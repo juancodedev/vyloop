@@ -1,0 +1,49 @@
+schema: spec-driven
+
+context: |
+  Project: vyloop — Loyalty/Engagement SaaS for LatAm SMBs.
+  Stack: Next.js + TypeScript (frontend), Cloudflare Workers + Hono (backend/api),
+    PostgreSQL + ClickHouse (data), Kafka/Queues (event bus).
+  Architecture: Event-first, DDD bounded contexts (Identity, Customer, Growth,
+    Communication, Automation, Analytics, Compliance), microservices on Workers.
+  Testing: No test runner detected (pre-implementation phase).
+  Style: TypeScript, strict typing, Edge-first, multi-tenant with RLS.
+
+rules:
+  proposal:
+    - Reference the FidelidApp analysis (analisis.md) for competitive positioning
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    - Reference event-driven patterns from atlas-docs/07-Architecture.md
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    - Follow existing code patterns
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: "npm run build || npx tsc --noEmit"
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
+
+testing:
+  strict_tdd: false
+  note: "No test runner detected. Project is in pre-implementation (documentation) phase. Strict TDD disabled until a test framework is established."
+  runner: null
+  layers:
+    unit: { available: false, tool: null }
+    integration: { available: false, tool: null }
+    e2e: { available: false, tool: null }
+  coverage: { available: false, command: null }
+  quality:
+    linter: { available: false, command: null }
+    type_checker: { available: false, command: null }
+    formatter: { available: false, command: null }
