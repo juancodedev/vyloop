@@ -1,0 +1,14 @@
+{
+  "extends": "./tooling/typescript/tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@vyloop/types": ["packages/types/src"],
+      "@vyloop/schemas": ["packages/schemas/src"],
+      "@vyloop/database": ["packages/database/src"],
+      "@vyloop/config": ["packages/config/src"],
+      "@vyloop/utils": ["packages/utils/src"]
+    }
+  },
+  "include": []
+}
