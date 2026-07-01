@@ -34,3 +34,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# wrangler (Cloudflare Workers)
+.wrangler/
+*.toml
+
+# turbo
+.turbo
