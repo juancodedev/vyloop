@@ -12,7 +12,7 @@
 
 Decision needed before apply: Yes
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: stacked-to-main (PR 1/3)
 400-line budget risk: High
 
 ### Suggested Work Units
@@ -25,22 +25,22 @@ Chain strategy: pending
 
 ## Phase 1: Monorepo Foundation
 
-- [ ] 1.1 Create root `package.json` (private, engines node>=20/pnpm>=9, scripts) + `pnpm-workspace.yaml` (apps/*, packages/*, services/*, tooling/*) + `.nvmrc` (20)
-- [ ] 1.2 Update `.gitignore` — add coverage/, dist/, .next/, .wrangler/, *.toml, .turbo, node_modules/
-- [ ] 1.3 Create `.env.example` with DATABASE_URL, MAILPIT_SMTP, MAILPIT_API
-- [ ] 1.4 Create `tooling/typescript/tsconfig.base.json` (strict, ES2022, bundler, declarations)
-- [ ] 1.5 Create root `tsconfig.json` extending base, references for workspace packages
-- [ ] 1.6 Create `tooling/eslint/eslint.config.ts` (flat config: typescript-eslint, import, prettier) + root `eslint.config.ts`
-- [ ] 1.7 Create `tooling/prettier/prettier.config.ts` (semi, singleQuote, trailingComma all, printWidth 100) + root `.prettierrc` pointer
-- [ ] 1.8 Create `tooling/vitest/vitest.workspace.ts` globbing packages/*, services/*, apps/*
+- [x] 1.1 Create root `package.json` (private, engines node>=20/pnpm>=9, scripts) + `pnpm-workspace.yaml` (apps/*, packages/*, services/*, tooling/*) + `.nvmrc` (20)
+- [x] 1.2 Update `.gitignore` — add coverage/, dist/, .next/, .wrangler/, *.toml, .turbo, node_modules/
+- [x] 1.3 Create `.env.example` with DATABASE_URL, MAILPIT_SMTP, MAILPIT_API
+- [x] 1.4 Create `tooling/typescript/tsconfig.base.json` (strict, ES2022, bundler, declarations)
+- [x] 1.5 Create root `tsconfig.json` extending base, references for workspace packages
+- [x] 1.6 Create `tooling/eslint/eslint.config.ts` (flat config: typescript-eslint, import, prettier) + root `eslint.config.ts`
+- [x] 1.7 Create `tooling/prettier/prettier.config.ts` (semi, singleQuote, trailingComma all, printWidth 100) + root `.prettierrc` pointer
+- [x] 1.8 Create `tooling/vitest/vitest.workspace.ts` globbing packages/*, services/*, apps/*
 
 ## Phase 2: Shared Packages
 
-- [ ] 2.1 Create `packages/types/` — branded types TenantId, UserId, CustomerId, BaseEvent<T>, Entity + package.json, tsconfig, vitest.config
-- [ ] 2.2 Create `packages/schemas/` — stub with zod dep, re-exports types + package.json, tsconfig
-- [ ] 2.3 Create `packages/database/` — Drizzle config (postgresql), createDb(), empty schema.ts, drizzle/ dir + package.json, tsconfig, vitest.config
-- [ ] 2.4 Create `packages/config/` — env() reader stub + package.json, tsconfig
-- [ ] 2.5 Create `packages/utils/` — noop/sleep stubs + package.json, tsconfig
+- [x] 2.1 Create `packages/types/` — branded types TenantId, UserId, CustomerId, BaseEvent<T>, Entity + package.json, tsconfig, vitest.config
+- [x] 2.2 Create `packages/schemas/` — stub with zod dep, re-exports types + package.json, tsconfig
+- [x] 2.3 Create `packages/database/` — Drizzle config (postgresql), createDb(), empty schema.ts, drizzle/ dir + package.json, tsconfig, vitest.config
+- [x] 2.4 Create `packages/config/` — env() reader stub + package.json, tsconfig
+- [x] 2.5 Create `packages/utils/` — noop/sleep stubs + package.json, tsconfig
 
 ## Phase 3: Services
 
