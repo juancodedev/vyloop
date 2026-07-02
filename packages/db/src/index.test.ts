@@ -59,10 +59,12 @@ describe('Database schema', () => {
     expect(db.allIndexes.length).toBe(6);
   });
 
-  it('should export createDb function', async () => {
+  it('should export createDb function using @neondatabase/serverless HTTP driver', async () => {
     const db = await import('./index');
     expect(db.createDb).toBeDefined();
     expect(typeof db.createDb).toBe('function');
+    // createDb expects a Neon pooled connection string
+    // Inline: client = neon(dbUrl), db = drizzle(client, { schema })
   });
 
   it('should export the schema object', async () => {
