@@ -1,16 +1,17 @@
 import type { Metadata, Viewport } from 'next';
+import './globals.css';
+import { AuthProvider } from './lib/auth';
 
 export const metadata: Metadata = {
-  title: 'Vyloop — Registro',
-  description:
-    'Registrate en el programa de lealtad y empezá a acumular puntos.',
+  title: 'Vyloop',
+  description: 'Tu programa de lealtad para acumular y canjear puntos.',
 };
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
-  themeColor: '#2563eb',
+  themeColor: '#f59e0b',
 };
 
 export default function RootLayout({
@@ -20,7 +21,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <body style={{ margin: 0 }}>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }
