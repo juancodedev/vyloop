@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schema.vyloop.app/events/test_event/v1",
+  "title": "TestEvent",
+  "description": "Simple test event for development and end-to-end verification",
+  "type": "object",
+  "required": ["header", "payload"],
+  "properties": {
+    "header": {
+      "type": "object",
+      "required": ["event_id", "event_type", "event_version", "business_id", "timestamp"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this event instance"
+        },
+        "event_type": {
+          "type": "string",
+          "const": "test_event",
+          "description": "Event type discriminator"
+        },
+        "event_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version of the event schema"
+        },
+        "business_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant (business) identifier"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of when the event occurred"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "Arbitrary test message"
+        },
+        "data": {
+          "description": "Arbitrary test payload data"
+        }
+      }
+    }
+  }
+}
