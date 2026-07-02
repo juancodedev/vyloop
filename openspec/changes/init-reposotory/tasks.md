@@ -44,24 +44,24 @@ Chain strategy: stacked-to-main (PR 1/3)
 
 ## Phase 3: Services
 
-- [ ] 3.1 Create `services/api-gateway/` — Hono app, GET /health → { status, timestamp }, GET /* → 404, wrangler.jsonc, package.json, tsconfig, vitest.config
-- [ ] 3.2 Create `services/identity/` — placeholder stub with wrangler.jsonc + package.json + tsconfig
-- [ ] 3.3 Create `services/customer/` — placeholder stub with wrangler.jsonc + package.json + tsconfig
-- [ ] 3.4 Create `services/growth/` — placeholder stub with wrangler.jsonc + package.json + tsconfig
+- [x] 3.1 Create `services/api-gateway/` — Hono app, GET /health → { status, timestamp }, GET /* → 404, wrangler.jsonc, package.json, tsconfig, vitest.config
+- [x] 3.2 Create `services/identity/` — placeholder stub with wrangler.jsonc + package.json + tsconfig
+- [x] 3.3 Create `services/customer/` — placeholder stub with wrangler.jsonc + package.json + tsconfig
+- [x] 3.4 Create `services/growth/` — placeholder stub with wrangler.jsonc + package.json + tsconfig
 
 ## Phase 4: Applications
 
-- [ ] 4.1 Create `apps/dashboard/` — Next.js 14 App Router, layout.tsx (HTML shell), page.tsx (Vyloop landing), next.config.ts, package.json, tsconfig, vitest.config
+- [x] 4.1 Create `apps/dashboard/` — Next.js 14 App Router, layout.tsx (HTML shell), page.tsx (Vyloop landing), next.config.ts, package.json, tsconfig, vitest.config
 
 ## Phase 5: Infrastructure
 
-- [ ] 5.1 Create `docker/docker-compose.yml` — PostgreSQL 16 (port 5432) + Mailpit (1025 SMTP, 8025 UI), named volume pgdata
-- [ ] 5.2 Create `docker/postgres/init.sql` — enable pgcrypto, uuid-ossp
-- [ ] 5.3 Create `.github/workflows/ci.yml` — push/PR to main, Node 20 + pnpm 9, install → lint → typecheck → test
+- [x] 5.1 Create `docker/docker-compose.yml` — PostgreSQL 16 (port 5432) + Mailpit (1025 SMTP, 8025 UI), named volume pgdata
+- [x] 5.2 Create `docker/postgres/init.sql` — enable pgcrypto, uuid-ossp
+- [x] 5.3 Create `.github/workflows/ci.yml` — push/PR to main, Node 20 + pnpm 9, install → lint → typecheck → test
 
 ## Phase 6: Documentation & Cleanup
 
-- [ ] 6.1 Move atlas-docs/ to docs/prd/, docs/architecture/, docs/operations/, docs/decisions/ per spec R16
-- [ ] 6.2 Move root `analisis.md` → `docs/analisis.md`
-- [ ] 6.3 Remove `atlas-docs/` directory
-- [ ] 6.4 Update README.md with project overview, tech stack, prerequisites, getting-started commands
+- [x] 6.1 Move atlas-docs/ to docs/prd/, docs/architecture/, docs/operations/, docs/decisions/ per spec R16
+- [x] 6.2 Move root `analisis.md` → `docs/analisis.md`
+- [x] 6.3 Remove `atlas-docs/` directory
+- [x] 6.4 Update README.md with project overview, tech stack, prerequisites, getting-started commands
