@@ -16,3 +16,14 @@ Te hago un resumen rápido de dónde estamos:
 - 🔲 PR 3 — pending review/merge (Infraestructura + Documentación)
 - El monorepo ya tiene scaffolding completo con tooling, paquetes compartidos, Workers, y dashboard
 Cuando abras en Linux, /sdd-status te va a mostrar el estado exacto y podés continuar.
+
+---
+Ahí está, ya lo subí a main en el repo.
+En Linux solo necesitás:
+git clone https://github.com/juancodedev/vyloop.git
+cd vyloop
+engram import engram-vyloop-export.json
+rm engram-vyloop-export.json   # ya no hace falta
+git add -u && git commit -m "chore: remove engram export after migration"
+Y con eso ya tenés todo el contexto de las 62 sesiones anteriores. Abrís OpenCode y tirás /sdd-status para ver dónde quedó cada cosa.
+¿Algo más antes de que cierre la sesión?
