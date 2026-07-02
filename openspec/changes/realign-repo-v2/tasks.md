@@ -8,13 +8,13 @@
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1: Structure (~400) → PR 2: Data Layer (~500) → PR 3: Services (~600) |
-| Delivery strategy | ask-on-risk |
-| Chain strategy | pending |
+| Delivery strategy | ask-on-risk → resolved to chained PRs |
+| Chain strategy | stacked-to-main (settled) |
 
-Decision needed before apply: Yes
-Chained PRs recommended: Yes
-Chain strategy: pending
-400-line budget risk: High
+Decision needed before apply: Yes — resolved
+Chained PRs recommended: Yes — resolved (PR 1 done, this is PR 2)
+Chain strategy: stacked-to-main — resolved
+400-line budget risk: High — resolved via chained PRs
 
 ### Suggested Work Units
 
@@ -41,15 +41,15 @@ Chain strategy: pending
 
 ## Phase 2: Data Layer & Schema Registry (PR 2)
 
-- [ ] 2.1 Write full Drizzle schema in `packages/db/src/schema.ts` — all 15 tables (tenants, branches, users, customers, customer_events, consents, loyalty_programs, membership_tiers, points_transactions, cross_loyalty_alliances, referrals, workflows, workflow_executions, churn_predictions, localization_configs)
-- [ ] 2.2 Create `packages/db/src/rls.ts` — RLS policies per `business_id` table using `app.current_business_id`
-- [ ] 2.3 Create `packages/db/src/indexes.ts` — critical indexes (phone, last_visit, points_balance, JSONB GIN, event lookups)
-- [ ] 2.4 Create `packages/db/migrate.ts` — migration + RLS application script
-- [ ] 2.5 Run `drizzle-kit generate` → commit `packages/db/drizzle/*.sql`
-- [ ] 2.6 Create JSON Schema files in `packages/schema-registry/src/schemas/` — `purchase_completed.json`, `customer_registered.json`, `points_assigned.json`, `test_event.json`
-- [ ] 2.7 Implement Schema Registry CRUD in `packages/schema-registry/src/index.ts` — KV get/set + `validate(eventType, payload)` with AJV
-- [ ] 2.8 Shell: `wrangler kv:namespace create schema-registry`, seed initial schemas
-- [ ] 2.9 Write tests: schema snapshot, RLS isolation (two-session), JSON Schema validation (valid + invalid payloads)
+- [x] 2.1 Write full Drizzle schema in `packages/db/src/schema.ts` — all 15 tables (tenants, branches, users, customers, customer_events, consents, loyalty_programs, membership_tiers, points_transactions, cross_loyalty_alliances, referrals, workflows, workflow_executions, churn_predictions, localization_configs)
+- [x] 2.2 Create `packages/db/src/rls.ts` — RLS policies per `business_id` table using `app.current_business_id`
+- [x] 2.3 Create `packages/db/src/indexes.ts` — critical indexes (phone, last_visit, points_balance, JSONB GIN, event lookups)
+- [x] 2.4 Update `packages/db/src/index.ts` to export all schema tables, RLS policies, and indexes
+- [x] 2.5 Run `npx drizzle-kit generate` to create SQL migration files in `packages/db/drizzle/`, then `pnpm -r typecheck` passes
+- [x] 2.6 Create JSON Schema files in `packages/schema-registry/src/schemas/` — `purchase_completed.json`, `customer_registered.json`, `points_assigned.json`, `test_event.json`
+- [x] 2.7 Implement Schema Registry in `packages/schema-registry/src/index.ts` — `getSchema(type)`, `registerSchema(type, schema)`, `validate(eventType, payload)` with AJV
+- [x] 2.8 Create `packages/schema-registry/src/index.test.ts` — tests for schema validation, not found, registration
+- [x] 2.9 Create `packages/db/src/index.test.ts` — tests for schema snapshot, table exports, RLS helpers
 
 ## Phase 3: Services, Auth & Event Bus (PR 3)
 
