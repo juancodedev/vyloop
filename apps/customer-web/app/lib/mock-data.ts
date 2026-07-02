@@ -56,18 +56,21 @@ export const TIERS: TierInfo[] = [
   },
 ];
 
+// NOTA: Este perfil coincide con los datos del dashboard (src/lib/mock-data.ts)
+// para que la demo muestre al mismo cliente en ambas interfaces.
+// Cuando se conecte a la API real, ambos consumirán del mismo backend.
 export const MOCK_CUSTOMER: CustomerProfile = {
-  id: 'cust-001',
-  fullName: 'Juan Pérez',
-  phone: '+56912345678',
-  email: 'juan@ejemplo.com',
-  points: 1250,
-  totalPointsEarned: 3250,
+  id: 'cust-005',
+  fullName: 'Lucía Fernández',
+  phone: '+56956789012',
+  email: 'lucia@ejemplo.com',
+  points: 1200,
+  totalPointsEarned: 3200,
   totalPointsRedeemed: 2000,
   currentTier: TIERS[1],
   nextTier: TIERS[2],
-  progressToNextTier: 12.5,
-  memberSince: 'Marzo 2026',
+  progressToNextTier: 10,
+  memberSince: 'Enero 2026',
   businessName: 'Café Central',
 };
 
@@ -77,7 +80,7 @@ export const MOCK_MOVEMENTS: Movement[] = [
     type: 'earned',
     description: 'Compra café americano',
     points: 150,
-    balance: 1250,
+    balance: 1200,
     date: '2026-06-28T10:30:00Z',
     referenceId: 'txn-001',
   },
@@ -164,7 +167,8 @@ export const MOCK_MOVEMENTS: Movement[] = [
   },
 ];
 
-const VALID_PHONE = '+56912345678';
+// Coincide con el teléfono de Lucía Fernández en el dashboard
+const VALID_PHONE = '+56956789012';
 
 export function getCustomerByPhone(phone: string): CustomerProfile | null {
   const cleaned = phone.replace(/[\s-]/g, '');
