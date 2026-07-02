@@ -2,5 +2,36 @@
   "name": "gateway",
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
-  "compatibility_flags": ["nodejs_compat"]
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "JWT_SECRET": ""
+  },
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMITER",
+      "id": "rate-limiter",
+      "preview_id": "rate-limiter-preview"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "EVENT_QUEUE",
+        "queue": "vyloop-events-dev"
+      },
+      {
+        "binding": "DOMAIN_EVENTS_QUEUE",
+        "queue": "vyloop-domain-events"
+      }
+    ]
+  },
+  "services": [
+    { "binding": "identity", "service": "identity" },
+    { "binding": "customer", "service": "customer" },
+    { "binding": "growth", "service": "growth" },
+    { "binding": "analytics", "service": "analytics" },
+    { "binding": "automation", "service": "automation" },
+    { "binding": "communication", "service": "communication" },
+    { "binding": "compliance", "service": "compliance" }
+  ]
 }
