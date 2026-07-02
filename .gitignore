@@ -42,3 +42,9 @@ next-env.d.ts
 # turbo
 .turbo
 **/.next/
+
+# tooling cache
+.atl/
+
+# local dev secrets (Cloudflare Workers)
+.dev.vars
