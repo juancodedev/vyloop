@@ -8,7 +8,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@vyloop/types": "workspace:*"
+    "@vyloop/event-bus": "workspace:*",
+    "@vyloop/types": "workspace:*",
+    "hono": "^4.0.0",
+    "jose": "^5.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",

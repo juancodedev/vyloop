@@ -100,12 +100,21 @@ importers:
 
   apps/gateway:
     dependencies:
+      '@vyloop/event-bus':
+        specifier: workspace:*
+        version: link:../../packages/event-bus
+      '@vyloop/schema-registry':
+        specifier: workspace:*
+        version: link:../../packages/schema-registry
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
       hono:
         specifier: ^4.0.0
         version: 4.12.27
+      jose:
+        specifier: ^5.0.0
+        version: 5.10.0
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.0.0
@@ -141,6 +150,22 @@ importers:
       drizzle-kit:
         specifier: ^0.30.0
         version: 0.30.6
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@22.20.0)
+
+  packages/event-bus:
+    dependencies:
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../types
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260701.1
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -277,9 +302,18 @@ importers:
 
   workers/identity:
     dependencies:
+      '@vyloop/event-bus':
+        specifier: workspace:*
+        version: link:../../packages/event-bus
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
+      hono:
+        specifier: ^4.0.0
+        version: 4.12.27
+      jose:
+        specifier: ^5.0.0
+        version: 5.10.0
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.0.0
@@ -2170,6 +2204,9 @@ packages:
   isexe@3.1.5:
     resolution: {integrity: sha512-6B3tLtFqtQS4ekarvLVMZ+X+VlvQekbe4taUkf/rhVO3d/h0M2rfARm/pXLcPEsjjMsFgrFgSrhQIxcSVrBz8w==}
     engines: {node: '>=18'}
+
+  jose@5.10.0:
+    resolution: {integrity: sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -4468,6 +4505,8 @@ snapshots:
   isexe@2.0.0: {}
 
   isexe@3.1.5: {}
+
+  jose@5.10.0: {}
 
   js-tokens@4.0.0: {}
 

@@ -2,5 +2,19 @@
   "name": "identity",
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
-  "compatibility_flags": ["nodejs_compat"]
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "JWT_SECRET": ""
+  },
+  "queues": {
+    "consumers": [
+      {
+        "queue": "vyloop-events-dev",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "vyloop-events-dlq"
+      }
+    ]
+  }
 }

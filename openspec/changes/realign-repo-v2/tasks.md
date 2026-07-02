@@ -53,17 +53,17 @@ Chain strategy: stacked-to-main — resolved
 
 ## Phase 3: Services, Auth & Event Bus (PR 3)
 
-- [ ] 3.1 Implement `workers/identity/src/auth.ts` — OIDC token endpoint, JWT issuance/validation with scopes via `jose`
-- [ ] 3.2 Implement `workers/identity/src/api-keys.ts` — key generation, SHA-256 hashing, scope validation against PostgreSQL
-- [ ] 3.3 Wire `workers/identity/src/index.ts` — Hono app with `/v1/auth/*`, `/v1/me`, tenant queries
-- [ ] 3.4 Create `apps/gateway/src/middleware/auth.ts` — JWT validation middleware
-- [ ] 3.5 Create `apps/gateway/src/middleware/business-id.ts` — X-Business-ID vs JWT claim mismatch → 403
-- [ ] 3.6 Create `apps/gateway/src/middleware/rate-limit.ts` — per-business KV counter, 429 + Retry-After
-- [ ] 3.7 Create `apps/gateway/src/router.ts` — domain prefix → Worker service binding map
-- [ ] 3.8 Wire `apps/gateway/src/index.ts` — Hono app with full middleware chain + routing
-- [ ] 3.9 Update `apps/gateway/wrangler.jsonc` — KV binding for rate-limiter, service bindings for domain Workers
-- [ ] 3.10 Create `packages/event-bus/src/index.ts` — `publish(queue, event)` and `consume(queue, handler)` helpers
-- [ ] 3.11 Configure Queues + DLQ in root/per-package `wrangler.jsonc`
-- [ ] 3.12 Implement Event Ingestor `apps/gateway/src/ingestor.ts` — `POST /v1/events/{type}`, schema validation, envelope, queue publish
-- [ ] 3.13 Create `workers/identity/src/event-handler.ts` — TestEvent consumer (log + ack)
-- [ ] 3.14 Write tests: JWT lifecycle, rate limit (429 after N), X-Business-ID mismatch (403), TestEvent e2e (POST → validate → queue → consume → assert)
+- [x] 3.1 Implement `workers/identity/src/auth.ts` — OIDC token endpoint, JWT issuance/validation with scopes via `jose`
+- [x] 3.2 Implement `workers/identity/src/api-keys.ts` — key generation, SHA-256 hashing, scope validation against PostgreSQL
+- [x] 3.3 Wire `workers/identity/src/index.ts` — Hono app with `/v1/auth/*`, `/v1/me`, tenant queries
+- [x] 3.4 Create `apps/gateway/src/middleware/auth.ts` — JWT validation middleware
+- [x] 3.5 Create `apps/gateway/src/middleware/business-id.ts` — X-Business-ID vs JWT claim mismatch → 403
+- [x] 3.6 Create `apps/gateway/src/middleware/rate-limit.ts` — per-business KV counter, 429 + Retry-After
+- [x] 3.7 Create `apps/gateway/src/router.ts` — domain prefix → Worker service binding map
+- [x] 3.8 Wire `apps/gateway/src/index.ts` — Hono app with full middleware chain + routing
+- [x] 3.9 Update `apps/gateway/wrangler.jsonc` — KV binding for rate-limiter, service bindings for domain Workers
+- [x] 3.10 Create `packages/event-bus/src/index.ts` — `publish(queue, event)` and `consume(queue, handler)` helpers
+- [x] 3.11 Configure Queues + DLQ in root/per-package `wrangler.jsonc`
+- [x] 3.12 Implement Event Ingestor `apps/gateway/src/ingestor.ts` — `POST /v1/events/{type}`, schema validation, envelope, queue publish
+- [x] 3.13 Create `workers/identity/src/event-handler.ts` — TestEvent consumer (log + ack)
+- [x] 3.14 Write tests: JWT lifecycle, rate limit (429 after N), X-Business-ID mismatch (403), TestEvent e2e (POST → validate → queue → consume → assert)
