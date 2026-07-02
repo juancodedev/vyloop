@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
-import { AuthProvider } from '../lib/auth';
+import { AuthProvider } from './lib/auth';
 
 export const metadata: Metadata = {
   title: 'Vyloop',
