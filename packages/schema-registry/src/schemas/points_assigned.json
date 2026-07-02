@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schema.vyloop.app/events/points_assigned/v1",
+  "title": "PointsAssigned",
+  "description": "Emitted when loyalty points are credited to a customer's account",
+  "type": "object",
+  "required": ["header", "payload"],
+  "properties": {
+    "header": {
+      "type": "object",
+      "required": ["event_id", "event_type", "event_version", "business_id", "timestamp"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this event instance"
+        },
+        "event_type": {
+          "type": "string",
+          "const": "points_assigned",
+          "description": "Event type discriminator"
+        },
+        "event_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version of the event schema"
+        },
+        "business_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant (business) identifier"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of when the event occurred"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "required": ["customer_id", "points", "balance_after", "reason"],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The customer receiving points"
+        },
+        "points": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Number of points credited (always positive in this event)"
+        },
+        "balance_after": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Customer's total balance after this assignment"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason for points assignment (e.g. purchase, referral, bonus)"
+        },
+        "reference_id": {
+          "type": "string",
+          "description": "Optional reference to the source transaction (purchase ID, referral ID)"
+        },
+        "branch_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Branch where the points were earned"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Expiration date for these points (if applicable)"
+        }
+      }
+    }
+  }
+}
