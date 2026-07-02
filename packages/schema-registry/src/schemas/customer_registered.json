@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schema.vyloop.app/events/customer_registered/v1",
+  "title": "CustomerRegistered",
+  "description": "Emitted when a new customer is registered in the loyalty program",
+  "type": "object",
+  "required": ["header", "payload"],
+  "properties": {
+    "header": {
+      "type": "object",
+      "required": ["event_id", "event_type", "event_version", "business_id", "timestamp"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this event instance"
+        },
+        "event_type": {
+          "type": "string",
+          "const": "customer_registered",
+          "description": "Event type discriminator"
+        },
+        "event_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version of the event schema"
+        },
+        "business_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant (business) identifier"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of when the event occurred"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "required": ["customer_id", "full_name"],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The newly registered customer"
+        },
+        "full_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Customer's full name"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Customer's phone number"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Customer's email address"
+        },
+        "birth_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Customer's date of birth (ISO 8601 date)"
+        },
+        "identity_doc": {
+          "type": "string",
+          "description": "Government-issued identity document (RUT, CPF, DNI, etc.)"
+        },
+        "identity_type": {
+          "type": "string",
+          "enum": ["rut", "cpf", "dni", "curp", "other"],
+          "description": "Type of identity document"
+        },
+        "language": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 5,
+          "description": "Customer's preferred language (BCP 47 tag)"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Arbitrary key-value attributes for extensibility"
+        }
+      }
+    }
+  }
+}

@@ -14,9 +14,11 @@
   },
   "dependencies": {
     "@vyloop/types": "workspace:*",
+    "ajv": "^8.17.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }
