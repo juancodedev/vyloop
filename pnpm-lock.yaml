@@ -36,6 +36,37 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)
 
+  apps/customer-web:
+    dependencies:
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+      next:
+        specifier: ^14.2.0
+        version: 14.2.35(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.0
+        version: 18.3.1(react@18.3.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.0
+      '@types/react':
+        specifier: ^18.3.0
+        version: 18.3.31
+      '@types/react-dom':
+        specifier: ^18.3.0
+        version: 18.3.7(@types/react@18.3.31)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@22.20.0)
+
   apps/dashboard:
     dependencies:
       '@vyloop/types':
@@ -67,6 +98,28 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)
 
+  apps/gateway:
+    dependencies:
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+      hono:
+        specifier: ^4.0.0
+        version: 4.12.27
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260701.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@22.20.0)
+      wrangler:
+        specifier: ^3.0.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260701.1)
+
   packages/config:
     devDependencies:
       typescript:
@@ -76,7 +129,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)
 
-  packages/database:
+  packages/db:
     dependencies:
       drizzle-orm:
         specifier: ^0.38.0
@@ -95,7 +148,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)
 
-  packages/schemas:
+  packages/schema-registry:
     dependencies:
       '@vyloop/types':
         specifier: workspace:*
@@ -120,38 +173,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)
 
-  packages/utils:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.6(@types/node@22.20.0)
-
-  services/api-gateway:
-    dependencies:
-      '@vyloop/types':
-        specifier: workspace:*
-        version: link:../../packages/types
-      hono:
-        specifier: ^4.0.0
-        version: 4.12.27
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.0.0
-        version: 4.20260701.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.6(@types/node@22.20.0)
-      wrangler:
-        specifier: ^3.0.0
-        version: 3.114.17(@cloudflare/workers-types@4.20260701.1)
-
-  services/customer:
+  workers/analytics:
     dependencies:
       '@vyloop/types':
         specifier: workspace:*
@@ -167,7 +189,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)
 
-  services/growth:
+  workers/automation:
     dependencies:
       '@vyloop/types':
         specifier: workspace:*
@@ -183,7 +205,71 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)
 
-  services/identity:
+  workers/communication:
+    dependencies:
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260701.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@22.20.0)
+
+  workers/compliance:
+    dependencies:
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260701.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@22.20.0)
+
+  workers/customer:
+    dependencies:
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260701.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@22.20.0)
+
+  workers/growth:
+    dependencies:
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260701.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@22.20.0)
+
+  workers/identity:
     dependencies:
       '@vyloop/types':
         specifier: workspace:*
