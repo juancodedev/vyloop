@@ -46,8 +46,8 @@ Chain strategy: pending
 
 ## Phase 3: Queue Consumer
 
-- [ ] 3.1 `workers/growth/src/event-handler.ts` — `CustomerRegistered` handler: find lowest tier (min_points=0), upsert wallet with 0 balance, assign tier; create Bronze if none exists
-- [ ] 3.2 `workers/growth/src/event-handler.ts` — `PointsAssigned` handler: re-read total balance, find highest tier where min_points ≤ balance, update currentTierId if changed (downgrade never)
+- [x] 3.1 `workers/growth/src/event-handler.ts` — `CustomerRegistered` handler: find lowest tier (min_points=0), upsert wallet with 0 balance, assign tier; create Bronze if none exists
+- [x] 3.2 `workers/growth/src/event-handler.ts` — `PointsAssigned` handler: re-read total balance, find highest tier where min_points ≤ balance, update currentTierId if changed (downgrade never)
 
 ## Phase 4: Dashboard
 
