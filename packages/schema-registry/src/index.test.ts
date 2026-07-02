@@ -6,6 +6,8 @@ import {
   validate,
   clearCache,
   customerRegisteredSchema,
+  pointsAssignedSchema,
+  rewardRedeemedSchema,
 } from './index';
 
 // ---------------------------------------------------------------------------
@@ -192,6 +194,157 @@ describe('SchemaRegistry', () => {
         customer_id: '123e4567-e89b-12d3-a456-426614174000',
         full_name: '',
         business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      });
+
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe('pointsAssignedSchema', () => {
+    it('should be exported with envelope structure and $id v1.0.0', async () => {
+      const mod = await import('./index');
+      expect(mod.pointsAssignedSchema).toBeDefined();
+      expect(mod.pointsAssignedSchema.$id).toContain('v1.0.0');
+      expect(mod.pointsAssignedSchema.title).toBe('PointsAssigned');
+      expect(mod.pointsAssignedSchema.required).toEqual(['header', 'payload']);
+    });
+
+    it('should pass validation for a valid PointsAssigned envelope', async () => {
+      await registerSchema(kv, 'PointsAssigned', pointsAssignedSchema, '1.0.0');
+
+      const result = await validate(kv, 'PointsAssigned', {
+        header: {
+          business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+          timestamp: '2026-07-02T12:00:00Z',
+          localization: { language: 'es-CL', timezone: 'America/Santiago' },
+        },
+        payload: {
+          customer_id: '123e4567-e89b-12d3-a456-426614174000',
+          points_assigned: 100,
+          points_multiplier: 1.0,
+          total_points: 500,
+          reference_id: 'ref-001',
+          assignment_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        },
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.errors).toBeUndefined();
+    });
+
+    it('should fail validation when header is missing', async () => {
+      await registerSchema(kv, 'PointsAssigned', pointsAssignedSchema, '1.0.0');
+
+      const result = await validate(kv, 'PointsAssigned', {
+        payload: {
+          customer_id: '123e4567-e89b-12d3-a456-426614174000',
+          points_assigned: 100,
+          points_multiplier: 1.0,
+          total_points: 500,
+          reference_id: 'ref-001',
+          assignment_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        },
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it('should fail validation when assignment_id is not a valid UUID', async () => {
+      await registerSchema(kv, 'PointsAssigned', pointsAssignedSchema, '1.0.0');
+
+      const result = await validate(kv, 'PointsAssigned', {
+        header: {
+          business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+          timestamp: '2026-07-02T12:00:00Z',
+          localization: { language: 'es-CL', timezone: 'America/Santiago' },
+        },
+        payload: {
+          customer_id: '123e4567-e89b-12d3-a456-426614174000',
+          points_assigned: 100,
+          points_multiplier: 1.0,
+          total_points: 500,
+          reference_id: 'ref-001',
+          assignment_id: 'not-a-uuid',
+        },
+      });
+
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe('rewardRedeemedSchema', () => {
+    it('should be exported with envelope structure and $id v1.0.0', async () => {
+      const mod = await import('./index');
+      expect(mod.rewardRedeemedSchema).toBeDefined();
+      expect(mod.rewardRedeemedSchema.$id).toContain('v1.0.0');
+      expect(mod.rewardRedeemedSchema.title).toBe('RewardRedeemed');
+      expect(mod.rewardRedeemedSchema.required).toEqual(['header', 'payload']);
+    });
+
+    it('should pass validation for a valid full redemption envelope', async () => {
+      await registerSchema(kv, 'RewardRedeemed', rewardRedeemedSchema, '1.0.0');
+
+      const result = await validate(kv, 'RewardRedeemed', {
+        header: {
+          business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+          timestamp: '2026-07-02T12:00:00Z',
+          localization: { language: 'es-CL', timezone: 'America/Santiago' },
+        },
+        payload: {
+          customer_id: '123e4567-e89b-12d3-a456-426614174000',
+          points_redeemed: 200,
+          total_points_after: 300,
+          reward_name: 'Gift Card',
+          partial: false,
+          reference_id: 'ref-002',
+          redemption_id: 'c4d5e6f7-8a9b-0c1d-2e3f-456789abcdef',
+        },
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.errors).toBeUndefined();
+    });
+
+    it('should pass validation for a partial redemption without reward_name', async () => {
+      await registerSchema(kv, 'RewardRedeemed', rewardRedeemedSchema, '1.0.0');
+
+      const result = await validate(kv, 'RewardRedeemed', {
+        header: {
+          business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+          timestamp: '2026-07-02T12:00:00Z',
+          localization: { language: 'es-CL', timezone: 'America/Santiago' },
+        },
+        payload: {
+          customer_id: '123e4567-e89b-12d3-a456-426614174000',
+          points_redeemed: 100,
+          total_points_after: 0,
+          partial: true,
+          reference_id: 'ref-003',
+          redemption_id: 'd5e6f7a8-9b0c-1d2e-3f4a-56789abcdef0',
+        },
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.errors).toBeUndefined();
+    });
+
+    it('should fail validation when points_redeemed is 0 (minimum 1)', async () => {
+      await registerSchema(kv, 'RewardRedeemed', rewardRedeemedSchema, '1.0.0');
+
+      const result = await validate(kv, 'RewardRedeemed', {
+        header: {
+          business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+          timestamp: '2026-07-02T12:00:00Z',
+          localization: { language: 'es-CL', timezone: 'America/Santiago' },
+        },
+        payload: {
+          customer_id: '123e4567-e89b-12d3-a456-426614174000',
+          points_redeemed: 0,
+          total_points_after: 0,
+          partial: false,
+          reference_id: 'ref-004',
+          redemption_id: 'e6f7a8b9-0c1d-2e3f-4a5b-6789abcdef01',
+        },
       });
 
       expect(result.valid).toBe(false);

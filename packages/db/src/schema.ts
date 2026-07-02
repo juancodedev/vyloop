@@ -61,6 +61,7 @@ export const customers = pgTable('customers', {
   language: text('language').default('es'),
   optedInAt: timestamp('opted_in_at', { withTimezone: true }),
   lastVisitAt: timestamp('last_visit_at', { withTimezone: true }),
+  currentTierId: uuid('current_tier_id').references(() => membershipTiers.id),
   metadata: jsonb('metadata').default({}),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
@@ -132,7 +133,9 @@ export const pointsTransactions = pgTable('points_transactions', {
   referenceId: text('reference_id'),
   note: text('note'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  unique('uq_points_tx_reference').on(table.customerId, table.referenceId),
+]);
 
 export const crossLoyaltyAlliances = pgTable('cross_loyalty_alliances', {
   id: uuid('id').primaryKey().defaultRandom(),

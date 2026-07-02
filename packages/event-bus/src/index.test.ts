@@ -41,6 +41,16 @@ describe('EventBus', () => {
       const mod = await import('./index');
       expect(mod.CUSTOMER_REGISTERED).toBe('CustomerRegistered');
     });
+
+    it('should export POINTS_ASSIGNED constant', async () => {
+      const mod = await import('./index');
+      expect(mod.POINTS_ASSIGNED).toBe('PointsAssigned');
+    });
+
+    it('should export REWARD_REDEEMED constant', async () => {
+      const mod = await import('./index');
+      expect(mod.REWARD_REDEEMED).toBe('RewardRedeemed');
+    });
   });
 
   describe('createEnvelope', () => {
