@@ -7,6 +7,7 @@ import {
   DEFAULT_LIMITS,
   DEFAULT_WINDOW,
 } from './middleware/rate-limit';
+import { authInjectMiddleware } from './middleware/auth-inject';
 import { routerMiddleware, type GatewayEnv } from './router';
 import { ingestor } from './ingestor';
 
@@ -83,7 +84,13 @@ app.use('/v1/*', async (c, next) => {
   })(c, next);
 });
 
-// Middleware 4: Route dispatch to service bindings
+// Middleware 4: Auth header injection — strip incoming X-* headers, inject from JWT
+// Runs before router so forwarded requests carry the correct auth headers.
+// Unlike auth/business-id/rate-limit, this middleware gracefully handles the
+// no-JWT case (e.g., /v1/auth/*) by simply stripping spoofed headers only.
+app.use('/v1/*', authInjectMiddleware());
+
+// Middleware 5: Route dispatch to service bindings
 app.use('/v1/*', routerMiddleware);
 
 // ---------------------------------------------------------------------------
