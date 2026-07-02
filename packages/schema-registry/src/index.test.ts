@@ -5,6 +5,7 @@ import {
   registerSchema,
   validate,
   clearCache,
+  customerRegisteredSchema,
 } from './index';
 
 // ---------------------------------------------------------------------------
@@ -133,6 +134,67 @@ describe('SchemaRegistry', () => {
       await registerSchema(kv, 'purchase_completed', purchaseSchema);
       const result = await getSchema(kv, 'purchase_completed');
       expect(result).toEqual(purchaseSchema);
+    });
+  });
+
+  describe('customerRegisteredSchema', () => {
+    it('should be exported with correct structure', async () => {
+      const mod = await import('./index');
+      expect(mod.customerRegisteredSchema).toBeDefined();
+      expect(mod.customerRegisteredSchema.title).toBe('CustomerRegistered');
+      expect(mod.customerRegisteredSchema.required).toEqual(['customer_id', 'full_name', 'business_id']);
+      expect(mod.customerRegisteredSchema.properties.customer_id.format).toBe('uuid');
+      expect(mod.customerRegisteredSchema.properties.full_name.minLength).toBe(1);
+      expect(mod.customerRegisteredSchema.properties.business_id.format).toBe('uuid');
+    });
+
+    it('should pass validation for a valid CustomerRegistered payload', async () => {
+      await registerSchema(kv, 'CustomerRegistered', customerRegisteredSchema, '1.0.0');
+
+      const result = await validate(kv, 'CustomerRegistered', {
+        customer_id: '123e4567-e89b-12d3-a456-426614174000',
+        full_name: 'Alice García',
+        business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.errors).toBeUndefined();
+    });
+
+    it('should fail validation for a payload missing full_name', async () => {
+      await registerSchema(kv, 'CustomerRegistered', customerRegisteredSchema, '1.0.0');
+
+      const result = await validate(kv, 'CustomerRegistered', {
+        customer_id: '123e4567-e89b-12d3-a456-426614174000',
+        business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors!.some((e) => e.includes("full_name"))).toBe(true);
+    });
+
+    it('should fail validation for invalid uuid format in customer_id', async () => {
+      await registerSchema(kv, 'CustomerRegistered', customerRegisteredSchema, '1.0.0');
+
+      const result = await validate(kv, 'CustomerRegistered', {
+        customer_id: 'not-a-uuid',
+        full_name: 'Alice García',
+        business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it('should fail validation for empty full_name (minLength 1)', async () => {
+      await registerSchema(kv, 'CustomerRegistered', customerRegisteredSchema, '1.0.0');
+
+      const result = await validate(kv, 'CustomerRegistered', {
+        customer_id: '123e4567-e89b-12d3-a456-426614174000',
+        full_name: '',
+        business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      });
+
+      expect(result.valid).toBe(false);
     });
   });
 

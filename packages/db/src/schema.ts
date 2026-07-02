@@ -62,6 +62,7 @@ export const customers = pgTable('customers', {
   optedInAt: timestamp('opted_in_at', { withTimezone: true }),
   lastVisitAt: timestamp('last_visit_at', { withTimezone: true }),
   metadata: jsonb('metadata').default({}),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [
