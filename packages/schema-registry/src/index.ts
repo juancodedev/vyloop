@@ -138,3 +138,41 @@ export function clearCache(): void {
   validatorCache.clear();
   ajv.removeSchema();
 }
+
+// ---------------------------------------------------------------------------
+// Event schemas
+// ---------------------------------------------------------------------------
+
+/**
+ * JSON Schema v1.0.0 for CustomerRegistered events.
+ *
+ * Validates the event payload contains:
+ * - customer_id: string (uuid format, required)
+ * - full_name: string (minLength 1, required)
+ * - business_id: string (uuid format, required)
+ */
+export const customerRegisteredSchema = {
+  $id: 'https://schema.vyloop.app/events/CustomerRegistered/v1.0.0',
+  type: 'object',
+  title: 'CustomerRegistered',
+  description: 'Payload schema for CustomerRegistered events',
+  required: ['customer_id', 'full_name', 'business_id'],
+  properties: {
+    customer_id: {
+      type: 'string',
+      format: 'uuid',
+      description: "The customer's global_id",
+    },
+    full_name: {
+      type: 'string',
+      minLength: 1,
+      description: "The customer's full name",
+    },
+    business_id: {
+      type: 'string',
+      format: 'uuid',
+      description: 'The business scoping identifier',
+    },
+  },
+  additionalProperties: false,
+};

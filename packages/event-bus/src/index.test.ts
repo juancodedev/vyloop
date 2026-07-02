@@ -36,6 +36,13 @@ function makeEnvelope(payload: unknown = {}): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe('EventBus', () => {
+  describe('event type constants', () => {
+    it('should export CUSTOMER_REGISTERED constant', async () => {
+      const mod = await import('./index');
+      expect(mod.CUSTOMER_REGISTERED).toBe('CustomerRegistered');
+    });
+  });
+
   describe('createEnvelope', () => {
     it('should create a valid event envelope', () => {
       const envelope = createEnvelope(
