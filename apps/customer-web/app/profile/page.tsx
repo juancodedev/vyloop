@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '../../lib/auth';
-import { MOCK_MOVEMENTS } from '../../lib/mock-data';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
+import { useAuth } from '../lib/auth';
+import { MOCK_MOVEMENTS } from '../lib/mock-data';
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);

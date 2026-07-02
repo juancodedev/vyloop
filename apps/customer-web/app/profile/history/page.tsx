@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '../../../lib/auth';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useAuth } from '../../lib/auth';
 import {
   MOCK_MOVEMENTS,
   type Movement,
-} from '../../../lib/mock-data';
+} from '../../lib/mock-data';
 
 type FilterType = 'all' | 'earned' | 'redeemed';
 
