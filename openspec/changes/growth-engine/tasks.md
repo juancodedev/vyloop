@@ -51,10 +51,10 @@ Chain strategy: pending
 
 ## Phase 4: Dashboard
 
-- [ ] 4.1 `apps/dashboard/src/app/layout.tsx` — Add sidebar nav with "Loyalty" section (Program Config, Tiers, Customer Points) after "Customers", before "Analytics"; active state highlight via `usePathname`
-- [ ] 4.2 `apps/dashboard/src/app/loyalty/config/page.tsx` — Inline edit form for earn_rate + program_name, persists via PUT /v1/loyalty/config
-- [ ] 4.3 `apps/dashboard/src/app/loyalty/tiers/page.tsx` — List tiers by display_order, create/edit/delete actions, error on delete-with-customers
-- [ ] 4.4 `apps/dashboard/src/app/loyalty/customers/page.tsx` — Paginated customer points list with search, current tier name, row links to `/dashboard/customers/{id}`
+- [x] 4.1 `apps/dashboard/src/app/layout.tsx` — Add sidebar nav with "Loyalty" section (Program Config, Tiers, Customer Points) after "Customers", before "Analytics"; active state highlight via `usePathname`
+- [x] 4.2 `apps/dashboard/src/app/loyalty/config/page.tsx` — Inline edit form for earn_rate + program_name, persists via PUT /v1/loyalty/config
+- [x] 4.3 `apps/dashboard/src/app/loyalty/tiers/page.tsx` — List tiers by display_order, create/edit/delete actions, error on delete-with-customers
+- [x] 4.4 `apps/dashboard/src/app/loyalty/customers/page.tsx` — Paginated customer points list with search, current tier name, row links to `/dashboard/customers/{id}`
 
 ## Phase 5: Tests
 

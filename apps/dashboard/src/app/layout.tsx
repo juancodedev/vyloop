@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
+import { AuthProvider } from '@/lib/auth';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Vyloop',
-  description: 'Vyloop Platform',
+  title: 'Vyloop — Dashboard',
+  description: 'Vyloop Platform — Loyalty & Growth Dashboard',
 };
 
 export default function RootLayout({
@@ -12,8 +13,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="es">
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }
