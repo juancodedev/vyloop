@@ -176,3 +176,95 @@ export const customerRegisteredSchema = {
   },
   additionalProperties: false,
 };
+
+// ---------------------------------------------------------------------------
+// Envelope header schema (shared by PointsAssigned and RewardRedeemed)
+// ---------------------------------------------------------------------------
+
+const envelopeHeaderSchema = {
+  type: 'object',
+  required: ['business_id', 'timestamp', 'localization'],
+  properties: {
+    business_id: {
+      type: 'string',
+      format: 'uuid',
+      description: 'The business scoping identifier',
+    },
+    timestamp: {
+      type: 'string',
+      format: 'date-time',
+      description: 'ISO 8601 timestamp of event creation',
+    },
+    localization: {
+      type: 'object',
+      required: ['language', 'timezone'],
+      properties: {
+        language: { type: 'string', description: 'Language code (e.g. es-CL)' },
+        timezone: { type: 'string', description: 'Timezone (e.g. America/Santiago)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
+/**
+ * JSON Schema v1.0.0 for PointsAssigned events (envelope format).
+ *
+ * Validates the full envelope with header + payload.
+ */
+export const pointsAssignedSchema = {
+  $id: 'https://schema.vyloop.app/events/PointsAssigned/v1.0.0',
+  type: 'object',
+  title: 'PointsAssigned',
+  description: 'Envelope schema for PointsAssigned events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['customer_id', 'points_assigned', 'points_multiplier', 'total_points', 'reference_id', 'assignment_id'],
+      properties: {
+        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
+        points_assigned: { type: 'integer', minimum: 1, description: 'Points awarded in this assignment' },
+        points_multiplier: { type: 'number', minimum: 0, description: 'Effective tier multiplier applied' },
+        total_points: { type: 'integer', minimum: 0, description: 'Running total balance after assignment' },
+        reference_id: { type: 'string', minLength: 1, description: 'Idempotency key scoped to customer' },
+        assignment_id: { type: 'string', format: 'uuid', description: 'Unique identifier for this assignment' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
+/**
+ * JSON Schema v1.0.0 for RewardRedeemed events (envelope format).
+ *
+ * Validates the full envelope with header + payload.
+ */
+export const rewardRedeemedSchema = {
+  $id: 'https://schema.vyloop.app/events/RewardRedeemed/v1.0.0',
+  type: 'object',
+  title: 'RewardRedeemed',
+  description: 'Envelope schema for RewardRedeemed events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['customer_id', 'points_redeemed', 'total_points_after', 'partial', 'reference_id', 'redemption_id'],
+      properties: {
+        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
+        points_redeemed: { type: 'integer', minimum: 1, description: 'Points consumed in this redemption' },
+        total_points_after: { type: 'integer', minimum: 0, description: 'Balance after redemption' },
+        reward_name: { type: 'string', description: 'Optional reward description' },
+        partial: { type: 'boolean', description: 'Whether this redemption was partial' },
+        reference_id: { type: 'string', minLength: 1, description: 'Idempotency key scoped to customer' },
+        redemption_id: { type: 'string', format: 'uuid', description: 'Unique identifier for this redemption' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};

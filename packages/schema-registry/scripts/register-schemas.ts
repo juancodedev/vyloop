@@ -10,7 +10,7 @@
  * Stores each schema under both `{eventType}:{version}` and `{eventType}:latest`.
  */
 import type { KVNamespace } from '@cloudflare/workers-types';
-import { registerSchema, customerRegisteredSchema } from '../src/index';
+import { registerSchema, customerRegisteredSchema, pointsAssignedSchema, rewardRedeemedSchema } from '../src/index';
 
 const SCHEMAS_TO_REGISTER: Array<{
   eventType: string;
@@ -20,6 +20,16 @@ const SCHEMAS_TO_REGISTER: Array<{
   {
     eventType: 'CustomerRegistered',
     schema: customerRegisteredSchema as Record<string, unknown>,
+    version: '1.0.0',
+  },
+  {
+    eventType: 'PointsAssigned',
+    schema: pointsAssignedSchema as Record<string, unknown>,
+    version: '1.0.0',
+  },
+  {
+    eventType: 'RewardRedeemed',
+    schema: rewardRedeemedSchema as Record<string, unknown>,
     version: '1.0.0',
   },
 ];
