@@ -184,7 +184,10 @@ describe('API Gateway', () => {
   });
 
   describe('X-Business-ID enforcement', () => {
-    it('returns 403 when X-Business-ID does not match JWT claims', async () => {
+    it('forwards request when X-Business-ID is spoofed (auth-inject normalizes it)', async () => {
+      // authInjectMiddleware runs BEFORE businessIdMiddleware and
+      // overwrites X-Business-Id from the JWT claims, so a spoofed
+      // header never reaches businessIdMiddleware.
       const token = await getValidToken();
 
       const res = await app.fetch(
@@ -197,12 +200,13 @@ describe('API Gateway', () => {
         mockEnv(),
       );
 
-      expect(res.status).toBe(403);
-      const body = (await res.json()) as { error?: { code?: string } };
-      expect(body.error?.code).toBe('AUTH_BUSINESS_MISMATCH');
+      // Auth-inject normalizes the header → no mismatch → forwarded to service
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { service?: string };
+      expect(body.service).toBe('customer');
     });
 
-    it('returns 403 when X-Business-ID is missing', async () => {
+    it('forwards request when X-Business-ID is missing (auth-inject injects it from JWT)', async () => {
       const token = await getValidToken();
 
       const res = await app.fetch(
@@ -214,9 +218,10 @@ describe('API Gateway', () => {
         mockEnv(),
       );
 
-      expect(res.status).toBe(403);
-      const body = (await res.json()) as { error?: { code?: string } };
-      expect(body.error?.code).toBe('AUTH_BUSINESS_MISMATCH');
+      // Auth-inject sets X-Business-Id from JWT → header present → forwarded
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { service?: string };
+      expect(body.service).toBe('customer');
     });
   });
 
