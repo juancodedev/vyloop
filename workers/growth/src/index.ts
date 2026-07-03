@@ -1,12 +1,16 @@
+import type { MessageBatch } from '@cloudflare/workers-types';
+import { consume } from '@vyloop/event-bus';
+import type { EventEnvelope } from '@vyloop/event-bus';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { MessageBatch } from '@cloudflare/workers-types';
+
+import { handleEvent } from './event-handler';
 import type { Bindings } from './helpers';
 import { extractAuthHeaders } from './helpers';
 import router from './routes';
-import { consume } from '@vyloop/event-bus';
-import { handleEvent } from './event-handler';
-import type { EventEnvelope } from '@vyloop/event-bus';
+
+
+
 
 // ---------------------------------------------------------------------------
 // Hono app

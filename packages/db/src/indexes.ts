@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { index } from 'drizzle-orm/pg-core';
+
 import {
   customers,
   customerEvents,

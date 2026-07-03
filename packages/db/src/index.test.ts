@@ -79,7 +79,7 @@ describe('Database schema', () => {
 
   it('should have 15 tables in the schema object', async () => {
     const db = await import('./index');
-    const tableNames = Object.keys(db.schema).filter(
+    const _tableNames = Object.keys(db.schema).filter(
       (key) => (db.schema as Record<string, unknown>)[key] !== undefined,
     );
     // Each table registers under its export name in `* as schema`

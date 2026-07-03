@@ -1,15 +1,16 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+
+import { ingestor } from './ingestor';
 import { authMiddleware } from './middleware/auth';
+import { authInjectMiddleware } from './middleware/auth-inject';
 import { businessIdMiddleware } from './middleware/business-id';
 import {
   rateLimitMiddleware,
   DEFAULT_LIMITS,
   DEFAULT_WINDOW,
 } from './middleware/rate-limit';
-import { authInjectMiddleware } from './middleware/auth-inject';
 import { routerMiddleware, type GatewayEnv } from './router';
-import { ingestor } from './ingestor';
 
 // ---------------------------------------------------------------------------
 // App

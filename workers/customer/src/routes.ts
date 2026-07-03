@@ -1,9 +1,10 @@
-import { Hono } from 'hono';
-import { HTTPException } from 'hono/http-exception';
-import { eq, and, isNull, like, or, count } from 'drizzle-orm';
 import { createDb, customers, customerEvents, consents } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
+import { eq, and, isNull, like, or, count } from 'drizzle-orm';
+import { Hono } from 'hono';
+// import { HTTPException } from 'hono/http-exception';
+
 import type { Bindings } from './helpers';
 import { extractAuthHeaders, buildCustomerRegisteredEvent } from './helpers';
 
@@ -126,7 +127,7 @@ router.get('/v1/customers', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
 
   // Base conditions: RLS scope + active customers only
-  const conditions: any[] = [
+  const conditions: import('drizzle-orm').SQL[] = [
     eq(customers.businessId, businessId),
     isNull(customers.deletedAt),
   ];
@@ -231,7 +232,7 @@ router.patch('/v1/customers/:id', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
 
   // Silently ignore business_id / businessId from body (defense)
-  const { businessId: _ignoreBiz, business_id: _ignoreBizSnake, ...updateData } = body as any;
+  const { businessId: _ignoreBiz, business_id: _ignoreBizSnake, ...updateData } = body;
 
   const db = createDb(c.env.DATABASE_URL);
 

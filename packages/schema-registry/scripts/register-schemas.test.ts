@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
 import type { KVNamespace } from '@cloudflare/workers-types';
+import { describe, it, expect, vi } from 'vitest';
 
 // Mock the schema registry module so we can verify calls without side effects
 const registerSchemaMock = vi.fn();

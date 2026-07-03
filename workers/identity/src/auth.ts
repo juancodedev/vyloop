@@ -35,7 +35,7 @@ export interface TokenResponse {
 const ACCESS_TOKEN_TTL = 3600;
 
 /** Refresh token lifetime: 30 days */
-const REFRESH_TOKEN_TTL = 2_592_000;
+const _REFRESH_TOKEN_TTL = 2_592_000;
 
 // ---------------------------------------------------------------------------
 // JWT Signing / Verification

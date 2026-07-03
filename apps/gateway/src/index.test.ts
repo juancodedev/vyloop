@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { SignJWT } from 'jose';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Test configuration
@@ -163,7 +163,7 @@ describe('API Gateway', () => {
     it('passes auth routes without token (POST /v1/auth/token)', async () => {
       // /v1/auth/* routes skip auth middleware
       const identityMock = {
-        fetch: async (req: Request) => {
+        fetch: async (_req: Request) => {
           return new Response(
             JSON.stringify({ access_token: 'mock', token_type: 'Bearer', expires_in: 3600 }),
             { status: 200, headers: { 'Content-Type': 'application/json' } },

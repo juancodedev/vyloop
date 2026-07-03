@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
-import { authInjectMiddleware } from './auth-inject';
+import { describe, it, expect } from 'vitest';
+
 import type { JwtClaims } from './auth';
+import { authInjectMiddleware } from './auth-inject';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,7 +111,7 @@ describe('authInjectMiddleware', () => {
   it('omits header when JWT claim is missing (does not fail)', async () => {
     // JWT without business_id and role claims — simulate token that only has
     // sub and scopes (e.g., a scoped system token)
-    const { business_id, role, ...partialClaims } = baseClaims;
+    const { business_id: _business_id, role: _role, ...partialClaims } = baseClaims;
 
     const app = createTestApp(partialClaims as unknown as JwtClaims);
 

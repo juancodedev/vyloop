@@ -1,9 +1,9 @@
-import { Hono } from 'hono';
-import { HTTPException } from 'hono/http-exception';
-import { eq, and, count } from 'drizzle-orm';
-import { sql } from 'drizzle-orm';
-import { createDb, loyaltyPrograms, membershipTiers, pointsTransactions, customers } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
+import { eq, and, count , sql } from 'drizzle-orm';
+import { Hono } from 'hono';
+// import { HTTPException } from 'hono/http-exception';
+
 import type { Bindings } from './helpers';
 import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls } from './helpers';
 
@@ -413,9 +413,10 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
 
     return c.json({ data: tx }, 201);
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const error = err as { message?: string; code?: string };
     // Detect unique constraint violation on (customer_id, reference_id)
-    if (err?.message?.includes('uq_points_tx_reference') || err?.code === '23505') {
+    if (error.message?.includes('uq_points_tx_reference') || error.code === '23505') {
       return c.json(
         { error: { code: 'DUPLICATE_REFERENCE', message: 'A transaction with this reference_id already exists for this customer' } },
         409,
@@ -566,9 +567,10 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
       },
       201,
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const error = err as { message?: string; code?: string };
     // Detect unique constraint violation on (customer_id, reference_id)
-    if (err?.message?.includes('uq_points_tx_reference') || err?.code === '23505') {
+    if (error.message?.includes('uq_points_tx_reference') || error.code === '23505') {
       return c.json(
         { error: { code: 'DUPLICATE_REFERENCE', message: 'A transaction with this reference_id already exists for this customer' } },
         409,
