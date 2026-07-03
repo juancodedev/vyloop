@@ -4,7 +4,6 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { useRef, useState } from 'react';
 
 const CUSTOMER_WEB_URL = 'https://vyloop-customer-web.pages.dev/register?biz=cafe-central';
-const BUSINESS_SLUG = 'cafe-central';
 const BUSINESS_NAME = 'Café Central';
 
 export default function QRCodePage() {
