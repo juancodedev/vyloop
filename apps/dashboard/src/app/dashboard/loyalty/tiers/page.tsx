@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+
 import { api } from '@/lib/api';
-import type { Tier } from '@/lib/mock-data';
+import type { Tier } from '@/lib/api';
 
 interface TierForm {
   name: string;

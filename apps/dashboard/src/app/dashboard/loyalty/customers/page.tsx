@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+
 import { api } from '@/lib/api';
-import type { Customer } from '@/lib/mock-data';
+import type { Customer } from '@/lib/api';
 
 const PER_PAGE = 10;
 

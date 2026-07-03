@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
 import type { MessageBatch } from '@cloudflare/workers-types';
+import { eq } from 'drizzle-orm';
+import { createDb, schema } from '@vyloop/db';
 import { issueTokenPair, validateToken, type JwtClaims } from './auth';
 import { handleTestEvent } from './event-handler';
 
@@ -10,11 +12,48 @@ import { handleTestEvent } from './event-handler';
 
 export interface Env {
   JWT_SECRET: string;
+  DATABASE_URL: string;
 }
 
 type Variables = {
   jwt: JwtClaims;
 };
+
+// ---------------------------------------------------------------------------
+// Password verification (PBKDF2 via Web Crypto API)
+// ---------------------------------------------------------------------------
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [saltHex, hashHex] = stored.split(':');
+  if (!saltHex || !hashHex) return false;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits'],
+  );
+
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: encoder.encode(saltHex), iterations: 100_000, hash: 'SHA-256' },
+    key,
+    512,
+  );
+
+  const computedHex = Array.from(new Uint8Array(derived))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  // Constant-time comparison
+  if (computedHex.length !== hashHex.length) return false;
+  let diff = 0;
+  for (let i = 0; i < computedHex.length; i++) {
+    diff |= computedHex.charCodeAt(i) ^ hashHex.charCodeAt(i);
+  }
+  return diff === 0;
+}
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -24,40 +63,57 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 app.post('/v1/auth/token', async (c) => {
   const secret = c.env.JWT_SECRET;
+  const dbUrl = c.env.DATABASE_URL;
   if (!secret) {
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'JWT secret not configured' } }, 500);
   }
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
 
   try {
-    const body = await c.req.json<{
-      client_id?: string;
-      client_secret?: string;
-      grant_type?: string;
-      refresh_token?: string;
-      scope?: string;
-      business_id?: string;
-      role?: string;
-    }>();
+    const body = await c.req.json<{ email?: string; password?: string; grant_type?: string }>();
 
-    // For PMV: accept direct credentials in the body.
-    // In production, validate against DB and use OAuth 2.0 flows.
-    if (!body.client_id || !body.client_secret) {
+    if (!body.email || !body.password) {
       return c.json(
-        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing client_id or client_secret' } },
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing email or password' } },
         401,
       );
     }
 
-    // Determine scopes from request or use defaults
-    const scopes = body.scope?.split(' ') ?? ['read:customers'];
-    const businessId = body.business_id ?? body.client_id;
-    const role = body.role ?? 'staff';
+    // Create DB connection
+    const db = createDb(dbUrl);
+
+    // Find user by email
+    const [user] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, body.email))
+      .limit(1);
+
+    if (!user) {
+      return c.json(
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid email or password' } },
+        401,
+      );
+    }
+
+    // Verify password
+    const isValid = await verifyPassword(body.password, user.passwordHash ?? '');
+    if (!isValid) {
+      return c.json(
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid email or password' } },
+        401,
+      );
+    }
+
+    const scopes = ['read:customers', 'write:customers', 'write:loyalty', 'read:analytics'];
 
     const { accessToken, refreshToken, expiresIn } = await issueTokenPair(
       secret,
-      body.client_id,
-      businessId,
-      role,
+      user.id,
+      user.businessId,
+      user.role,
       scopes,
     );
 
@@ -67,6 +123,12 @@ app.post('/v1/auth/token', async (c) => {
       expires_in: expiresIn,
       refresh_token: refreshToken,
       scope: scopes.join(' '),
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+      },
     });
   } catch (err) {
     console.error('Token issuance error:', err);
@@ -83,28 +145,46 @@ app.post('/v1/auth/token', async (c) => {
 
 app.post('/v1/auth/refresh', async (c) => {
   const secret = c.env.JWT_SECRET;
+  const dbUrl = c.env.DATABASE_URL;
   if (!secret) {
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'JWT secret not configured' } }, 500);
   }
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
 
   try {
-    const body = await c.req.json<{ refresh_token?: string; client_id?: string }>();
+    const body = await c.req.json<{ refresh_token?: string; email?: string }>();
 
-    if (!body.refresh_token || !body.client_id) {
+    if (!body.refresh_token || !body.email) {
       return c.json(
-        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing refresh_token or client_id' } },
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing refresh_token or email' } },
         401,
       );
     }
 
-    // PMV: accept any non-empty refresh token (no DB validation yet)
-    // In production: validate refresh token against DB, check expiry
+    const db = createDb(dbUrl);
+    const [user] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, body.email))
+      .limit(1);
+
+    if (!user) {
+      return c.json(
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid email or refresh token' } },
+        401,
+      );
+    }
+
+    const scopes = ['read:customers', 'write:customers', 'write:loyalty', 'read:analytics'];
+
     const { accessToken, refreshToken, expiresIn } = await issueTokenPair(
       secret,
-      body.client_id,
-      body.client_id, // business_id = client_id for PMV
-      'staff',
-      ['read:customers'],
+      user.id,
+      user.businessId,
+      user.role,
+      scopes,
     );
 
     return c.json({
@@ -112,7 +192,7 @@ app.post('/v1/auth/refresh', async (c) => {
       token_type: 'Bearer',
       expires_in: expiresIn,
       refresh_token: refreshToken,
-      scope: 'read:customers',
+      scope: scopes.join(' '),
     });
   } catch (err) {
     console.error('Token refresh error:', err);
