@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+
 import { api } from '@/lib/api';
-import type { LoyaltyConfig } from '@/lib/mock-data';
+import type { LoyaltyConfig } from '@/lib/api';
 
 export default function LoyaltyConfigPage() {
   const [config, setConfig] = useState<LoyaltyConfig | null>(null);

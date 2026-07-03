@@ -1,10 +1,10 @@
-import { neon } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-http';
+import { Pool } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-serverless';
 import * as schema from './schema';
 
 export function createDb(dbUrl: string) {
-  const client = neon(dbUrl);
-  return drizzle(client, { schema });
+  const pool = new Pool({ connectionString: dbUrl });
+  return drizzle(pool, { schema });
 }
 
 // Re-export the full schema object
