@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { generateApiKey, hashKey, validateApiKey, validateScopes, VALID_SCOPES } from './api-keys';
+
+import { generateApiKey, validateApiKey, validateScopes, VALID_SCOPES } from './api-keys';
 
 describe('ApiKeys', () => {
   describe('generateApiKey', () => {

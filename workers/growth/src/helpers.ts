@@ -1,13 +1,13 @@
-import type { Context } from 'hono';
-import { HTTPException } from 'hono/http-exception';
 import type { Queue, KVNamespace } from '@cloudflare/workers-types';
+import { setCurrentBusinessId } from '@vyloop/db';
 import {
   POINTS_ASSIGNED,
   REWARD_REDEEMED,
   createEnvelope,
 } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
-import { setCurrentBusinessId } from '@vyloop/db';
+import type { Context } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -128,6 +128,7 @@ export function buildRewardRedeemedEvent(
  *
  * Call this at the start of every request that touches tenant-scoped tables.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function withRls(db: any, businessId: string): Promise<void> {
   await db.execute(setCurrentBusinessId(businessId));
 }

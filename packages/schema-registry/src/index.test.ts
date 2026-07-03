@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
 import type { KVNamespace } from '@cloudflare/workers-types';
+import { describe, it, expect, beforeEach } from 'vitest';
+
 import {
   getSchema,
   registerSchema,

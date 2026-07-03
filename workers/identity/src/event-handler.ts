@@ -1,5 +1,5 @@
-import type { EventEnvelope } from '@vyloop/event-bus';
 import type { Message } from '@cloudflare/workers-types';
+import type { EventEnvelope } from '@vyloop/event-bus';
 
 /**
  * TestEvent consumer handler.
