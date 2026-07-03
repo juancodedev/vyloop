@@ -1,6 +1,6 @@
 # Vyloop — Estado de Tareas
 
-> Actualizado: 2 Julio 2026
+> Actualizado: 3 Julio 2026
 
 ---
 
@@ -14,9 +14,10 @@
   - [x] 8 Workers deployados (identity, customer, growth, analytics, automation, communication, compliance, gateway)
   - [x] Dashboard Pages deployado en vyloop.juancode.dev
   - [x] Customer-web Pages deployado en vyloop-customer-web.pages.dev
-- [x] CI/CD probado y funcionando (PRs #19, #20 mergeados)
+- [x] CI/CD probado y funcionando — 11/11 jobs verdes ✅
 - [x] Node.js actualizado a v22 para compatibilidad con undici v8
 - [x] wrangler agregado como root devDependency para deploy de workers
+- [x] Cloudflare API token con permisos correctos: Workers Scripts:Edit + Memberships:Read
 
 ### Base de Datos (PostgreSQL + Neon + Drizzle ORM)
 - [x] Schema: 15 tablas (tenants, users, customers, loyalty_programs, tiers, points, rewards, etc.)

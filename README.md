@@ -22,7 +22,7 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | Growth Engine (puntos, tiers, wallet, consumer) | ✅ Completado |
 | Dashboard PMV (login, sidebar, clientes, loyalty) | ✅ Completado |
 | Customer detail card SDK | ✅ Completado |
-| CI/CD automático (GitHub Actions → Cloudflare) | ✅ Completado |
+| CI/CD automático (GitHub Actions → Cloudflare) | ✅ 11/11 jobs verdes |
 | **Deployado y demo-list** | **✅ VIVO** |
 | Growth Engine Phase 5 tests | 🔲 Pendiente |
 | Workers placeholder (analytics, automation, communication, compliance) | 🔲 Implementar lógica de negocio |
@@ -191,6 +191,16 @@ Ver [docs/](./docs) para:
 | #18 | Customer detail card + Cloudflare deployment |
 | #19 | GitHub Actions deploy workflow |
 | #20 | Fix CI pnpm version spec |
+| — | Fix CI: Node v22, wrangler root dep, API token permissions |
+
+---
+
+### CI/CD: Cada push a `main` ejecuta
+
+1. **quality** — lint + typecheck + test (105+ tests)
+2. **deploy-workers** — 8 workers a Cloudflare Workers (matrix paralelo)
+3. **deploy-dashboard** — build next-on-pages + Pages deploy
+4. **deploy-customer-web** — build next-on-pages + Pages deploy
 
 ---
 
