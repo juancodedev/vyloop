@@ -4,7 +4,6 @@ import { useEffect, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
-import { business } from '@/lib/mock-data';
 
 // Minimal inline SVG icons
 const IconUsers = () => (
@@ -114,7 +113,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="sidebar-footer">
-          <div className="business-name">{business.name}</div>
+          <div className="business-name">Café Central</div>
         </div>
       </aside>
 
@@ -123,6 +122,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <header className="main-topbar">
           <div className="page-title">
             {pathname === '/dashboard/customers' && 'Clientes'}
+            {pathname.match(/^\/dashboard\/customers\/(.+)/) && 'Detalle del Cliente'}
             {pathname === '/dashboard/loyalty/config' && 'Configuración de Lealtad'}
             {pathname === '/dashboard/loyalty/tiers' && 'Niveles de Lealtad'}
             {pathname === '/dashboard/loyalty/customers' && 'Puntos de Clientes'}

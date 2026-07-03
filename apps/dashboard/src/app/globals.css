@@ -956,3 +956,161 @@ table.data-table td.actions {
     padding: 0.5rem 0.625rem;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Clickable rows                                                    */
+/* ------------------------------------------------------------------ */
+
+tr.clickable-row {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+tr.clickable-row:hover {
+  background-color: #f3f7f9;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Customer detail / hero card                                       */
+/* ------------------------------------------------------------------ */
+
+.btn-back {
+  background: none;
+  border: none;
+  color: #2c7f8f;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0 0 0.75rem;
+  display: inline-block;
+}
+
+.btn-back:hover {
+  color: #1b5e6b;
+}
+
+.customer-hero-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 2rem;
+  padding: 1.75rem;
+}
+
+.customer-hero-name {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem;
+  color: #1e293b;
+}
+
+.customer-hero-email {
+  color: #4b5c6b;
+  margin: 0 0 0.15rem;
+  font-size: 0.9rem;
+}
+
+.customer-hero-phone {
+  color: #4b5c6b;
+  margin: 0 0 0.15rem;
+  font-size: 0.9rem;
+}
+
+.customer-hero-birth,
+.customer-hero-since {
+  color: #7c8d9d;
+  margin: 0.15rem 0 0;
+  font-size: 0.8rem;
+}
+
+.customer-hero-stats {
+  display: flex;
+  gap: 1.5rem;
+  flex-shrink: 0;
+}
+
+.hero-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.hero-stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6d7f8f;
+}
+
+.hero-stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.hero-tier-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.2rem 0.75rem;
+  border-radius: 9999px;
+}
+
+.hero-points {
+  font-size: 1.6rem;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Event timeline                                                    */
+/* ------------------------------------------------------------------ */
+
+.event-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.event-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid #e9edf0;
+}
+
+.event-row:last-child {
+  border-bottom: none;
+}
+
+.event-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #cbd5e0;
+  margin-top: 0.4rem;
+  flex-shrink: 0;
+}
+
+.event-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.event-type {
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: #1e293b;
+}
+
+.event-points {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.event-date {
+  font-size: 0.75rem;
+  color: #7c8d9d;
+  margin-left: auto;
+}

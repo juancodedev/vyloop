@@ -1,10 +1,13 @@
 'use client';
 
 import { useState, useEffect, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
+
 import { api } from '@/lib/api';
-import type { Customer } from '@/lib/mock-data';
+import type { Customer } from '@/lib/api';
 
 export default function CustomersPage() {
+  const router = useRouter();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -79,7 +82,11 @@ export default function CustomersPage() {
                 </tr>
               ) : (
                 customers.map((c) => (
-                  <tr key={c.id}>
+                  <tr
+                    key={c.id}
+                    className="clickable-row"
+                    onClick={() => router.push(`/dashboard/customers/${c.id}`)}
+                  >
                     <td>
                       <div style={{ fontWeight: 500 }}>{c.fullName}</div>
                       {c.email && (
