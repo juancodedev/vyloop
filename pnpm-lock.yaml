@@ -46,6 +46,9 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@22.20.0)(jiti@2.7.0)(tsx@4.22.5)
+      wrangler:
+        specifier: ^3.0.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260702.1)
 
   apps/customer-web:
     dependencies:
