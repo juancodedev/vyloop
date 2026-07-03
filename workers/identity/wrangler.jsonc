@@ -4,7 +4,8 @@
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "JWT_SECRET": ""
+    "JWT_SECRET": "vyloop-dev-secret-2026",
+    "DATABASE_URL": "postgresql://neondb_owner:npg_aUClio5VLTd8@ep-shiny-paper-aibbf0hk-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require"
   },
   "queues": {
     "consumers": [
