@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+
 import { createEnvelope, publish, publishBatch, consume } from './index';
 import type { EventEnvelope } from './index';
 

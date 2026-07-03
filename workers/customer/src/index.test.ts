@@ -1,8 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HTTPException } from 'hono/http-exception';
-import app from './index';
-import { extractAuthHeaders, buildCustomerRegisteredEvent, withRls } from './helpers';
 import { setCurrentBusinessId } from '@vyloop/db';
+import { HTTPException } from 'hono/http-exception';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+import { extractAuthHeaders, buildCustomerRegisteredEvent, withRls } from './helpers';
+
+import app from './index';
+
+
 
 // ===========================================================================
 // Mock setup
@@ -383,7 +387,7 @@ describe('CRUD Routes', () => {
       const res = await request('GET', '/', { auth: false });
 
       expect(res.status).toBe(403);
-      const body = await res.json();
+      const body = await res.json() as any as any;
       expect(body.error.code).toBe('UNAUTHORIZED');
     });
   });
@@ -408,10 +412,10 @@ describe('CRUD Routes', () => {
       });
 
       const body = { fullName: 'Alice Smith', phone: '+56912345678' };
-      const res = await request('PUT', '/', { body });
+      const res = await request('PUT', '/v1/customers', { body });
 
       expect(res.status).toBe(201);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.event_published).toBe(true);
       expect(data.fullName).toBe('Alice Smith');
       expect(data.id).toBe('new-id');
@@ -425,7 +429,7 @@ describe('CRUD Routes', () => {
     });
 
     it('returns 400 when required fields are missing', async () => {
-      const res = await request('PUT', '/', { body: { phone: '+56912345678' } as any });
+      const res = await request('PUT', '/v1/customers', { body: { phone: '+56912345678' } as any });
 
       expect(res.status).toBe(400);
       expect(mockDb.insert).not.toHaveBeenCalled();
@@ -456,10 +460,10 @@ describe('CRUD Routes', () => {
       });
 
       const body = { fullName: 'Alice Updated', phone: '+56912345678', email: 'alice@test.com' };
-      const res = await request('PUT', '/', { body });
+      const res = await request('PUT', '/v1/customers', { body });
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.fullName).toBe('Alice Updated');
       expect(data.email).toBe('alice@updated.com');
 
@@ -485,10 +489,10 @@ describe('CRUD Routes', () => {
       mockValidate.mockResolvedValue({ valid: false, errors: ["payload full_name can't be empty"] });
 
       const body = { fullName: 'Alice Smith', phone: '+56912345678' };
-      const res = await request('PUT', '/', { body });
+      const res = await request('PUT', '/v1/customers', { body });
 
       expect(res.status).toBe(500);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.error.code).toBe('VALIDATION_ERROR');
 
       // Event NOT published
@@ -542,10 +546,10 @@ describe('CRUD Routes', () => {
         return chain;
       });
 
-      const res = await request('GET', '/?page=1&limit=10');
+      const res = await request('GET', '/v1/customers?page=1&limit=10');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.data).toHaveLength(10);
       expect(data.total).toBe(25);
       expect(data.page).toBe(1);
@@ -594,10 +598,10 @@ describe('CRUD Routes', () => {
         return chain;
       });
 
-      const res = await request('GET', '/?q=alice');
+      const res = await request('GET', '/v1/customers?q=alice');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.data).toHaveLength(1);
       expect(data.data[0].fullName).toContain('Alice');
       expect(data.total).toBe(1);
@@ -637,10 +641,10 @@ describe('CRUD Routes', () => {
         return chain;
       });
 
-      const res = await request('GET', '/');
+      const res = await request('GET', '/v1/customers');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.data).toHaveLength(3);
       expect(data.total).toBe(3);
       // Verify no customer has deletedAt set
@@ -735,10 +739,10 @@ describe('CRUD Routes', () => {
           return chain;
         });
 
-      const res = await request('GET', '/c-1');
+      const res = await request('GET', '/v1/customers/c-1');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.id).toBe('c-1');
       expect(data.fullName).toBe('Alice Smith');
       expect(data.customer_events).toHaveLength(1);
@@ -785,7 +789,7 @@ describe('CRUD Routes', () => {
         return chain;
       });
 
-      const res = await request('GET', '/c-deleted');
+      const res = await request('GET', '/v1/customers/c-deleted');
 
       expect(res.status).toBe(404);
     });
@@ -812,10 +816,10 @@ describe('CRUD Routes', () => {
       });
 
       const body = { email: 'newemail@test.com', fullName: 'New Name' };
-      const res = await request('PATCH', '/existing-id', { body });
+      const res = await request('PATCH', '/v1/customers/existing-id', { body });
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.fullName).toBe('Alice Updated');
       expect(data.email).toBe('alice@updated.com');
 
@@ -845,7 +849,7 @@ describe('CRUD Routes', () => {
       });
 
       const body = { fullName: 'Hacker', business_id: 'biz-evil', businessId: 'biz-evil' };
-      const res = await request('PATCH', '/existing-id', { body });
+      const res = await request('PATCH', '/v1/customers/existing-id', { body });
 
       expect(res.status).toBe(200);
 
@@ -898,7 +902,7 @@ describe('CRUD Routes', () => {
         return chain;
       });
 
-      const res = await request('DELETE', '/c-1');
+      const res = await request('DELETE', '/v1/customers/c-1');
 
       expect(res.status).toBe(204);
       expect(res.body).toBeNull();
@@ -946,7 +950,7 @@ describe('CRUD Routes', () => {
       });
 
       // GET /c-deleted-after-delete
-      const res = await request('GET', '/c-deleted-after-delete');
+      const res = await request('GET', '/v1/customers/c-deleted-after-delete');
 
       expect(res.status).toBe(404);
     });
@@ -962,7 +966,7 @@ describe('CRUD Routes', () => {
       const res = await request('POST', '/');
 
       expect(res.status).toBe(404);
-      const body = await res.json();
+      const body = await res.json() as any;
       expect(body.error.code).toBe('NOT_FOUND');
     });
   });

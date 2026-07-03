@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+
 import type { Bindings } from './helpers';
 import { extractAuthHeaders } from './helpers';
 import router from './routes';

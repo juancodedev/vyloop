@@ -1,7 +1,7 @@
-import { Hono } from 'hono';
-import { validate } from '@vyloop/schema-registry';
-import { publish, createEnvelope } from '@vyloop/event-bus';
 import type { KVNamespace } from '@cloudflare/workers-types';
+import { publish, createEnvelope } from '@vyloop/event-bus';
+import { validate } from '@vyloop/schema-registry';
+import { Hono } from 'hono';
 
 // ---------------------------------------------------------------------------
 // Types

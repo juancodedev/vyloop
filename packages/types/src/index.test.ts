@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+
 import type { TenantId, UserId, CustomerId, BaseEvent, Entity } from './index';
 
 describe('branded types', () => {

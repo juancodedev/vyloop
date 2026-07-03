@@ -1,6 +1,5 @@
-import type { Context, Next } from 'hono';
 import type { KVNamespace } from '@cloudflare/workers-types';
-import type { AuthEnv } from './middleware/auth';
+import type { Context, Next } from 'hono';
 
 // ---------------------------------------------------------------------------
 // Types

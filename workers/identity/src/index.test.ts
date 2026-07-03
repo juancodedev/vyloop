@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+
 import { issueToken, validateToken, issueTokenPair, generateRefreshToken } from './auth';
 
 // ---------------------------------------------------------------------------
@@ -9,6 +10,52 @@ const TEST_SECRET = 'test-jwt-secret-key-for-unit-tests-only';
 const TEST_SUB = 'user_abc123';
 const TEST_BUSINESS_ID = 'biz_456';
 const TEST_ROLE = 'admin';
+const TEST_PASSWORD_HASH = '7465737473616c743132333435363738:29e173ede6837224f941422881874869027d7a0c41ea754d81eb479ab49fab86180da374e764ade13d98102ebc3e0cbc1375ec5c321a32e54a241df21e659077';
+
+// ---------------------------------------------------------------------------
+// Mock database
+// ---------------------------------------------------------------------------
+
+vi.mock('@vyloop/db', () => {
+  const mockUser = {
+    id: TEST_SUB,
+    email: 'test@example.com',
+    passwordHash: TEST_PASSWORD_HASH,
+    businessId: TEST_BUSINESS_ID,
+    role: TEST_ROLE,
+    fullName: 'Test User',
+    createdAt: new Date(),
+    updatedAt: null,
+    deletedAt: null,
+  };
+
+  const mockDb = {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: () => Promise.resolve([mockUser]),
+        }),
+      }),
+    }),
+  };
+
+  return {
+    createDb: () => mockDb,
+    schema: {
+      users: {
+        id: 'id',
+        email: 'email',
+        passwordHash: 'passwordHash',
+        businessId: 'businessId',
+        role: 'role',
+        fullName: 'fullName',
+        createdAt: 'createdAt',
+        updatedAt: 'updatedAt',
+        deletedAt: 'deletedAt',
+      },
+    },
+  };
+});
 const TEST_SCOPES = ['read:customers', 'write:customers', 'write:loyalty'];
 
 // ---------------------------------------------------------------------------
@@ -96,21 +143,17 @@ describe('Identity API', () => {
   });
 
   describe('POST /v1/auth/token', () => {
-    it('should return 200 with token pair for valid credentials', async () => {
+    it('should return 200 with token pair for valid email/password', async () => {
       const res = await app.fetch(
         new Request('http://localhost/v1/auth/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            client_id: 'test-client',
-            client_secret: 'test-secret',
-            grant_type: 'client_credentials',
-            scope: 'read:customers write:loyalty',
-            business_id: 'biz_001',
-            role: 'admin',
+            email: 'test@example.com',
+            password: 'test-password',
           }),
         }),
-        { JWT_SECRET: TEST_SECRET },
+        { JWT_SECRET: TEST_SECRET, DATABASE_URL: 'postgres://mock' },
       );
 
       expect(res.status).toBe(200);
@@ -119,7 +162,7 @@ describe('Identity API', () => {
       expect(body).toHaveProperty('refresh_token');
       expect(body).toHaveProperty('token_type', 'Bearer');
       expect(body).toHaveProperty('expires_in');
-      expect(body).toHaveProperty('scope', 'read:customers write:loyalty');
+      expect(body).toHaveProperty('scope');
     });
 
     it('should return 401 for missing credentials', async () => {
@@ -129,7 +172,7 @@ describe('Identity API', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
         }),
-        { JWT_SECRET: TEST_SECRET },
+        { JWT_SECRET: TEST_SECRET, DATABASE_URL: 'postgres://mock' },
       );
 
       expect(res.status).toBe(401);

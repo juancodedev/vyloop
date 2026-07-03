@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+
 import { env, envOptional } from './index';
 
 const TEST_KEY = 'VYLOOP_TEST_VAR';

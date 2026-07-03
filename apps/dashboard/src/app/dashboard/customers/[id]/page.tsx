@@ -2,8 +2,9 @@
 
 export const runtime = 'edge';
 
-import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+
 import { api, type CustomerDetail } from '@/lib/api';
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
-import { Hono } from 'hono';
-import { consume, type EventEnvelope } from '@vyloop/event-bus';
 import type { MessageBatch } from '@cloudflare/workers-types';
-import { eq } from 'drizzle-orm';
 import { createDb, schema } from '@vyloop/db';
+import { consume, type EventEnvelope } from '@vyloop/event-bus';
+import { eq } from 'drizzle-orm';
+import { Hono } from 'hono';
+
 import { issueTokenPair, validateToken, type JwtClaims } from './auth';
 import { handleTestEvent } from './event-handler';
 

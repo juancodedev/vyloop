@@ -1,9 +1,10 @@
-import { Hono } from 'hono';
-import { HTTPException } from 'hono/http-exception';
-import { eq, and, isNull, like, or, count } from 'drizzle-orm';
 import { createDb, customers, customerEvents, consents } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
+import { eq, and, isNull, like, or, count, type SQL } from 'drizzle-orm';
+import { Hono } from 'hono';
+// import { HTTPException } from 'hono/http-exception';
+
 import type { Bindings } from './helpers';
 import { extractAuthHeaders, buildCustomerRegisteredEvent } from './helpers';
 
@@ -51,7 +52,7 @@ router.put('/v1/customers', async (c) => {
   if (existing.length > 0) {
     // Update existing — skip event
     const customer = existing[0];
-    const updateData: Record<string, unknown> = {
+    const updateData: Partial<typeof customers.$inferInsert> = {
       fullName: body.fullName,
       updatedAt: new Date(),
     };
@@ -68,7 +69,7 @@ router.put('/v1/customers', async (c) => {
   }
 
   // Insert new customer — first-time registration
-  const insertData: Record<string, unknown> = {
+  const insertData: typeof customers.$inferInsert = {
     businessId,
     phone: body.phone,
     fullName: body.fullName,
@@ -126,7 +127,7 @@ router.get('/v1/customers', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
 
   // Base conditions: RLS scope + active customers only
-  const conditions: any[] = [
+  const conditions: SQL[] = [
     eq(customers.businessId, businessId),
     isNull(customers.deletedAt),
   ];
@@ -141,8 +142,8 @@ router.get('/v1/customers', async (c) => {
         like(customers.phone, `%${token}%`),
       ),
     );
-    // OR across all tokens (any match returns the row)
-    conditions.push(...tokenConditions);
+    // Filter out undefined and push
+    conditions.push(...tokenConditions.filter((c): c is SQL => c !== undefined));
   }
 
   const where = and(...conditions);
@@ -231,7 +232,7 @@ router.patch('/v1/customers/:id', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
 
   // Silently ignore business_id / businessId from body (defense)
-  const { businessId: _ignoreBiz, business_id: _ignoreBizSnake, ...updateData } = body as any;
+  const { businessId: _ignoreBiz, business_id: _ignoreBizSnake, ...updateData } = body;
 
   const db = createDb(c.env.DATABASE_URL);
 
