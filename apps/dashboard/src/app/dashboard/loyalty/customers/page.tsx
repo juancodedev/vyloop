@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { api } from '@/lib/api';
 import type { Customer } from '@/lib/api';
@@ -8,6 +9,7 @@ import type { Customer } from '@/lib/api';
 const PER_PAGE = 10;
 
 export default function LoyaltyCustomersPage() {
+  const router = useRouter();
   const [data, setData] = useState<{
     items: Customer[];
     total: number;
@@ -16,7 +18,6 @@ export default function LoyaltyCustomersPage() {
   }>({ items: [], total: 0, page: 1, totalPages: 0 });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState<{ type: string; message: string } | null>(null);
 
   const load = useCallback(async (page: number) => {
     setLoading(true);
@@ -29,11 +30,6 @@ export default function LoyaltyCustomersPage() {
     load(1);
   }, [load]);
 
-  function showToast(message: string) {
-    setToast({ type: 'info', message });
-    setTimeout(() => setToast(null), 3000);
-  }
-
   function handleSearch(value: string) {
     setSearch(value);
   }
@@ -44,7 +40,7 @@ export default function LoyaltyCustomersPage() {
   }
 
   function handleRowClick(customer: Customer) {
-    showToast(`Detalle de ${customer.fullName} — próximamente`);
+    router.push(`/dashboard/customers/${customer.id}`);
   }
 
   return (
@@ -166,12 +162,6 @@ export default function LoyaltyCustomersPage() {
         )}
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div className="toast-container">
-          <div className={`toast toast-${toast.type}`}>{toast.message}</div>
-        </div>
-      )}
     </>
   );
 }
