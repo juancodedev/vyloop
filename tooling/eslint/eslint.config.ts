@@ -11,8 +11,9 @@ const config = tseslint.config(
     rules: {
       '@typescript-eslint/no-unused-vars': [
         'error',
-        { argsIgnorePattern: '^_' },
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
+      '@typescript-eslint/no-explicit-any': ['error', { ignoreRestArgs: true }],
       '@typescript-eslint/explicit-function-return-type': 'off',
       'import/order': [
         'error',
@@ -21,11 +22,25 @@ const config = tseslint.config(
           'newlines-between': 'always',
         },
       ],
+      'import/no-unresolved': 'off',
+    },
+  },
+  {
+    files: ['**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
   prettier,
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.next/**', '**/drizzle/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.next/**',
+      '**/.vercel/**',
+      '**/drizzle/**',
+      '**/next-env.d.ts',
+    ],
   },
 );
 

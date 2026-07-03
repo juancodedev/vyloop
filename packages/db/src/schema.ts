@@ -1,5 +1,5 @@
-import { pgTable, uuid, text, timestamp, jsonb, numeric, integer, boolean, date, unique } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { pgTable, uuid, text, timestamp, jsonb, numeric, integer, boolean, date, unique } from 'drizzle-orm/pg-core';
 
 // ============================================================================
 // Identity Domain

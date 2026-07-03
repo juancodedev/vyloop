@@ -1,8 +1,8 @@
+import type { Queue, KVNamespace } from '@cloudflare/workers-types';
+import { setCurrentBusinessId } from '@vyloop/db';
+import { CUSTOMER_REGISTERED, createEnvelope } from '@vyloop/event-bus';
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { Queue, KVNamespace } from '@cloudflare/workers-types';
-import { CUSTOMER_REGISTERED, createEnvelope } from '@vyloop/event-bus';
-import { setCurrentBusinessId } from '@vyloop/db';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,6 +84,7 @@ export function buildCustomerRegisteredEvent(
  * With the Neon HTTP driver this sends a `SET LOCAL` statement to the
  * database — effective for the current transaction.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function withRls(db: any, businessId: string): Promise<void> {
   await db.execute(setCurrentBusinessId(businessId));
 }

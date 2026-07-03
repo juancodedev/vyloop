@@ -1,9 +1,10 @@
 import type { Message } from '@cloudflare/workers-types';
+import { createDb, customers, membershipTiers, loyaltyPrograms } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
+import { eq, and, lte, desc, sql } from 'drizzle-orm';
+
 import type { Bindings } from './helpers';
 import { withRls } from './helpers';
-import { createDb, customers, membershipTiers, loyaltyPrograms } from '@vyloop/db';
-import { eq, and, lte, desc, sql } from 'drizzle-orm';
 
 // ---------------------------------------------------------------------------
 // Queue consumer dispatcher
@@ -153,9 +154,10 @@ async function handleCustomerRegistered(
     `);
 
     console.log(`[growth] Wallet initialized for customer ${customer.id}`);
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const error = err as { message?: string; code?: string };
     // Idempotency: duplicate (customer_id, reference_id) → second event is a no-op
-    if (err?.message?.includes('uq_points_tx_reference') || err?.code === '23505') {
+    if (error.message?.includes('uq_points_tx_reference') || error.code === '23505') {
       console.log(`[growth] Customer ${customer.id} already has wallet — continuing`);
     } else {
       throw err;

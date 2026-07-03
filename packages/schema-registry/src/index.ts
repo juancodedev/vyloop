@@ -1,5 +1,5 @@
-import Ajv, { type ValidateFunction } from 'ajv';
 import type { KVNamespace } from '@cloudflare/workers-types';
+import Ajv, { type ValidateFunction } from 'ajv';
 
 const ajv = new Ajv({
   // Prevent schema-with-$id conflicts when re-compiling schemas with same $id

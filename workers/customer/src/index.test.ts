@@ -1,8 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HTTPException } from 'hono/http-exception';
-import app from './index';
-import { extractAuthHeaders, buildCustomerRegisteredEvent, withRls } from './helpers';
 import { setCurrentBusinessId } from '@vyloop/db';
+import { HTTPException } from 'hono/http-exception';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+import { extractAuthHeaders, buildCustomerRegisteredEvent, withRls } from './helpers';
+
+import app from './index';
+
+
 
 // ===========================================================================
 // Mock setup
