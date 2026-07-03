@@ -15,6 +15,13 @@
       "when": 1783024370138,
       "tag": "0001_good_ultimatum",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783030944465,
+      "tag": "0002_bouncy_tyger_tiger",
+      "breakpoints": true
     }
   ]
 }

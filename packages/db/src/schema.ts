@@ -38,6 +38,7 @@ export const users = pgTable('users', {
   fullName: text('full_name'),
   role: text('role').notNull().default('cashier'),
   branchId: uuid('branch_id').references(() => branches.id),
+  passwordHash: text('password_hash'),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [

@@ -13,14 +13,17 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.0",
-    "drizzle-orm": "^0.38.0"
+    "drizzle-orm": "^0.38.0",
+    "pg": "^8.0.0"
   },
   "devDependencies": {
     "drizzle-kit": "^0.30.0",
+    "tsx": "^4.22.5",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }

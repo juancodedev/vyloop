@@ -3,14 +3,11 @@
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {
-    "DATABASE_URL": ""
-  },
+  "vars": {},
   "kv_namespaces": [
     {
       "binding": "SCHEMA_REGISTRY",
-      "id": "schema-registry",
-      "preview_id": "schema-registry-preview"
+      "id": "732ccde5b0944db082d07667aba8104b"
     }
   ],
   "queues": {
