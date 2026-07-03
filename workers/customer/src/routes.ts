@@ -14,10 +14,10 @@ import { extractAuthHeaders, buildCustomerRegisteredEvent } from './helpers';
 const router = new Hono<{ Bindings: Bindings }>();
 
 // ---------------------------------------------------------------------------
-// Upsert: PUT /
+// Upsert: PUT /v1/customers
 // ---------------------------------------------------------------------------
 
-router.put('/', async (c) => {
+router.put('/v1/customers', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const body = await c.req.json<{
     fullName: string;
@@ -113,10 +113,10 @@ router.put('/', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// List: GET /
+// List: GET /v1/customers
 // ---------------------------------------------------------------------------
 
-router.get('/', async (c) => {
+router.get('/v1/customers', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
@@ -165,10 +165,10 @@ router.get('/', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Profile: GET /:id
+// Profile: GET /v1/customers/:id
 // ---------------------------------------------------------------------------
 
-router.get('/:id', async (c) => {
+router.get('/v1/customers/:id', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const id = c.req.param('id');
   const db = createDb(c.env.DATABASE_URL);
@@ -222,10 +222,10 @@ router.get('/:id', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Partial update: PATCH /:id
+// Partial update: PATCH /v1/customers/:id
 // ---------------------------------------------------------------------------
 
-router.patch('/:id', async (c) => {
+router.patch('/v1/customers/:id', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const id = c.req.param('id');
   const body = await c.req.json<Record<string, unknown>>();
@@ -266,10 +266,10 @@ router.patch('/:id', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Soft delete: DELETE /:id
+// Soft delete: DELETE /v1/customers/:id
 // ---------------------------------------------------------------------------
 
-router.delete('/:id', async (c) => {
+router.delete('/v1/customers/:id', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const id = c.req.param('id');
   const db = createDb(c.env.DATABASE_URL);

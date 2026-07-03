@@ -4,13 +4,12 @@
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "JWT_SECRET": ""
+    "JWT_SECRET": "vyloop-dev-secret-2026"
   },
   "kv_namespaces": [
     {
       "binding": "RATE_LIMITER",
-      "id": "rate-limiter",
-      "preview_id": "rate-limiter-preview"
+      "id": "c2d6e3da0e96495697b3caa2c4270e87"
     }
   ],
   "queues": {
