@@ -37,6 +37,21 @@ const IconLayers = () => (
   </svg>
 );
 
+const IconQR = () => (
+  <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="7" height="7" rx="1" />
+    <rect x="14" y="3" width="7" height="7" rx="1" />
+    <rect x="3" y="14" width="7" height="7" rx="1" />
+    <line x1="14" y1="17" x2="17" y2="17" />
+    <line x1="14" y1="14" x2="14" y2="14.01" />
+    <line x1="17" y1="14" x2="17" y2="14.01" />
+    <line x1="14" y1="21" x2="17" y2="21" />
+    <line x1="21" y1="14" x2="21" y2="17" />
+    <line x1="21" y1="19" x2="21" y2="21" />
+    <line x1="19" y1="21" x2="19" y2="21.01" />
+  </svg>
+);
+
 const _IconLogOut = () => (
   <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -111,6 +126,16 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             <IconStar />
             <span>Puntos</span>
           </Link>
+
+          <div className="sidebar-section-label">Comercio</div>
+
+          <Link
+            href="/dashboard/qr"
+            className={isActive(pathname, '/dashboard/qr') ? 'active' : ''}
+          >
+            <IconQR />
+            <span>QR del Negocio</span>
+          </Link>
         </nav>
 
         <div className="sidebar-footer">
@@ -127,6 +152,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             {pathname === '/dashboard/loyalty/config' && 'Configuración de Lealtad'}
             {pathname === '/dashboard/loyalty/tiers' && 'Niveles de Lealtad'}
             {pathname === '/dashboard/loyalty/customers' && 'Puntos de Clientes'}
+            {pathname === '/dashboard/qr' && 'QR del Negocio'}
             {pathname === '/dashboard' && 'Panel Principal'}
           </div>
           <div className="topbar-right">

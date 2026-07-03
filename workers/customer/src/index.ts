@@ -16,6 +16,13 @@ const app = new Hono<{ Bindings: Bindings; Variables: { auth: ReturnType<typeof 
 // ---------------------------------------------------------------------------
 
 app.use('*', async (c, next) => {
+  // Skip auth header check for public registration endpoint
+  const path = new URL(c.req.url).pathname;
+  if (path === '/v1/customers' && c.req.method === 'PUT') {
+    await next();
+    return;
+  }
+
   try {
     // Extract and validate auth headers (injected by gateway).
     // The gateway already strips incoming X-* headers before forwarding,

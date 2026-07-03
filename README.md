@@ -46,7 +46,7 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 ### Demo: Dashboard
 
 1. Entrá a [vyloop.juancode.dev](https://vyloop.juancode.dev)
-2. Login con email `admin@cafecentral.com` / contraseña `admin123`
+2. Login con email `demo@cafecentral.com` / contraseña `demo123`
 3. Navegá clientes, niveles, configuración de lealtad
 
 ---
@@ -85,6 +85,17 @@ docker compose -f docker/docker-compose.yml up -d
 pnpm dev
 ```
 
+Esto arranca en paralelo:
+- `next dev` para el dashboard (puerto 3000)
+- `wrangler dev` para el gateway (puerto 8787) + todos los workers (8788–8794)
+- El dashboard apunta al gateway en `http://localhost:8787`
+- La gateway descubre automáticamente los workers via service bindings
+
+> ⚠️ Si es la primera vez, seedear la base de datos primero:
+> ```bash
+> DATABASE_URL="postgresql://..." pnpm --filter @vyloop/db db:seed
+> ```
+
 ### Puertos de Servicios
 
 | Servicio | Puerto |
@@ -92,6 +103,13 @@ pnpm dev
 | API Gateway (dev) | 8787 |
 | Dashboard (dev) | 3000 |
 | Customer Web (dev) | 3001 |
+| Identity Worker | 8788 |
+| Customer Worker | 8789 |
+| Growth Worker | 8790 |
+| Analytics Worker | 8791 |
+| Automation Worker | 8792 |
+| Communication Worker | 8793 |
+| Compliance Worker | 8794 |
 | PostgreSQL | 5432 |
 | Mailpit SMTP | 1025 |
 | Mailpit UI | 8025 |

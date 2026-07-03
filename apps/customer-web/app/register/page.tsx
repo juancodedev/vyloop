@@ -29,6 +29,12 @@ export default function RegisterPage() {
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
+  // Extract business slug from URL (e.g. ?biz=cafe-central)
+  const businessSlug =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('biz')
+      : null;
+
   function validate(): FormErrors {
     const errs: FormErrors = {};
     if (!form.fullName.trim()) errs.fullName = 'El nombre es obligatorio';
@@ -52,6 +58,7 @@ export default function RegisterPage() {
         fullName: form.fullName.trim(),
         phone: form.phone.trim(),
       };
+      if (businessSlug) payload.businessSlug = businessSlug;
       if (form.email.trim()) payload.email = form.email.trim();
       if (form.birthDate) payload.birthDate = form.birthDate;
 

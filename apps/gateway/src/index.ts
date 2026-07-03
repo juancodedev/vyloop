@@ -39,10 +39,16 @@ app.route('/', ingestor);
 // Middleware chain for /v1/* routes
 // ---------------------------------------------------------------------------
 
-// Middleware 1: Auth (JWT validation) — skip /v1/auth/*
+// Middleware 1: Auth (JWT validation) — skip auth routes + customer registration
 app.use('/v1/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
-  if (path.startsWith('/v1/auth/')) {
+  const method = c.req.method;
+
+  // Public routes — no JWT required
+  if (
+    path.startsWith('/v1/auth/') ||
+    (method === 'PUT' && path === '/v1/customers')
+  ) {
     await next();
     return;
   }
@@ -62,12 +68,30 @@ app.use('/v1/*', async (c, next) => {
 // Middleware 2: Auth header injection — strip incoming X-* headers, inject from JWT
 // MUST run before business-id enforcement and router so injected headers
 // are available for validation and forwarding.
-app.use('/v1/*', authInjectMiddleware());
-
-// Middleware 3: X-Business-ID enforcement — skip /v1/auth/*
 app.use('/v1/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
-  if (path.startsWith('/v1/auth/')) {
+  const method = c.req.method;
+
+  // Skip for public routes — no JWT to inject from
+  if (
+    path.startsWith('/v1/auth/') ||
+    (method === 'PUT' && path === '/v1/customers')
+  ) {
+    await next();
+    return;
+  }
+
+  return authInjectMiddleware()(c, next);
+});
+
+// Middleware 3: X-Business-ID enforcement — skip /v1/auth/* + registration
+app.use('/v1/*', async (c, next) => {
+  const path = new URL(c.req.url).pathname;
+  const method = c.req.method;
+  if (
+    path.startsWith('/v1/auth/') ||
+    (method === 'PUT' && path === '/v1/customers')
+  ) {
     await next();
     return;
   }

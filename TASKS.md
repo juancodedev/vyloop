@@ -7,6 +7,10 @@
 ## ✅ COMPLETADO
 
 ### Infraestructura y Tooling
+- [x] **Dev scripts para workers** — Todos los workers tienen `dev` con puertos únicos (8788-8794) y service binding discovery
+- [x] **Gateway dev port fijo** — `wrangler dev --port 8787` para que el dashboard lo encuentre siempre
+- [x] **.dev.vars** — customer y growth workers con DATABASE_URL para dev local
+- [x] **Credenciales seed corregidas** — `demo@cafecentral.com` / `demo123`
 - [x] Monorepo pnpm workspace con shared configs (TS, ESLint, Prettier, Vitest)
 - [x] Docker Compose para PostgreSQL 16 + Mailpit local
 - [x] CI workflow: lint + typecheck + test en cada push
@@ -88,10 +92,11 @@
 - [ ] Revisar y alinear versiones de `@neondatabase/serverless` entre workers
 
 ### Dashboard
-- [ ] **Customer detail page** — Vista de perfil individual del cliente desde el dashboard
-- [ ] **QR del negocio** — Página para mostrar/compartir el QR del comercio
+- [x] **Customer detail page** — Vista de perfil individual del cliente desde el dashboard
+- [x] **QR del negocio** — Página para mostrar/compartir el QR del comercio
 - [ ] **CRUD de rewards** — UI para crear/editar rewards del programa de lealtad
 - [ ] **Dashboard analytics** — KPIs (clientes nuevos, puntos emitidos, canjes)
+- [ ] **Fix loyalty customers** — Row click navega al detalle del cliente (hoy muestra toast "próximamente")
 
 ### Customer Web
 - [ ] **Auth real** — Reemplazar mock auth por autenticación real contra el gateway
@@ -122,7 +127,7 @@
 
 | Rol | Email / Teléfono | Contraseña |
 |-----|------------------|-------------|
-| Admin (Café Central) | admin@cafecentral.com | admin123 |
+| Admin (Café Central) | demo@cafecentral.com | demo123 |
 | Cliente (Lucía Fernández) | +56956789012 | (login con teléfono) |
 
 ### Comandos Útiles
