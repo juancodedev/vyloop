@@ -16,6 +16,7 @@
   - [x] Customer-web Pages deployado en vyloop-customer-web.pages.dev
 - [x] CI/CD probado y funcionando (PRs #19, #20 mergeados)
 - [x] Node.js actualizado a v22 para compatibilidad con undici v8
+- [x] wrangler agregado como root devDependency para deploy de workers
 
 ### Base de Datos (PostgreSQL + Neon + Drizzle ORM)
 - [x] Schema: 15 tablas (tenants, users, customers, loyalty_programs, tiers, points, rewards, etc.)
