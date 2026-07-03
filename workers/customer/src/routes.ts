@@ -1,4 +1,4 @@
-import { createDb, customers, customerEvents, consents } from '@vyloop/db';
+import { createDb, customers, customerEvents, consents, tenants } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
 import { eq, and, isNull, like, or, count, type SQL } from 'drizzle-orm';
@@ -19,12 +19,12 @@ const router = new Hono<{ Bindings: Bindings }>();
 // ---------------------------------------------------------------------------
 
 router.put('/v1/customers', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
   const body = await c.req.json<{
     fullName: string;
     phone: string;
     email?: string;
     birthDate?: string;
+    businessSlug?: string;
   }>();
 
   if (!body.fullName || !body.phone) {
@@ -35,6 +35,40 @@ router.put('/v1/customers', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
+
+  // Resolve businessId: from auth headers (JWT flow) or businessSlug (public registration)
+  let businessId: string;
+  try {
+    const auth = extractAuthHeaders(c);
+    businessId = auth.businessId;
+  } catch {
+    // No auth headers — must be public registration with businessSlug
+    if (!body.businessSlug) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'businessSlug is required for public registration',
+          },
+        },
+        400,
+      );
+    }
+
+    const [tenant] = await db
+      .select({ id: tenants.id })
+      .from(tenants)
+      .where(eq(tenants.slug, body.businessSlug))
+      .limit(1);
+
+    if (!tenant) {
+      return c.json(
+        { error: { code: 'NOT_FOUND', message: `Business "${body.businessSlug}" not found` } },
+        404,
+      );
+    }
+    businessId = tenant.id;
+  }
 
   // Check if a customer already exists for this business + phone
   const existing = await db
@@ -92,7 +126,7 @@ router.put('/v1/customers', async (c) => {
 
   if (!schemaResult.valid) {
     console.error(
-      '[customer] Event validation failed:',
+      '[customer] Event payload validation failed:',
       schemaResult.errors,
     );
     return c.json(
