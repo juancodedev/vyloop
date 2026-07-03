@@ -8,8 +8,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.0.0",
+    "@vyloop/db": "workspace:*",
     "@vyloop/event-bus": "workspace:*",
     "@vyloop/types": "workspace:*",
+    "drizzle-orm": "^0.38.0",
     "hono": "^4.0.0",
     "jose": "^5.0.0"
   },

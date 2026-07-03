@@ -1,16 +1,19 @@
 'use client';
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useCallback,
-  type ReactNode,
-} from 'react';
-import { DEMO_USER, DEMO_PASSWORD, type User } from './mock-data';
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
+
+interface User {
+  email: string;
+  name: string;
+  id?: string;
+  role?: string;
+}
 
 interface AuthState {
   user: User | null;
+  token: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
@@ -20,26 +23,65 @@ const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Restore session from localStorage
+  useEffect(() => {
+    const stored = localStorage.getItem('auth');
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        setUser(parsed.user);
+        setToken(parsed.token);
+      } catch { /* ignore */ }
+    }
+  }, []);
+
+  // Persist session to localStorage
+  useEffect(() => {
+    if (token && user) {
+      localStorage.setItem('auth', JSON.stringify({ token, user }));
+    } else {
+      localStorage.removeItem('auth');
+    }
+  }, [token, user]);
 
   const login = useCallback(async (email: string, password: string) => {
     setIsLoading(true);
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 400));
-    if (email === DEMO_USER.email && password === DEMO_PASSWORD) {
-      setUser(DEMO_USER);
-    } else {
-      throw new Error('Credenciales inválidas. Intente nuevamente.');
+    try {
+      const res = await fetch(`${API_URL}/v1/auth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message || 'Credenciales inválidas');
+      }
+
+      const data = await res.json();
+
+      setUser({
+        email: data.user.email,
+        name: data.user.fullName,
+        id: data.user.id,
+        role: data.user.role,
+      });
+      setToken(data.access_token);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, []);
 
   const logout = useCallback(() => {
     setUser(null);
+    setToken(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

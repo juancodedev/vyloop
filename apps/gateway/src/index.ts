@@ -58,7 +58,12 @@ app.use('/v1/*', async (c, next) => {
   return authMiddleware(secret)(c, next);
 });
 
-// Middleware 2: X-Business-ID enforcement — skip /v1/auth/*
+// Middleware 2: Auth header injection — strip incoming X-* headers, inject from JWT
+// MUST run before business-id enforcement and router so injected headers
+// are available for validation and forwarding.
+app.use('/v1/*', authInjectMiddleware());
+
+// Middleware 3: X-Business-ID enforcement — skip /v1/auth/*
 app.use('/v1/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   if (path.startsWith('/v1/auth/')) {
@@ -68,7 +73,7 @@ app.use('/v1/*', async (c, next) => {
   return businessIdMiddleware(c, next) as unknown as ReturnType<typeof next>;
 });
 
-// Middleware 3: Rate limiting — skip /v1/auth/*
+// Middleware 4: Rate limiting — skip /v1/auth/*
 app.use('/v1/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   if (path.startsWith('/v1/auth/')) {
@@ -83,12 +88,6 @@ app.use('/v1/*', async (c, next) => {
     windowSeconds: DEFAULT_WINDOW,
   })(c, next);
 });
-
-// Middleware 4: Auth header injection — strip incoming X-* headers, inject from JWT
-// Runs before router so forwarded requests carry the correct auth headers.
-// Unlike auth/business-id/rate-limit, this middleware gracefully handles the
-// no-JWT case (e.g., /v1/auth/*) by simply stripping spoofed headers only.
-app.use('/v1/*', authInjectMiddleware());
 
 // Middleware 5: Route dispatch to service bindings
 app.use('/v1/*', routerMiddleware);
