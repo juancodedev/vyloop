@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { describe, it, expect } from 'vitest';
 
-import type { JwtClaims } from './auth';
+import type { JwtClaims, AuthEnv } from './auth';
 import { authInjectMiddleware } from './auth-inject';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ import { authInjectMiddleware } from './auth-inject';
  * `c.req.raw`, so we can verify stripping and injection.
  */
 function createTestApp(jwt?: JwtClaims) {
-  const app = new Hono();
+  const app = new Hono<AuthEnv>();
 
   // Simulate the real chain: earlier middleware sets JWT before auth-inject runs
   if (jwt) {

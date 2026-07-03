@@ -387,7 +387,7 @@ describe('CRUD Routes', () => {
       const res = await request('GET', '/', { auth: false });
 
       expect(res.status).toBe(403);
-      const body = await res.json();
+      const body = await res.json() as any as any;
       expect(body.error.code).toBe('UNAUTHORIZED');
     });
   });
@@ -415,7 +415,7 @@ describe('CRUD Routes', () => {
       const res = await request('PUT', '/', { body });
 
       expect(res.status).toBe(201);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.event_published).toBe(true);
       expect(data.fullName).toBe('Alice Smith');
       expect(data.id).toBe('new-id');
@@ -463,7 +463,7 @@ describe('CRUD Routes', () => {
       const res = await request('PUT', '/', { body });
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.fullName).toBe('Alice Updated');
       expect(data.email).toBe('alice@updated.com');
 
@@ -492,7 +492,7 @@ describe('CRUD Routes', () => {
       const res = await request('PUT', '/', { body });
 
       expect(res.status).toBe(500);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.error.code).toBe('VALIDATION_ERROR');
 
       // Event NOT published
@@ -549,7 +549,7 @@ describe('CRUD Routes', () => {
       const res = await request('GET', '/?page=1&limit=10');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.data).toHaveLength(10);
       expect(data.total).toBe(25);
       expect(data.page).toBe(1);
@@ -601,7 +601,7 @@ describe('CRUD Routes', () => {
       const res = await request('GET', '/?q=alice');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.data).toHaveLength(1);
       expect(data.data[0].fullName).toContain('Alice');
       expect(data.total).toBe(1);
@@ -644,7 +644,7 @@ describe('CRUD Routes', () => {
       const res = await request('GET', '/');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.data).toHaveLength(3);
       expect(data.total).toBe(3);
       // Verify no customer has deletedAt set
@@ -742,7 +742,7 @@ describe('CRUD Routes', () => {
       const res = await request('GET', '/c-1');
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.id).toBe('c-1');
       expect(data.fullName).toBe('Alice Smith');
       expect(data.customer_events).toHaveLength(1);
@@ -819,7 +819,7 @@ describe('CRUD Routes', () => {
       const res = await request('PATCH', '/existing-id', { body });
 
       expect(res.status).toBe(200);
-      const data = await res.json();
+      const data = await res.json() as any;
       expect(data.fullName).toBe('Alice Updated');
       expect(data.email).toBe('alice@updated.com');
 
@@ -966,7 +966,7 @@ describe('CRUD Routes', () => {
       const res = await request('POST', '/');
 
       expect(res.status).toBe(404);
-      const body = await res.json();
+      const body = await res.json() as any;
       expect(body.error.code).toBe('NOT_FOUND');
     });
   });
