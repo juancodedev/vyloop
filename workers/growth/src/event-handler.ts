@@ -355,3 +355,4 @@ async function handlePointsAssigned(
       await publish(env.DOMAIN_EVENTS_QUEUE, event);
     }
   }
+}
