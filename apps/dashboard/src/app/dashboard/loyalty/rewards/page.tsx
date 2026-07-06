@@ -85,13 +85,13 @@ export default function LoyaltyRewardsPage() {
     try {
       const payload: Partial<Reward> = {
         name: form.name,
-        description: form.description || undefined,
         pointsCost: form.pointsCost,
-        category: form.category || undefined,
-        stock: form.stock ? Number(form.stock) : undefined,
-        autoGrantThreshold: form.autoGrantThreshold ? Number(form.autoGrantThreshold) : undefined,
-        validFrom: form.validFrom ? new Date(form.validFrom).toISOString() : undefined,
-        validUntil: form.validUntil ? new Date(form.validUntil).toISOString() : undefined,
+        ...(form.description && { description: form.description }),
+        ...(form.category && { category: form.category }),
+        ...(form.stock && { stock: Number(form.stock) }),
+        ...(form.autoGrantThreshold && { autoGrantThreshold: Number(form.autoGrantThreshold) }),
+        ...(form.validFrom && { validFrom: new Date(form.validFrom).toISOString() }),
+        ...(form.validUntil && { validUntil: new Date(form.validUntil).toISOString() }),
       };
 
       if (modal?.mode === 'create') {
