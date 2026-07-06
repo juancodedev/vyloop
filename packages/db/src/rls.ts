@@ -36,10 +36,11 @@ export function enableRls(): SQL[] {
 /**
  * Create the `tenant_isolation` policy on every business_id table.
  * The policy compares `business_id` against the session variable
- * `app.current_business_id`, which must be set by the API Gateway
- * before each request:
+ * `app.current_business_id`, which must be set per-request:
  *
- *   SET LOCAL app.current_business_id = '<tenant-uuid>';
+ *   SELECT set_config('app.current_business_id', '<tenant-uuid>', true);
+ *
+ * The third argument `true` limits scope to the current transaction.
  */
 export function createRlsPolicies(): SQL[] {
   return BUSINESS_ID_TABLES.map(
@@ -62,10 +63,15 @@ export function dropRlsPolicies(): SQL[] {
 }
 
 /**
- * Generate a `SET LOCAL` statement to set the business ID for the current session.
- * Call this at the start of every authenticated request that touches tenant-scoped
- * tables.
+ * Generate a `SELECT set_config(...)` statement to set the business ID for the
+ * current transaction. `SET LOCAL` does NOT accept parameterized values,
+ * so we use `set_config()` instead which accepts `$1` placeholders.
+ *
+ * Call this at the start of every authenticated request that touches
+ * tenant-scoped tables.
+ *
+ * @see https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-SET
  */
 export function setCurrentBusinessId(id: string): SQL {
-  return sql`SET LOCAL app.current_business_id = ${id};`;
+  return sql`SELECT set_config('app.current_business_id', ${id}, true);`;
 }
