@@ -16,7 +16,7 @@
     "@vyloop/types": "workspace:*"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.0.0",
+    "@cloudflare/workers-types": "^5.20260706.1",
     "typescript": "^5.7.0",
     "vitest": "^4.1.10"
   }
