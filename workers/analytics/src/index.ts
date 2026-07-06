@@ -1,4 +1,4 @@
-import { createDb } from '@vyloop/db';
+import { createDb, setCurrentBusinessId } from '@vyloop/db';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -58,36 +58,35 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.get('/v1/analytics/kpis', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const db = createDb(c.env.DATABASE_URL);
+  await db.execute(setCurrentBusinessId(businessId));
 
-  const [customerResult, pointsResult, tierResult, rewardResult] = await Promise.all([
-    db.execute(sql`
-      SELECT
-        count(*) AS total_customers,
-        count(*) FILTER (WHERE deleted_at IS NULL) AS active_customers
-      FROM customers
-      WHERE business_id = ${businessId}::uuid
-    `),
-    db.execute(sql`
-      SELECT
-        COALESCE(sum(points) FILTER (WHERE type = 'earn'), 0) AS total_issued,
-        COALESCE(sum(points) FILTER (WHERE type = 'redeem'), 0) AS total_redeemed
-      FROM points_transactions
-      WHERE business_id = ${businessId}::uuid
-    `),
-    db.execute(sql`
-      SELECT mt.name, count(c.id) AS customer_count
-      FROM membership_tiers mt
-      LEFT JOIN customers c ON c.current_tier_id = mt.id AND c.business_id = ${businessId}::uuid
-      WHERE mt.business_id = ${businessId}::uuid
-      GROUP BY mt.id, mt.name, mt.display_order
-      ORDER BY mt.display_order
-    `),
-    db.execute(sql`
-      SELECT count(*) AS rewards_claimed
-      FROM reward_grants
-      WHERE business_id = ${businessId}::uuid
-    `),
-  ]);
+  const customerResult = await db.execute(sql`
+    SELECT
+      count(*) AS total_customers,
+      count(*) FILTER (WHERE deleted_at IS NULL) AS active_customers
+    FROM customers
+    WHERE business_id = ${businessId}::uuid
+  `);
+  const pointsResult = await db.execute(sql`
+    SELECT
+      COALESCE(sum(points) FILTER (WHERE type = 'earn'), 0) AS total_issued,
+      COALESCE(sum(points) FILTER (WHERE type = 'redeem'), 0) AS total_redeemed
+    FROM points_transactions
+    WHERE business_id = ${businessId}::uuid
+  `);
+  const tierResult = await db.execute(sql`
+    SELECT mt.name, count(c.id) AS customer_count
+    FROM membership_tiers mt
+    LEFT JOIN customers c ON c.current_tier_id = mt.id AND c.business_id = ${businessId}::uuid
+    WHERE mt.business_id = ${businessId}::uuid
+    GROUP BY mt.id, mt.name, mt.display_order
+    ORDER BY mt.display_order
+  `);
+  const rewardResult = await db.execute(sql`
+    SELECT count(*) AS rewards_claimed
+    FROM reward_grants
+    WHERE business_id = ${businessId}::uuid
+  `);
 
   const customers = customerResult.rows?.[0] ?? {
     total_customers: 0,
