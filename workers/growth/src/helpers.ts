@@ -3,6 +3,7 @@ import { setCurrentBusinessId } from '@vyloop/db';
 import {
   POINTS_ASSIGNED,
   REWARD_REDEEMED,
+  REWARD_AUTO_GRANTED,
   createEnvelope,
 } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
@@ -98,6 +99,7 @@ export function buildRewardRedeemedEvent(
   referenceId: string,
   partial: boolean,
   rewardName?: string,
+  rewardId?: string,
 ): EventEnvelope {
   const payload: Record<string, unknown> = {
     customer_id: customerId,
@@ -111,9 +113,40 @@ export function buildRewardRedeemedEvent(
   if (rewardName !== undefined) {
     payload.reward_name = rewardName;
   }
+  if (rewardId !== undefined) {
+    payload.reward_id = rewardId;
+  }
 
   return createEnvelope(
     REWARD_REDEEMED,
+    { business_id: businessId, timestamp: new Date().toISOString() },
+    payload,
+  );
+}
+
+/**
+ * Build a RewardAutoGranted event envelope for the domain events queue.
+ *
+ * The payload follows the RewardAutoGranted schema registered in the
+ * schema registry.
+ */
+export function buildRewardAutoGrantedEvent(
+  customerId: string,
+  businessId: string,
+  rewardId: string,
+  rewardName: string,
+  balanceAfter: number,
+): EventEnvelope {
+  const payload = {
+    customer_id: customerId,
+    reward_id: rewardId,
+    reward_name: rewardName,
+    granted_at: new Date().toISOString(),
+    balance_after: balanceAfter,
+  };
+
+  return createEnvelope(
+    REWARD_AUTO_GRANTED,
     { business_id: businessId, timestamp: new Date().toISOString() },
     payload,
   );

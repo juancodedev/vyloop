@@ -1,6 +1,6 @@
-import { createDb, loyaltyPrograms, membershipTiers, customers } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
-import { eq, and, count , sql } from 'drizzle-orm';
+import { eq, and, count, sql, or, isNull, lte, gte, gt, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
@@ -427,6 +427,288 @@ router.post('/v1/loyalty/points/assign', async (c) => {
 });
 
 // ============================================================================
+// Rewards Catalog CRUD
+// ============================================================================
+
+/**
+ * POST /v1/loyalty/rewards
+ *
+ * Create a new reward in the catalog.
+ * Name must be unique per business.
+ */
+router.post('/v1/loyalty/rewards', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const body = await c.req.json<{
+    name: string;
+    description?: string;
+    points_cost: number;
+    category?: string;
+    stock?: number | null;
+    auto_grant_threshold?: number | null;
+    valid_from?: string;
+    valid_until?: string;
+    image_url?: string;
+  }>();
+
+  if (!body.name || body.points_cost === undefined) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'name and points_cost are required' } },
+      400,
+    );
+  }
+
+  if (!Number.isInteger(body.points_cost) || body.points_cost < 1) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'points_cost must be a positive integer' } },
+      400,
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // Check duplicate name
+  const [existing] = await db
+    .select({ id: rewards.id })
+    .from(rewards)
+    .where(and(eq(rewards.businessId, businessId), eq(rewards.name, body.name)))
+    .limit(1);
+
+  if (existing) {
+    return c.json(
+      { error: { code: 'DUPLICATE_REWARD_NAME', message: 'A reward with this name already exists' } },
+      409,
+    );
+  }
+
+  const [inserted] = await db
+    .insert(rewards)
+    .values({
+      businessId,
+      name: body.name,
+      description: body.description ?? null,
+      pointsCost: body.points_cost,
+      category: body.category ?? null,
+      stock: body.stock ?? null,
+      autoGrantThreshold: body.auto_grant_threshold ?? null,
+      validFrom: body.valid_from ? new Date(body.valid_from) : null,
+      validUntil: body.valid_until ? new Date(body.valid_until) : null,
+      imageUrl: body.image_url ?? null,
+    })
+    .returning();
+
+  return c.json({ data: inserted }, 201);
+});
+
+/**
+ * GET /v1/loyalty/rewards
+ *
+ * List rewards for the current business.
+ * Supports ?category= and ?active=true filters.
+ * Returns paginated results with meta.
+ */
+router.get('/v1/loyalty/rewards', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const category = c.req.query('category');
+  const active = c.req.query('active');
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10) || 1);
+  const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // Build where conditions
+  const conditions: ReturnType<typeof and>[] = [eq(rewards.businessId, businessId)];
+
+  if (category) {
+    conditions.push(eq(rewards.category, category));
+  }
+
+  if (active === 'true') {
+    conditions.push(
+      or(
+        isNull(rewards.validFrom),
+        lte(rewards.validFrom, sql`now()`),
+      ),
+      or(
+        isNull(rewards.validUntil),
+        gte(rewards.validUntil, sql`now()`),
+      ),
+      or(
+        isNull(rewards.stock),
+        gt(rewards.stock, 0),
+      ),
+    );
+  }
+
+  const where = and(...conditions);
+
+  // Count total
+  const [totalResult] = await db
+    .select({ total: count() })
+    .from(rewards)
+    .where(where);
+
+  const total = Number(totalResult?.total ?? 0);
+
+  // Fetch page
+  const items = await db
+    .select()
+    .from(rewards)
+    .where(where)
+    .orderBy(desc(rewards.createdAt))
+    .limit(perPage)
+    .offset((page - 1) * perPage);
+
+  return c.json({
+    data: items,
+    meta: { total, page, per_page: perPage },
+  });
+});
+
+/**
+ * GET /v1/loyalty/rewards/:id
+ *
+ * Get a single reward by id.
+ */
+router.get('/v1/loyalty/rewards/:id', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const id = c.req.param('id');
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const [reward] = await db
+    .select()
+    .from(rewards)
+    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
+    .limit(1);
+
+  if (!reward) {
+    return c.json(
+      { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
+      404,
+    );
+  }
+
+  return c.json({ data: reward });
+});
+
+/**
+ * PUT /v1/loyalty/rewards/:id
+ *
+ * Update an existing reward.
+ * Name uniqueness enforced per business.
+ */
+router.put('/v1/loyalty/rewards/:id', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const id = c.req.param('id');
+  const body = await c.req.json<{
+    name?: string;
+    description?: string | null;
+    points_cost?: number;
+    category?: string | null;
+    stock?: number | null;
+    auto_grant_threshold?: number | null;
+    valid_from?: string | null;
+    valid_until?: string | null;
+    image_url?: string | null;
+  }>();
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // Verify reward exists and belongs to this business
+  const [existing] = await db
+    .select()
+    .from(rewards)
+    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
+    .limit(1);
+
+  if (!existing) {
+    return c.json(
+      { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
+      404,
+    );
+  }
+
+  // Name uniqueness check (if name changed)
+  if (body.name !== undefined && body.name !== existing.name) {
+    const [nameCollision] = await db
+      .select({ id: rewards.id })
+      .from(rewards)
+      .where(and(eq(rewards.businessId, businessId), eq(rewards.name, body.name)))
+      .limit(1);
+
+    if (nameCollision) {
+      return c.json(
+        { error: { code: 'DUPLICATE_REWARD_NAME', message: 'A reward with this name already exists' } },
+        409,
+      );
+    }
+  }
+
+  const updateData: Record<string, unknown> = {};
+  if (body.name !== undefined) updateData.name = body.name;
+  if (body.description !== undefined) updateData.description = body.description;
+  if (body.points_cost !== undefined) updateData.pointsCost = body.points_cost;
+  if (body.category !== undefined) updateData.category = body.category;
+  if (body.stock !== undefined) updateData.stock = body.stock;
+  if (body.auto_grant_threshold !== undefined) updateData.autoGrantThreshold = body.auto_grant_threshold;
+  if (body.valid_from !== undefined) updateData.validFrom = body.valid_from ? new Date(body.valid_from) : null;
+  if (body.valid_until !== undefined) updateData.validUntil = body.valid_until ? new Date(body.valid_until) : null;
+  if (body.image_url !== undefined) updateData.imageUrl = body.image_url;
+
+  if (Object.keys(updateData).length === 0) {
+    return c.json({ data: existing });
+  }
+
+  updateData.updatedAt = new Date();
+
+  const [updated] = await db
+    .update(rewards)
+    .set(updateData)
+    .where(eq(rewards.id, id))
+    .returning();
+
+  return c.json({ data: updated });
+});
+
+/**
+ * DELETE /v1/loyalty/rewards/:id
+ *
+ * Soft-delete a reward by setting deleted_at.
+ */
+router.delete('/v1/loyalty/rewards/:id', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const id = c.req.param('id');
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // Verify reward exists and belongs to this business
+  const [existing] = await db
+    .select()
+    .from(rewards)
+    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
+    .limit(1);
+
+  if (!existing) {
+    return c.json(
+      { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
+      404,
+    );
+  }
+
+  await db
+    .update(rewards)
+    .set({ deletedAt: new Date() })
+    .where(eq(rewards.id, id));
+
+  return c.json({ data: { id } });
+});
+
+// ============================================================================
 // Rewards Redeem
 // ============================================================================
 
@@ -435,18 +717,23 @@ router.post('/v1/loyalty/points/assign', async (c) => {
  *
  * Redeem loyalty points for a reward.
  *
+ * - Catalog validation: if `reward_id` provided, validates reward is active,
+ *   in-stock, within valid dates, and customer has enough points.
+ * - Atomic stock deduction: stock decremented in same transaction as points
+ *   when reward_id is present.
  * - Balance check: returns 409 INSUFFICIENT_BALANCE if not enough points
  *   and partial is false.
  * - Partial redeem: when partial: true and points > balance, consumes all
  *   available points and reports partial fulfillment.
  * - Dedup: referenceId unique per customer → 409
- * - After success, publishes a RewardRedeemed event.
+ * - After success, publishes a RewardRedeemed event with reward_id.
  */
 router.post('/v1/loyalty/rewards/redeem', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const body = await c.req.json<{
     customer_id: string;
     points: number;
+    reward_id?: string;
     reward_name?: string;
     partial?: boolean;
     reference_id: string;
@@ -468,6 +755,60 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
+
+  // -----------------------------------------------------------------------
+  // Validate reward catalog (if reward_id provided)
+  // -----------------------------------------------------------------------
+  let resolvedRewardId: string | undefined;
+  let resolvedRewardName: string | undefined = body.reward_name;
+
+  if (body.reward_id) {
+    const [reward] = await db
+      .select()
+      .from(rewards)
+      .where(and(eq(rewards.id, body.reward_id), eq(rewards.businessId, businessId)))
+      .limit(1);
+
+    if (!reward || reward.deletedAt) {
+      return c.json(
+        { error: { code: 'REWARD_NOT_FOUND', message: 'Reward not found' } },
+        404,
+      );
+    }
+
+    // Validate active dates
+    if (reward.validFrom && new Date(reward.validFrom) > new Date()) {
+      return c.json(
+        { error: { code: 'REWARD_INACTIVE', message: 'Reward is not yet active' } },
+        409,
+      );
+    }
+    if (reward.validUntil && new Date(reward.validUntil) < new Date()) {
+      return c.json(
+        { error: { code: 'REWARD_INACTIVE', message: 'Reward has expired' } },
+        409,
+      );
+    }
+
+    // Validate stock
+    if (reward.stock !== null && reward.stock <= 0) {
+      return c.json(
+        { error: { code: 'REWARD_OUT_OF_STOCK', message: 'Reward is out of stock' } },
+        409,
+      );
+    }
+
+    // Validate points match
+    if (body.points < reward.pointsCost) {
+      return c.json(
+        { error: { code: 'INSUFFICIENT_POINTS', message: `This reward requires ${reward.pointsCost} points` } },
+        409,
+      );
+    }
+
+    resolvedRewardId = reward.id;
+    resolvedRewardName = reward.name;
+  }
 
   // -----------------------------------------------------------------------
   // Get current balance
@@ -513,26 +854,59 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
   }
 
   // -----------------------------------------------------------------------
-  // Atomic insert with balance deduction
+  // Atomic insert with balance deduction (+ stock deduction if reward_id)
   // -----------------------------------------------------------------------
   try {
-    const result = await db.execute(sql`
-      INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
-      VALUES (
-        ${businessId}::uuid,
-        ${body.customer_id}::uuid,
-        'redeem',
-        ${redeemPoints}::integer,
-        COALESCE(
-          (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid ORDER BY created_at DESC LIMIT 1),
-          0
-        ) - ${redeemPoints}::integer,
-        ${body.reference_id},
-        ${body.reward_name ?? null}
-      )
-      RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
-    `);
+    // When reward_id is provided, wrap both ops in a transaction
+    const performRedeem = async () => {
+      if (resolvedRewardId) {
+        return await db.transaction(async (tx) => {
+          const txResult = await tx.execute(sql`
+            INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
+            VALUES (
+              ${businessId}::uuid,
+              ${body.customer_id}::uuid,
+              'redeem',
+              ${redeemPoints}::integer,
+              COALESCE(
+                (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid ORDER BY created_at DESC LIMIT 1),
+                0
+              ) - ${redeemPoints}::integer,
+              ${body.reference_id},
+              ${resolvedRewardName ?? null}
+            )
+            RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
+          `);
 
+          // Atomic stock decrement — no-op if already out of stock
+          await tx.execute(sql`
+            UPDATE rewards SET stock = stock - 1 WHERE id = ${resolvedRewardId}::uuid AND stock > 0
+          `);
+
+          return txResult;
+        });
+      }
+
+      // No reward_id — keep existing simple flow
+      return await db.execute(sql`
+        INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
+        VALUES (
+          ${businessId}::uuid,
+          ${body.customer_id}::uuid,
+          'redeem',
+          ${redeemPoints}::integer,
+          COALESCE(
+            (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid ORDER BY created_at DESC LIMIT 1),
+            0
+          ) - ${redeemPoints}::integer,
+          ${body.reference_id},
+          ${resolvedRewardName ?? null}
+        )
+        RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
+      `);
+    };
+
+    const result = await performRedeem();
     const tx = result.rows?.[0];
     if (!tx) {
       return c.json(
@@ -553,7 +927,8 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
       balanceAfter,
       body.reference_id,
       isPartial,
-      body.reward_name,
+      resolvedRewardName,
+      resolvedRewardId,
     );
 
     await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
