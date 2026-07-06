@@ -1,6 +1,6 @@
 # Vyloop — Estado de Tareas
 
-> Actualizado: 3 Julio 2026
+> Actualizado: 6 Julio 2026
 
 ---
 
@@ -94,9 +94,9 @@
 ### Dashboard
 - [x] **Customer detail page** — Vista de perfil individual del cliente desde el dashboard
 - [x] **QR del negocio** — Página para mostrar/compartir el QR del comercio
-- [ ] **CRUD de rewards** — UI para crear/editar rewards del programa de lealtad
+- [x] **CRUD de rewards** — UI para crear/editar rewards del programa de lealtad
+- [x] **Fix loyalty customers** — Row click navega al detalle del cliente
 - [ ] **Dashboard analytics** — KPIs (clientes nuevos, puntos emitidos, canjes)
-- [ ] **Fix loyalty customers** — Row click navega al detalle del cliente (hoy muestra toast "próximamente")
 
 ### Customer Web
 - [ ] **Auth real** — Reemplazar mock auth por autenticación real contra el gateway

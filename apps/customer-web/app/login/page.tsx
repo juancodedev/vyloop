@@ -13,7 +13,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
@@ -31,12 +31,17 @@ export default function LoginPage() {
         : `+56${cleaned}`;
 
     setSubmitting(true);
-    const success = login(fullPhone);
 
-    if (success) {
-      router.push('/profile');
-    } else {
-      setError('Número no registrado. ¿Ya te registraste?');
+    try {
+      const success = await login(fullPhone);
+      if (success) {
+        router.push('/profile');
+      } else {
+        setError('Número no registrado. ¿Ya te registraste?');
+      }
+    } catch {
+      setError('Error al conectar con el servidor. Intentalo de nuevo.');
+    } finally {
       setSubmitting(false);
     }
   }

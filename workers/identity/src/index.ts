@@ -1,10 +1,10 @@
 import type { MessageBatch } from '@cloudflare/workers-types';
 import { createDb, schema } from '@vyloop/db';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 
-import { issueTokenPair, validateToken, type JwtClaims } from './auth';
+import { issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
 import { handleTestEvent } from './event-handler';
 
 // ---------------------------------------------------------------------------
@@ -199,6 +199,96 @@ app.post('/v1/auth/refresh', async (c) => {
     console.error('Token refresh error:', err);
     return c.json(
       { error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid refresh token' } },
+      401,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/auth/customer/token — phone-only auth (demo mode, no OTP)
+// ---------------------------------------------------------------------------
+
+app.post('/v1/auth/customer/token', async (c) => {
+  const secret = c.env.JWT_SECRET;
+  const dbUrl = c.env.DATABASE_URL;
+  if (!secret) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'JWT secret not configured' } }, 500);
+  }
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  try {
+    const body = await c.req.json<{ phone?: string; otp?: string; businessSlug?: string }>();
+
+    if (!body.phone) {
+      return c.json(
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing phone number' } },
+        401,
+      );
+    }
+
+    const db = createDb(dbUrl);
+
+    // Look up customer by phone
+    let [customer] = await db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.phone, body.phone))
+      .limit(1);
+
+    // If businessSlug provided, refine the lookup to a specific tenant
+    if (body.businessSlug) {
+      const [tenant] = await db
+        .select()
+        .from(schema.tenants)
+        .where(eq(schema.tenants.slug, body.businessSlug))
+        .limit(1);
+
+      if (tenant) {
+        [customer] = await db
+          .select()
+          .from(schema.customers)
+          .where(
+            and(
+              eq(schema.customers.phone, body.phone),
+              eq(schema.customers.businessId, tenant.id),
+            ),
+          )
+          .limit(1);
+      }
+    }
+
+    if (!customer || customer.deletedAt) {
+      return c.json(
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Número no registrado' } },
+        401,
+      );
+    }
+
+    // Demo mode: skip OTP verification when absent
+    // In production, validate body.otp here before issuing the token
+
+    const token = await issueToken(
+      secret,
+      customer.globalId,
+      customer.businessId,
+      'customer',
+      ['rewards:read', 'rewards:redeem'],
+    );
+
+    return c.json({
+      token,
+      customer: {
+        name: customer.fullName,
+        globalId: customer.globalId,
+      },
+      expiresIn: 3600,
+    });
+  } catch (err) {
+    console.error('Customer token issuance error:', err);
+    return c.json(
+      { error: { code: 'AUTH_TOKEN_INVALID', message: 'Error al verificar el número' } },
       401,
     );
   }

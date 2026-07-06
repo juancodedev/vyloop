@@ -5,33 +5,25 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import { useAuth } from '../../lib/auth';
-import {
-  MOCK_MOVEMENTS,
-  type Movement,
-} from '../../lib/mock-data';
 
 type FilterType = 'all' | 'earned' | 'redeemed';
 
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  return `${day}/${month}/${year}`;
-}
-
-function formatTime(dateStr: string): string {
-  const date = new Date(dateStr);
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
-}
+type Movement = {
+  id: string;
+  type: 'earned' | 'redeemed';
+  description: string;
+  points: number;
+  balance: number;
+  date: string;
+  referenceId?: string;
+};
 
 export default function HistoryPage() {
   const router = useRouter();
   const { customer, isLoading } = useAuth();
   const [filter, setFilter] = useState<FilterType>('all');
   const [refreshing, setRefreshing] = useState(false);
+  const [movements] = useState<Movement[]>([]);
 
   useEffect(() => {
     if (!isLoading && !customer) {
@@ -49,12 +41,12 @@ export default function HistoryPage() {
 
   const filtered: Movement[] =
     filter === 'all'
-      ? MOCK_MOVEMENTS
-      : MOCK_MOVEMENTS.filter((m) => m.type === filter);
+      ? movements
+      : movements.filter((m) => m.type === filter);
 
   function handleRefresh() {
     setRefreshing(true);
-    // Simulate network delay
+    // Phase 2: fetch movements from API
     setTimeout(() => setRefreshing(false), 800);
   }
 
@@ -120,9 +112,7 @@ export default function HistoryPage() {
                 <div className="movement__description">
                   {mov.description}
                 </div>
-                <div className="movement__date">
-                  {formatDate(mov.date)} · {formatTime(mov.date)}
-                </div>
+                <div className="movement__date">{mov.date}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div
