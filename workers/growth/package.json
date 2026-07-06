@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev --port 8790 --inspector-port 0",
-    "lint": "eslint .",
+    "lint": "eslint . --ignore-pattern .wrangler",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
