@@ -404,6 +404,50 @@ async function main() {
     console.log(`  ✓ ${c.fullName} — ${c.balance.toLocaleString()} pts (${c.tier}) — ${txCount} movimientos`);
   }
 
+  // ---- 8. Rewards catalog ----
+  const [rewardGiftCard] = await db
+    .insert(schema.rewards)
+    .values({
+      businessId: tenant.id,
+      name: 'Tarjeta de Regalo $10.000',
+      description: 'Tarjeta de regalo canjeable por $10.000 en cualquier producto de Café Central',
+      pointsCost: 5000,
+      category: 'Tarjetas de Regalo',
+      stock: 50,
+      validFrom: new Date(),
+      validUntil: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+    })
+    .returning();
+
+  const [rewardCoffee] = await db
+    .insert(schema.rewards)
+    .values({
+      businessId: tenant.id,
+      name: 'Café Americano Gratis',
+      description: 'Un café americano recién preparado, completamente gratis',
+      pointsCost: 300,
+      category: 'Bebidas',
+      stock: null, // unlimited
+    })
+    .returning();
+
+  const [rewardBirthday] = await db
+    .insert(schema.rewards)
+    .values({
+      businessId: tenant.id,
+      name: 'Pastelito de Cumpleaños',
+      description: 'Un pastelito artesanal para celebrar tu cumpleaños — se otorga automáticamente al alcanzar 1000 puntos',
+      pointsCost: 800,
+      category: 'Repostería',
+      stock: 200,
+      autoGrantThreshold: 1000,
+      validFrom: new Date(),
+      validUntil: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000),
+    })
+    .returning();
+
+  console.log(`  ✓ Rewards: ${rewardGiftCard.name} (5.000 pts), ${rewardCoffee.name} (300 pts, ∞), ${rewardBirthday.name} (800 pts, auto@1000)`);
+
   console.log('\n✅ Seed complete. Demo tenant "Café Central" is ready.');
   console.log(`   Login: demo@cafecentral.com / demo123`);
 
