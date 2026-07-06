@@ -1,10 +1,11 @@
 import type { Message } from '@cloudflare/workers-types';
-import { createDb, customers, membershipTiers, loyaltyPrograms } from '@vyloop/db';
+import { createDb, customers, membershipTiers, loyaltyPrograms, rewards, rewardGrants } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
-import { eq, and, lte, desc, sql } from 'drizzle-orm';
+import { publish } from '@vyloop/event-bus';
+import { eq, and, lte, desc, sql, isNotNull } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
-import { withRls } from './helpers';
+import { withRls, buildRewardAutoGrantedEvent } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Queue consumer dispatcher
@@ -254,45 +255,103 @@ async function handlePointsAssigned(
     .orderBy(desc(membershipTiers.minPoints))
     .limit(1);
 
-  if (!highestTier) {
-    // No tier is eligible — no change needed
-    return;
-  }
-
   // -----------------------------------------------------------------------
-  // Only upgrade, never downgrade
+  // Evaluate tier upgrade (only upgrade, never downgrade)
   // -----------------------------------------------------------------------
-  if (customer.currentTierId === highestTier.id) {
-    // Same tier — no change needed
-    return;
-  }
+  if (highestTier && customer.currentTierId !== highestTier.id) {
+    let isUpgrade = true;
 
-  // If the customer has a current tier, verify this is an upgrade
-  if (customer.currentTierId) {
-    const [currentTier] = await db
-      .select({ minPoints: membershipTiers.minPoints })
-      .from(membershipTiers)
-      .where(eq(membershipTiers.id, customer.currentTierId))
-      .limit(1);
+    if (customer.currentTierId) {
+      const [currentTier] = await db
+        .select({ minPoints: membershipTiers.minPoints })
+        .from(membershipTiers)
+        .where(eq(membershipTiers.id, customer.currentTierId))
+        .limit(1);
 
-    // Downgrade guard: skip if the new tier's requirement is lower or equal
-    if (currentTier && highestTier.minPoints <= currentTier.minPoints) {
+      // Downgrade guard: skip if the new tier's requirement is lower or equal
+      if (currentTier && highestTier.minPoints <= currentTier.minPoints) {
+        isUpgrade = false;
+        console.log(
+          `[growth] Customer ${customerId} tier unchanged — ${highestTier.name} is not an upgrade from current tier`,
+        );
+      }
+    }
+
+    if (isUpgrade) {
+      await db
+        .update(customers)
+        .set({ currentTierId: highestTier.id })
+        .where(eq(customers.id, customer.id));
+
       console.log(
-        `[growth] Customer ${customerId} tier unchanged — ${highestTier.name} is not an upgrade from current tier`,
+        `[growth] Customer ${customerId} upgraded to tier ${highestTier.name} (minPoints: ${highestTier.minPoints}, balance: ${currentBalance})`,
       );
-      return;
+    }
+  } else if (!highestTier) {
+    console.log(
+      `[growth] Customer ${customerId} — no eligible tier found (balance: ${currentBalance})`,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // Auto-reward hook: check threshold-based rewards after points update
+  // -----------------------------------------------------------------------
+  if (currentBalance > 0) {
+    const autoRewards = await db
+      .select()
+      .from(rewards)
+      .where(
+        and(
+          eq(rewards.businessId, businessId),
+          isNotNull(rewards.autoGrantThreshold),
+          lte(rewards.autoGrantThreshold, currentBalance),
+        ),
+      );
+
+    for (const reward of autoRewards) {
+      // Check idempotency: skip if already granted to this customer
+      const [existingGrant] = await db
+        .select({ id: rewardGrants.id })
+        .from(rewardGrants)
+        .where(
+          and(
+            eq(rewardGrants.customerId, customer.id),
+            eq(rewardGrants.rewardId, reward.id),
+          ),
+        )
+        .limit(1);
+
+      if (existingGrant) {
+        console.log(
+          `[growth] Auto-reward ${reward.name} already granted to customer ${customer.id} — skipping`,
+        );
+        continue;
+      }
+
+      // Insert grant record
+      await db
+        .insert(rewardGrants)
+        .values({
+          businessId,
+          customerId: customer.id,
+          rewardId: reward.id,
+          balanceAfter: currentBalance,
+        })
+        .returning();
+
+      console.log(
+        `[growth] Auto-reward "${reward.name}" granted to customer ${customer.id} (threshold: ${reward.autoGrantThreshold}, balance: ${currentBalance})`,
+      );
+
+      // Publish RewardAutoGranted event
+      const event = buildRewardAutoGrantedEvent(
+        customer.id,
+        businessId,
+        reward.id,
+        reward.name,
+        currentBalance,
+      );
+
+      await publish(env.DOMAIN_EVENTS_QUEUE, event);
     }
   }
-
-  // -----------------------------------------------------------------------
-  // Upgrade the customer's tier
-  // -----------------------------------------------------------------------
-  await db
-    .update(customers)
-    .set({ currentTierId: highestTier.id })
-    .where(eq(customers.id, customer.id));
-
-  console.log(
-    `[growth] Customer ${customerId} upgraded to tier ${highestTier.name} (minPoints: ${highestTier.minPoints}, balance: ${currentBalance})`,
-  );
-}
