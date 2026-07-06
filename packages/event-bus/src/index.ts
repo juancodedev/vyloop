@@ -7,6 +7,7 @@ import type { Queue, Message, MessageBatch } from '@cloudflare/workers-types';
 export const CUSTOMER_REGISTERED = 'CustomerRegistered';
 export const POINTS_ASSIGNED = 'PointsAssigned';
 export const REWARD_REDEEMED = 'RewardRedeemed';
+export const REWARD_AUTO_GRANTED = 'RewardAutoGranted';
 
 // ---------------------------------------------------------------------------
 // Event envelope format
