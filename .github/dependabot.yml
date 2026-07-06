@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "type:chore"
+    allow:
+      - dependency-type: "direct"
+    ignore:
+      - dependency-name: "wrangler"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]

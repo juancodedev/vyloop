@@ -253,15 +253,46 @@ export const rewardRedeemedSchema = {
     header: envelopeHeaderSchema,
     payload: {
       type: 'object',
-      required: ['customer_id', 'points_redeemed', 'total_points_after', 'partial', 'reference_id', 'redemption_id'],
+      required: ['customer_id', 'points_redeemed', 'total_points_after', 'partial', 'reference_id', 'redemption_id', 'reward_id'],
       properties: {
         customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
         points_redeemed: { type: 'integer', minimum: 1, description: 'Points consumed in this redemption' },
         total_points_after: { type: 'integer', minimum: 0, description: 'Balance after redemption' },
+        reward_id: { type: 'string', format: 'uuid', description: 'Catalog reward identifier' },
         reward_name: { type: 'string', description: 'Optional reward description' },
         partial: { type: 'boolean', description: 'Whether this redemption was partial' },
         reference_id: { type: 'string', minLength: 1, description: 'Idempotency key scoped to customer' },
         redemption_id: { type: 'string', format: 'uuid', description: 'Unique identifier for this redemption' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
+/**
+ * JSON Schema v1.0.0 for RewardAutoGranted events (envelope format).
+ *
+ * Validates the full envelope with header + payload.
+ * Payload: customer_id, reward_id, reward_name, granted_at, balance_after.
+ */
+export const rewardAutoGrantedSchema = {
+  $id: 'https://schema.vyloop.app/events/RewardAutoGranted/v1.0.0',
+  type: 'object',
+  title: 'RewardAutoGranted',
+  description: 'Envelope schema for RewardAutoGranted events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['customer_id', 'reward_id', 'reward_name', 'granted_at', 'balance_after'],
+      properties: {
+        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
+        reward_id: { type: 'string', format: 'uuid', description: 'Catalog reward identifier' },
+        reward_name: { type: 'string', minLength: 1, description: 'Name of the auto-granted reward' },
+        granted_at: { type: 'string', format: 'date-time', description: 'ISO 8601 timestamp of grant' },
+        balance_after: { type: 'integer', minimum: 0, description: 'Customer balance after grant' },
       },
       additionalProperties: false,
     },

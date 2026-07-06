@@ -173,7 +173,7 @@ importers:
         specifier: ^1.0.0
         version: 1.1.0
       drizzle-orm:
-        specifier: '>=0.45.2'
+        specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260702.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       pg:
         specifier: ^8.0.0
@@ -321,7 +321,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       drizzle-orm:
-        specifier: '>=0.45.2'
+        specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260702.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.7.0
@@ -352,7 +352,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       drizzle-orm:
-        specifier: '>=0.45.2'
+        specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260702.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.7.0
@@ -383,7 +383,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       drizzle-orm:
-        specifier: '>=0.45.2'
+        specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260702.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.0.0
