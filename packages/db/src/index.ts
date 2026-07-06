@@ -28,6 +28,8 @@ export {
   workflowExecutions,
   churnPredictions,
   localizationConfigs,
+  rewards,
+  rewardGrants,
 } from './schema';
 
 // Re-export all type exports
@@ -62,6 +64,10 @@ export type {
   NewChurnPrediction,
   LocalizationConfig,
   NewLocalizationConfig,
+  Reward,
+  NewReward,
+  RewardGrant,
+  NewRewardGrant,
 } from './schema';
 
 // Re-export RLS helpers
@@ -81,5 +87,8 @@ export {
   idxCustomersMetadata,
   idxCustomerEventsCustomer,
   idxCustomerEventsType,
+  idxRewardsCategory,
+  idxRewardsAutoGrant,
+  idxRewardGrantsCustomer,
   allIndexes,
 } from './indexes';
