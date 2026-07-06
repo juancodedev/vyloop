@@ -228,13 +228,16 @@ app.post('/v1/auth/customer/token', async (c) => {
       );
     }
 
+    // Normalize phone: strip all whitespace so '+569 5678 9012' matches '+56956789012'
+    const normalizedPhone = body.phone.replace(/\s+/g, '');
+
     const db = createDb(dbUrl);
 
     // Look up customer by phone
     let [customer] = await db
       .select()
       .from(schema.customers)
-      .where(eq(schema.customers.phone, body.phone))
+      .where(eq(schema.customers.phone, normalizedPhone))
       .limit(1);
 
     // If businessSlug provided, refine the lookup to a specific tenant
@@ -251,7 +254,7 @@ app.post('/v1/auth/customer/token', async (c) => {
           .from(schema.customers)
           .where(
             and(
-              eq(schema.customers.phone, body.phone),
+              eq(schema.customers.phone, normalizedPhone),
               eq(schema.customers.businessId, tenant.id),
             ),
           )

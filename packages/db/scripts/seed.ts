@@ -72,7 +72,7 @@ interface CustomerDef {
 const customerDefs: CustomerDef[] = [
   {
     fullName: 'María González',
-    phone: '+569 1234 5678',
+    phone: '+56912345678',
     earned: 8000,
     redeemed: 3800,
     balance: 4200,
@@ -90,7 +90,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Carlos Muñoz',
-    phone: '+569 2345 6789',
+    phone: '+56923456789',
     earned: 5000,
     redeemed: 1900,
     balance: 3100,
@@ -106,7 +106,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Ana Soto',
-    phone: '+569 3456 7890',
+    phone: '+56934567890',
     earned: 3500,
     redeemed: 1000,
     balance: 2500,
@@ -122,7 +122,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Pedro Ramírez',
-    phone: '+569 4567 8901',
+    phone: '+56945678901',
     earned: 2800,
     redeemed: 1000,
     balance: 1800,
@@ -138,7 +138,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Lucía Fernández',
-    phone: '+569 5678 9012',
+    phone: '+56956789012',
     earned: 3200,
     redeemed: 2000,
     balance: 1200,
@@ -153,7 +153,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Jorge Valenzuela',
-    phone: '+569 6789 0123',
+    phone: '+56967890123',
     earned: 850,
     redeemed: 0,
     balance: 850,
@@ -166,7 +166,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Carmen Díaz',
-    phone: '+569 7890 1234',
+    phone: '+56978901234',
     earned: 620,
     redeemed: 0,
     balance: 620,
@@ -179,7 +179,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Roberto Vega',
-    phone: '+569 8901 2345',
+    phone: '+56989012345',
     earned: 480,
     redeemed: 0,
     balance: 480,
@@ -192,7 +192,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Daniela Pizarro',
-    phone: '+569 9012 3456',
+    phone: '+56990123456',
     earned: 300,
     redeemed: 0,
     balance: 300,
@@ -205,7 +205,7 @@ const customerDefs: CustomerDef[] = [
   },
   {
     fullName: 'Felipe Torres',
-    phone: '+569 0123 4567',
+    phone: '+56901234567',
     earned: 920,
     redeemed: 0,
     balance: 920,
