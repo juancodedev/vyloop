@@ -34,6 +34,9 @@ router.put('/v1/customers', async (c) => {
     );
   }
 
+  // Normalize phone: strip whitespace so '+569 5678 9012' is stored as '+56956789012'
+  body.phone = body.phone.replace(/\s+/g, '');
+
   const db = createDb(c.env.DATABASE_URL);
 
   // Resolve businessId: from auth headers (JWT flow) or businessSlug (public registration)
