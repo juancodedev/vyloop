@@ -207,6 +207,40 @@ export const churnPredictions = pgTable('churn_predictions', {
 ]);
 
 // ============================================================================
+// Rewards Domain
+// ============================================================================
+
+export const rewards = pgTable('rewards', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  pointsCost: integer('points_cost').notNull(),
+  category: text('category'),
+  stock: integer('stock'),
+  autoGrantThreshold: integer('auto_grant_threshold'),
+  validFrom: timestamp('valid_from', { withTimezone: true }),
+  validUntil: timestamp('valid_until', { withTimezone: true }),
+  imageUrl: text('image_url'),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  unique('uq_rewards_business_name').on(table.businessId, table.name),
+]);
+
+export const rewardGrants = pgTable('reward_grants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+  rewardId: uuid('reward_id').notNull().references(() => rewards.id, { onDelete: 'cascade' }),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().default(sql`now()`),
+  balanceAfter: integer('balance_after'),
+}, (table) => [
+  unique('uq_reward_grants_customer_reward').on(table.customerId, table.rewardId),
+]);
+
+// ============================================================================
 // Compliance Domain
 // ============================================================================
 
@@ -271,3 +305,9 @@ export type NewChurnPrediction = typeof churnPredictions.$inferInsert;
 
 export type LocalizationConfig = typeof localizationConfigs.$inferSelect;
 export type NewLocalizationConfig = typeof localizationConfigs.$inferInsert;
+
+export type Reward = typeof rewards.$inferSelect;
+export type NewReward = typeof rewards.$inferInsert;
+
+export type RewardGrant = typeof rewardGrants.$inferSelect;
+export type NewRewardGrant = typeof rewardGrants.$inferInsert;
