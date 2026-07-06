@@ -20,6 +20,8 @@ export const BUSINESS_ID_TABLES = [
   'workflow_executions',
   'churn_predictions',
   'localization_configs',
+  'rewards',
+  'reward_grants',
 ] as const;
 
 /**
