@@ -3,6 +3,8 @@
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
+import { api } from '../lib/api';
+
 interface FormData {
   fullName: string;
   phone: string;
@@ -14,8 +16,6 @@ interface FormErrors {
   fullName?: string;
   phone?: string;
 }
-
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8787';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -62,11 +62,14 @@ export default function RegisterPage() {
       if (form.email.trim()) payload.email = form.email.trim();
       if (form.birthDate) payload.birthDate = form.birthDate;
 
-      const res = await fetch(`${GATEWAY_URL}/v1/customers`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8787'}/v1/customers`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      );
 
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -75,8 +78,17 @@ export default function RegisterPage() {
         );
       }
 
-      const customer = await res.json();
-      router.push(`/confirm?name=${encodeURIComponent(customer.fullName)}`);
+      // Auto-login: issue JWT for the registered phone and redirect to profile
+      const authResult = await api.loginCustomer(form.phone.trim(), businessSlug ?? undefined);
+      localStorage.setItem('vyloop_jwt', authResult.token);
+      localStorage.setItem(
+        'vyloop_customer',
+        JSON.stringify({
+          fullName: authResult.customer.name,
+          globalId: authResult.customer.globalId,
+        }),
+      );
+      router.push('/profile');
     } catch (err) {
       setServerError(
         err instanceof Error ? err.message : 'Error inesperado',
