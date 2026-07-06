@@ -120,6 +120,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </Link>
 
           <Link
+            href="/dashboard/loyalty/rewards"
+            className={isActive(pathname, '/dashboard/loyalty/rewards') ? 'active sub-nav' : 'sub-nav'}
+          >
+            <IconStar />
+            <span>Recompensas</span>
+          </Link>
+
+          <Link
             href="/dashboard/loyalty/customers"
             className={isActive(pathname, '/dashboard/loyalty/customers') ? 'active sub-nav' : 'sub-nav'}
           >
@@ -151,6 +159,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             {pathname.match(/^\/dashboard\/customers\/(.+)/) && 'Detalle del Cliente'}
             {pathname === '/dashboard/loyalty/config' && 'Configuración de Lealtad'}
             {pathname === '/dashboard/loyalty/tiers' && 'Niveles de Lealtad'}
+            {pathname === '/dashboard/loyalty/rewards' && 'Recompensas'}
             {pathname === '/dashboard/loyalty/customers' && 'Puntos de Clientes'}
             {pathname === '/dashboard/qr' && 'QR del Negocio'}
             {pathname === '/dashboard' && 'Panel Principal'}
