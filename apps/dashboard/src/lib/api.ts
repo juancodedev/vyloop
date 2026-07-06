@@ -327,6 +327,10 @@ export const api = {
   async deleteReward(id: string): Promise<void> {
     await apiFetch(`/v1/loyalty/rewards/${id}`, { method: 'DELETE' });
   },
+
+  async getKpis(): Promise<KpiResponse> {
+    return apiFetch('/v1/analytics/kpis') as Promise<KpiResponse>;
+  },
 };
 
 function mapReward(r: ApiRewardRecord): Reward {
@@ -342,6 +346,16 @@ function mapReward(r: ApiRewardRecord): Reward {
     ...(r.valid_until != null && { validUntil: r.valid_until }),
     ...(r.image_url != null && { imageUrl: r.image_url }),
   };
+}
+
+export interface KpiResponse {
+  totalCustomers: number;
+  activeCustomers: number;
+  totalPointsIssued: number;
+  totalPointsRedeemed: number;
+  redemptionRate: number;
+  tierDistribution: Record<string, number>;
+  rewardsClaimed: number;
 }
 
 function toRewardPayload(data: Partial<Reward>): Record<string, unknown> {

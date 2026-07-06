@@ -104,7 +104,7 @@ importers:
     devDependencies:
       '@cloudflare/next-on-pages':
         specifier: ^1.13.16
-        version: 1.13.16(@cloudflare/workers-types@4.20260702.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@4.20260702.1))
+        version: 1.13.16(@cloudflare/workers-types@5.20260706.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@5.20260706.1))
       '@cloudflare/workers-types':
         specifier: ^5.20260706.1
         version: 5.20260706.1
@@ -241,9 +241,18 @@ importers:
 
   workers/analytics:
     dependencies:
+      '@vyloop/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260706.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+      hono:
+        specifier: ^4.7.0
+        version: 4.12.27
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260706.1
@@ -2004,9 +2013,6 @@ packages:
   lodash.merge@4.6.2:
     resolution: {integrity: sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==}
 
-  loupe@3.2.1:
-    resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
-
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -2737,7 +2743,7 @@ snapshots:
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
-  '@cloudflare/next-on-pages@1.13.16(@cloudflare/workers-types@4.20260702.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@4.20260702.1))':
+  '@cloudflare/next-on-pages@1.13.16(@cloudflare/workers-types@5.20260706.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@5.20260706.1))':
     dependencies:
       acorn: 8.17.0
       ast-types: 0.14.2
@@ -4209,8 +4215,6 @@ snapshots:
 
   lodash.merge@4.6.2: {}
 
-  loupe@3.2.1: {}
-
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
@@ -4743,10 +4747,6 @@ snapshots:
   strip-bom@3.0.0: {}
 
   strip-json-comments@3.1.1: {}
-
-  strip-literal@3.1.0:
-    dependencies:
-      js-tokens: 9.0.1
 
   styled-jsx@5.1.6(react@19.2.7):
     dependencies:
