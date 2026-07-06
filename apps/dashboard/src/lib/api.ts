@@ -133,6 +133,32 @@ export interface CustomerDetail extends Customer {
   consents: Array<Record<string, unknown>>;
 }
 
+export interface Reward {
+  id: string;
+  name: string;
+  description?: string;
+  pointsCost: number;
+  category?: string;
+  stock?: number;
+  autoGrantThreshold?: number;
+  validFrom?: string;
+  validUntil?: string;
+  imageUrl?: string;
+}
+
+interface ApiRewardRecord {
+  id: string;
+  name: string;
+  description?: string | null;
+  points_cost: number;
+  category?: string | null;
+  stock?: number | null;
+  auto_grant_threshold?: number | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  image_url?: string | null;
+}
+
 export const api = {
   async getCustomer(id: string): Promise<CustomerDetail> {
     const raw = await apiFetch(`/v1/customers/${id}`) as Record<string, unknown>;
@@ -274,4 +300,60 @@ export const api = {
       totalPages: Math.ceil(result.total / perPage),
     };
   },
+
+  async getRewards(): Promise<Reward[]> {
+    const result = await apiFetch('/v1/loyalty/rewards') as { data: ApiRewardRecord[] };
+    return (result.data || []).map(mapReward);
+  },
+
+  async createReward(data: Omit<Reward, 'id'>): Promise<Reward> {
+    const result = await apiFetch('/v1/loyalty/rewards', {
+      method: 'POST',
+      body: JSON.stringify(toRewardPayload(data)),
+    });
+    const created = result as { data: ApiRewardRecord };
+    return mapReward(created.data);
+  },
+
+  async updateReward(id: string, data: Partial<Reward>): Promise<Reward> {
+    const result = await apiFetch(`/v1/loyalty/rewards/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(toRewardPayload(data)),
+    });
+    const updated = result as { data: ApiRewardRecord };
+    return mapReward(updated.data);
+  },
+
+  async deleteReward(id: string): Promise<void> {
+    await apiFetch(`/v1/loyalty/rewards/${id}`, { method: 'DELETE' });
+  },
 };
+
+function mapReward(r: ApiRewardRecord): Reward {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description ?? undefined,
+    pointsCost: r.points_cost,
+    category: r.category ?? undefined,
+    stock: r.stock ?? undefined,
+    autoGrantThreshold: r.auto_grant_threshold ?? undefined,
+    validFrom: r.valid_from ?? undefined,
+    validUntil: r.valid_until ?? undefined,
+    imageUrl: r.image_url ?? undefined,
+  };
+}
+
+function toRewardPayload(data: Partial<Reward>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (data.name !== undefined) body.name = data.name;
+  if (data.description !== undefined) body.description = data.description;
+  if (data.pointsCost !== undefined) body.points_cost = data.pointsCost;
+  if (data.category !== undefined) body.category = data.category;
+  if (data.stock !== undefined) body.stock = data.stock;
+  if (data.autoGrantThreshold !== undefined) body.auto_grant_threshold = data.autoGrantThreshold;
+  if (data.validFrom !== undefined) body.valid_from = data.validFrom;
+  if (data.validUntil !== undefined) body.valid_until = data.validUntil;
+  if (data.imageUrl !== undefined) body.image_url = data.imageUrl;
+  return body;
+}
