@@ -5,6 +5,8 @@ import {
   customers,
   customerEvents,
   pointsTransactions,
+  rewards,
+  rewardGrants,
 } from './schema';
 
 /**
@@ -52,6 +54,26 @@ export const idxCustomerEventsType = index('idx_customer_events_type')
   .on(sql`${customerEvents.businessId}`, sql`${customerEvents.eventType}`, sql`${customerEvents.createdAt} DESC`);
 
 /**
+ * Index: filter rewards by category per business (catalog browsing).
+ */
+export const idxRewardsCategory = index('idx_rewards_category')
+  .on(sql`${rewards.businessId}`, sql`${rewards.category}`);
+
+/**
+ * Partial index: find auto-grant rewards by threshold per business.
+ * Only rows with auto_grant_threshold IS NOT NULL are indexed.
+ */
+export const idxRewardsAutoGrant = index('idx_rewards_auto_grant')
+  .on(sql`${rewards.businessId}`, sql`${rewards.autoGrantThreshold}`)
+  .where(sql`auto_grant_threshold IS NOT NULL`);
+
+/**
+ * Index: fast idempotency check for reward grants per customer.
+ */
+export const idxRewardGrantsCustomer = index('idx_reward_grants_customer')
+  .on(sql`${rewardGrants.customerId}`, sql`${rewardGrants.rewardId}`);
+
+/**
  * Convenience array of all indexes for bulk creation / export.
  */
 export const allIndexes = [
@@ -61,4 +83,7 @@ export const allIndexes = [
   idxCustomersMetadata,
   idxCustomerEventsCustomer,
   idxCustomerEventsType,
+  idxRewardsCategory,
+  idxRewardsAutoGrant,
+  idxRewardGrantsCustomer,
 ];
