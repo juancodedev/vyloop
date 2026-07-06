@@ -29,6 +29,14 @@ const IconSettings = () => (
   </svg>
 );
 
+const IconBarChart = () => (
+  <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="20" x2="12" y2="10" />
+    <line x1="18" y1="20" x2="18" y2="4" />
+    <line x1="6" y1="20" x2="6" y2="16" />
+  </svg>
+);
+
 const IconLayers = () => (
   <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="12 2 2 7 12 12 22 7 12 2" />
@@ -94,6 +102,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <div className="sidebar-section-label">Navegación</div>
 
           <Link
+            href="/dashboard/analytics"
+            className={isActive(pathname, '/dashboard/analytics') ? 'active' : ''}
+          >
+            <IconBarChart />
+            <span>Analytics</span>
+          </Link>
+
+          <Link
             href="/dashboard/customers"
             className={isActive(pathname, '/dashboard/customers') ? 'active' : ''}
           >
@@ -155,6 +171,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <div className="main-area">
         <header className="main-topbar">
           <div className="page-title">
+            {pathname === '/dashboard/analytics' && 'Analytics'}
             {pathname === '/dashboard/customers' && 'Clientes'}
             {pathname.match(/^\/dashboard\/customers\/(.+)/) && 'Detalle del Cliente'}
             {pathname === '/dashboard/loyalty/config' && 'Configuración de Lealtad'}
