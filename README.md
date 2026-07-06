@@ -61,7 +61,7 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | **Database** | PostgreSQL 16 (Neon), Drizzle ORM |
 | **Auth** | JWT (Web Crypto API), PBKDF2, service bindings |
 | **Events** | Cloudflare Queues + Schema Registry (AJV) |
-| **Infrastructure** | Docker Compose (dev), Cloudflare (prod) |
+| **Infrastructure** | Docker (Postgres + Mailpit), `wrangler dev` (workers) |
 | **CI/CD** | GitHub Actions — quality checks + deploy automático |
 | **SDK** | `@vyloop/dashboard-cards` — customer detail card component |
 | **Tooling** | TypeScript strict, ESLint 9, Prettier, Vitest |
@@ -75,44 +75,80 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 ## Getting Started
 
 ```bash
-# Instalar dependencias
+# 1. Instalar dependencias
 pnpm install
 
-# Iniciar infraestructura local (PostgreSQL + Mailpit)
+# 2. Iniciar infraestructura local (PostgreSQL + Mailpit)
 docker compose -f docker/docker-compose.yml up -d
 
-# Ejecutar todo en modo dev
+# 3. Crear archivos .dev.vars para workers que lo necesiten
+#    (identity, customer y growth ya tienen; analytics y el resto no)
+for w in workers/analytics workers/automation workers/communication workers/compliance; do
+  if [ ! -f "$w/.dev.vars" ]; then
+    cp workers/identity/.dev.vars "$w/.dev.vars"
+  fi
+done
+
+# 4. Ejecutar todo en modo dev (todos los workers + dashboard)
 pnpm dev
 ```
 
 Esto arranca en paralelo:
-- `next dev` para el dashboard (puerto 3000)
+- `next dev` para el dashboard (puerto 3001)
 - `wrangler dev` para el gateway (puerto 8787) + todos los workers (8788–8794)
 - El dashboard apunta al gateway en `http://localhost:8787`
-- La gateway descubre automáticamente los workers via service bindings
+- La gateway resuelve service bindings automáticamente mientras todos los workers estén corriendo
 
-> ⚠️ Si es la primera vez, seedear la base de datos primero:
+> ⚠️ **Service bindings en local**: wrangler dev descubre workers automáticamente cuando
+> todos corren al mismo tiempo. Si un worker no se inicia (ej. por puerto ocupado),
+> el gateway responderá `503 Worker "<name>" not found`.
+>
+> Verificá que todos los workers estén levantados:
 > ```bash
-> DATABASE_URL="postgresql://..." pnpm --filter @vyloop/db db:seed
+> lsof -i :8787-8794 -P 2>/dev/null | grep LISTEN | wc -l
+> # → deberían ser 8 (gateway + 7 workers)
+> ```
+
+> ⚠️ **Primera vez** — seedear la base de datos local:
+> ```bash
+> DATABASE_URL="postgresql://vyloop:vyloop_dev@localhost:5432/vyloop_dev" \
+>   pnpm --filter @vyloop/db db:seed
 > ```
 
 ### Puertos de Servicios
 
-| Servicio | Puerto |
-|----------|--------|
-| API Gateway (dev) | 8787 |
-| Dashboard (dev) | 3000 |
-| Customer Web (dev) | 3001 |
-| Identity Worker | 8788 |
-| Customer Worker | 8789 |
-| Growth Worker | 8790 |
-| Analytics Worker | 8791 |
-| Automation Worker | 8792 |
-| Communication Worker | 8793 |
-| Compliance Worker | 8794 |
-| PostgreSQL | 5432 |
-| Mailpit SMTP | 1025 |
-| Mailpit UI | 8025 |
+| Servicio | Puerto | Uso |
+|----------|--------|-----|
+| API Gateway (dev) | 8787 | Punto de entrada HTTP — el frontend apunta acá |
+| Identity Worker | 8788 | Auth (login, JWT, API keys) |
+| Customer Worker | 8789 | CRUD de clientes |
+| Growth Worker | 8790 | Motor de lealtad (puntos, tiers) |
+| Analytics Worker | 8791 | KPIs y reportes |
+| Automation Worker | 8792 | Automatizaciones (placeholder) |
+| Communication Worker | 8793 | Comunicación omnicanal (placeholder) |
+| Compliance Worker | 8794 | Compliance y auditoría (placeholder) |
+| Dashboard (dev) | 3001 | Frontend Next.js |
+| PostgreSQL | 5432 | Base de datos local (Docker) |
+| Mailpit SMTP | 1025 | Captura de emails (Docker) |
+| Mailpit UI | 8025 | Web UI para ver emails capturados |
+
+### Conexión directa a workers en local
+
+En dev podés llamar cada worker directamente por su puerto,
+sin pasar por el gateway. Esto es útil para debugging:
+
+```bash
+# Identity — login
+curl -X POST http://localhost:8788/v1/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo@cafecentral.com","password":"demo123"}'
+
+# Analytics — requiere headers inyectados por el gateway
+curl -H 'X-User-Id: <uuid>' \
+  -H 'X-Business-Id: <uuid>' \
+  -H 'X-User-Role: admin' \
+  http://localhost:8791/v1/analytics/kpis
+```
 
 ### Quality Checks
 
