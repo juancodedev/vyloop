@@ -1,7 +1,7 @@
-import { createDb, customers, customerEvents, consents, tenants } from '@vyloop/db';
+import { createDb, customers, customerEvents, consents, tenants, pointsTransactions, membershipTiers } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
-import { eq, and, isNull, like, or, count, type SQL } from 'drizzle-orm';
+import { eq, and, isNull, like, or, count, desc, sum, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
@@ -200,6 +200,119 @@ router.get('/v1/customers', async (c) => {
   const total = totalResult[0]?.total ?? 0;
 
   return c.json({ data, total, page, limit });
+});
+
+// ---------------------------------------------------------------------------
+// Self-profile: GET /v1/customers/me
+// MUST be registered BEFORE /:id to avoid Hono treating "me" as an :id param.
+// ---------------------------------------------------------------------------
+
+router.get('/v1/customers/me', async (c) => {
+  const userId = c.req.header('X-User-Id'); // globalId from JWT sub
+  const businessId = c.req.header('X-Business-Id');
+
+  if (!userId) {
+    return c.json(
+      { error: { code: 'UNAUTHORIZED', message: 'Missing X-User-Id header' } },
+      401,
+    );
+  }
+
+  if (!businessId) {
+    return c.json(
+      { error: { code: 'UNAUTHORIZED', message: 'Missing X-Business-Id header' } },
+      401,
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+
+  // Look up customer by globalId + businessId
+  const [customer] = await db
+    .select()
+    .from(customers)
+    .where(
+      and(
+        eq(customers.globalId, userId),
+        eq(customers.businessId, businessId),
+        isNull(customers.deletedAt),
+      ),
+    )
+    .limit(1);
+
+  if (!customer) {
+    return c.json(
+      { error: { code: 'NOT_FOUND', message: 'Customer not found' } },
+      404,
+    );
+  }
+
+  // Fetch balance, total earned, tier, and events in parallel
+  const [balanceResult, earnedResult, eventsResult] = await Promise.all([
+    // Latest balance (uses customer.id PK — matches FK on points_transactions)
+    db
+      .select({ balance_after: pointsTransactions.balanceAfter })
+      .from(pointsTransactions)
+      .where(eq(pointsTransactions.customerId, customer.id))
+      .orderBy(desc(pointsTransactions.createdAt))
+      .limit(1),
+    // Total points earned (sum of all 'earn' transactions)
+    db
+      .select({ total: sum(pointsTransactions.points) })
+      .from(pointsTransactions)
+      .where(
+        and(
+          eq(pointsTransactions.customerId, customer.id),
+          eq(pointsTransactions.type, 'earn'),
+        ),
+      ),
+    // Last 10 customer events
+    db
+      .select()
+      .from(customerEvents)
+      .where(eq(customerEvents.customerId, customer.id))
+      .orderBy(desc(customerEvents.createdAt))
+      .limit(10),
+  ]);
+
+  const points = balanceResult[0]?.balance_after ?? 0;
+  const totalPointsEarned = Number(earnedResult[0]?.total ?? 0);
+
+  // Resolve tier name if customer has a tier assigned
+  let tier: { id: string; name: string; multiplier: number } | null = null;
+  if (customer.currentTierId) {
+    const [tierRow] = await db
+      .select()
+      .from(membershipTiers)
+      .where(eq(membershipTiers.id, customer.currentTierId))
+      .limit(1);
+
+    if (tierRow) {
+      tier = {
+        id: tierRow.id,
+        name: tierRow.name,
+        multiplier: Number(tierRow.multiplier),
+      };
+    }
+  }
+
+  return c.json({
+    data: {
+      id: customer.id,
+      globalId: customer.globalId,
+      fullName: customer.fullName,
+      phone: customer.phone,
+      email: customer.email,
+      birthDate: customer.birthDate,
+      points,
+      totalPointsEarned,
+      currentTierId: customer.currentTierId,
+      currentTier: tier?.name ?? null,
+      tier,
+      customer_events: eventsResult,
+      createdAt: customer.createdAt,
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------

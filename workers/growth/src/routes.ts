@@ -1,4 +1,4 @@
-import { createDb, loyaltyPrograms, membershipTiers, customers, rewards } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import { eq, and, count, sql, or, isNull, lte, gte, gt, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -424,6 +424,70 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     }
     throw err;
   }
+});
+
+// ============================================================================
+// Points Transactions History
+// ============================================================================
+
+/**
+ * GET /v1/loyalty/points/transactions
+ *
+ * Paginated transaction history scoped by X-Business-Id.
+ * Supports ?customer_id=, ?type=earn|redeem, ?page=, ?limit= filters.
+ */
+router.get('/v1/loyalty/points/transactions', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const customerId = c.req.query('customer_id');
+  const typeFilter = c.req.query('type');
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') ?? '20', 10) || 20));
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // Build WHERE conditions
+  const conditions: ReturnType<typeof and>[] = [
+    eq(pointsTransactions.businessId, businessId),
+  ];
+
+  if (customerId) {
+    conditions.push(eq(pointsTransactions.customerId, customerId));
+  }
+
+  if (typeFilter === 'earn' || typeFilter === 'redeem') {
+    conditions.push(eq(pointsTransactions.type, typeFilter));
+  }
+
+  const where = and(...conditions);
+
+  // Count total + fetch page in parallel
+  const [totalResult, items] = await Promise.all([
+    db.select({ total: count() }).from(pointsTransactions).where(where),
+    db
+      .select({
+        id: pointsTransactions.id,
+        customer_id: pointsTransactions.customerId,
+        type: pointsTransactions.type,
+        points: pointsTransactions.points,
+        balance_after: pointsTransactions.balanceAfter,
+        reference_id: pointsTransactions.referenceId,
+        note: pointsTransactions.note,
+        created_at: pointsTransactions.createdAt,
+      })
+      .from(pointsTransactions)
+      .where(where)
+      .orderBy(desc(pointsTransactions.createdAt))
+      .limit(limit)
+      .offset((page - 1) * limit),
+  ]);
+
+  const total = Number(totalResult[0]?.total ?? 0);
+
+  return c.json({
+    data: items,
+    meta: { total, page, per_page: limit },
+  });
 });
 
 // ============================================================================
