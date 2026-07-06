@@ -333,14 +333,14 @@ function mapReward(r: ApiRewardRecord): Reward {
   return {
     id: r.id,
     name: r.name,
-    description: r.description ?? undefined,
     pointsCost: r.points_cost,
-    category: r.category ?? undefined,
-    stock: r.stock ?? undefined,
-    autoGrantThreshold: r.auto_grant_threshold ?? undefined,
-    validFrom: r.valid_from ?? undefined,
-    validUntil: r.valid_until ?? undefined,
-    imageUrl: r.image_url ?? undefined,
+    ...(r.description != null && { description: r.description }),
+    ...(r.category != null && { category: r.category }),
+    ...(r.stock != null && { stock: r.stock }),
+    ...(r.auto_grant_threshold != null && { autoGrantThreshold: r.auto_grant_threshold }),
+    ...(r.valid_from != null && { validFrom: r.valid_from }),
+    ...(r.valid_until != null && { validUntil: r.valid_until }),
+    ...(r.image_url != null && { imageUrl: r.image_url }),
   };
 }
 
