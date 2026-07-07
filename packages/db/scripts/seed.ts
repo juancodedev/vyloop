@@ -59,12 +59,6 @@ interface TxDef {
   daysAgo: number;
 }
 
-interface EventDef {
-  eventType: string;
-  payload: Record<string, unknown>;
-  daysAgo: number;
-}
-
 interface CustomerDef {
   fullName: string;
   phone: string;
