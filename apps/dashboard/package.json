@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "pages:build": "next-on-pages",
     "test": "vitest run"
   },
   "dependencies": {
