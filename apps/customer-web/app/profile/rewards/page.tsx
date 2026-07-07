@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback } from 'react';
 
-import { api, Reward } from '../../lib/api';
+import { api, type Reward, type CustomerProfile } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+
+const CID_KEY = 'vyloop_customer_id';
 
 export default function RewardsPage() {
   const router = useRouter();
@@ -15,6 +17,7 @@ export default function RewardsPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [redeemingId, setRedeemingId] = useState<string | null>(null);
   const [redeemError, setRedeemError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<CustomerProfile | null>(null);
 
   useEffect(() => {
     if (!authLoading && !customer) {
@@ -24,41 +27,68 @@ export default function RewardsPage() {
 
   useEffect(() => {
     if (!customer) return;
+
+    // Restore customer id from localStorage (set by profile page)
+    const storedId = localStorage.getItem(CID_KEY);
+    if (storedId) {
+      setProfile((prev) => (prev ? prev : { ...(prev || {}), id: storedId } as CustomerProfile));
+    }
+
     setLoading(true);
     setFetchError(null);
-    api
-      .getRewards()
-      .then(setRewards)
+
+    // Fetch rewards + profile in parallel
+    Promise.all([
+      api.getRewards(),
+      api.getProfile(),
+    ])
+      .then(([rewardsData, profileData]) => {
+        setRewards(rewardsData);
+        setProfile(profileData);
+        // Ensure customer id is persisted for other pages
+        localStorage.setItem(CID_KEY, profileData.id);
+      })
       .catch((err: Error) => setFetchError(err.message))
       .finally(() => setLoading(false));
   }, [customer]);
 
   const handleRedeem = useCallback(
     async (reward: Reward) => {
+      const customerId = localStorage.getItem(CID_KEY) || profile?.id;
+      if (!customerId) {
+        setRedeemError('No se encontró el perfil del cliente. Volvé a la página de perfil.');
+        return;
+      }
+
       setRedeemingId(reward.id);
       setRedeemError(null);
       try {
-        const result = (await api.redeemReward(reward.id)) as {
-          success: boolean;
-          remainingBalance?: number;
-          rewardName?: string;
+        const result = (await api.redeemReward({
+          customer_id: customerId,
+          points: reward.pointsCost,
+          reward_id: reward.id,
+          reference_id: `redeem-${customerId}-${Date.now()}`,
+        })) as {
+          data?: { id: string; points: number; balance_after: number };
+          fulfilled?: number;
+          partial?: boolean;
         };
-        if (result?.success) {
-          const params = new URLSearchParams({
-            name: result.rewardName ?? reward.name,
-            points: String(reward.pointsCost),
-          });
-          if (result.remainingBalance != null) {
-            params.set('balance', String(result.remainingBalance));
-          }
-          router.push(`/profile/rewards/confirm?${params.toString()}`);
+
+        const balanceAfter = result?.data?.balance_after;
+        const params = new URLSearchParams({
+          name: reward.name,
+          points: String(reward.pointsCost),
+        });
+        if (balanceAfter != null) {
+          params.set('balance', String(balanceAfter));
         }
+        router.push(`/profile/rewards/confirm?${params.toString()}`);
       } catch (err) {
         setRedeemError((err as Error).message || 'Error al canjear');
         setRedeemingId(null);
       }
     },
-    [router],
+    [router, profile],
   );
 
   // --- Auth guard ---
