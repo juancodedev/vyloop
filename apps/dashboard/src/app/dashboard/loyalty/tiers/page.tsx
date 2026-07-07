@@ -1,6 +1,10 @@
 'use client';
 
+import { Button } from '@vyloop/design-system';
+import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
+
+import styles from './page.module.css';
 
 import { api } from '@/lib/api';
 import type { Tier } from '@/lib/api';
@@ -99,69 +103,63 @@ export default function LoyaltyTiersPage() {
   }
 
   if (loading) {
-    return (
-      <div className="card">
-        <div className="card-body text-center text-muted">Cargando…</div>
-      </div>
-    );
+    return <div className={styles.loading}>Cargando…</div>;
   }
 
   return (
     <>
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-sm text-muted">
+      <div className={styles.header}>
+        <span className={styles.count}>
           {tiers.length} nivel{tiers.length !== 1 ? 'es' : ''} configurado{tiers.length !== 1 ? 's' : ''}
         </span>
-        <button className="btn btn-primary btn-sm" onClick={openCreate}>
-          + Nuevo Nivel
-        </button>
+        <Button size="sm" icon={<Plus size={16} />} onClick={openCreate}>
+          Nuevo Nivel
+        </Button>
       </div>
 
-      {/* Tier Cards */}
-      <div className="tier-grid">
+      {/* Tier Grid */}
+      <div className={styles.grid}>
         {tiers.map((tier) => (
-          <div className="card tier-card" key={tier.id}>
-            <div className="card-body">
-              <div className="tier-name">{tier.name}</div>
+          <div className={styles.card} key={tier.id}>
+            <div className={styles.cardBody}>
+              <div className={styles.tierName}>{tier.name}</div>
 
-              <div className="tier-stat">
-                <span className="tier-stat-label">Puntos mínimos</span>
-                <span className="tier-stat-value">{tier.minPoints.toLocaleString()}</span>
+              <div className={styles.statRow}>
+                <span className={styles.statLabel}>Puntos mínimos</span>
+                <span className={styles.statValue}>{tier.minPoints.toLocaleString()}</span>
               </div>
 
-              <div className="tier-stat">
-                <span className="tier-stat-label">Multiplicador</span>
-                <span className="tier-stat-value">{tier.multiplier}x</span>
+              <div className={styles.statRow}>
+                <span className={styles.statLabel}>Multiplicador</span>
+                <span className={styles.statValue}>{tier.multiplier}x</span>
               </div>
 
-              <div className="tier-stat">
-                <span className="tier-stat-label">Clientes</span>
-                <span className="tier-stat-value">{tier.customerCount}</span>
+              <div className={styles.statRow}>
+                <span className={styles.statLabel}>Clientes</span>
+                <span className={styles.statValue}>{tier.customerCount}</span>
               </div>
 
-              <div className="tier-stat">
-                <span className="tier-stat-label">Beneficios</span>
-                <span className="tier-stat-value" style={{ fontWeight: 400, fontSize: '0.8rem' }}>
-                  {tier.benefits}
-                </span>
+              <div className={styles.statRow}>
+                <span className={styles.statLabel}>Beneficios</span>
+                <span className={styles.statBenefits}>{tier.benefits}</span>
               </div>
 
-              <div className="tier-actions">
-                <button className="btn btn-secondary btn-sm" onClick={() => openEdit(tier)}>
+              <div className={styles.actions}>
+                <Button variant="secondary" size="sm" icon={<Pencil size={14} />} onClick={() => openEdit(tier)}>
                   Editar
-                </button>
-                <button className="btn btn-danger btn-sm" onClick={() => handleDelete(tier)}>
+                </Button>
+                <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => handleDelete(tier)}>
                   Eliminar
-                </button>
+                </Button>
               </div>
             </div>
           </div>
         ))}
 
         {tiers.length === 0 && (
-          <div className="card">
-            <div className="card-body empty-state">
+          <div className={styles.emptyCard}>
+            <div className={styles.emptyBody}>
               <p>No hay niveles configurados. Cree el primer nivel para comenzar.</p>
             </div>
           </div>
@@ -170,71 +168,73 @@ export default function LoyaltyTiersPage() {
 
       {/* Modal */}
       {modal && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{modal.mode === 'create' ? 'Nuevo Nivel' : 'Editar Nivel'}</h3>
-              <button className="modal-close" onClick={closeModal}>
-                &times;
+        <div className={styles.overlay} onClick={closeModal}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <h3 className={styles.modalTitle}>
+                {modal.mode === 'create' ? 'Nuevo Nivel' : 'Editar Nivel'}
+              </h3>
+              <button className={styles.closeBtn} onClick={closeModal} aria-label="Cerrar">
+                <X size={18} />
               </button>
             </div>
 
-            <div className="modal-body">
-              <div className="form-group">
-                <label htmlFor="tier-name">Nombre del nivel</label>
+            <div className={styles.modalBody}>
+              <div className={styles.fieldGroup}>
+                <label className={styles.label} htmlFor="tier-name">Nombre del nivel</label>
                 <input
                   id="tier-name"
                   type="text"
-                  className="form-control"
+                  className={styles.input}
                   placeholder="Ej: Diamante"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                 />
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="tier-minPoints">Puntos mínimos</label>
+              <div className={styles.fieldRow}>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="tier-minPoints">Puntos mínimos</label>
                   <input
                     id="tier-minPoints"
                     type="number"
                     min="0"
-                    className="form-control"
+                    className={styles.input}
                     value={form.minPoints}
                     onChange={(e) => setForm({ ...form, minPoints: Number(e.target.value) })}
                   />
                 </div>
-                <div className="form-group">
-                  <label htmlFor="tier-multiplier">Multiplicador</label>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="tier-multiplier">Multiplicador</label>
                   <input
                     id="tier-multiplier"
                     type="number"
                     step="0.1"
                     min="1"
-                    className="form-control"
+                    className={styles.input}
                     value={form.multiplier}
                     onChange={(e) => setForm({ ...form, multiplier: Number(e.target.value) })}
                   />
                 </div>
               </div>
 
-              <div className="form-group">
-                <label htmlFor="tier-order">Orden de visualización</label>
+              <div className={styles.fieldGroup}>
+                <label className={styles.label} htmlFor="tier-order">Orden de visualización</label>
                 <input
                   id="tier-order"
                   type="number"
                   min="1"
-                  className="form-control"
+                  className={styles.input}
                   value={form.displayOrder}
                   onChange={(e) => setForm({ ...form, displayOrder: Number(e.target.value) })}
                 />
               </div>
 
-              <div className="form-group">
-                <label htmlFor="tier-benefits">Beneficios</label>
+              <div className={styles.fieldGroup}>
+                <label className={styles.label} htmlFor="tier-benefits">Beneficios</label>
                 <textarea
                   id="tier-benefits"
-                  className="form-control"
+                  className={styles.textarea}
                   rows={3}
                   placeholder="Describe los beneficios de este nivel"
                   value={form.benefits}
@@ -243,17 +243,17 @@ export default function LoyaltyTiersPage() {
               </div>
             </div>
 
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal} disabled={saving}>
+            <div className={styles.modalFooter}>
+              <Button variant="secondary" onClick={closeModal} disabled={saving}>
                 Cancelar
-              </button>
-              <button
-                className="btn btn-primary"
+              </Button>
+              <Button
                 onClick={handleSave}
-                disabled={saving || !form.name.trim()}
+                loading={saving}
+                disabled={!form.name.trim()}
               >
-                {saving ? 'Guardando…' : modal.mode === 'create' ? 'Crear Nivel' : 'Guardar Cambios'}
-              </button>
+                {modal.mode === 'create' ? 'Crear Nivel' : 'Guardar Cambios'}
+              </Button>
             </div>
           </div>
         </div>
@@ -261,8 +261,10 @@ export default function LoyaltyTiersPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast toast-${toast.type}`}>{toast.message}</div>
+        <div className={styles.toastContainer}>
+          <div className={toast.type === 'success' ? styles.toastSuccess : styles.toastError}>
+            {toast.message}
+          </div>
         </div>
       )}
     </>
