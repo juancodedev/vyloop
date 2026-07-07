@@ -1,6 +1,10 @@
 'use client';
 
+import { Button } from '@vyloop/design-system';
+import { Check, Pencil, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
+
+import styles from './page.module.css';
 
 import { api } from '@/lib/api';
 import type { LoyaltyConfig } from '@/lib/api';
@@ -58,108 +62,91 @@ export default function LoyaltyConfigPage() {
   }
 
   if (loading) {
-    return (
-      <div className="card">
-        <div className="card-body text-center text-muted">Cargando…</div>
-      </div>
-    );
+    return <div className={styles.loading}>Cargando…</div>;
   }
 
   if (!config) {
-    return (
-      <div className="card">
-        <div className="card-body text-center text-muted">
-          No se pudo cargar la configuración
-        </div>
-      </div>
-    );
+    return <div className={styles.loading}>No se pudo cargar la configuración</div>;
   }
 
   return (
     <>
-      <div className="card">
-        <div className="card-header">
-          <h3>Configuración del Programa</h3>
+      <div className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Configuración del Programa</h2>
           {!editing && (
-            <button className="btn btn-secondary btn-sm" onClick={handleEdit}>
+            <Button variant="secondary" size="sm" icon={<Pencil size={14} />} onClick={handleEdit}>
               Editar
-            </button>
+            </Button>
           )}
         </div>
-        <div className="card-body">
+        <div className={styles.cardBody}>
           {!editing ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div>
-                <div className="text-xs text-muted" style={{ marginBottom: '0.25rem' }}>
-                  NOMBRE DEL PROGRAMA
-                </div>
-                <div style={{ fontSize: '1rem', fontWeight: 500 }}>{config.programName}</div>
+            <div className={styles.fieldStack}>
+              <div className={styles.fieldGroup}>
+                <span className={styles.fieldLabel}>Nombre del programa</span>
+                <span className={styles.fieldValue}>{config.programName}</span>
               </div>
-              <div>
-                <div className="text-xs text-muted" style={{ marginBottom: '0.25rem' }}>
-                  TASA DE ACUMULACIÓN
-                </div>
-                <div style={{ fontSize: '1rem', fontWeight: 500 }}>
+              <div className={styles.fieldGroup}>
+                <span className={styles.fieldLabel}>Tasa de acumulación</span>
+                <span className={styles.fieldValue}>
                   {config.earnRate} punto por cada $1.000
-                </div>
-                <div className="text-xs text-muted" style={{ marginTop: '0.25rem' }}>
+                </span>
+                <span className={styles.fieldHint}>
                   Por cada $1.000 pesos de compra, el cliente recibe {config.earnRate} punto
                   {config.earnRate !== 1 ? 's' : ''} (multiplicado por el nivel)
-                </div>
+                </span>
               </div>
             </div>
           ) : (
-            <div>
-              <div className="form-group">
-                <label htmlFor="programName">Nombre del programa</label>
+            <div className={styles.fieldStack}>
+              <div className={styles.fieldGroup}>
+                <label className={styles.label} htmlFor="programName">
+                  Nombre del programa
+                </label>
                 <input
                   id="programName"
                   type="text"
-                  className="form-control"
+                  className={styles.input}
                   value={form.programName}
                   onChange={(e) => setForm({ ...form, programName: e.target.value })}
                 />
               </div>
-              <div className="form-group">
-                <label htmlFor="earnRate">Tasa de acumulación (puntos por $1.000)</label>
+              <div className={styles.fieldGroup}>
+                <label className={styles.label} htmlFor="earnRate">
+                  Tasa de acumulación (puntos por $1.000)
+                </label>
                 <input
                   id="earnRate"
                   type="number"
                   step="0.1"
                   min="0.1"
-                  className="form-control"
+                  className={styles.input}
                   value={form.earnRate}
                   onChange={(e) => setForm({ ...form, earnRate: Number(e.target.value) })}
                 />
-                <div className="hint">
+                <span className={styles.fieldHint}>
                   Por cada $1.000 pesos de compra, el cliente recibe esta cantidad de puntos base
-                </div>
+                </span>
               </div>
-              <div className="inline-edit-actions">
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={handleSave}
-                  disabled={saving}
-                >
-                  {saving ? 'Guardando…' : 'Guardar'}
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleCancel}
-                  disabled={saving}
-                >
+              <div className={styles.inlineActions}>
+                <Button size="sm" icon={<Check size={14} />} onClick={handleSave} loading={saving}>
+                  Guardar
+                </Button>
+                <Button variant="secondary" size="sm" icon={<X size={14} />} onClick={handleCancel} disabled={saving}>
                   Cancelar
-                </button>
+                </Button>
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast toast-${toast.type}`}>{toast.message}</div>
+        <div className={styles.toastContainer}>
+          <div className={toast.type === 'success' ? styles.toastSuccess : styles.toastError}>
+            {toast.message}
+          </div>
         </div>
       )}
     </>
