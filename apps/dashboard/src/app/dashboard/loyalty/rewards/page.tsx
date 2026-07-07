@@ -1,6 +1,10 @@
 'use client';
 
+import { Button } from '@vyloop/design-system';
+import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
+
+import styles from './page.module.css';
 
 import { api } from '@/lib/api';
 import type { Reward } from '@/lib/api';
@@ -124,105 +128,105 @@ export default function LoyaltyRewardsPage() {
   }
 
   if (loading) {
-    return (
-      <div className="card">
-        <div className="card-body text-center text-muted">Cargando…</div>
-      </div>
-    );
+    return <div className={styles.loading}>Cargando…</div>;
   }
 
   return (
     <>
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-sm text-muted">
+      <div className={styles.header}>
+        <span className={styles.count}>
           {rewards.length} recompensa{rewards.length !== 1 ? 's' : ''} configurada{rewards.length !== 1 ? 's' : ''}
         </span>
-        <button className="btn btn-primary btn-sm" onClick={openCreate}>
-          + Nueva Recompensa
-        </button>
+        <Button size="sm" icon={<Plus size={16} />} onClick={openCreate}>
+          Nueva Recompensa
+        </Button>
       </div>
 
-      {/* Rewards Table */}
+      {/* Rewards Table / Empty */}
       {rewards.length === 0 ? (
-        <div className="card">
-          <div className="card-body empty-state">
+        <div className={styles.card}>
+          <div className={styles.emptyBody}>
             <p>No hay recompensas configuradas. Cree la primera recompensa para comenzar.</p>
           </div>
         </div>
       ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Nombre</th>
-                <th>Puntos</th>
-                <th>Categoría</th>
-                <th>Stock</th>
-                <th>Auto-grant</th>
-                <th>Vigencia</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rewards.map((reward) => (
-                <tr key={reward.id}>
-                  <td className="fw-500">{reward.name}</td>
-                  <td>{reward.pointsCost.toLocaleString()}</td>
-                  <td>{reward.category || '—'}</td>
-                  <td>{reward.stock !== undefined ? reward.stock.toLocaleString() : '∞'}</td>
-                  <td>{reward.autoGrantThreshold ? `${reward.autoGrantThreshold.toLocaleString()} pts` : '—'}</td>
-                  <td>
-                    {reward.validFrom || reward.validUntil
-                      ? `${formatDate(reward.validFrom)} — ${formatDate(reward.validUntil)}`
-                      : '—'}
-                  </td>
-                  <td>
-                    <div className="flex gap-1">
-                      <button className="btn btn-secondary btn-xs" onClick={() => openEdit(reward)}>
-                        Editar
-                      </button>
-                      <button className="btn btn-danger btn-xs" onClick={() => handleDelete(reward)}>
-                        Eliminar
-                      </button>
-                    </div>
-                  </td>
+        <div className={styles.card}>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Puntos</th>
+                  <th>Categoría</th>
+                  <th>Stock</th>
+                  <th>Auto-grant</th>
+                  <th>Vigencia</th>
+                  <th>Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rewards.map((reward) => (
+                  <tr key={reward.id}>
+                    <td className={styles.cellName}>{reward.name}</td>
+                    <td>{reward.pointsCost.toLocaleString()}</td>
+                    <td>{reward.category || '—'}</td>
+                    <td>{reward.stock !== undefined ? reward.stock.toLocaleString() : '∞'}</td>
+                    <td>{reward.autoGrantThreshold ? `${reward.autoGrantThreshold.toLocaleString()} pts` : '—'}</td>
+                    <td>
+                      {reward.validFrom || reward.validUntil
+                        ? `${formatDate(reward.validFrom)} — ${formatDate(reward.validUntil)}`
+                        : '—'}
+                    </td>
+                    <td>
+                      <div className={styles.cellActions}>
+                        <Button variant="secondary" size="sm" icon={<Pencil size={14} />} onClick={() => openEdit(reward)}>
+                          Editar
+                        </Button>
+                        <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => handleDelete(reward)}>
+                          Eliminar
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* Modal */}
       {modal && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{modal.mode === 'create' ? 'Nueva Recompensa' : 'Editar Recompensa'}</h3>
-              <button className="modal-close" onClick={closeModal}>
-                &times;
+        <div className={styles.overlay} onClick={closeModal}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <h3 className={styles.modalTitle}>
+                {modal.mode === 'create' ? 'Nueva Recompensa' : 'Editar Recompensa'}
+              </h3>
+              <button className={styles.closeBtn} onClick={closeModal} aria-label="Cerrar">
+                <X size={18} />
               </button>
             </div>
 
-            <div className="modal-body">
-              <div className="form-group">
-                <label htmlFor="reward-name">Nombre</label>
+            <div className={styles.modalBody}>
+              <div className={styles.fieldGroup}>
+                <label className={styles.label} htmlFor="reward-name">Nombre</label>
                 <input
                   id="reward-name"
                   type="text"
-                  className="form-control"
+                  className={styles.input}
                   placeholder="Ej: Café Americano"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                 />
               </div>
 
-              <div className="form-group">
-                <label htmlFor="reward-desc">Descripción</label>
+              <div className={styles.fieldGroup}>
+                <label className={styles.label} htmlFor="reward-desc">Descripción</label>
                 <textarea
                   id="reward-desc"
-                  className="form-control"
+                  className={styles.textarea}
                   rows={2}
                   placeholder="Descripción de la recompensa"
                   value={form.description}
@@ -230,24 +234,24 @@ export default function LoyaltyRewardsPage() {
                 />
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="reward-points">Costo en puntos</label>
+              <div className={styles.fieldRow}>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="reward-points">Costo en puntos</label>
                   <input
                     id="reward-points"
                     type="number"
                     min="1"
-                    className="form-control"
+                    className={styles.input}
                     value={form.pointsCost}
                     onChange={(e) => setForm({ ...form, pointsCost: Number(e.target.value) })}
                   />
                 </div>
-                <div className="form-group">
-                  <label htmlFor="reward-category">Categoría</label>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="reward-category">Categoría</label>
                   <input
                     id="reward-category"
                     type="text"
-                    className="form-control"
+                    className={styles.input}
                     placeholder="Ej: Bebidas"
                     value={form.category}
                     onChange={(e) => setForm({ ...form, category: e.target.value })}
@@ -255,26 +259,26 @@ export default function LoyaltyRewardsPage() {
                 </div>
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="reward-stock">Stock (vacío = ilimitado)</label>
+              <div className={styles.fieldRow}>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="reward-stock">Stock (vacío = ilimitado)</label>
                   <input
                     id="reward-stock"
                     type="number"
                     min="0"
-                    className="form-control"
+                    className={styles.input}
                     placeholder="Ilimitado"
                     value={form.stock}
                     onChange={(e) => setForm({ ...form, stock: e.target.value })}
                   />
                 </div>
-                <div className="form-group">
-                  <label htmlFor="reward-auto">Auto-grant al alcanzar puntos</label>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="reward-auto">Auto-grant al alcanzar puntos</label>
                   <input
                     id="reward-auto"
                     type="number"
                     min="0"
-                    className="form-control"
+                    className={styles.input}
                     placeholder="Ej: 5000"
                     value={form.autoGrantThreshold}
                     onChange={(e) => setForm({ ...form, autoGrantThreshold: e.target.value })}
@@ -282,23 +286,23 @@ export default function LoyaltyRewardsPage() {
                 </div>
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="reward-validFrom">Válido desde</label>
+              <div className={styles.fieldRow}>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="reward-validFrom">Válido desde</label>
                   <input
                     id="reward-validFrom"
                     type="date"
-                    className="form-control"
+                    className={styles.input}
                     value={form.validFrom}
                     onChange={(e) => setForm({ ...form, validFrom: e.target.value })}
                   />
                 </div>
-                <div className="form-group">
-                  <label htmlFor="reward-validUntil">Válido hasta</label>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.label} htmlFor="reward-validUntil">Válido hasta</label>
                   <input
                     id="reward-validUntil"
                     type="date"
-                    className="form-control"
+                    className={styles.input}
                     value={form.validUntil}
                     onChange={(e) => setForm({ ...form, validUntil: e.target.value })}
                   />
@@ -306,17 +310,17 @@ export default function LoyaltyRewardsPage() {
               </div>
             </div>
 
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal} disabled={saving}>
+            <div className={styles.modalFooter}>
+              <Button variant="secondary" onClick={closeModal} disabled={saving}>
                 Cancelar
-              </button>
-              <button
-                className="btn btn-primary"
+              </Button>
+              <Button
                 onClick={handleSave}
-                disabled={saving || !form.name.trim() || form.pointsCost < 1}
+                loading={saving}
+                disabled={!form.name.trim() || form.pointsCost < 1}
               >
                 {saving ? 'Guardando…' : modal.mode === 'create' ? 'Crear Recompensa' : 'Guardar Cambios'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -324,8 +328,10 @@ export default function LoyaltyRewardsPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast toast-${toast.type}`}>{toast.message}</div>
+        <div className={styles.toastContainer}>
+          <div className={toast.type === 'success' ? styles.toastSuccess : styles.toastError}>
+            {toast.message}
+          </div>
         </div>
       )}
     </>
