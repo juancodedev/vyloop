@@ -1,0 +1,135 @@
+/* ── Wrapper for horizontal scroll ── */
+.wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Table ── */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+}
+
+/* ── Header ── */
+.header {
+  border-bottom: 1px solid var(--border);
+}
+
+.headerCell {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-weight: var(--font-semibold);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.headerCell.sortable {
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.headerCell.sortable:hover {
+  color: var(--text-primary);
+}
+
+.headerCell.alignCenter {
+  text-align: center;
+}
+
+.headerCell.alignRight {
+  text-align: right;
+}
+
+/* ── Sort icons ── */
+.sortIcon {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-1);
+  vertical-align: middle;
+  color: var(--text-muted);
+}
+
+.sortIcon.active {
+  color: var(--brand-500);
+}
+
+/* ── Body ── */
+.body {
+  /* empty */
+}
+
+/* ── Rows ── */
+.row {
+  border-bottom: 1px solid var(--border-light);
+  transition: background var(--transition-fast);
+}
+
+.row:nth-child(even) {
+  background: var(--surface-page);
+}
+
+.row:hover {
+  background: var(--stone-100);
+}
+
+.row.clickable {
+  cursor: pointer;
+}
+
+/* ── Cells ── */
+.cell {
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-body);
+  line-height: var(--leading-normal);
+  vertical-align: middle;
+}
+
+.cell.alignCenter {
+  text-align: center;
+}
+
+.cell.alignRight {
+  text-align: right;
+}
+
+/* ── Loading skeleton ── */
+.skeletonRow {
+  border-bottom: 1px solid var(--border-light);
+}
+
+.skeletonCell {
+  padding: var(--space-3) var(--space-4);
+}
+
+.skeletonBar {
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--stone-100) 25%,
+    var(--stone-200) 50%,
+    var(--stone-100) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Empty state ── */
+.empty {
+  padding: var(--space-10) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
