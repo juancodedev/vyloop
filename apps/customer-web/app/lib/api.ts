@@ -49,6 +49,13 @@ export interface Reward {
   imageUrl?: string;
 }
 
+export interface CustomerEvent {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface CustomerProfile {
   id: string;
   globalId: string;
@@ -60,6 +67,8 @@ export interface CustomerProfile {
   totalPointsEarned: number;
   currentTierId?: string;
   currentTier: string | null;
+  tier?: { id: string; name: string; multiplier: number } | null;
+  customer_events?: CustomerEvent[];
   createdAt: string;
 }
 
