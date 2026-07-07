@@ -34,11 +34,6 @@ function formatRelative(time: string): string {
   return `Hace ${Math.floor(days / 7)} sem`;
 }
 
-function formatShortDate(time: string): string {
-  const d = new Date(time);
-  return d.toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
-}
-
 function getInitials(name: string): string {
   return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 }
