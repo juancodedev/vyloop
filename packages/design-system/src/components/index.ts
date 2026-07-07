@@ -9,3 +9,12 @@ export type { InputProps, TextareaProps, SelectProps } from './Input';
 
 export { Badge } from './Badge';
 export type { BadgeProps, BadgeVariant, BadgeSize } from './Badge';
+
+export { ProgressBar } from './ProgressBar';
+export type { ProgressBarProps, ProgressBarColor, ProgressBarSize } from './ProgressBar';
+
+export { Avatar } from './Avatar';
+export type { AvatarProps, AvatarSize } from './Avatar';
+
+export { Skeleton } from './Skeleton';
+export type { SkeletonProps, SkeletonVariant } from './Skeleton';
