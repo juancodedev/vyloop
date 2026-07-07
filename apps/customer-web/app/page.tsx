@@ -35,7 +35,7 @@ export default function Home() {
               width="44"
               height="44"
               rx="4"
-              fill="#fde68a"
+              fill="var(--brand-200)"
             />
             <rect
               x="18"
@@ -43,7 +43,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="34"
@@ -51,7 +51,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="18"
@@ -59,7 +59,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="68"
@@ -67,7 +67,7 @@ export default function Home() {
               width="44"
               height="44"
               rx="4"
-              fill="#fde68a"
+              fill="var(--brand-200)"
             />
             <rect
               x="78"
@@ -75,7 +75,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="94"
@@ -83,7 +83,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="78"
@@ -91,7 +91,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="8"
@@ -99,7 +99,7 @@ export default function Home() {
               width="44"
               height="44"
               rx="4"
-              fill="#fde68a"
+              fill="var(--brand-200)"
             />
             <rect
               x="18"
@@ -107,7 +107,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="34"
@@ -115,7 +115,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="18"
@@ -123,7 +123,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="68"
@@ -131,7 +131,7 @@ export default function Home() {
               width="44"
               height="44"
               rx="4"
-              fill="#fde68a"
+              fill="var(--brand-200)"
             />
             <rect
               x="78"
@@ -139,7 +139,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="94"
@@ -147,7 +147,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
             <rect
               x="78"
@@ -155,7 +155,7 @@ export default function Home() {
               width="8"
               height="8"
               rx="1"
-              fill="#f59e0b"
+              fill="var(--brand-500)"
             />
           </svg>
         </div>
