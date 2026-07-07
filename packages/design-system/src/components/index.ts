@@ -18,3 +18,11 @@ export type { ToastType, ToastItem, ToastOptions, ToastProviderProps } from './T
 
 export { Tabs, TabPanel } from './Tabs';
 export type { TabsProps, TabsVariant, Tab, TabPanelProps } from './Tabs';
+export { ProgressBar } from './ProgressBar';
+export type { ProgressBarProps, ProgressBarColor, ProgressBarSize } from './ProgressBar';
+
+export { Avatar } from './Avatar';
+export type { AvatarProps, AvatarSize } from './Avatar';
+
+export { Skeleton } from './Skeleton';
+export type { SkeletonProps, SkeletonVariant } from './Skeleton';
