@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { Inter, Sora } from 'next/font/google';
 
+import '@vyloop/design-system/tokens';
+import '@vyloop/design-system/styles';
+
 import { AuthProvider } from '@/lib/auth';
 import './globals.css';
 
