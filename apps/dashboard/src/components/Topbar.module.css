@@ -1,0 +1,79 @@
+/* ── Topbar ── */
+.topbar {
+  position: sticky;
+  top: 0;
+  background: var(--surface-topbar);
+  border-bottom: 1px solid var(--border);
+  padding: 0 var(--space-8);
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 40;
+  flex-shrink: 0;
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.userEmail {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.logoutBtn {
+  color: var(--text-secondary);
+}
+
+/* ── Hamburger (mobile only) ── */
+.hamburger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.hamburger:hover {
+  background: var(--stone-100);
+  color: var(--text-primary);
+}
+
+/* ── Mobile ── */
+@media (max-width: 767px) {
+  .topbar {
+    padding: 0 var(--space-4);
+  }
+
+  .userEmail {
+    display: none;
+  }
+}

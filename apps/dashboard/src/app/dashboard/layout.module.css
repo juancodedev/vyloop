@@ -1,0 +1,38 @@
+/* ── Dashboard layout ── */
+.layout {
+  display: flex;
+  min-height: 100vh;
+  background: var(--surface-page);
+}
+
+/* Content area shifts with sidebar width */
+.contentArea {
+  flex: 1;
+  margin-left: 260px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  transition: margin-left var(--transition-base);
+}
+
+.contentCollapsed {
+  margin-left: 64px;
+}
+
+.main {
+  flex: 1;
+  padding: var(--space-8);
+  overflow-y: auto;
+}
+
+/* Mobile: sidebar is overlay, no margin shift */
+@media (max-width: 767px) {
+  .contentArea,
+  .contentCollapsed {
+    margin-left: 0;
+  }
+
+  .main {
+    padding: var(--space-4);
+  }
+}
