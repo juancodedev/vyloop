@@ -60,8 +60,65 @@ export default function CustomerDetailPage() {
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [tierName, setTierName] = useState('—');
+  const [tierMultiplier, setTierMultiplier] = useState(1);
+  const [earnRate, setEarnRate] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [amount, setAmount] = useState(0);
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ type: string; message: string } | null>(null);
+
+  function showToast(type: string, message: string) {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 3500);
+  }
+
+  function handleOpenModal() {
+    setAmount(0);
+    setNote('');
+    setModalError(null);
+    setShowModal(true);
+  }
+
+  function handleCloseModal() {
+    setShowModal(false);
+    setAmount(0);
+    setNote('');
+    setModalError(null);
+  }
+
+  async function handleSubmit() {
+    if (amount < 1 || !customer) return;
+    setSubmitting(true);
+    setModalError(null);
+    try {
+      await api.assignPoints(customer.id, amount, note || undefined);
+      showToast('success', 'Venta registrada exitosamente');
+      handleCloseModal();
+      // Refetch customer + tiers
+      setLoading(true);
+      const [cust, tiers] = await Promise.all([
+        api.getCustomer(id),
+        api.getTiers().catch(() => []),
+      ]);
+      setCustomer(cust);
+      if (cust.currentTierId) {
+        const match = tiers.find((t) => t.id === cust.currentTierId);
+        setTierName(match?.name || cust.currentTier || '—');
+        setTierMultiplier(match?.multiplier || 1);
+      } else {
+        setTierName(cust.currentTier || 'Bronce');
+        setTierMultiplier(1);
+      }
+    } catch (err) {
+      setModalError(err instanceof Error ? err.message : 'Error al registrar venta');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -73,16 +130,20 @@ export default function CustomerDetailPage() {
     Promise.all([
       api.getCustomer(id),
       api.getTiers().catch(() => []),
+      api.getLoyaltyConfig().catch(() => ({ earnRate: 1 })),
     ])
-      .then(([cust, tiers]) => {
+      .then(([cust, tiers, config]) => {
         setCustomer(cust);
+        setEarnRate(config.earnRate);
 
-        // Map tier ID to name
+        // Map tier ID to name + multiplier
         if (cust.currentTierId) {
           const match = tiers.find((t) => t.id === cust.currentTierId);
           setTierName(match?.name || cust.currentTier || '—');
+          setTierMultiplier(match?.multiplier || 1);
         } else {
           setTierName(cust.currentTier || 'Bronce');
+          setTierMultiplier(1);
         }
       })
       .catch((err) => {
@@ -114,7 +175,7 @@ export default function CustomerDetailPage() {
   const recentEvents = customer.customer_events.slice(-10).reverse();
 
   return (
-    <div className="customer-detail">
+    <>
       {/* Back */}
       <button
         className="btn-back"
@@ -171,6 +232,10 @@ export default function CustomerDetailPage() {
             </span>
           </div>
         </div>
+
+        <button className="btn btn-primary" onClick={handleOpenModal} style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>
+          Registrar Venta
+        </button>
       </div>
 
       {/* ---------- Recent Activity ---------- */}
@@ -203,6 +268,80 @@ export default function CustomerDetailPage() {
           </div>
         )}
       </div>
-    </div>
+
+      {/* ---------- Registrar Venta Modal ---------- */}
+      {showModal && (
+        <div className="modal-overlay" onClick={handleCloseModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Registrar Venta</h3>
+              <button className="modal-close" onClick={handleCloseModal}>&times;</button>
+            </div>
+
+            <div className="modal-body">
+              <div className="form-group">
+                <label htmlFor="sale-amount">Monto de venta ($)</label>
+                <input
+                  id="sale-amount"
+                  type="number"
+                  min="1"
+                  className="form-control"
+                  placeholder="Ej: 1500"
+                  value={amount || ''}
+                  onChange={(e) => setAmount(Number(e.target.value))}
+                />
+              </div>
+
+              {amount > 0 && (
+                <div className="points-preview" style={{ background: '#f9fafb', padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem' }}>
+                  <p className="text-sm text-muted" style={{ marginBottom: '0.5rem' }}>Desglose de puntos</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+                    <span>Base: {amount} pts</span>
+                    <span>&times; Multiplicador ({tierMultiplier}x)</span>
+                    <span><strong>= {Math.floor(amount * earnRate * tierMultiplier)} pts</strong></span>
+                  </div>
+                </div>
+              )}
+
+              <div className="form-group">
+                <label htmlFor="sale-note">Nota (opcional)</label>
+                <textarea
+                  id="sale-note"
+                  className="form-control"
+                  rows={2}
+                  placeholder="Nota interna sobre esta venta"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
+              </div>
+
+              {modalError && (
+                <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.5rem' }}>{modalError}</p>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={handleCloseModal} disabled={submitting}>
+                Cancelar
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleSubmit}
+                disabled={submitting || amount < 1}
+              >
+                {submitting ? 'Registrando…' : 'Registrar Venta'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="toast-container">
+          <div className={`toast toast-${toast.type}`}>{toast.message}</div>
+        </div>
+      )}
+    </>
   );
 }
