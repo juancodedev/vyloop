@@ -328,6 +328,23 @@ export const api = {
     await apiFetch(`/v1/loyalty/rewards/${id}`, { method: 'DELETE' });
   },
 
+  async assignPoints(
+    customerId: string,
+    points: number,
+    note?: string,
+  ): Promise<{ id: string; points: number; balance_after: number }> {
+    const result = await apiFetch('/v1/loyalty/points/assign', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: customerId,
+        points,
+        reference_id: `sale-${customerId}-${Date.now()}`,
+        ...(note ? { note } : {}),
+      }),
+    }) as { data: { id: string; points: number; balance_after: number } };
+    return result.data;
+  },
+
   async getKpis(): Promise<KpiResponse> {
     return apiFetch('/v1/analytics/kpis') as Promise<KpiResponse>;
   },
