@@ -17,11 +17,11 @@ html {
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+  font-family: var(--font-body), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     'Helvetica Neue', Arial, sans-serif;
-  background: #fef9f0;
-  color: #1c1917;
-  line-height: 1.5;
+  background: var(--surface-page);
+  color: var(--text-body);
+  line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   padding-bottom: env(safe-area-inset-bottom, 0);
@@ -48,10 +48,10 @@ a {
 
 /* --- Card --- */
 .card {
-  background: #ffffff;
-  border-radius: 20px;
+  background: var(--surface-card);
+  border-radius: var(--radius-xl);
   padding: 28px 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-md);
   width: 100%;
 }
 
@@ -66,20 +66,20 @@ a {
 /* --- Typography --- */
 .title {
   font-size: 26px;
-  font-weight: 700;
+  font-weight: var(--font-bold);
   margin: 0 0 4px;
-  color: #1c1917;
+  color: var(--text-primary);
 }
 
 .title--sm {
-  font-size: 20px;
+  font-size: var(--text-2xl);
 }
 
 .subtitle {
-  font-size: 14px;
-  color: #78716c;
-  margin: 0 0 24px;
-  line-height: 1.5;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-6);
+  line-height: var(--leading-normal);
 }
 
 /* --- Buttons --- */
@@ -87,16 +87,16 @@ a {
   display: block;
   width: 100%;
   padding: 14px 0;
-  font-size: 16px;
-  font-weight: 600;
-  border-radius: 12px;
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  border-radius: var(--radius-lg);
   border: none;
   cursor: pointer;
   font-family: inherit;
   text-align: center;
   min-height: 48px;
   line-height: 20px;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--transition-fast);
 }
 
 .btn:active {
@@ -109,136 +109,136 @@ a {
 }
 
 .btn--primary {
-  background: #f59e0b;
-  color: #ffffff;
+  background: var(--brand-500);
+  color: var(--text-inverse);
 }
 
 .btn--primary:hover {
-  background: #d97706;
+  background: var(--brand-600);
 }
 
 .btn--secondary {
-  background: #f5f5f4;
-  color: #44403c;
+  background: var(--stone-100);
+  color: var(--text-primary);
 }
 
 .btn--secondary:hover {
-  background: #e7e5e4;
+  background: var(--stone-150);
 }
 
 .btn--outline {
   background: transparent;
-  color: #f59e0b;
-  border: 2px solid #f59e0b;
+  color: var(--brand-500);
+  border: 2px solid var(--brand-500);
 }
 
 .btn--link {
   background: none;
-  color: #78716c;
-  font-size: 14px;
-  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  font-weight: var(--font-normal);
   padding: 8px 0;
   min-height: auto;
 }
 
 .btn--link:hover {
-  color: #44403c;
+  color: var(--text-primary);
 }
 
 /* --- Inputs --- */
 .field {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .label {
   display: block;
-  font-size: 13px;
-  font-weight: 600;
-  color: #57534e;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-body);
   margin-bottom: 6px;
 }
 
 .input {
   width: 100%;
   padding: 14px 16px;
-  font-size: 16px;
-  border: 1.5px solid #d6d3d1;
-  border-radius: 12px;
+  font-size: var(--text-lg);
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--radius-lg);
   outline: none;
   font-family: inherit;
-  background: #fff;
-  transition: border-color 0.15s ease;
+  background: var(--surface-input);
+  transition: border-color var(--transition-fast);
   min-height: 48px;
 }
 
 .input:focus {
-  border-color: #f59e0b;
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
+  border-color: var(--brand-500);
+  box-shadow: var(--shadow-ring);
 }
 
 .input--error {
-  border-color: #ef4444;
+  border-color: var(--border-error);
 }
 
 .input--error:focus {
-  border-color: #ef4444;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+  border-color: var(--border-error);
+  box-shadow: var(--shadow-ring-error);
 }
 
 .input--phone {
-  font-size: 18px;
+  font-size: var(--text-xl);
   letter-spacing: 0.5px;
 }
 
 .error-text {
   display: block;
-  color: #ef4444;
-  font-size: 12px;
+  color: var(--error);
+  font-size: var(--text-xs);
   margin-top: 4px;
 }
 
 .error-box {
-  background: #fef2f2;
-  color: #991b1b;
+  background: var(--error-bg);
+  color: oklch(0.35 0.15 28);
   padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
 }
 
 /* --- Points Card --- */
 .points-card {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  border-radius: 20px;
+  background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
+  border-radius: var(--radius-xl);
   padding: 24px 20px;
-  color: #ffffff;
+  color: var(--text-inverse);
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5);
 }
 
 .points-card__label {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
   opacity: 0.9;
   margin-bottom: 4px;
 }
 
 .points-card__value {
   font-size: 48px;
-  font-weight: 800;
+  font-weight: var(--font-extrabold);
   line-height: 1;
   letter-spacing: -1px;
   margin-bottom: 4px;
 }
 
 .points-card__sublabel {
-  font-size: 13px;
+  font-size: var(--text-sm);
   opacity: 0.8;
 }
 
 /* --- Tier Section --- */
 .tier-section {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5);
 }
 
 .tier-header {
@@ -252,38 +252,38 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #f59e0b;
-  background: #fffbeb;
-  border: 1.5px solid #fde68a;
+  font-size: var(--text-base);
+  font-weight: var(--font-bold);
+  color: var(--brand-500);
+  background: var(--brand-50);
+  border: 1.5px solid var(--brand-200);
   padding: 6px 14px;
-  border-radius: 20px;
+  border-radius: var(--radius-full);
 }
 
 .tier-badge__icon {
-  font-size: 16px;
+  font-size: var(--text-lg);
 }
 
 .tier-info {
-  font-size: 13px;
-  color: #78716c;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
   margin-bottom: 12px;
 }
 
 .tier-multiplier {
-  font-weight: 600;
-  color: #f59e0b;
+  font-weight: var(--font-semibold);
+  color: var(--brand-500);
 }
 
 /* --- Progress Bar --- */
 .progress-section {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5);
 }
 
 .progress-label {
-  font-size: 13px;
-  color: #57534e;
+  font-size: var(--text-sm);
+  color: var(--text-body);
   margin-bottom: 8px;
   display: flex;
   justify-content: space-between;
@@ -291,7 +291,7 @@ a {
 
 .progress-bar {
   height: 10px;
-  background: #e7e5e4;
+  background: var(--stone-150);
   border-radius: 5px;
   overflow: hidden;
   margin-bottom: 6px;
@@ -300,13 +300,13 @@ a {
 .progress-bar__fill {
   height: 100%;
   border-radius: 5px;
-  background: linear-gradient(90deg, #fbbf24, #f59e0b);
+  background: linear-gradient(90deg, var(--brand-300), var(--brand-500));
   transition: width 0.5s ease;
 }
 
 .progress-hint {
-  font-size: 12px;
-  color: #a8a29e;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
   text-align: right;
 }
 
@@ -315,7 +315,7 @@ a {
   display: flex;
   align-items: center;
   padding: 12px 0;
-  border-bottom: 1px solid #f5f5f4;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .movement:last-child {
@@ -330,19 +330,19 @@ a {
   align-items: center;
   justify-content: center;
   font-size: 18px;
-  font-weight: 700;
+  font-weight: var(--font-bold);
   margin-right: 12px;
   flex-shrink: 0;
 }
 
 .movement__icon--earned {
-  background: #f0fdf4;
-  color: #16a34a;
+  background: var(--success-bg);
+  color: var(--success);
 }
 
 .movement__icon--redeemed {
-  background: #fef2f2;
-  color: #dc2626;
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .movement__body {
@@ -351,71 +351,71 @@ a {
 }
 
 .movement__description {
-  font-size: 14px;
-  font-weight: 500;
-  color: #1c1917;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
   margin-bottom: 2px;
 }
 
 .movement__date {
-  font-size: 12px;
-  color: #a8a29e;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
 
 .movement__points {
   font-size: 15px;
-  font-weight: 700;
+  font-weight: var(--font-bold);
   flex-shrink: 0;
   text-align: right;
 }
 
 .movement__points--earned {
-  color: #16a34a;
+  color: var(--success);
 }
 
 .movement__points--redeemed {
-  color: #dc2626;
+  color: var(--error);
 }
 
 .movement__balance {
   font-size: 11px;
-  color: #a8a29e;
+  color: var(--text-muted);
   text-align: right;
 }
 
 /* --- Sections --- */
 .section-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1c1917;
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  color: var(--text-primary);
   margin: 0 0 12px;
 }
 
 .section-spacer {
-  height: 24px;
+  height: var(--space-6);
 }
 
 /* --- Welcome header --- */
 .welcome-header {
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5);
 }
 
 .welcome-header__greeting {
   font-size: 22px;
-  font-weight: 700;
+  font-weight: var(--font-bold);
   margin-bottom: 2px;
 }
 
 .welcome-header__member-since {
-  font-size: 13px;
-  color: #78716c;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
 }
 
 /* --- Business name --- */
 .business-name {
-  font-size: 13px;
-  color: #a8a29e;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   text-align: center;
   margin-bottom: 4px;
 }
@@ -427,8 +427,8 @@ a {
   text-align: center;
   background: none;
   border: none;
-  font-size: 14px;
-  color: #a8a29e;
+  font-size: var(--text-base);
+  color: var(--text-muted);
   cursor: pointer;
   font-family: inherit;
   padding: 12px 0;
@@ -436,7 +436,7 @@ a {
 }
 
 .logout-btn:hover {
-  color: #dc2626;
+  color: var(--error);
 }
 
 /* --- Loading --- */
@@ -445,8 +445,8 @@ a {
   align-items: center;
   justify-content: center;
   min-height: 100dvh;
-  color: #a8a29e;
-  font-size: 14px;
+  color: var(--text-muted);
+  font-size: var(--text-base);
 }
 
 /* --- Link row --- */
@@ -454,14 +454,14 @@ a {
   display: flex;
   justify-content: center;
   gap: 4px;
-  margin-top: 20px;
-  font-size: 14px;
-  color: #78716c;
+  margin-top: var(--space-5);
+  font-size: var(--text-base);
+  color: var(--text-secondary);
 }
 
 .link-row a {
-  color: #f59e0b;
-  font-weight: 600;
+  color: var(--brand-500);
+  font-weight: var(--font-semibold);
 }
 
 .link-row a:hover {
@@ -470,7 +470,7 @@ a {
 
 /* --- QR landing --- */
 .qr-icon {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5);
   display: flex;
   justify-content: center;
 }
@@ -484,55 +484,55 @@ a {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: var(--space-5);
 }
 
 /* --- Filter tabs (history) --- */
 .filter-tabs {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .filter-tab {
   flex: 1;
   padding: 10px;
   text-align: center;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: 10px;
-  border: 1.5px solid #d6d3d1;
-  background: #fff;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border-input);
+  background: var(--surface-card);
   cursor: pointer;
   font-family: inherit;
-  color: #57534e;
-  transition: all 0.15s ease;
+  color: var(--text-body);
+  transition: all var(--transition-fast);
 }
 
 .filter-tab--active {
-  background: #fffbeb;
-  border-color: #f59e0b;
-  color: #f59e0b;
+  background: var(--brand-50);
+  border-color: var(--brand-500);
+  color: var(--brand-500);
 }
 
 /* --- Refresh button --- */
 .refresh-btn {
   width: 100%;
   padding: 12px;
-  background: #f5f5f4;
+  background: var(--stone-100);
   border: none;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #57534e;
+  border-radius: var(--radius-lg);
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  color: var(--text-body);
   cursor: pointer;
   font-family: inherit;
   margin-top: 12px;
-  transition: background 0.15s ease;
+  transition: background var(--transition-fast);
 }
 
 .refresh-btn:active {
-  background: #e7e5e4;
+  background: var(--stone-150);
 }
 
 /* --- Back link --- */
@@ -540,22 +540,22 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 14px;
-  color: #78716c;
-  margin-bottom: 16px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-4);
+  font-weight: var(--font-medium);
 }
 
 .back-link:hover {
-  color: #44403c;
+  color: var(--text-primary);
 }
 
 /* --- Empty state --- */
 .empty-state {
   text-align: center;
   padding: 40px 0;
-  color: #a8a29e;
-  font-size: 14px;
+  color: var(--text-muted);
+  font-size: var(--text-base);
 }
 
 /* --- Rewards grid (catalog) --- */
@@ -574,9 +574,9 @@ a {
 .reward-card__image-wrap {
   width: 100%;
   height: 140px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  background: #f5f5f4;
+  background: var(--stone-100);
 }
 
 .reward-card__image {
@@ -591,15 +591,15 @@ a {
 }
 
 .reward-card__name {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1c1917;
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  color: var(--text-primary);
   margin: 0 0 4px;
 }
 
 .reward-card__desc {
-  font-size: 13px;
-  color: #78716c;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
   margin: 0 0 8px;
   line-height: 1.4;
 }
@@ -613,25 +613,25 @@ a {
 
 .reward-card__cost {
   font-size: 18px;
-  font-weight: 800;
-  color: #f59e0b;
+  font-weight: var(--font-extrabold);
+  color: var(--brand-500);
 }
 
 .reward-card__stock {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
   padding: 3px 8px;
   border-radius: 6px;
 }
 
 .reward-card__stock--ok {
-  background: #f0fdf4;
-  color: #16a34a;
+  background: var(--success-bg);
+  color: var(--success);
 }
 
 .reward-card__stock--empty {
-  background: #fef2f2;
-  color: #dc2626;
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .reward-card__btn {
@@ -643,10 +643,10 @@ a {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: #f0fdf4;
-  color: #16a34a;
+  background: var(--success-bg);
+  color: var(--success);
   font-size: 32px;
-  font-weight: 800;
+  font-weight: var(--font-extrabold);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -654,29 +654,29 @@ a {
 }
 
 .confirm-message {
-  font-size: 16px;
-  color: #57534e;
+  font-size: var(--text-lg);
+  color: var(--text-body);
   text-align: center;
-  line-height: 1.5;
-  margin: 0 0 20px;
+  line-height: var(--leading-normal);
+  margin: 0 0 var(--space-5);
 }
 
 .confirm-balance {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 24px;
+  margin-bottom: var(--space-6);
 }
 
 .confirm-balance__label {
-  font-size: 14px;
-  color: #78716c;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
 }
 
 .confirm-balance__value {
-  font-size: 20px;
-  font-weight: 800;
-  color: #f59e0b;
+  font-size: var(--text-2xl);
+  font-weight: var(--font-extrabold);
+  color: var(--brand-500);
 }
 
 .confirm-actions {

@@ -52,9 +52,15 @@ importers:
 
   apps/customer-web:
     dependencies:
+      '@vyloop/design-system':
+        specifier: workspace:*
+        version: link:../../packages/design-system
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
+      lucide-react:
+        specifier: ^0.400.0
+        version: 0.400.0(react@19.2.7)
       next:
         specifier: ^15.5.18
         version: 15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
