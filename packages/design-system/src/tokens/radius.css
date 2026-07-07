@@ -1,0 +1,9 @@
+:root {
+  --radius-none: 0px;
+  --radius-sm:   4px;    /* Inputs, buttons, badges */
+  --radius-md:   8px;    /* Cards, dropdowns */
+  --radius-lg:   12px;   /* Modals, dialogs */
+  --radius-xl:   16px;   /* Cards in customer-web */
+  --radius-2xl:  24px;   /* Large containers */
+  --radius-full: 9999px; /* Pills, avatars, tabs */
+}
