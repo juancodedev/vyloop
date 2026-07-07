@@ -265,7 +265,7 @@ export default function DashboardHome() {
                     const totalCustomers = kpis.totalCustomers;
                     const pct = totalCustomers > 0 ? Math.round((count / totalCustomers) * 100) : 0;
                     return (
-                      <div key={name} className="tier-dist-row">
+                      <div key={name} className="dash-tier-dist-row">
                         <div className="tier-dist-header">
                           <span className="tier-dist-name">{name}</span>
                           <span className="tier-dist-count">{count} cl.</span>

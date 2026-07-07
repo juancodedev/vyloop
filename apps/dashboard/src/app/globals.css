@@ -811,8 +811,8 @@ table.data-table td.actions {
 }
 
 /* ========================================
-   Tier Cards
-   ======================================== */
+    Tier Cards
+    ======================================== */
 
 .tier-grid {
   display: grid;
@@ -853,13 +853,17 @@ table.data-table td.actions {
 }
 
 /* ========================================
-   Empty State
-   ======================================== */
+    Empty State
+    ======================================== */
 
 .empty-state {
   text-align: center;
-  padding: 3rem 1.5rem;
+  padding: 3rem 2rem;
   color: var(--text-muted);
+}
+
+.empty-state svg {
+  margin: 0 auto 1rem;
 }
 
 .empty-state p {
@@ -1652,29 +1656,10 @@ tr.clickable-row:hover {
   color: var(--primary);
 }
 
-/* Tier dist header variant */
-.tier-dist-row {
+/* Dashboard home — tier distribution (column variant) */
+.dash-tier-dist-row {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 0.25rem;
-}
-
-/* Empty state */
-.empty-state {
-  text-align: center;
-  padding: 3rem 2rem;
-  color: var(--text-muted);
-}
-
-.empty-state svg {
-  margin: 0 auto 1rem;
-}
-
-/* KPI grid reused from analytics */
-.kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.5rem;
 }
