@@ -21,6 +21,16 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** Decode JWT payload without verifying — just to read exp for client-side guard. */
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.exp * 1000 < Date.now();
+  } catch {
+    return true; // can't decode → treat as expired
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -32,6 +42,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
+
+        // Check if the token is already expired before restoring
+        if (parsed.token && isTokenExpired(parsed.token)) {
+          localStorage.removeItem('auth');
+          return;
+        }
+
         setUser(parsed.user);
         setToken(parsed.token);
       } catch { /* ignore */ }
