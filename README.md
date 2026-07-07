@@ -94,9 +94,11 @@ pnpm dev
 ```
 
 Esto arranca en paralelo:
-- `next dev` para el dashboard (puerto 3001)
+- `next dev -p 3000` para el dashboard (admin sell flow)
+- `next dev -p 3001` para el customer web (perfil del cliente)
 - `wrangler dev` para el gateway (puerto 8787) + todos los workers (8788–8794)
 - El dashboard apunta al gateway en `http://localhost:8787`
+- El customer web apunta al gateway en `http://localhost:8787`
 - La gateway resuelve service bindings automáticamente mientras todos los workers estén corriendo
 
 > ⚠️ **Service bindings en local**: wrangler dev descubre workers automáticamente cuando
@@ -127,7 +129,8 @@ Esto arranca en paralelo:
 | Automation Worker | 8792 | Automatizaciones (placeholder) |
 | Communication Worker | 8793 | Comunicación omnicanal (placeholder) |
 | Compliance Worker | 8794 | Compliance y auditoría (placeholder) |
-| Dashboard (dev) | 3001 | Frontend Next.js |
+| Dashboard (dev) | 3000 | Frontend Next.js — admin sell flow |
+| Customer Web (dev) | 3001 | Frontend Next.js — perfil del cliente |
 | PostgreSQL | 5432 | Base de datos local (Docker) |
 | Mailpit SMTP | 1025 | Captura de emails (Docker) |
 | Mailpit UI | 8025 | Web UI para ver emails capturados |
@@ -227,7 +230,7 @@ Ver [docs/](./docs) para:
 | compliance | `compliance.cl-jmunoz.workers.dev` | 🔲 Placeholder |
 | gateway | `gateway.cl-jmunoz.workers.dev` | ✅ API Gateway |
 
-## PRs Completados (20 mergeados)
+## PRs Completados (24 mergeados)
 
 | PR | Título |
 |----|--------|
@@ -246,6 +249,10 @@ Ver [docs/](./docs) para:
 | #19 | GitHub Actions deploy workflow |
 | #20 | Fix CI pnpm version spec |
 | — | Fix CI: Node v22, wrangler root dep, API token permissions |
+| #39 | Backend PMV: /me, /transactions, seed-demo.ts |
+| #40 | Dashboard sell: Registrar Venta modal |
+| #41 | JWT expiry: clockTolerance in gateway + auto-redirect on 401 |
+| #42 | Customer-web real data: profile, history, redeem fix |
 
 ---
 
