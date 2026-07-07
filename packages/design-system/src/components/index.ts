@@ -10,6 +10,8 @@ export type { InputProps, TextareaProps, SelectProps } from './Input';
 export { Badge } from './Badge';
 export type { BadgeProps, BadgeVariant, BadgeSize } from './Badge';
 
+export { Table } from './Table';
+export type { TableProps, TableColumn, SortDirection } from './Table';
 export { Modal } from './Modal';
 export type { ModalProps, ModalSize } from './Modal';
 
