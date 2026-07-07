@@ -1,5 +1,8 @@
 import type { Metadata } from 'next';
 
+import '@vyloop/design-system/tokens';
+import '@vyloop/design-system/styles';
+
 import { AuthProvider } from '@/lib/auth';
 import './globals.css';
 
