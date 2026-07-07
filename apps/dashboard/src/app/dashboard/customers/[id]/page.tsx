@@ -2,10 +2,29 @@
 
 export const runtime = 'edge';
 
+import { Button } from '@vyloop/design-system';
+import {
+  AlertCircle,
+  ArrowLeft,
+  Award,
+  Cake,
+  Calendar,
+  CheckCircle,
+  Mail,
+  Phone,
+  Plus,
+  Sparkles,
+  Star,
+  TrendingUp,
+  X,
+} from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
+import styles from './page.module.css';
+
 import { api, type CustomerDetail } from '@/lib/api';
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,17 +55,71 @@ function formatDate(iso: string): string {
   }
 }
 
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .slice(0, 2)
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase();
+}
+
 // ---------------------------------------------------------------------------
-// Tier badge color
+// Tier helpers
 // ---------------------------------------------------------------------------
 
-function tierColor(tierName: string): string {
+function tierClass(tierName: string): string {
+  const key = tierName.toLowerCase();
+  if (key === 'bronce') return styles.tierBronce;
+  if (key === 'plata') return styles.tierPlata;
+  if (key === 'oro') return styles.tierOro;
+  return styles.tierPlata;
+}
+
+function tierDotColor(tierName: string): string {
   const colors: Record<string, string> = {
-    Bronce: '#cd7f32',
-    Plata: '#a0a0a0',
-    Oro: '#ffd700',
+    Bronce: 'var(--brand-500)',
+    Plata: 'var(--stone-400)',
+    Oro: 'var(--brand-400)',
   };
-  return colors[tierName] || '#6b7280';
+  return colors[tierName] || 'var(--stone-400)';
+}
+
+function tierAvatarBg(tierName: string): string {
+  const colors: Record<string, string> = {
+    Bronce: 'var(--brand-100)',
+    Plata: 'var(--stone-100)',
+    Oro: 'var(--brand-100)',
+  };
+  return colors[tierName] || 'var(--stone-100)';
+}
+
+function tierAvatarColor(tierName: string): string {
+  const colors: Record<string, string> = {
+    Bronce: 'var(--brand-700)',
+    Plata: 'var(--stone-600)',
+    Oro: 'var(--brand-800)',
+  };
+  return colors[tierName] || 'var(--stone-600)';
+}
+
+// ---------------------------------------------------------------------------
+// Event dot color
+// ---------------------------------------------------------------------------
+
+function eventDotColor(eventType: string): string {
+  const colors: Record<string, string> = {
+    CUSTOMER_REGISTERED: 'var(--info)',
+    POINTS_EARNED: 'var(--success)',
+    POINTS_REDEEMED: 'var(--error)',
+    TIER_CHANGED: 'var(--warning)',
+    VISIT_RECORDED: 'var(--stone-400)',
+  };
+  return colors[eventType] || 'var(--stone-300)';
+}
+
+function eventPointsColor(points: number): string {
+  return points > 0 ? 'var(--success)' : 'var(--error)';
 }
 
 // ---------------------------------------------------------------------------
@@ -154,114 +227,149 @@ export default function CustomerDetailPage() {
 
   if (loading) {
     return (
-      <div className="text-center text-muted" style={{ padding: '4rem' }}>
-        Cargando cliente…
+      <div className={styles.loadingState}>
+        <div className={styles.spinner} />
+        <span>Cargando cliente…</span>
       </div>
     );
   }
 
   if (error || !customer) {
     return (
-      <div className="text-center" style={{ padding: '4rem' }}>
-        <p style={{ color: '#ef4444', marginBottom: '1rem' }}>{error || 'Cliente no encontrado'}</p>
-        <button className="btn btn-secondary" onClick={() => router.push('/dashboard/customers')}>
+      <div className={styles.errorState}>
+        <AlertCircle size={32} style={{ color: 'var(--error)' }} />
+        <p className={styles.errorMessage}>{error || 'Cliente no encontrado'}</p>
+        <Button variant="secondary" onClick={() => router.push('/dashboard/customers')}>
           Volver a clientes
-        </button>
+        </Button>
       </div>
     );
   }
 
-  const tierBaseColor = tierColor(tierName);
   const recentEvents = customer.customer_events.slice(-10).reverse();
 
   return (
     <>
       {/* Back */}
-      <button
-        className="btn-back"
-        onClick={() => router.push('/dashboard/customers')}
-      >
-        ← Volver a clientes
+      <button className={styles.backLink} onClick={() => router.push('/dashboard/customers')}>
+        <ArrowLeft size={14} />
+        Volver a clientes
       </button>
 
-      {/* ---------- Hero / Card ---------- */}
+      {/* ---------- Hero Card ---------- */}
       <div
-        className="card customer-hero-card"
+        className={styles.heroCard}
         style={{
-          background: `linear-gradient(135deg, ${tierBaseColor}22 0%, ${tierBaseColor}44 100%)`,
-          borderLeft: `4px solid ${tierBaseColor}`,
+          borderLeft: `3px solid ${tierDotColor(tierName)}`,
         }}
       >
-        <div className="customer-hero-info">
-          <h1 className="customer-hero-name">{customer.fullName}</h1>
-          {customer.email && <p className="customer-hero-email">{customer.email}</p>}
-          <p className="customer-hero-phone">{customer.phone}</p>
-          {customer.birthDate && (
-            <p className="customer-hero-birth">
-              🎂 {new Date(customer.birthDate).toLocaleDateString('es-MX')}
-            </p>
-          )}
-          <p className="customer-hero-since">
-            Cliente desde {customer.createdAt}
-          </p>
+        <div className={styles.heroContent}>
+          <div
+            className={styles.avatar}
+            style={{
+              background: tierAvatarBg(tierName),
+              color: tierAvatarColor(tierName),
+            }}
+          >
+            {getInitials(customer.fullName)}
+          </div>
+
+          <div className={styles.heroInfo}>
+            <h1 className={styles.heroName}>{customer.fullName}</h1>
+
+            <div className={styles.heroMeta}>
+              {customer.email && (
+                <span className={styles.heroMetaItem}>
+                  <Mail />
+                  {customer.email}
+                </span>
+              )}
+              <span className={styles.heroMetaItem}>
+                <Phone />
+                {customer.phone}
+              </span>
+              {customer.birthDate && (
+                <span className={styles.heroMetaItem}>
+                  <Cake />
+                  {new Date(customer.birthDate).toLocaleDateString('es-MX')}
+                </span>
+              )}
+            </div>
+
+            <div className={styles.heroSince}>
+              <Calendar />
+              Cliente desde {customer.createdAt}
+            </div>
+          </div>
         </div>
 
-        <div className="customer-hero-stats">
-          <div className="hero-stat">
-            <span className="hero-stat-label">Nivel</span>
-            <span
-              className="hero-stat-value hero-tier-badge"
-              style={{
-                background: tierBaseColor,
-                color: tierName === 'Oro' ? '#333' : '#fff',
-              }}
-            >
+        {/* Stats */}
+        <div className={styles.statsRow}>
+          <div className={styles.statCard}>
+            <span className={styles.statLabel}>
+              <Award size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              Nivel
+            </span>
+            <span className={`${styles.tierBadge} ${tierClass(tierName)}`}>
+              <Sparkles size={12} />
               {tierName}
             </span>
           </div>
-          <div className="hero-stat">
-            <span className="hero-stat-label">Puntos</span>
-            <span className="hero-stat-value hero-points">
-              {customer.points.toLocaleString()}
+          <div className={styles.statCard}>
+            <span className={styles.statLabel}>
+              <Star size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              Puntos
             </span>
+            <span className={styles.statValue}>{customer.points.toLocaleString()}</span>
           </div>
-          <div className="hero-stat">
-            <span className="hero-stat-label">Ganados (total)</span>
-            <span className="hero-stat-value">
+          <div className={styles.statCard}>
+            <span className={styles.statLabel}>
+              <TrendingUp size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              Ganados (total)
+            </span>
+            <span className={styles.statValue}>
               {customer.totalPointsEarned.toLocaleString()}
             </span>
           </div>
         </div>
 
-        <button className="btn btn-primary" onClick={handleOpenModal} style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>
-          Registrar Venta
-        </button>
+        {/* Actions */}
+        <div className={styles.heroActions}>
+          <Button variant="primary" icon={<Plus size={16} />} onClick={handleOpenModal}>
+            Registrar Venta
+          </Button>
+        </div>
       </div>
 
       {/* ---------- Recent Activity ---------- */}
-      <div className="card" style={{ marginTop: '1.5rem' }}>
-        <h2 className="card-title">Actividad reciente</h2>
+      <div className={styles.activityCard}>
+        <div className={styles.activityHeader}>
+          <h2 className={styles.activityTitle}>Actividad reciente</h2>
+          <span className="text-xs text-muted">{recentEvents.length} eventos</span>
+        </div>
 
         {recentEvents.length === 0 ? (
-          <p className="text-muted" style={{ padding: '1rem 0' }}>
-            Sin actividad registrada
-          </p>
+          <div className={styles.activityEmpty}>Sin actividad registrada</div>
         ) : (
-          <div className="event-timeline">
+          <div className={styles.timeline}>
             {recentEvents.map((ev, i) => (
-              <div key={ev.id || i} className="event-row">
-                <div className="event-dot" />
-                <div className="event-body">
-                  <span className="event-type">{eventLabel(ev.eventType)}</span>
+              <div key={ev.id || i} className={styles.timelineItem}>
+                <div
+                  className={styles.timelineDot}
+                  style={{ background: eventDotColor(ev.eventType) }}
+                />
+                <div className={styles.timelineBody}>
+                  <span className={styles.timelineType}>{eventLabel(ev.eventType)}</span>
                   {ev.points != null && ev.points !== 0 && (
                     <span
-                      className="event-points"
-                      style={{ color: ev.points > 0 ? '#16a34a' : '#dc2626' }}
+                      className={styles.timelinePoints}
+                      style={{ color: eventPointsColor(ev.points) }}
                     >
-                      {ev.points > 0 ? '+' : ''}{ev.points} pts
+                      {ev.points > 0 ? '+' : ''}
+                      {ev.points} pts
                     </span>
                   )}
-                  <span className="event-date">{formatDate(ev.createdAt)}</span>
+                  <span className={styles.timelineDate}>{formatDate(ev.createdAt)}</span>
                 </div>
               </div>
             ))}
@@ -271,21 +379,25 @@ export default function CustomerDetailPage() {
 
       {/* ---------- Registrar Venta Modal ---------- */}
       {showModal && (
-        <div className="modal-overlay" onClick={handleCloseModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Registrar Venta</h3>
-              <button className="modal-close" onClick={handleCloseModal}>&times;</button>
+        <div className={styles.modalOverlay} onClick={handleCloseModal}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <h3 className={styles.modalTitle}>Registrar Venta</h3>
+              <button className={styles.modalClose} onClick={handleCloseModal}>
+                <X size={18} />
+              </button>
             </div>
 
-            <div className="modal-body">
-              <div className="form-group">
-                <label htmlFor="sale-amount">Monto de venta ($)</label>
+            <div className={styles.modalBody}>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel} htmlFor="sale-amount">
+                  Monto de venta ($)
+                </label>
                 <input
                   id="sale-amount"
                   type="number"
                   min="1"
-                  className="form-control"
+                  className={styles.formControl}
                   placeholder="Ej: 1500"
                   value={amount || ''}
                   onChange={(e) => setAmount(Number(e.target.value))}
@@ -293,21 +405,25 @@ export default function CustomerDetailPage() {
               </div>
 
               {amount > 0 && (
-                <div className="points-preview" style={{ background: '#f9fafb', padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem' }}>
-                  <p className="text-sm text-muted" style={{ marginBottom: '0.5rem' }}>Desglose de puntos</p>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+                <div className={styles.pointsPreview}>
+                  <p className={styles.pointsPreviewTitle}>Desglose de puntos</p>
+                  <div className={styles.pointsBreakdown}>
                     <span>Base: {amount} pts</span>
                     <span>&times; Multiplicador ({tierMultiplier}x)</span>
-                    <span><strong>= {Math.floor(amount * earnRate * tierMultiplier)} pts</strong></span>
+                    <span className={styles.pointsTotal}>
+                      = {Math.floor(amount * earnRate * tierMultiplier)} pts
+                    </span>
                   </div>
                 </div>
               )}
 
-              <div className="form-group">
-                <label htmlFor="sale-note">Nota (opcional)</label>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel} htmlFor="sale-note">
+                  Nota (opcional)
+                </label>
                 <textarea
                   id="sale-note"
-                  className="form-control"
+                  className={styles.formControl}
                   rows={2}
                   placeholder="Nota interna sobre esta venta"
                   value={note}
@@ -316,21 +432,25 @@ export default function CustomerDetailPage() {
               </div>
 
               {modalError && (
-                <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.5rem' }}>{modalError}</p>
+                <p className={styles.modalError}>
+                  <AlertCircle size={14} />
+                  {modalError}
+                </p>
               )}
             </div>
 
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={handleCloseModal} disabled={submitting}>
+            <div className={styles.modalFooter}>
+              <Button variant="secondary" onClick={handleCloseModal} disabled={submitting}>
                 Cancelar
-              </button>
-              <button
-                className="btn btn-primary"
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleSubmit}
                 disabled={submitting || amount < 1}
+                loading={submitting}
               >
-                {submitting ? 'Registrando…' : 'Registrar Venta'}
-              </button>
+                Registrar Venta
+              </Button>
             </div>
           </div>
         </div>
@@ -338,8 +458,13 @@ export default function CustomerDetailPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast toast-${toast.type}`}>{toast.message}</div>
+        <div className={styles.toastContainer}>
+          <div
+            className={`${styles.toast} ${toast.type === 'success' ? styles.toastSuccess : styles.toastError}`}
+          >
+            {toast.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+            {toast.message}
+          </div>
         </div>
       )}
     </>
