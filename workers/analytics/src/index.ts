@@ -7,6 +7,13 @@ import { HTTPException } from 'hono/http-exception';
 // Types
 // ---------------------------------------------------------------------------
 
+interface TimelineItem {
+  type: 'customer.created' | 'points.earned' | 'points.redeemed' | 'customer.event';
+  customerName: string;
+  description: string;
+  timestamp: string;
+}
+
 interface KpiResponse {
   totalCustomers: number;
   activeCustomers: number;
@@ -115,6 +122,74 @@ app.get('/v1/analytics/kpis', async (c) => {
     tierDistribution,
     rewardsClaimed: Number(rewards.rewards_claimed),
   } satisfies KpiResponse);
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/analytics/timeline
+// ---------------------------------------------------------------------------
+
+app.get('/v1/analytics/timeline', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const db = createDb(c.env.DATABASE_URL);
+  await db.execute(setCurrentBusinessId(businessId));
+
+  const result = await db.execute(sql`
+    SELECT type, customer_name, description, timestamp
+    FROM (
+      -- Recent customer registrations
+      SELECT
+        'customer.created' AS type,
+        c.full_name AS customer_name,
+        'Nuevo cliente registrado' AS description,
+        c.created_at AS timestamp
+      FROM customers c
+      WHERE c.business_id = ${businessId}::uuid
+        AND c.deleted_at IS NULL
+
+      UNION ALL
+
+      -- Recent points transactions with customer name
+      SELECT
+        CASE pt.type
+          WHEN 'earn'   THEN 'points.earned'
+          WHEN 'redeem' THEN 'points.redeemed'
+        END AS type,
+        c.full_name AS customer_name,
+        CASE pt.type
+          WHEN 'earn'
+            THEN 'Ganó ' || ABS(pt.points) || ' pts - ' || COALESCE(pt.note, '')
+          WHEN 'redeem'
+            THEN 'Canjeó ' || ABS(pt.points) || ' pts - ' || COALESCE(pt.note, '')
+        END AS description,
+        pt.created_at AS timestamp
+      FROM points_transactions pt
+      JOIN customers c ON c.id = pt.customer_id
+      WHERE pt.business_id = ${businessId}::uuid
+
+      UNION ALL
+
+      -- Recent customer events
+      SELECT
+        'customer.event' AS type,
+        c.full_name AS customer_name,
+        ce.event_type AS description,
+        ce.created_at AS timestamp
+      FROM customer_events ce
+      JOIN customers c ON c.id = ce.customer_id
+      WHERE ce.business_id = ${businessId}::uuid
+    ) AS timeline
+    ORDER BY timestamp DESC
+    LIMIT 20
+  `);
+
+  const items: TimelineItem[] = (result.rows ?? []).map((row) => ({
+    type: row.type as TimelineItem['type'],
+    customerName: String(row.customer_name ?? ''),
+    description: String(row.description ?? ''),
+    timestamp: String(row.timestamp),
+  }));
+
+  return c.json(items);
 });
 
 // ---------------------------------------------------------------------------
