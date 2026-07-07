@@ -11,9 +11,17 @@ interface User {
   role?: string;
 }
 
-interface AuthState {
+interface StoredSession {
+  token: string;
+  refreshToken: string;
+  email: string;
+  user: User;
+}
+
+export interface AuthState {
   user: User | null;
   token: string | null;
+  refreshToken: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
@@ -22,47 +30,110 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 /** Decode JWT payload without verifying — just to read exp for client-side guard. */
-function isTokenExpired(token: string): boolean {
+export function isTokenExpired(token: string): boolean {
   try {
     const payload = JSON.parse(atob(token.split('.')[1]));
     return payload.exp * 1000 < Date.now();
   } catch {
-    return true; // can't decode → treat as expired
+    return true;
+  }
+}
+
+/** Read the current session from localStorage (used by api.ts too). */
+export function getSession(): StoredSession | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem('auth');
+    if (stored) return JSON.parse(stored);
+  } catch { /* ignore */ }
+  return null;
+}
+
+/** Save a full session object to localStorage. */
+export function saveSession(session: StoredSession): void {
+  localStorage.setItem('auth', JSON.stringify(session));
+}
+
+/** Clear auth and optionally redirect to login. */
+export function clearSession(redirect = true): void {
+  localStorage.removeItem('auth');
+  if (redirect && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
+}
+
+/**
+ * Attempt to refresh the access token using the stored refresh token.
+ * Returns the new session data on success, or null if refresh failed.
+ */
+export async function refreshAccessToken(): Promise<StoredSession | null> {
+  const session = getSession();
+  if (!session?.refreshToken || !session?.email) return null;
+
+  try {
+    const res = await fetch(`${API_URL}/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        refresh_token: session.refreshToken,
+        email: session.email,
+      }),
+    });
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+
+    const newSession: StoredSession = {
+      token: data.access_token,
+      refreshToken: data.refresh_token,
+      email: session.email,
+      user: session.user,
+    };
+
+    saveSession(newSession);
+    return newSession;
+  } catch {
+    return null;
   }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Restore session from localStorage
+  // Restore or refresh session on mount
   useEffect(() => {
-    const stored = localStorage.getItem('auth');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-
-        // Check if the token is already expired before restoring
-        if (parsed.token && isTokenExpired(parsed.token)) {
-          localStorage.removeItem('auth');
-          return;
-        }
-
-        setUser(parsed.user);
-        setToken(parsed.token);
-      } catch { /* ignore */ }
+    const stored = getSession();
+    if (!stored) {
+      setIsLoading(false);
+      return;
     }
+
+    if (stored.token && !isTokenExpired(stored.token)) {
+      // Token still valid — restore
+      setUser(stored.user);
+      setToken(stored.token);
+      setRefreshToken(stored.refreshToken);
+      setIsLoading(false);
+      return;
+    }
+
+    // Token expired — try refreshing
+    refreshAccessToken().then((newSession) => {
+      if (newSession) {
+        setUser(newSession.user);
+        setToken(newSession.token);
+        setRefreshToken(newSession.refreshToken);
+      } else {
+        // Refresh failed — clear session silently (no redirect on init)
+        clearSession(false);
+      }
+      setIsLoading(false);
+    });
   }, []);
-
-  // Persist session to localStorage
-  useEffect(() => {
-    if (token && user) {
-      localStorage.setItem('auth', JSON.stringify({ token, user }));
-    } else {
-      localStorage.removeItem('auth');
-    }
-  }, [token, user]);
 
   const login = useCallback(async (email: string, password: string) => {
     setIsLoading(true);
@@ -80,13 +151,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const data = await res.json();
 
-      setUser({
+      const session: StoredSession = {
+        token: data.access_token,
+        refreshToken: data.refresh_token,
         email: data.user.email,
-        name: data.user.fullName,
-        id: data.user.id,
-        role: data.user.role,
-      });
-      setToken(data.access_token);
+        user: {
+          email: data.user.email,
+          name: data.user.fullName,
+          id: data.user.id,
+          role: data.user.role,
+        },
+      };
+
+      saveSession(session);
+      setUser(session.user);
+      setToken(session.token);
+      setRefreshToken(session.refreshToken);
     } finally {
       setIsLoading(false);
     }
@@ -95,10 +175,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     setUser(null);
     setToken(null);
+    setRefreshToken(null);
+    clearSession(false);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, token, refreshToken, login, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );
