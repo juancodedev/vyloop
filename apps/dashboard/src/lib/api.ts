@@ -1,7 +1,6 @@
 // API client — real fetch() calls against the backend API gateway
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
-const LOGIN_PATH = '/login';
 
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -12,16 +11,13 @@ function getToken(): string | null {
   return null;
 }
 
-function isOnLoginPage(): boolean {
-  return typeof window !== 'undefined' && window.location.pathname === LOGIN_PATH;
-}
-
-function clearAuthAndRedirect(): void {
-  if (typeof window === 'undefined') return;
-  localStorage.removeItem('auth');
-  if (!isOnLoginPage()) {
-    window.location.href = LOGIN_PATH;
-  }
+function getEmail(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem('auth');
+    if (stored) return JSON.parse(stored).email;
+  } catch { /* ignore */ }
+  return null;
 }
 
 interface ApiBenefit {
@@ -54,15 +50,68 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<unknow
 
   if (!res.ok) {
     if (res.status === 401 && getToken()) {
-      // Token expired or invalid — clean up and redirect to login
+      // Token expired — try to refresh before giving up
+      const refreshed = await tryRefreshToken();
+      if (refreshed) {
+        // Retry the original request with the new token
+        headers['Authorization'] = `Bearer ${getToken()}`;
+        const retryRes = await fetch(`${API_URL}${path}`, { ...options, headers });
+        if (retryRes.status === 204) return null;
+        const retryData = await retryRes.json();
+        if (!retryRes.ok) {
+          throw new Error(retryData?.error?.message || `Error ${retryRes.status}`);
+        }
+        return retryData;
+      }
+      // Refresh failed — clear auth and redirect
       clearAuthAndRedirect();
-      // Throw a clear error in case the redirect doesn't happen (SSR, test)
       throw new Error('Session expired. Redirecting to login…');
     }
     throw new Error(data?.error?.message || `Error ${res.status}`);
   }
 
   return data;
+}
+
+async function tryRefreshToken(): Promise<boolean> {
+  try {
+    const stored = localStorage.getItem('auth');
+    if (!stored) return false;
+    const session = JSON.parse(stored);
+    if (!session.refreshToken || !session.email) return false;
+
+    const res = await fetch(`${API_URL}/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        refresh_token: session.refreshToken,
+        email: session.email,
+      }),
+    });
+
+    if (!res.ok) return false;
+
+    const data = await res.json();
+
+    // Update stored session with new tokens, keeping the same user
+    localStorage.setItem('auth', JSON.stringify({
+      ...session,
+      token: data.access_token,
+      refreshToken: data.refresh_token,
+    }));
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearAuthAndRedirect(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('auth');
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
 }
 
 // Types (aligned with mock-data shapes so pages don't break)
@@ -124,8 +173,8 @@ async function getCustomersWithPoints(search?: string, page: number = 1, perPage
       id: c.id as string,
       fullName: c.fullName as string,
       phone: c.phone as string,
-      points: 0,  // Points not available in basic customer list — will improve later
-      totalPointsEarned: 0,
+      points: Number(c.points ?? 0),
+      totalPointsEarned: Number(c.totalPointsEarned ?? 0),
       currentTier: c.currentTierId ? (tierMap[c.currentTierId as string] || '—') : 'Bronce',
       createdAt: c.createdAt ? (c.createdAt as string).split('T')[0] : '—',
     };
@@ -367,6 +416,10 @@ export const api = {
   async getKpis(): Promise<KpiResponse> {
     return apiFetch('/v1/analytics/kpis') as Promise<KpiResponse>;
   },
+
+  async getTimeline(): Promise<TimelineEvent[]> {
+    return apiFetch('/v1/analytics/timeline') as Promise<TimelineEvent[]>;
+  },
 };
 
 function mapReward(r: ApiRewardRecord): Reward {
@@ -392,6 +445,13 @@ export interface KpiResponse {
   redemptionRate: number;
   tierDistribution: Record<string, number>;
   rewardsClaimed: number;
+}
+
+export interface TimelineEvent {
+  type: 'customer.created' | 'points.earned' | 'points.redeemed' | 'customer.event';
+  customerName: string;
+  description: string;
+  timestamp: string;
 }
 
 function toRewardPayload(data: Partial<Reward>): Record<string, unknown> {
