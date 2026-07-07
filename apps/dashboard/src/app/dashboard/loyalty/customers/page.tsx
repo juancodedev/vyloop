@@ -1,7 +1,10 @@
 'use client';
 
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+
+import styles from './page.module.css';
 
 import { api } from '@/lib/api';
 import type { Customer } from '@/lib/api';
@@ -46,37 +49,26 @@ export default function LoyaltyCustomersPage() {
   return (
     <>
       {/* Toolbar */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="search-input-wrapper">
-          <svg
-            className="search-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
+      <div className={styles.toolbar}>
+        <div className={styles.searchWrap}>
+          <Search className={styles.searchIcon} size={16} />
           <input
             type="text"
-            className="form-control"
+            className={styles.searchInput}
             placeholder="Buscar cliente por nombre…"
             value={search}
             onInput={(e) => handleSearch(e.currentTarget.value)}
           />
         </div>
-        <span className="text-sm text-muted">
+        <span className={styles.count}>
           {data.total} cliente{data.total !== 1 ? 's' : ''}
         </span>
       </div>
 
       {/* Table */}
-      <div className="card">
-        <div className="table-container">
-          <table className="data-table">
+      <div className={styles.card}>
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
             <thead>
               <tr>
                 <th>Nombre</th>
@@ -89,39 +81,29 @@ export default function LoyaltyCustomersPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="text-center text-muted" style={{ padding: '2rem' }}>
+                  <td colSpan={5} className={styles.loadingRow}>
                     Cargando…
                   </td>
                 </tr>
               ) : data.items.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="text-center text-muted" style={{ padding: '2rem' }}>
+                  <td colSpan={5} className={styles.loadingRow}>
                     No se encontraron clientes
                   </td>
                 </tr>
               ) : (
                 data.items.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => handleRowClick(c)}
-                    style={{ cursor: 'pointer' }}
-                  >
+                  <tr key={c.id} onClick={() => handleRowClick(c)}>
                     <td>
-                      <div style={{ fontWeight: 500 }}>{c.fullName}</div>
-                      {c.email && (
-                        <div className="text-xs text-muted">{c.email}</div>
-                      )}
+                      <div className={styles.cellName}>{c.fullName}</div>
+                      {c.email && <div className={styles.cellEmail}>{c.email}</div>}
                     </td>
-                    <td style={{ fontWeight: 600 }}>
-                      {c.points.toLocaleString()}
-                    </td>
+                    <td className={styles.cellPoints}>{c.points.toLocaleString()}</td>
                     <td>
-                      <span className={`badge badge-${c.currentTier.toLowerCase()}`}>
-                        {c.currentTier}
-                      </span>
+                      <span className={styles.badgeDefault}>{c.currentTier}</span>
                     </td>
                     <td>{c.totalPointsEarned.toLocaleString()}</td>
-                    <td className="text-sm text-muted">{c.createdAt}</td>
+                    <td className={styles.cellDate}>{c.createdAt}</td>
                   </tr>
                 ))
               )}
@@ -131,37 +113,40 @@ export default function LoyaltyCustomersPage() {
 
         {/* Pagination */}
         {data.totalPages > 1 && (
-          <div className="pagination" style={{ padding: '0.75rem 1.5rem', borderTop: '1px solid var(--border)' }}>
-            <div className="pagination-info">
+          <div className={styles.pagination}>
+            <span className={styles.paginationInfo}>
               Página {data.page} de {data.totalPages} ({data.total} clientes)
-            </div>
-            <div className="pagination-controls">
+            </span>
+            <div className={styles.paginationControls}>
               <button
+                className={styles.pageBtn}
                 onClick={() => goToPage(data.page - 1)}
                 disabled={data.page <= 1}
+                aria-label="Página anterior"
               >
-                Anterior
+                <ChevronLeft size={16} />
               </button>
               {Array.from({ length: data.totalPages }, (_, i) => i + 1).map((p) => (
                 <button
                   key={p}
-                  className={p === data.page ? 'active' : ''}
+                  className={p === data.page ? styles.pageActive : styles.pageBtn}
                   onClick={() => goToPage(p)}
                 >
                   {p}
                 </button>
               ))}
               <button
+                className={styles.pageBtn}
                 onClick={() => goToPage(data.page + 1)}
                 disabled={data.page >= data.totalPages}
+                aria-label="Página siguiente"
               >
-                Siguiente
+                <ChevronRight size={16} />
               </button>
             </div>
           </div>
         )}
       </div>
-
     </>
   );
 }
