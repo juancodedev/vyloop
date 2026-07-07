@@ -60,6 +60,7 @@ export function authMiddleware(secret: string) {
       const { payload } = await jwtVerify(token, secretKey(secret), {
         issuer: 'vyloop',
         algorithms: ['HS256'],
+        clockTolerance: 60, // tolerate up to 60s of clock drift
       });
 
       const claims = payload as unknown as JwtClaims;
