@@ -1,0 +1,6 @@
+:root {
+  --transition-fast: 120ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 300ms ease;
+  --ease-out:        cubic-bezier(0.23, 1, 0.32, 1);
+}
