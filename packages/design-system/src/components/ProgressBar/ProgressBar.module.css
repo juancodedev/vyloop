@@ -1,0 +1,75 @@
+/* ── ProgressBar ── */
+
+.container {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Track */
+.track {
+  flex: 1;
+  background: var(--stone-100);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+/* Fill */
+.fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.animated .fill {
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Sizes */
+.sm {
+  height: 4px;
+}
+
+.md {
+  height: 8px;
+}
+
+.lg {
+  height: 12px;
+}
+
+/* Colors */
+.brand .fill {
+  background: var(--brand-500);
+}
+
+.success .fill {
+  background: var(--success);
+}
+
+.warning .fill {
+  background: var(--warning);
+}
+
+/* Label */
+.label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 2.5em;
+  text-align: right;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
