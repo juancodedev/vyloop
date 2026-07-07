@@ -1,10 +1,27 @@
 'use client';
 
+import { Button } from '@vyloop/design-system';
+import {
+  AlertCircle,
+  ArrowUpRight,
+  ChevronRight,
+  Clock,
+  DollarSign,
+  Gift,
+  Sparkles,
+  Star,
+  TrendingUp,
+  UserPlus,
+  Users,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
 
+import styles from './page.module.css';
+
 import { api } from '@/lib/api';
 import type { KpiResponse, TimelineEvent } from '@/lib/api';
+
 
 function formatRelative(time: string): string {
   const diff = Date.now() - new Date(time).getTime();
@@ -21,6 +38,44 @@ function formatRelative(time: string): string {
 function getName(text: string): string {
   return text.split(' ').slice(0, 2).join(' ');
 }
+
+type KpiEntry = {
+  icon: React.ReactNode;
+  iconBg: string;
+  iconColor: string;
+  value: string;
+  label: string;
+  trend?: number;
+  trendLabel?: string;
+  link?: string;
+};
+
+const TIMELINE_ICON_MAP: Record<string, React.ReactNode> = {
+  'customer.created': <UserPlus size={14} />,
+  'points.earned': <DollarSign size={14} />,
+  'points.redeemed': <Gift size={14} />,
+  'customer.event': <Clock size={14} />,
+};
+
+const TIMELINE_COLORS: Record<string, string> = {
+  'customer.created': 'var(--info)',
+  'points.earned': 'var(--success)',
+  'points.redeemed': 'var(--error)',
+  'customer.event': 'var(--text-muted)',
+};
+
+const TIMELINE_LABELS: Record<string, string> = {
+  'customer.created': 'Nuevo cliente',
+  'points.earned': 'Puntos ganados',
+  'points.redeemed': 'Puntos canjeados',
+  'customer.event': 'Evento',
+};
+
+const TIER_BAR_COLORS: Record<string, string> = {
+  Bronce: 'var(--brand-300)',
+  Plata: 'var(--stone-400)',
+  Oro: 'var(--brand-500)',
+};
 
 export default function DashboardHome() {
   const [kpis, setKpis] = useState<KpiResponse | null>(null);
@@ -40,8 +95,8 @@ export default function DashboardHome() {
 
   if (loading) {
     return (
-      <div className="loading-screen">
-        <div className="spinner" />
+      <div className={styles.loading}>
+        <div className={styles.spinner} />
         <p className="text-muted">Cargando dashboard…</p>
       </div>
     );
@@ -49,201 +104,150 @@ export default function DashboardHome() {
 
   if (error) {
     return (
-      <div className="page fade-in">
-        <div className="empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          <p>{error}</p>
-          <button className="btn btn-primary mt-4" onClick={() => window.location.reload()}>
-            Reintentar
-          </button>
-        </div>
+      <div className={styles.errorState}>
+        <AlertCircle size={40} />
+        <p>{error}</p>
+        <Button variant="primary" size="sm" onClick={() => window.location.reload()}>
+          Reintentar
+        </Button>
       </div>
     );
   }
 
-  const kpiCards = kpis ? [
-    {
-      icon: (
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-          <circle cx="9" cy="7" r="4" />
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-        </svg>
-      ),
-      value: kpis.totalCustomers.toLocaleString(),
-      label: 'Total Clientes',
-      trend: kpis.activeCustomers,
-      trendLabel: 'activos',
-      color: 'var(--primary)',
-      bg: 'var(--primary-light)',
-      link: '/dashboard/customers',
-    },
-    {
-      icon: (
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2" />
-          <circle cx="12" cy="12" r="5" />
-        </svg>
-      ),
-      value: kpis.totalPointsIssued.toLocaleString(),
-      label: 'Puntos Emitidos',
-      color: '#ca8a04',
-      bg: '#fefce8',
-    },
-    {
-      icon: (
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-        </svg>
-      ),
-      value: `${kpis.redemptionRate}%`,
-      label: 'Tasa de Canje',
-      color: '#7c3aed',
-      bg: '#f5f3ff',
-    },
-    {
-      icon: (
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-        </svg>
-      ),
-      value: kpis.rewardsClaimed.toLocaleString(),
-      label: 'Recompensas',
-      color: '#ea580c',
-      bg: '#fff7ed',
-    },
-  ] : [];
+  const kpiCards: KpiEntry[] = kpis
+    ? [
+        {
+          icon: <Users size={18} />,
+          iconBg: 'var(--info-bg)',
+          iconColor: 'var(--info)',
+          value: kpis.totalCustomers.toLocaleString(),
+          label: 'Total Clientes',
+          trend: kpis.activeCustomers,
+          trendLabel: 'activos',
+          link: '/dashboard/customers',
+        },
+        {
+          icon: <Sparkles size={18} />,
+          iconBg: 'var(--warning-bg)',
+          iconColor: 'var(--warning)',
+          value: kpis.totalPointsIssued.toLocaleString(),
+          label: 'Puntos Emitidos',
+        },
+        {
+          icon: <TrendingUp size={18} />,
+          iconBg: 'var(--info-bg)',
+          iconColor: 'var(--info)',
+          value: `${kpis.redemptionRate}%`,
+          label: 'Tasa de Canje',
+        },
+        {
+          icon: <Gift size={18} />,
+          iconBg: 'var(--warning-bg)',
+          iconColor: 'var(--warning)',
+          value: kpis.rewardsClaimed.toLocaleString(),
+          label: 'Recompensas',
+        },
+      ]
+    : [];
 
-  const timelineIcons: Record<string, React.ReactNode> = {
-    'customer.created': (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-        <circle cx="8.5" cy="7" r="4" />
-        <line x1="20" y1="8" x2="20" y2="14" />
-        <line x1="23" y1="11" x2="17" y2="11" />
-      </svg>
-    ),
-    'points.earned': (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="12" y1="1" x2="12" y2="23" />
-        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-      </svg>
-    ),
-    'points.redeemed': (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="12" y1="1" x2="12" y2="23" />
-        <path d="M6 19H14.5a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H18" />
-      </svg>
-    ),
-    'customer.event': (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10" />
-        <polyline points="12 6 12 12 16 14" />
-      </svg>
-    ),
-  };
-
-  const timelineColors: Record<string, string> = {
-    'customer.created': '#2563eb',
-    'points.earned': '#16a34a',
-    'points.redeemed': '#dc2626',
-    'customer.event': '#6b7280',
-  };
-
-  const timelineLabels: Record<string, string> = {
-    'customer.created': 'Nuevo cliente',
-    'points.earned': 'Puntos ganados',
-    'points.redeemed': 'Puntos canjeados',
-    'customer.event': 'Evento',
-  };
+  const today = new Date().toLocaleDateString('es-CL', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 
   return (
-    <div className="page fade-in">
+    <div>
       {/* ─── Header ─── */}
-      <div className="dash-header">
-        <div>
-          <h1 className="dash-title">Panel de Control</h1>
-          <p className="dash-subtitle">
-            {new Date().toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-          </p>
+      <div className={styles.header}>
+        <div className={styles.headerInner}>
+          <h1 className={styles.title}>Panel de Control</h1>
+          <span className={styles.subtitle}>{today}</span>
         </div>
-        <div className="dash-actions">
-          <Link href="/dashboard/analytics" className="btn btn-secondary btn-sm">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-            </svg>
+        <Link href="/dashboard/analytics">
+          <Button variant="secondary" size="sm" icon={<Star size={14} />}>
             Ver Analytics
-          </Link>
-        </div>
+          </Button>
+        </Link>
       </div>
 
-      {/* ─── KPI Cards ─── */}
-      <div className="dash-kpi-grid">
-        {kpiCards.map((card, i) => (
-          <Link
-            key={i}
-            href={card.link ?? '#'}
-            className={`card dash-kpi-card ${card.link ? 'dash-kpi-linked' : ''}`}
-          >
-            <div className="card-body">
-              <div className="dash-kpi-top">
-                <div className="dash-kpi-icon" style={{ background: card.bg, color: card.color }}>
+      {/* ─── KPI Grid ─── */}
+      <div className={styles.kpiGrid}>
+        {kpiCards.map((card, i) => {
+          const inner = (
+            <>
+              <div className={styles.kpiTop}>
+                <div
+                  className={styles.kpiIconWrap}
+                  style={{ background: card.iconBg, color: card.iconColor }}
+                >
                   {card.icon}
                 </div>
+                {card.trend !== undefined && (
+                  <span className={`${styles.kpiTrend} ${styles.kpiTrendUp}`}>
+                    <ArrowUpRight size={12} />
+                    <span className={styles.kpiTrendValue}>
+                      {card.trend!.toLocaleString()}
+                    </span>{' '}
+                    {card.trendLabel}
+                  </span>
+                )}
               </div>
-              <div className="dash-kpi-value">{card.value}</div>
-              <div className="dash-kpi-label">{card.label}</div>
-              {'trend' in card && (
-                <div className="dash-kpi-trend">
-                  <span className="dash-kpi-trend-num">{card.trend!.toLocaleString()}</span>{' '}
-                  {card.trendLabel}
-                </div>
-              )}
+              <div className={styles.kpiValue}>{card.value}</div>
+              <div className={styles.kpiLabel}>{card.label}</div>
+            </>
+          );
+
+          return card.link ? (
+            <Link key={i} href={card.link} className={styles.kpiCard}>
+              {inner}
+            </Link>
+          ) : (
+            <div key={i} className={styles.kpiCard}>
+              {inner}
             </div>
-          </Link>
-        ))}
+          );
+        })}
       </div>
 
-      {/* ─── Content grid ─── */}
-      <div className="dash-content-grid">
+      {/* ─── Content Grid ─── */}
+      <div className={styles.contentGrid}>
         {/* ─── Timeline ─── */}
-        <div className="card dash-timeline-card">
-          <div className="card-header">
+        <div className={styles.card}>
+          <div className={styles.cardHeader}>
             <h3>Actividad Reciente</h3>
             <span className="text-sm text-muted">{timeline.length} eventos</span>
           </div>
-          <div className="card-body" style={{ padding: 0 }}>
+          <div className={styles.cardBodyCompact}>
             {timeline.length === 0 ? (
-              <div className="empty-state" style={{ padding: '2rem' }}>
-                <p className="text-muted">No hay actividad reciente</p>
+              <div className={styles.emptyState}>
+                <Clock size={32} />
+                <p>No hay actividad reciente</p>
               </div>
             ) : (
-              <div className="timeline-list">
+              <div className={styles.timelineList}>
                 {timeline.slice(0, 15).map((ev, i) => (
-                  <div key={i} className="timeline-item">
+                  <div key={i} className={styles.timelineItem}>
                     <div
-                      className="timeline-dot"
-                      style={{ background: timelineColors[ev.type] || '#6b7280' }}
+                      className={styles.timelineDot}
+                      style={{ background: TIMELINE_COLORS[ev.type] || 'var(--text-muted)' }}
                     />
-                    <div className="timeline-icon">
-                      {timelineIcons[ev.type]}
+                    <div className={styles.timelineIcon}>
+                      {TIMELINE_ICON_MAP[ev.type] || <Clock size={14} />}
                     </div>
-                    <div className="timeline-body">
-                      <div className="timeline-desc">
-                        <span className="timeline-name">{getName(ev.customerName)}</span>
-                        {' '}
-                        <span className="timeline-action">{ev.description}</span>
+                    <div className={styles.timelineBody}>
+                      <div className={styles.timelineDesc}>
+                        <span className={styles.timelineName}>
+                          {getName(ev.customerName)}
+                        </span>{' '}
+                        <span className={styles.timelineAction}>{ev.description}</span>
                       </div>
-                      <div className="timeline-label">
-                        {timelineLabels[ev.type]}
+                      <div className={styles.timelineLabel}>
+                        {TIMELINE_LABELS[ev.type]}
                       </div>
                     </div>
-                    <div className="timeline-time">{formatRelative(ev.timestamp)}</div>
+                    <div className={styles.timelineTime}>{formatRelative(ev.timestamp)}</div>
                   </div>
                 ))}
               </div>
@@ -251,32 +255,38 @@ export default function DashboardHome() {
           </div>
         </div>
 
-        {/* ─── Tier distribution + quick links ─── */}
-        <div className="dash-sidebar-grid">
+        {/* ─── Right Sidebar ─── */}
+        <div className={styles.sidebarGrid}>
           {/* Tier Distribution */}
           {kpis && Object.keys(kpis.tierDistribution).length > 0 && (
-            <div className="card">
-              <div className="card-header">
+            <div className={styles.card}>
+              <div className={styles.cardHeader}>
                 <h3>Distribución por Nivel</h3>
               </div>
-              <div className="card-body">
-                <div className="tier-distribution">
+              <div className={styles.cardBody}>
+                <div className={styles.tierDist}>
                   {Object.entries(kpis.tierDistribution).map(([name, count]) => {
-                    const totalCustomers = kpis.totalCustomers;
-                    const pct = totalCustomers > 0 ? Math.round((count / totalCustomers) * 100) : 0;
+                    const total = kpis.totalCustomers;
+                    const pct = total > 0 ? Math.round((count / total) * 100) : 0;
                     return (
-                      <div key={name} className="tier-dist-row">
-                        <div className="tier-dist-header">
-                          <span className="tier-dist-name">{name}</span>
-                          <span className="tier-dist-count">{count} cl.</span>
+                      <div key={name} className={styles.tierDistRow}>
+                        <div className={styles.tierDistHeader}>
+                          <span className={styles.tierDistName}>{name}</span>
+                          <span className={styles.tierDistCount}>
+                            {count} cl.
+                          </span>
                         </div>
-                        <div className="tier-dist-bar-wrapper">
+                        <div className={styles.tierDistBarOuter}>
                           <div
-                            className="tier-dist-bar"
-                            style={{ width: `${Math.max(2, pct)}%` }}
+                            className={styles.tierDistBarInner}
+                            style={{
+                              width: `${Math.max(2, pct)}%`,
+                              background:
+                                TIER_BAR_COLORS[name] || 'var(--brand-500)',
+                            }}
                           />
                         </div>
-                        <span className="tier-dist-pct">{pct}%</span>
+                        <span className={styles.tierDistPct}>{pct}%</span>
                       </div>
                     );
                   })}
@@ -285,49 +295,34 @@ export default function DashboardHome() {
             </div>
           )}
 
-          {/* Quick links */}
-          <div className="card">
-            <div className="card-header">
+          {/* Quick Links */}
+          <div className={styles.card}>
+            <div className={styles.cardHeader}>
               <h3>Acceso Rápido</h3>
             </div>
-            <div className="card-body dash-links">
-              <Link href="/dashboard/customers" className="dash-link-item">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                  <circle cx="9" cy="7" r="4" />
-                </svg>
-                <span>Gestionar Clientes</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="dash-link-arrow">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </Link>
-              <Link href="/dashboard/analytics" className="dash-link-item">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                </svg>
-                <span>Analytics</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="dash-link-arrow">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </Link>
-              <Link href="/dashboard/loyalty" className="dash-link-item">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                </svg>
-                <span>Programa de Lealtad</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="dash-link-arrow">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </Link>
-              <Link href="/dashboard/rewards" className="dash-link-item">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                </svg>
-                <span>Catálogo de Recompensas</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="dash-link-arrow">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </Link>
+            <div className={styles.cardBody}>
+              <div className={styles.links}>
+                <Link href="/dashboard/customers" className={styles.linkItem}>
+                  <Users size={16} className={styles.linkIcon} />
+                  <span>Gestionar Clientes</span>
+                  <ChevronRight size={14} className={styles.linkArrow} />
+                </Link>
+                <Link href="/dashboard/analytics" className={styles.linkItem}>
+                  <TrendingUp size={16} className={styles.linkIcon} />
+                  <span>Analytics</span>
+                  <ChevronRight size={14} className={styles.linkArrow} />
+                </Link>
+                <Link href="/dashboard/loyalty" className={styles.linkItem}>
+                  <Star size={16} className={styles.linkIcon} />
+                  <span>Programa de Lealtad</span>
+                  <ChevronRight size={14} className={styles.linkArrow} />
+                </Link>
+                <Link href="/dashboard/rewards" className={styles.linkItem}>
+                  <Gift size={16} className={styles.linkIcon} />
+                  <span>Catálogo de Recompensas</span>
+                  <ChevronRight size={14} className={styles.linkArrow} />
+                </Link>
+              </div>
             </div>
           </div>
         </div>
