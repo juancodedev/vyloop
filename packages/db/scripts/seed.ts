@@ -52,10 +52,16 @@ function hoursAgo(hours: number): Date {
 // ---------------------------------------------------------------------------
 
 interface TxDef {
-  type: 'earned' | 'redeemed';
+  type: 'earn' | 'redeem';
   points: number; // positive for earned, positive for redeemed (we negate in the insert)
   balanceAfter: number;
   note: string;
+  daysAgo: number;
+}
+
+interface EventDef {
+  eventType: string;
+  payload: Record<string, unknown>;
   daysAgo: number;
 }
 
@@ -78,14 +84,14 @@ const customerDefs: CustomerDef[] = [
     balance: 4200,
     tier: 'oro',
     transactions: [
-      { type: 'earned', points: 1500, balanceAfter: 1500, note: 'Compra #001 - Café y pastelería', daysAgo: 82 },
-      { type: 'earned', points: 2000, balanceAfter: 3500, note: 'Compra #002 - Pedido corporativo', daysAgo: 65 },
-      { type: 'redeemed', points: 1000, balanceAfter: 2500, note: 'Canje - Café americano + sándwich', daysAgo: 50 },
-      { type: 'earned', points: 2500, balanceAfter: 5000, note: 'Compra #003 - Catering evento', daysAgo: 38 },
-      { type: 'redeemed', points: 800, balanceAfter: 4200, note: 'Canje - Bebidas especiales', daysAgo: 25 },
-      { type: 'earned', points: 1500, balanceAfter: 5700, note: 'Compra #004 - Pedido mensual', daysAgo: 14 },
-      { type: 'redeemed', points: 2000, balanceAfter: 3700, note: 'Canje - Mesa de regalos', daysAgo: 7 },
-      { type: 'earned', points: 500, balanceAfter: 4200, note: 'Compra #005 - Café matutino', daysAgo: 1 },
+      { type: 'earn', points: 1500, balanceAfter: 1500, note: 'Compra #001 - Café y pastelería', daysAgo: 82 },
+      { type: 'earn', points: 2000, balanceAfter: 3500, note: 'Compra #002 - Pedido corporativo', daysAgo: 65 },
+      { type: 'redeem', points: 1000, balanceAfter: 2500, note: 'Canje - Café americano + sándwich', daysAgo: 50 },
+      { type: 'earn', points: 2500, balanceAfter: 5000, note: 'Compra #003 - Catering evento', daysAgo: 38 },
+      { type: 'redeem', points: 800, balanceAfter: 4200, note: 'Canje - Bebidas especiales', daysAgo: 25 },
+      { type: 'earn', points: 1500, balanceAfter: 5700, note: 'Compra #004 - Pedido mensual', daysAgo: 14 },
+      { type: 'redeem', points: 2000, balanceAfter: 3700, note: 'Canje - Mesa de regalos', daysAgo: 7 },
+      { type: 'earn', points: 500, balanceAfter: 4200, note: 'Compra #005 - Café matutino', daysAgo: 1 },
     ],
   },
   {
@@ -96,12 +102,12 @@ const customerDefs: CustomerDef[] = [
     balance: 3100,
     tier: 'oro',
     transactions: [
-      { type: 'earned', points: 1200, balanceAfter: 1200, note: 'Compra #101 - Desayuno ejecutivo', daysAgo: 75 },
-      { type: 'earned', points: 1800, balanceAfter: 3000, note: 'Compra #102 - Almuerzo negocios', daysAgo: 55 },
-      { type: 'redeemed', points: 500, balanceAfter: 2500, note: 'Canje - Bebidas calientes', daysAgo: 40 },
-      { type: 'earned', points: 1000, balanceAfter: 3500, note: 'Compra #103 - Pedido oficina', daysAgo: 28 },
-      { type: 'redeemed', points: 1400, balanceAfter: 2100, note: 'Canje - Combo ejecutivo', daysAgo: 15 },
-      { type: 'earned', points: 1000, balanceAfter: 3100, note: 'Compra #104 - Café espresso', daysAgo: 3 },
+      { type: 'earn', points: 1200, balanceAfter: 1200, note: 'Compra #101 - Desayuno ejecutivo', daysAgo: 75 },
+      { type: 'earn', points: 1800, balanceAfter: 3000, note: 'Compra #102 - Almuerzo negocios', daysAgo: 55 },
+      { type: 'redeem', points: 500, balanceAfter: 2500, note: 'Canje - Bebidas calientes', daysAgo: 40 },
+      { type: 'earn', points: 1000, balanceAfter: 3500, note: 'Compra #103 - Pedido oficina', daysAgo: 28 },
+      { type: 'redeem', points: 1400, balanceAfter: 2100, note: 'Canje - Combo ejecutivo', daysAgo: 15 },
+      { type: 'earn', points: 1000, balanceAfter: 3100, note: 'Compra #104 - Café espresso', daysAgo: 3 },
     ],
   },
   {
@@ -112,12 +118,12 @@ const customerDefs: CustomerDef[] = [
     balance: 2500,
     tier: 'plata',
     transactions: [
-      { type: 'earned', points: 800, balanceAfter: 800, note: 'Compra #201 - Café matutino', daysAgo: 70 },
-      { type: 'earned', points: 1200, balanceAfter: 2000, note: 'Compra #202 - Postres y café', daysAgo: 52 },
-      { type: 'earned', points: 1000, balanceAfter: 3000, note: 'Compra #203 - Pedido familiar', daysAgo: 35 },
-      { type: 'redeemed', points: 500, balanceAfter: 2500, note: 'Canje - Bebidas frías', daysAgo: 22 },
-      { type: 'earned', points: 500, balanceAfter: 3000, note: 'Compra #204 - Té y pastelería', daysAgo: 10 },
-      { type: 'redeemed', points: 500, balanceAfter: 2500, note: 'Canje - Descuento en compra', daysAgo: 4 },
+      { type: 'earn', points: 800, balanceAfter: 800, note: 'Compra #201 - Café matutino', daysAgo: 70 },
+      { type: 'earn', points: 1200, balanceAfter: 2000, note: 'Compra #202 - Postres y café', daysAgo: 52 },
+      { type: 'earn', points: 1000, balanceAfter: 3000, note: 'Compra #203 - Pedido familiar', daysAgo: 35 },
+      { type: 'redeem', points: 500, balanceAfter: 2500, note: 'Canje - Bebidas frías', daysAgo: 22 },
+      { type: 'earn', points: 500, balanceAfter: 3000, note: 'Compra #204 - Té y pastelería', daysAgo: 10 },
+      { type: 'redeem', points: 500, balanceAfter: 2500, note: 'Canje - Descuento en compra', daysAgo: 4 },
     ],
   },
   {
@@ -128,12 +134,12 @@ const customerDefs: CustomerDef[] = [
     balance: 1800,
     tier: 'plata',
     transactions: [
-      { type: 'earned', points: 600, balanceAfter: 600, note: 'Compra #301 - Café americano', daysAgo: 68 },
-      { type: 'earned', points: 1200, balanceAfter: 1800, note: 'Compra #302 - Bebidas y snacks', daysAgo: 45 },
-      { type: 'redeemed', points: 300, balanceAfter: 1500, note: 'Canje - Café para llevar', daysAgo: 30 },
-      { type: 'earned', points: 800, balanceAfter: 2300, note: 'Compra #303 - Pedido semanal', daysAgo: 18 },
-      { type: 'redeemed', points: 700, balanceAfter: 1600, note: 'Canje - Bebidas especiales', daysAgo: 8 },
-      { type: 'earned', points: 200, balanceAfter: 1800, note: 'Compra #304 - Café express', daysAgo: 1 },
+      { type: 'earn', points: 600, balanceAfter: 600, note: 'Compra #301 - Café americano', daysAgo: 68 },
+      { type: 'earn', points: 1200, balanceAfter: 1800, note: 'Compra #302 - Bebidas y snacks', daysAgo: 45 },
+      { type: 'redeem', points: 300, balanceAfter: 1500, note: 'Canje - Café para llevar', daysAgo: 30 },
+      { type: 'earn', points: 800, balanceAfter: 2300, note: 'Compra #303 - Pedido semanal', daysAgo: 18 },
+      { type: 'redeem', points: 700, balanceAfter: 1600, note: 'Canje - Bebidas especiales', daysAgo: 8 },
+      { type: 'earn', points: 200, balanceAfter: 1800, note: 'Compra #304 - Café express', daysAgo: 1 },
     ],
   },
   {
@@ -144,11 +150,11 @@ const customerDefs: CustomerDef[] = [
     balance: 1200,
     tier: 'plata',
     transactions: [
-      { type: 'earned', points: 1000, balanceAfter: 1000, note: 'Compra #401 - Café y medialunas', daysAgo: 60 },
-      { type: 'redeemed', points: 500, balanceAfter: 500, note: 'Canje - Café americano', daysAgo: 45 },
-      { type: 'earned', points: 1200, balanceAfter: 1700, note: 'Compra #402 - Almuerzo ejecutivo', daysAgo: 30 },
-      { type: 'redeemed', points: 1500, balanceAfter: 200, note: 'Canje - Mesa de regalos', daysAgo: 18 },
-      { type: 'earned', points: 1000, balanceAfter: 1200, note: 'Compra #403 - Pedido catering', daysAgo: 5 },
+      { type: 'earn', points: 1000, balanceAfter: 1000, note: 'Compra #401 - Café y medialunas', daysAgo: 60 },
+      { type: 'redeem', points: 500, balanceAfter: 500, note: 'Canje - Café americano', daysAgo: 45 },
+      { type: 'earn', points: 1200, balanceAfter: 1700, note: 'Compra #402 - Almuerzo ejecutivo', daysAgo: 30 },
+      { type: 'redeem', points: 1500, balanceAfter: 200, note: 'Canje - Mesa de regalos', daysAgo: 18 },
+      { type: 'earn', points: 1000, balanceAfter: 1200, note: 'Compra #403 - Pedido catering', daysAgo: 5 },
     ],
   },
   {
@@ -159,9 +165,9 @@ const customerDefs: CustomerDef[] = [
     balance: 850,
     tier: 'bronce',
     transactions: [
-      { type: 'earned', points: 300, balanceAfter: 300, note: 'Compra #501 - Café matutino', daysAgo: 40 },
-      { type: 'earned', points: 250, balanceAfter: 550, note: 'Compra #502 - Té y pastelería', daysAgo: 22 },
-      { type: 'earned', points: 300, balanceAfter: 850, note: 'Compra #503 - Bebidas frías', daysAgo: 5 },
+      { type: 'earn', points: 300, balanceAfter: 300, note: 'Compra #501 - Café matutino', daysAgo: 40 },
+      { type: 'earn', points: 250, balanceAfter: 550, note: 'Compra #502 - Té y pastelería', daysAgo: 22 },
+      { type: 'earn', points: 300, balanceAfter: 850, note: 'Compra #503 - Bebidas frías', daysAgo: 5 },
     ],
   },
   {
@@ -172,9 +178,9 @@ const customerDefs: CustomerDef[] = [
     balance: 620,
     tier: 'bronce',
     transactions: [
-      { type: 'earned', points: 200, balanceAfter: 200, note: 'Compra #601 - Café espresso', daysAgo: 55 },
-      { type: 'earned', points: 180, balanceAfter: 380, note: 'Compra #602 - Té y galletas', daysAgo: 30 },
-      { type: 'earned', points: 240, balanceAfter: 620, note: 'Compra #603 - Bebida especial', daysAgo: 8 },
+      { type: 'earn', points: 200, balanceAfter: 200, note: 'Compra #601 - Café espresso', daysAgo: 55 },
+      { type: 'earn', points: 180, balanceAfter: 380, note: 'Compra #602 - Té y galletas', daysAgo: 30 },
+      { type: 'earn', points: 240, balanceAfter: 620, note: 'Compra #603 - Bebida especial', daysAgo: 8 },
     ],
   },
   {
@@ -185,9 +191,9 @@ const customerDefs: CustomerDef[] = [
     balance: 480,
     tier: 'bronce',
     transactions: [
-      { type: 'earned', points: 150, balanceAfter: 150, note: 'Compra #701 - Café para llevar', daysAgo: 48 },
-      { type: 'earned', points: 180, balanceAfter: 330, note: 'Compra #702 - Pastelería', daysAgo: 25 },
-      { type: 'earned', points: 150, balanceAfter: 480, note: 'Compra #703 - Bebida fría', daysAgo: 6 },
+      { type: 'earn', points: 150, balanceAfter: 150, note: 'Compra #701 - Café para llevar', daysAgo: 48 },
+      { type: 'earn', points: 180, balanceAfter: 330, note: 'Compra #702 - Pastelería', daysAgo: 25 },
+      { type: 'earn', points: 150, balanceAfter: 480, note: 'Compra #703 - Bebida fría', daysAgo: 6 },
     ],
   },
   {
@@ -198,9 +204,9 @@ const customerDefs: CustomerDef[] = [
     balance: 300,
     tier: 'bronce',
     transactions: [
-      { type: 'earned', points: 100, balanceAfter: 100, note: 'Compra #801 - Café americano', daysAgo: 35 },
-      { type: 'earned', points: 120, balanceAfter: 220, note: 'Compra #802 - Té', daysAgo: 18 },
-      { type: 'earned', points: 80, balanceAfter: 300, note: 'Compra #803 - Galletas artesanales', daysAgo: 3 },
+      { type: 'earn', points: 100, balanceAfter: 100, note: 'Compra #801 - Café americano', daysAgo: 35 },
+      { type: 'earn', points: 120, balanceAfter: 220, note: 'Compra #802 - Té', daysAgo: 18 },
+      { type: 'earn', points: 80, balanceAfter: 300, note: 'Compra #803 - Galletas artesanales', daysAgo: 3 },
     ],
   },
   {
@@ -211,9 +217,85 @@ const customerDefs: CustomerDef[] = [
     balance: 920,
     tier: 'bronce',
     transactions: [
-      { type: 'earned', points: 350, balanceAfter: 350, note: 'Compra #901 - Desayuno completo', daysAgo: 42 },
-      { type: 'earned', points: 280, balanceAfter: 630, note: 'Compra #902 - Café y pastelería', daysAgo: 20 },
-      { type: 'earned', points: 290, balanceAfter: 920, note: 'Compra #903 - Pedido especial', daysAgo: 4 },
+      { type: 'earn', points: 350, balanceAfter: 350, note: 'Compra #901 - Desayuno completo', daysAgo: 42 },
+      { type: 'earn', points: 280, balanceAfter: 630, note: 'Compra #902 - Café y pastelería', daysAgo: 20 },
+      { type: 'earn', points: 290, balanceAfter: 920, note: 'Compra #903 - Pedido especial', daysAgo: 4 },
+    ],
+  },
+  {
+    fullName: 'Valentina Rojas',
+    phone: '+56911122333',
+    earned: 15000,
+    redeemed: 7800,
+    balance: 7200,
+    tier: 'oro',
+    transactions: [
+      { type: 'earn', points: 5000, balanceAfter: 5000, note: 'Compra #A01 - Evento corporativo grande', daysAgo: 90 },
+      { type: 'earn', points: 3500, balanceAfter: 8500, note: 'Compra #A02 - Catering bodas', daysAgo: 70 },
+      { type: 'redeem', points: 2000, balanceAfter: 6500, note: 'Canje - Tarjeta de regalo $10.000', daysAgo: 55 },
+      { type: 'earn', points: 2800, balanceAfter: 9300, note: 'Compra #A03 - Pedido mensual oficina', daysAgo: 40 },
+      { type: 'redeem', points: 3800, balanceAfter: 5500, note: 'Canje - Tarjeta de regalo $10.000', daysAgo: 30 },
+      { type: 'earn', points: 2200, balanceAfter: 7700, note: 'Compra #A04 - Desayuno ejecutivo', daysAgo: 15 },
+      { type: 'redeem', points: 500, balanceAfter: 7200, note: 'Canje - Café americano gratis', daysAgo: 2 },
+    ],
+  },
+  {
+    fullName: 'Sofía Navarro',
+    phone: '+56922233444',
+    earned: 4200,
+    redeemed: 1500,
+    balance: 2700,
+    tier: 'plata',
+    transactions: [
+      { type: 'earn', points: 1500, balanceAfter: 1500, note: 'Compra #B01 - Café especialidad', daysAgo: 65 },
+      { type: 'earn', points: 800, balanceAfter: 2300, note: 'Compra #B02 - Pastelería fina', daysAgo: 48 },
+      { type: 'earn', points: 1200, balanceAfter: 3500, note: 'Compra #B03 - Pedido grupo', daysAgo: 32 },
+      { type: 'redeem', points: 800, balanceAfter: 2700, note: 'Canje - Pastelito de cumpleaños', daysAgo: 20 },
+      { type: 'earn', points: 700, balanceAfter: 3400, note: 'Compra #B04 - Café y lectura', daysAgo: 10 },
+      { type: 'redeem', points: 700, balanceAfter: 2700, note: 'Canje - Bebidas especiales', daysAgo: 3 },
+    ],
+  },
+  {
+    fullName: 'Mateo Castillo',
+    phone: '+56933344555',
+    earned: 600,
+    redeemed: 0,
+    balance: 600,
+    tier: 'bronce',
+    transactions: [
+      { type: 'earn', points: 200, balanceAfter: 200, note: 'Compra #C01 - Café espresso', daysAgo: 28 },
+      { type: 'earn', points: 250, balanceAfter: 450, note: 'Compra #C02 - Sándwich + café', daysAgo: 15 },
+      { type: 'earn', points: 150, balanceAfter: 600, note: 'Compra #C03 - Bebida fría', daysAgo: 2 },
+    ],
+  },
+  {
+    fullName: 'Isidora Ponce',
+    phone: '+56944455666',
+    earned: 12500,
+    redeemed: 6500,
+    balance: 6000,
+    tier: 'oro',
+    transactions: [
+      { type: 'earn', points: 4000, balanceAfter: 4000, note: 'Compra #D01 - Evento empresa', daysAgo: 85 },
+      { type: 'earn', points: 3000, balanceAfter: 7000, note: 'Compra #D02 - Catering reunión', daysAgo: 60 },
+      { type: 'redeem', points: 2500, balanceAfter: 4500, note: 'Canje - Tarjeta de regalo $10.000', daysAgo: 45 },
+      { type: 'earn', points: 3500, balanceAfter: 8000, note: 'Compra #D03 - Pedido corporativo', daysAgo: 28 },
+      { type: 'redeem', points: 2000, balanceAfter: 6000, note: 'Canje - Mesa de regalos', daysAgo: 12 },
+      { type: 'earn', points: 2000, balanceAfter: 8000, note: 'Compra #D04 - Celebracion', daysAgo: 5 },
+      { type: 'redeem', points: 2000, balanceAfter: 6000, note: 'Canje - Tarjeta de regalo $10.000', daysAgo: 1 },
+    ],
+  },
+  {
+    fullName: 'Emilio Herrera',
+    phone: '+56955566777',
+    earned: 1800,
+    redeemed: 0,
+    balance: 1800,
+    tier: 'plata',
+    transactions: [
+      { type: 'earn', points: 500, balanceAfter: 500, note: 'Compra #E01 - Desayuno especial', daysAgo: 50 },
+      { type: 'earn', points: 700, balanceAfter: 1200, note: 'Compra #E02 - Café + postres', daysAgo: 35 },
+      { type: 'earn', points: 600, balanceAfter: 1800, note: 'Compra #E03 - Combo ejecutivo', daysAgo: 18 },
     ],
   },
 ];
@@ -270,6 +352,21 @@ async function main() {
     })
     .returning();
   console.log(`  ✓ Branch: ${branch.name} (${branch.id})`);
+
+  // ---- 2b. Second branch ----
+  const [branch2] = await db
+    .insert(schema.branches)
+    .values({
+      businessId: tenant.id,
+      name: 'Sucursal Vitacura',
+      address: 'Av. Vitacura 5678, Las Condes',
+      city: 'Santiago',
+      country: 'CL',
+      timezone: 'America/Santiago',
+      isActive: true,
+    })
+    .returning();
+  console.log(`  ✓ Branch: ${branch2.name} (${branch2.id})`);
 
   // ---- 3. Dashboard user ----
   const [user] = await db
@@ -386,7 +483,7 @@ async function main() {
     let txCount = 0;
     for (const tx of c.transactions) {
       txCount++;
-      const points = tx.type === 'redeemed' ? -tx.points : tx.points;
+      const points = tx.type === 'redeem' ? -tx.points : tx.points;
 
       await db.insert(schema.pointsTransactions).values({
         businessId: tenant.id,
@@ -401,7 +498,31 @@ async function main() {
       });
     }
 
-    console.log(`  ✓ ${c.fullName} — ${c.balance.toLocaleString()} pts (${c.tier}) — ${txCount} movimientos`);
+    // Insert customer events for timeline
+    const eventTypes = ['customer.registered', 'visit', 'points.earned', 'visit', 'points.redeemed', 'visit'];
+    let eventCount = 0;
+    for (const evType of eventTypes) {
+      eventCount++;
+      let payload: Record<string, unknown> = {};
+      if (evType === 'points.earned') {
+        const lastEarnTx = [...c.transactions].reverse().find(tx => tx.type === 'earn');
+        payload = { points: lastEarnTx?.points ?? 0 };
+      } else if (evType === 'points.redeemed') {
+        const lastRedeemTx = [...c.transactions].reverse().find(tx => tx.type === 'redeem');
+        payload = { points: lastRedeemTx?.points ?? 0 };
+      }
+
+      await db.insert(schema.customerEvents).values({
+        businessId: tenant.id,
+        customerId: customer.id,
+        branchId: branch.id,
+        eventType: evType,
+        payload,
+        createdAt: daysAgo(eventCount * 15 - 1),
+      });
+    }
+
+    console.log(`  ✓ ${c.fullName} — ${c.balance.toLocaleString()} pts (${c.tier}) — ${txCount} movimientos, ${eventCount} eventos`);
   }
 
   // ---- 8. Rewards catalog ----

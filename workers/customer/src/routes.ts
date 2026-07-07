@@ -1,7 +1,7 @@
 import { createDb, customers, customerEvents, consents, tenants, pointsTransactions, membershipTiers } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
-import { eq, and, isNull, like, or, count, desc, sum, type SQL } from 'drizzle-orm';
+import { eq, and, isNull, like, or, count, desc, sum, sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
@@ -189,7 +189,34 @@ router.get('/v1/customers', async (c) => {
   const [totalResult, data] = await Promise.all([
     db.select({ total: count() }).from(customers).where(where),
     db
-      .select()
+      .select({
+        id: customers.id,
+        globalId: customers.globalId,
+        businessId: customers.businessId,
+        phone: customers.phone,
+        email: customers.email,
+        fullName: customers.fullName,
+        birthDate: customers.birthDate,
+        identityDoc: customers.identityDoc,
+        identityType: customers.identityType,
+        language: customers.language,
+        optedInAt: customers.optedInAt,
+        lastVisitAt: customers.lastVisitAt,
+        currentTierId: customers.currentTierId,
+        metadata: customers.metadata,
+        deletedAt: customers.deletedAt,
+        createdAt: customers.createdAt,
+        updatedAt: customers.updatedAt,
+        points: sql<number>`COALESCE((
+          SELECT balance_after FROM ${pointsTransactions}
+          WHERE customer_id = ${customers.id}
+          ORDER BY created_at DESC LIMIT 1
+        ), 0)`,
+        totalPointsEarned: sql<number>`COALESCE((
+          SELECT SUM(points) FROM ${pointsTransactions}
+          WHERE customer_id = ${customers.id} AND type IN ('earn', 'earned')
+        ), 0)`,
+      })
       .from(customers)
       .where(where)
       .limit(limit)
@@ -256,14 +283,14 @@ router.get('/v1/customers/me', async (c) => {
       .where(eq(pointsTransactions.customerId, customer.id))
       .orderBy(desc(pointsTransactions.createdAt))
       .limit(1),
-    // Total points earned (sum of all 'earn' transactions)
+    // Total points earned (sum of all 'earn'/'earned' transactions)
     db
       .select({ total: sum(pointsTransactions.points) })
       .from(pointsTransactions)
       .where(
         and(
           eq(pointsTransactions.customerId, customer.id),
-          eq(pointsTransactions.type, 'earn'),
+          or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
         ),
       ),
     // Last 10 customer events
