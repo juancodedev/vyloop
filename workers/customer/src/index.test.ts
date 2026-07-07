@@ -124,6 +124,9 @@ vi.mock('@vyloop/db', () => ({
   customers: {},
   customerEvents: {},
   consents: {},
+  tenants: {},
+  pointsTransactions: {},
+  membershipTiers: {},
 }));
 
 vi.mock('@vyloop/event-bus', () => ({

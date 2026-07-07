@@ -11,15 +11,6 @@ function getToken(): string | null {
   return null;
 }
 
-function getEmail(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const stored = localStorage.getItem('auth');
-    if (stored) return JSON.parse(stored).email;
-  } catch { /* ignore */ }
-  return null;
-}
-
 interface ApiBenefit {
   title: string;
   description: string;
