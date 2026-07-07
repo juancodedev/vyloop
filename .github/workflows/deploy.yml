@@ -111,7 +111,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build with @cloudflare/next-on-pages
-        run: npx --yes @cloudflare/next-on-pages
+        run: pnpm pages:build
         working-directory: apps/dashboard
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL || 'https://gateway.cl-jmunoz.workers.dev' }}
