@@ -352,7 +352,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
   const [customer] = await db
     .select()
     .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.globalId, body.customer_id)))
+    .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
     .limit(1);
 
   if (customer?.currentTierId) {
