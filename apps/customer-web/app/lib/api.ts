@@ -49,6 +49,36 @@ export interface Reward {
   imageUrl?: string;
 }
 
+export interface CustomerProfile {
+  id: string;
+  globalId: string;
+  fullName: string;
+  phone: string;
+  email?: string;
+  birthDate?: string;
+  points: number;
+  totalPointsEarned: number;
+  currentTierId?: string;
+  currentTier: string | null;
+  createdAt: string;
+}
+
+export interface Transaction {
+  id: string;
+  customer_id: string;
+  type: 'earn' | 'redeem';
+  points: number;
+  balance_after: number;
+  reference_id?: string;
+  note?: string;
+  created_at: string;
+}
+
+export interface PaginatedTransactions {
+  data: Transaction[];
+  meta: { total: number; page: number; per_page: number };
+}
+
 // ---------------------------------------------------------------------------
 // API methods
 // ---------------------------------------------------------------------------
@@ -79,14 +109,36 @@ export const api = {
     return result?.data ?? [];
   },
 
-  async redeemReward(rewardId: string): Promise<unknown> {
+  async redeemReward(params: {
+    customer_id: string;
+    points: number;
+    reward_id: string;
+    reference_id: string;
+  }): Promise<unknown> {
     return apiFetch('/v1/loyalty/rewards/redeem', {
       method: 'POST',
-      body: JSON.stringify({ rewardId }),
+      body: JSON.stringify(params),
     });
   },
 
-  async getProfile(): Promise<unknown> {
-    return apiFetch('/v1/customers/me');
+  async getProfile(): Promise<CustomerProfile> {
+    const result = await apiFetch('/v1/customers/me') as { data: CustomerProfile };
+    return result.data;
+  },
+
+  async getTransactions(filters?: {
+    customer_id?: string;
+    type?: 'earn' | 'redeem';
+    page?: number;
+    limit?: number;
+  }): Promise<PaginatedTransactions> {
+    const params = new URLSearchParams();
+    if (filters?.customer_id) params.set('customer_id', filters.customer_id);
+    if (filters?.type) params.set('type', filters.type);
+    if (filters?.page) params.set('page', String(filters.page));
+    if (filters?.limit) params.set('limit', String(filters.limit));
+    const qs = params.toString();
+    const result = await apiFetch(`/v1/loyalty/points/transactions${qs ? `?${qs}` : ''}`) as PaginatedTransactions;
+    return result;
   },
 };
