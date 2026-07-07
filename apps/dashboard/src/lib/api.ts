@@ -1,6 +1,7 @@
 // API client — real fetch() calls against the backend API gateway
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
+const LOGIN_PATH = '/login';
 
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -9,6 +10,18 @@ function getToken(): string | null {
     if (stored) return JSON.parse(stored).token;
   } catch { /* ignore */ }
   return null;
+}
+
+function isOnLoginPage(): boolean {
+  return typeof window !== 'undefined' && window.location.pathname === LOGIN_PATH;
+}
+
+function clearAuthAndRedirect(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('auth');
+  if (!isOnLoginPage()) {
+    window.location.href = LOGIN_PATH;
+  }
 }
 
 interface ApiBenefit {
@@ -40,6 +53,12 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<unknow
   const data = await res.json();
 
   if (!res.ok) {
+    if (res.status === 401 && getToken()) {
+      // Token expired or invalid — clean up and redirect to login
+      clearAuthAndRedirect();
+      // Throw a clear error in case the redirect doesn't happen (SSR, test)
+      throw new Error('Session expired. Redirecting to login…');
+    }
     throw new Error(data?.error?.message || `Error ${res.status}`);
   }
 
