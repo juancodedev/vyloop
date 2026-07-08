@@ -4,8 +4,8 @@
   "private": true,
   "exports": {
     ".": "./src/index.ts",
-    "./tokens": "./src/tokens/index.css",
-    "./styles": "./src/styles/index.css",
+    "./tokens": "./src/tokens/index.ts",
+    "./styles": "./src/styles/index.ts",
     "./tokens/*": "./src/tokens/*.css",
     "./icons": "./src/icons/index.ts"
   },
