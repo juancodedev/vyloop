@@ -1,7 +1,7 @@
 'use client';
 
 import clsx from 'clsx';
-import { CheckCircle2, XCircle, AlertTriangle, Info, X } from 'lucide-react';
+import { CircleCheckBig, CircleX, AlertTriangle, Info, X } from 'lucide-react';
 import {
   createContext,
   useCallback,
@@ -39,8 +39,8 @@ interface ToastContextValue {
 // ── Icons ──
 
 const TOAST_ICONS: Record<ToastType, ReactNode> = {
-  success: <CheckCircle2 size={20} aria-hidden="true" />,
-  error: <XCircle size={20} aria-hidden="true" />,
+  success: <CircleCheckBig size={20} aria-hidden="true" />,
+  error: <CircleX size={20} aria-hidden="true" />,
   warning: <AlertTriangle size={20} aria-hidden="true" />,
   info: <Info size={20} aria-hidden="true" />,
 };
