@@ -294,3 +294,4 @@ TODO — not yet licensed.
 ---
 
 _Vyloop — Build loyalty, grow your business._
+.
