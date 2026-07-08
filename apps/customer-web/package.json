@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "pages:build": "next-on-pages",
     "test": "vitest run"
   },
   "dependencies": {
@@ -19,11 +20,13 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@cloudflare/next-on-pages": "^1.13.16",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "jiti": "^2.7.0",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.107.0"
   }
 }
