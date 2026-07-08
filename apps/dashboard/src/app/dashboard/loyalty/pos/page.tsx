@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import styles from './pos.module.css';
 
 import { api } from '@/lib/api';
-import styles from './pos.module.css';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
