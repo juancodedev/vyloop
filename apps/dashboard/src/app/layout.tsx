@@ -3,6 +3,7 @@ import { Inter, Sora } from 'next/font/google';
 
 import { AuthProvider } from '@/lib/auth';
 import '@vyloop/design-system/tokens';
+import '@vyloop/design-system/styles';
 import './globals.css';
 
 const inter = Inter({

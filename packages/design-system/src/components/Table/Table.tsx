@@ -1,3 +1,5 @@
+'use client';
+
 import clsx from 'clsx';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import { useState, useCallback, useMemo, type ReactNode } from 'react';

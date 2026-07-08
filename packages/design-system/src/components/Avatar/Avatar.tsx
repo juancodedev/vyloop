@@ -1,3 +1,5 @@
+'use client';
+
 import clsx from 'clsx';
 import { useState, useCallback, type SyntheticEvent } from 'react';
 
