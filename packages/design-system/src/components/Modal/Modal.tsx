@@ -1,3 +1,5 @@
+'use client';
+
 import * as Dialog from '@radix-ui/react-dialog';
 import clsx from 'clsx';
 import { X } from 'lucide-react';
