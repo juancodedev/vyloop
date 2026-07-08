@@ -1,6 +1,7 @@
 {
   "extends": "./tooling/typescript/tsconfig.base.json",
   "compilerOptions": {
+    "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
       "@vyloop/types": ["packages/types/src"],
