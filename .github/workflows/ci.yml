@@ -28,8 +28,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build packages
-        run: pnpm -r build --filter=@vyloop/design-system
+      - name: Build design-system package
+        run: pnpm --filter=@vyloop/design-system build
 
       - name: Lint
         run: pnpm -r lint
