@@ -3,10 +3,10 @@
 import { Clock, Gift, ChevronDown, ChevronUp, QrCode, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
+import { useCallback, useEffect, useState } from 'react';
 
-import { api, type CustomerProfile, type CustomerEvent, type RecentTransaction } from '../lib/api';
+import { api, type CustomerProfile, type CustomerEvent } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
 const CID_KEY = 'vyloop_customer_id';
@@ -265,7 +265,6 @@ export default function ProfilePage() {
             </p>
             <div className="profile-qr-code">
               {qrDataUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
                 <img src={qrDataUrl} alt="Código QR de perfil" width={200} height={200} />
               ) : (
                 <div className="profile-qr-placeholder">
