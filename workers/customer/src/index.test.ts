@@ -103,7 +103,7 @@ const { mockPublish, mockValidate, mockDb, setSelectData } = vi.hoisted(() => {
     delete: vi.fn(() => ({
       where: vi.fn(() => Promise.resolve()),
     })),
-    execute: vi.fn(),
+    execute: vi.fn(() => Promise.resolve({ rows: [] })),
   };
 
   return {
