@@ -19,13 +19,13 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | Event Bus + Schema Registry | ✅ Completado |
 | Customer CRUD (worker + tests) | ✅ Completado |
 | Customer-web PWA (registro, perfil, puntos) | ✅ Completado |
+| **Perfil premium con QR + achievements + tracking** | **✅ Completado** |
 | Growth Engine (puntos, tiers, wallet, consumer) | ✅ Completado |
 | Dashboard PMV (login, sidebar, clientes, loyalty) | ✅ Completado |
+| **POS Emulator — menú, carrito, QR scanner, cobro+puntos** | **✅ Completado** |
 | Customer detail card SDK | ✅ Completado |
 | CI/CD automático (GitHub Actions → Cloudflare) | ✅ 11/11 jobs verdes |
 | **Deployado y demo-list** | **✅ VIVO** |
-| Growth Engine Phase 5 tests | 🔲 Pendiente |
-| Workers placeholder (analytics, automation, communication, compliance) | 🔲 Implementar lógica de negocio |
 
 ---
 
@@ -41,7 +41,27 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 
 1. Entrá a [vyloop-customer-web.pages.dev](https://vyloop-customer-web.pages.dev)
 2. Iniciá sesión con teléfono `+56956789012`
-3. Ves la tarjeta de Lucía Fernández: 1.200 pts, nivel Plata, progreso a Oro, últimos movimientos
+3. Ves el perfil de Lucía Fernández con:
+   - **Avatar con glow** y animación de puntos
+   - **Puntos acumulados** + racha de visitas últimos 30 días
+   - **Barra de progreso** al siguiente nivel (Oro)
+   - **QR dinámico** colapsable para identificar al cliente en el local
+   - **Logro Oro** — celebración especial al alcanzar el nivel máximo
+   - **Actividad reciente** unificada (eventos + transacciones)
+   - **Empty state** elegante cuando no hay actividad
+   - Botones lado a lado: historial y canje de puntos
+
+### Demo: POS Emulado (Caja)
+
+1. Entrá a [vyloop.juancode.dev](https://vyloop.juancode.dev)
+2. Login con email `demo@cafecentral.com` / contraseña `demo123`
+3. Navegá a **Lealtad > POS**
+4. Seleccioná productos del menú de cafetería (precios reales)
+5. Hacé click en **📷 Identificar Cliente** — se abre la cámara
+6. Escaneá el QR del perfil del cliente (desde el celular o desde la web abriendo `/profile`)
+7. Se muestra el cliente, sus puntos, y los puntos a ganar por la compra
+8. Opcional: ingresá puntos a canjear como descuento
+9. **Cobrar** → asigna puntos, registra la venta, muestra recibo
 
 ### Demo: Dashboard
 
@@ -168,7 +188,7 @@ pnpm -r test        # Vitest (105+ tests)
 ```
 vyloop/
 ├── apps/
-│   ├── dashboard/          # Next.js 14 — merchant dashboard
+│   ├── dashboard/          # Next.js 14 — merchant dashboard + POS emulator
 │   ├── customer-web/       # Next.js 15 — PWA del cliente (QR, login, perfil)
 │   └── gateway/            # Hono Worker — API Gateway (HTTP entry point)
 ├── workers/
@@ -230,7 +250,7 @@ Ver [docs/](./docs) para:
 | compliance | `compliance.cl-jmunoz.workers.dev` | 🔲 Placeholder |
 | gateway | `gateway.cl-jmunoz.workers.dev` | ✅ API Gateway |
 
-## PRs Completados (24 mergeados)
+## PRs Completados (25+ mergeados)
 
 | PR | Título |
 |----|--------|
@@ -253,6 +273,8 @@ Ver [docs/](./docs) para:
 | #40 | Dashboard sell: Registrar Venta modal |
 | #41 | JWT expiry: clockTolerance in gateway + auto-redirect on 401 |
 | #42 | Customer-web real data: profile, history, redeem fix |
+| #43 | Profile redesign Propuesta A — QR, Oro achievement, empty state, tracking |
+| #44 | POS Emulator — menu cafetería, carrito, QR scanner, cobro + puntos + canje |
 
 ---
 

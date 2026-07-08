@@ -15,6 +15,7 @@
     "@vyloop/design-system": "workspace:*",
     "@vyloop/types": "workspace:*",
     "clsx": "^2.1.1",
+    "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.400.0",
     "next": "^15.5.18",
     "qrcode.react": "^4.2.0",

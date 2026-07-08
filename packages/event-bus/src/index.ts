@@ -8,6 +8,8 @@ export const CUSTOMER_REGISTERED = 'CustomerRegistered';
 export const POINTS_ASSIGNED = 'PointsAssigned';
 export const REWARD_REDEEMED = 'RewardRedeemed';
 export const REWARD_AUTO_GRANTED = 'RewardAutoGranted';
+export const PROFILE_VIEWED = 'ProfileViewed';
+export const QR_DISPLAYED = 'QRDisplayed';
 
 // ---------------------------------------------------------------------------
 // Event envelope format
