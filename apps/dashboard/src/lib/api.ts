@@ -404,6 +404,51 @@ export const api = {
     return result.data;
   },
 
+  async redeemPoints(
+    customerId: string,
+    points: number,
+    rewardName?: string,
+  ): Promise<{ id: string; points: number; balance_after: number; partial?: boolean }> {
+    const result = await apiFetch('/v1/loyalty/rewards/redeem', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: customerId,
+        points,
+        reference_id: `pos-redeem-${customerId}-${Date.now()}`,
+        partial: true,
+        ...(rewardName ? { reward_name: rewardName } : {}),
+      }),
+    }) as { data: { id: string; points: number; balance_after: number }; partial?: boolean };
+    return {
+      id: result.data.id,
+      points: result.data.points,
+      balance_after: result.data.balance_after,
+      ...(result.partial ? { partial: result.partial } : {}),
+    };
+  },
+
+  async getCustomerByGlobalId(globalId: string): Promise<{
+    id: string;
+    globalId: string;
+    fullName: string;
+    phone: string;
+    points: number;
+    currentTier: string | null;
+    tier?: { id: string; name: string; multiplier: number } | null;
+  }> {
+    const result = await apiFetch(`/v1/customers/by-global-id/${globalId}`) as { data: Record<string, unknown> };
+    const d = result.data;
+    return {
+      id: d.id as string,
+      globalId: d.globalId as string,
+      fullName: d.fullName as string,
+      phone: d.phone as string,
+      points: Number(d.points ?? 0),
+      currentTier: d.currentTier as string | null,
+      tier: d.tier ? d.tier as { id: string; name: string; multiplier: number } : null,
+    };
+  },
+
   async getKpis(): Promise<KpiResponse> {
     return apiFetch('/v1/analytics/kpis') as Promise<KpiResponse>;
   },
