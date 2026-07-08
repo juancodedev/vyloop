@@ -1,5 +1,5 @@
 import { createDb, customers, customerEvents, consents, tenants, pointsTransactions, membershipTiers } from '@vyloop/db';
-import { CUSTOMER_REGISTERED, PROFILE_VIEWED, QR_DISPLAYED, createEnvelope, publish } from '@vyloop/event-bus';
+import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
 import { eq, and, isNull, like, or, count, desc, sum, sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
