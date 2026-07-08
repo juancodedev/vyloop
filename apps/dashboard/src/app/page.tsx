@@ -1,7 +1,7 @@
+import { Features } from './(landing)/components/Features';
 import { Header } from './(landing)/components/Header';
 import { Hero } from './(landing)/components/Hero';
 import { HowItWorks } from './(landing)/components/HowItWorks';
-import { Features } from './(landing)/components/Features';
 import styles from './(landing)/layout.module.css';
 
 export default function LandingPage() {
