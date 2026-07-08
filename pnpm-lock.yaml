@@ -134,10 +134,10 @@ importers:
     devDependencies:
       '@cloudflare/next-on-pages':
         specifier: ^1.13.16
-        version: 1.13.16(@cloudflare/workers-types@5.20260706.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@5.20260706.1))
+        version: 1.13.16(@cloudflare/workers-types@5.20260708.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@5.20260708.1))
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.0
@@ -155,7 +155,7 @@ importers:
         version: 4.1.10(@types/node@22.20.0)(jsdom@25.0.1)(vite@7.3.6(@types/node@22.20.0)(jiti@2.7.0)(tsx@4.23.0))
       wrangler:
         specifier: ^4.107.0
-        version: 4.107.0(@cloudflare/workers-types@5.20260706.1)
+        version: 4.107.0(@cloudflare/workers-types@5.20260708.1)
 
   apps/gateway:
     dependencies:
@@ -176,8 +176,8 @@ importers:
         version: 6.2.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -186,7 +186,7 @@ importers:
         version: 4.1.10(@types/node@22.20.0)(jsdom@25.0.1)(vite@7.3.6(@types/node@22.20.0)(jiti@2.7.0)(tsx@4.23.0))
       wrangler:
         specifier: ^4.107.0
-        version: 4.107.0(@cloudflare/workers-types@5.20260706.1)
+        version: 4.107.0(@cloudflare/workers-types@5.20260708.1)
 
   packages/config:
     devDependencies:
@@ -204,7 +204,7 @@ importers:
         version: 1.1.0
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260706.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       pg:
         specifier: ^8.0.0
         version: 8.22.0
@@ -263,8 +263,8 @@ importers:
         version: link:../types
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -285,8 +285,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -313,14 +313,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260706.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.7.0
         version: 4.12.27
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -335,8 +335,8 @@ importers:
         version: link:../../packages/types
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -351,8 +351,8 @@ importers:
         version: link:../../packages/types
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -367,8 +367,8 @@ importers:
         version: link:../../packages/types
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -395,14 +395,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260706.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.7.0
         version: 4.12.27
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -426,14 +426,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260706.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.7.0
         version: 4.12.27
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -457,7 +457,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260706.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.0.0
         version: 4.12.27
@@ -466,8 +466,8 @@ importers:
         version: 6.2.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260706.1
-        version: 5.20260706.1
+        specifier: ^5.20260708.1
+        version: 5.20260708.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -569,8 +569,8 @@ packages:
   '@cloudflare/workers-types@4.20260702.1':
     resolution: {integrity: sha512-mOhf5TUEB1m2vPrxtqoIGfz0fUC9xyxRDx5gWHy5s+OCo6dcV+g7wI1R7gYCMFohhqF/2y2xeKVwMwCJjfn/WA==}
 
-  '@cloudflare/workers-types@5.20260706.1':
-    resolution: {integrity: sha512-PdGrKyJMmKjrZs6xPN/LYN2zpKo9bgn8Iq3JLYho1/76t0HEfUYnssgUljqFxQYPzH4SZ8wsIThaGHmW5GZkLg==}
+  '@cloudflare/workers-types@5.20260708.1':
+    resolution: {integrity: sha512-FSRyCsxALKmmNnk/2HMkTiX9Iz9yqTiTWX/BJZdffGznMSunXmQgb3mKy9wGBX2BCTLOuRYWL36uh7/3Gm05Eg==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -3494,7 +3494,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cloudflare/next-on-pages@1.13.16(@cloudflare/workers-types@5.20260706.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@5.20260706.1))':
+  '@cloudflare/next-on-pages@1.13.16(@cloudflare/workers-types@5.20260708.1)(next@15.5.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@5.20260708.1))':
     dependencies:
       acorn: 8.17.0
       ast-types: 0.14.2
@@ -3509,9 +3509,9 @@ snapshots:
       package-manager-manager: 0.2.0
       pcre-to-regexp: 1.1.0
       semver: 7.8.5
-      wrangler: 4.107.0(@cloudflare/workers-types@5.20260706.1)
+      wrangler: 4.107.0(@cloudflare/workers-types@5.20260708.1)
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260706.1
+      '@cloudflare/workers-types': 5.20260708.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3555,7 +3555,7 @@ snapshots:
   '@cloudflare/workers-types@4.20260702.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20260706.1': {}
+  '@cloudflare/workers-types@5.20260708.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -4645,9 +4645,9 @@ snapshots:
       esbuild: 0.25.12
       tsx: 4.23.0
 
-  drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260706.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9):
+  drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9):
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260706.1
+      '@cloudflare/workers-types': 5.20260708.1
       '@neondatabase/serverless': 1.1.0
       '@types/pg': 8.11.6
       gel: 2.2.0
@@ -6274,7 +6274,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  wrangler@4.107.0(@cloudflare/workers-types@5.20260706.1):
+  wrangler@4.107.0(@cloudflare/workers-types@5.20260708.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260701.1)
@@ -6285,7 +6285,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260701.1
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260706.1
+      '@cloudflare/workers-types': 5.20260708.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil
