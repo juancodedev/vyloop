@@ -1,5 +1,5 @@
 import { createDb, customers, customerEvents, consents, tenants, pointsTransactions, membershipTiers } from '@vyloop/db';
-import { CUSTOMER_REGISTERED, publish } from '@vyloop/event-bus';
+import { CUSTOMER_REGISTERED, PROFILE_VIEWED, QR_DISPLAYED, createEnvelope, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
 import { eq, and, isNull, like, or, count, desc, sum, sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -186,7 +186,10 @@ router.get('/v1/customers', async (c) => {
   const where = and(...conditions);
 
   // Run count + data queries in parallel
-  const [totalResult, data] = await Promise.all([
+  // NOTE: Points are fetched separately via raw SQL because Drizzle ORM
+  // with @neondatabase/serverless mishandles correlated subqueries in
+  // .select() — it returns 0 instead of the actual balance.
+  const [totalResult, data, pointsResult] = await Promise.all([
     db.select({ total: count() }).from(customers).where(where),
     db
       .select({
@@ -207,24 +210,49 @@ router.get('/v1/customers', async (c) => {
         deletedAt: customers.deletedAt,
         createdAt: customers.createdAt,
         updatedAt: customers.updatedAt,
-        points: sql<number>`COALESCE((
-          SELECT balance_after FROM ${pointsTransactions}
-          WHERE customer_id = ${customers.id}
-          ORDER BY created_at DESC LIMIT 1
-        ), 0)`,
-        totalPointsEarned: sql<number>`COALESCE((
-          SELECT SUM(points) FROM ${pointsTransactions}
-          WHERE customer_id = ${customers.id} AND type IN ('earn', 'earned')
-        ), 0)`,
       })
       .from(customers)
       .where(where)
       .limit(limit)
       .offset(offset)
       .orderBy(customers.createdAt),
+    // Fetch latest balance + total earned per customer in one pass
+    db.execute(sql`
+      SELECT
+        customer_id,
+        COALESCE(MAX(balance_after) FILTER (WHERE rn = 1), 0)::integer as points,
+        COALESCE(SUM(points) FILTER (WHERE type IN ('earn', 'earned')), 0)::integer as total_earned
+      FROM (
+        SELECT
+          pt.customer_id, pt.balance_after, pt.points, pt.type,
+          ROW_NUMBER() OVER (PARTITION BY pt.customer_id ORDER BY pt.created_at DESC) as rn
+        FROM points_transactions pt
+        WHERE pt.business_id = ${businessId}
+      ) ranked
+      GROUP BY customer_id
+    `),
   ]);
 
   const total = totalResult[0]?.total ?? 0;
+
+  // Merge points into customer rows
+  const pointsMap = new Map<string, { points: number; totalEarned: number }>();
+  for (const row of (pointsResult.rows ?? []) as Array<{
+    customer_id: string;
+    points: number;
+    total_earned: number;
+  }>) {
+    pointsMap.set(row.customer_id, {
+      points: row.points,
+      totalEarned: row.total_earned,
+    });
+  }
+
+  for (const customer of data) {
+    const p = pointsMap.get(customer.id);
+    (customer as Record<string, unknown>).points = p?.points ?? 0;
+    (customer as Record<string, unknown>).totalPointsEarned = p?.totalEarned ?? 0;
+  }
 
   return c.json({ data, total, page, limit });
 });
@@ -274,8 +302,8 @@ router.get('/v1/customers/me', async (c) => {
     );
   }
 
-  // Fetch balance, total earned, tier, and events in parallel
-  const [balanceResult, earnedResult, eventsResult] = await Promise.all([
+  // Fetch balance, total earned, events, and recent transactions in parallel
+  const [balanceResult, earnedResult, eventsResult, txResult] = await Promise.all([
     // Latest balance (uses customer.id PK — matches FK on points_transactions)
     db
       .select({ balance_after: pointsTransactions.balanceAfter })
@@ -300,6 +328,20 @@ router.get('/v1/customers/me', async (c) => {
       .where(eq(customerEvents.customerId, customer.id))
       .orderBy(desc(customerEvents.createdAt))
       .limit(10),
+    // Last 5 points transactions for activity timeline
+    db
+      .select({
+        id: pointsTransactions.id,
+        type: pointsTransactions.type,
+        points: pointsTransactions.points,
+        balanceAfter: pointsTransactions.balanceAfter,
+        note: pointsTransactions.note,
+        createdAt: pointsTransactions.createdAt,
+      })
+      .from(pointsTransactions)
+      .where(eq(pointsTransactions.customerId, customer.id))
+      .orderBy(desc(pointsTransactions.createdAt))
+      .limit(5),
   ]);
 
   const points = balanceResult[0]?.balance_after ?? 0;
@@ -323,6 +365,31 @@ router.get('/v1/customers/me', async (c) => {
     }
   }
 
+  // Fire-and-forget: record profile_viewed event for dashboards
+  c.executionCtx.waitUntil(
+    (async () => {
+      try {
+        await db.insert(customerEvents).values({
+          businessId,
+          customerId: customer.id,
+          eventType: 'customer.profile_viewed',
+          payload: {},
+        });
+        await publish(
+          c.env.DOMAIN_EVENTS_QUEUE,
+          createEnvelope(PROFILE_VIEWED, {
+            business_id: businessId,
+            timestamp: new Date().toISOString(),
+          }, {
+            customer_id: customer.globalId,
+          }),
+        );
+      } catch (err) {
+        console.error('[customer] Failed to emit profile_viewed event:', err);
+      }
+    })(),
+  );
+
   return c.json({
     data: {
       id: customer.id,
@@ -337,7 +404,76 @@ router.get('/v1/customers/me', async (c) => {
       currentTier: tier?.name ?? null,
       tier,
       customer_events: eventsResult,
+      recent_transactions: txResult,
       createdAt: customer.createdAt,
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lookup by globalId: GET /v1/customers/by-global-id/:globalId
+// Used by POS to resolve QR scan data. Must be registered BEFORE :id.
+// ---------------------------------------------------------------------------
+
+router.get('/v1/customers/by-global-id/:globalId', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const globalId = c.req.param('globalId');
+  const db = createDb(c.env.DATABASE_URL);
+
+  const [customer] = await db
+    .select()
+    .from(customers)
+    .where(
+      and(
+        eq(customers.globalId, globalId),
+        eq(customers.businessId, businessId),
+        isNull(customers.deletedAt),
+      ),
+    )
+    .limit(1);
+
+  if (!customer) {
+    return c.json(
+      { error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' } },
+      404,
+    );
+  }
+
+  // Fetch current balance
+  const [balanceRow] = await db
+    .select({ balance_after: pointsTransactions.balanceAfter })
+    .from(pointsTransactions)
+    .where(eq(pointsTransactions.customerId, customer.id))
+    .orderBy(desc(pointsTransactions.createdAt))
+    .limit(1);
+
+  // Resolve tier
+  let tier: { id: string; name: string; multiplier: number } | null = null;
+  if (customer.currentTierId) {
+    const [tierRow] = await db
+      .select()
+      .from(membershipTiers)
+      .where(eq(membershipTiers.id, customer.currentTierId))
+      .limit(1);
+
+    if (tierRow) {
+      tier = {
+        id: tierRow.id,
+        name: tierRow.name,
+        multiplier: Number(tierRow.multiplier),
+      };
+    }
+  }
+
+  return c.json({
+    data: {
+      id: customer.id,
+      globalId: customer.globalId,
+      fullName: customer.fullName,
+      phone: customer.phone,
+      points: balanceRow?.balance_after ?? 0,
+      currentTier: tier?.name ?? null,
+      tier,
     },
   });
 });

@@ -56,6 +56,15 @@ export interface CustomerEvent {
   createdAt: string;
 }
 
+export interface RecentTransaction {
+  id: string;
+  type: string;
+  points: number;
+  balanceAfter: number;
+  note?: string | null;
+  createdAt: string;
+}
+
 export interface CustomerProfile {
   id: string;
   globalId: string;
@@ -69,6 +78,7 @@ export interface CustomerProfile {
   currentTier: string | null;
   tier?: { id: string; name: string; multiplier: number } | null;
   customer_events?: CustomerEvent[];
+  recent_transactions?: RecentTransaction[];
   createdAt: string;
 }
 
