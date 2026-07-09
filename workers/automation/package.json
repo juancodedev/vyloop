@@ -9,7 +9,12 @@
     "dev": "wrangler dev --port 8792 --inspector-port 0"
   },
   "dependencies": {
-    "@vyloop/types": "workspace:*"
+    "@vyloop/db": "workspace:*",
+    "@vyloop/event-bus": "workspace:*",
+    "@vyloop/schema-registry": "workspace:*",
+    "@vyloop/types": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.28"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260708.1",

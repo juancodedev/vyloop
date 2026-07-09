@@ -1,0 +1,449 @@
+import { createDb, messageLog, whatsappTemplates, customers } from '@vyloop/db';
+import { publish } from '@vyloop/event-bus';
+import { eq, and, desc, count, sql } from 'drizzle-orm';
+import { Hono } from 'hono';
+
+import type { Bindings } from './helpers';
+import { extractAuthHeaders, buildWhatsAppOutboundRequestedEvent, withRls } from './helpers';
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+const router = new Hono<{ Bindings: Bindings }>();
+
+// ============================================================================
+// POST /v1/communication/send
+// ============================================================================
+
+/**
+ * POST /v1/communication/send
+ *
+ * Enqueue a WhatsApp outbound message.
+ * - Validates WhatsApp consent on customer record
+ * - Idempotent via reference_id
+ * - Creates message_log entry with status='queued'
+ * - Publishes WhatsAppOutboundRequested event
+ */
+router.post('/v1/communication/send', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const body = await c.req.json<{
+    customer_id: string;
+    template_name: string;
+    parameters?: Record<string, string>;
+    phone?: string;
+    reference_id?: string;
+  }>();
+
+  if (!body.customer_id || !body.template_name) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'customer_id and template_name are required' } },
+      400,
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // -----------------------------------------------------------------------
+  // Validate customer exists and check consent
+  // -----------------------------------------------------------------------
+  const [customer] = await db
+    .select({ id: customers.id, phone: customers.phone, metadata: customers.metadata })
+    .from(customers)
+    .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
+    .limit(1);
+
+  if (!customer) {
+    return c.json(
+      { error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } },
+      404,
+    );
+  }
+
+  // Check WhatsApp consent via customer metadata
+  const metadata = (customer.metadata ?? {}) as Record<string, unknown>;
+  const consent = (metadata.consent ?? {}) as Record<string, unknown>;
+  if (consent.whatsapp !== true) {
+    return c.json(
+      { error: { code: 'CONSENT_REQUIRED', message: 'Customer has not consented to WhatsApp messaging' } },
+      409,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // Resolve phone number
+  // -----------------------------------------------------------------------
+  const phone = body.phone ?? customer.phone;
+
+  if (!phone) {
+    return c.json(
+      { error: { code: 'PHONE_REQUIRED', message: 'No phone number available for this customer' } },
+      400,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // Idempotency check
+  // -----------------------------------------------------------------------
+  const referenceId = body.reference_id ?? `${body.customer_id}-${body.template_name}-${Date.now()}`;
+
+  const [existing] = await db
+    .select({ id: messageLog.id })
+    .from(messageLog)
+    .where(
+      and(
+        eq(messageLog.businessId, businessId),
+        eq(messageLog.customerId, body.customer_id),
+        // Use content->>'reference_id' as a dedup signal
+        sql`${messageLog.content}->>'reference_id' = ${referenceId}`,
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    return c.json(
+      { error: { code: 'DUPLICATE_MESSAGE', message: 'A message with this reference already exists' } },
+      409,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // Create message_log entry
+  // -----------------------------------------------------------------------
+  const [logEntry] = await db
+    .insert(messageLog)
+    .values({
+      businessId,
+      customerId: body.customer_id,
+      direction: 'outbound',
+      channel: 'whatsapp',
+      status: 'queued',
+      content: {
+        template_name: body.template_name,
+        parameters: body.parameters ?? {},
+        reference_id: referenceId,
+      },
+    })
+    .returning();
+
+  // -----------------------------------------------------------------------
+  // Publish event
+  // -----------------------------------------------------------------------
+  const event = buildWhatsAppOutboundRequestedEvent(
+    body.customer_id,
+    businessId,
+    body.template_name,
+    body.parameters ?? {},
+    logEntry.id,
+    phone,
+  );
+
+  await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+
+  return c.json({ data: logEntry }, 202);
+});
+
+// ============================================================================
+// GET /v1/communication/templates
+// ============================================================================
+
+/**
+ * GET /v1/communication/templates
+ *
+ * List WhatsApp templates for the current business.
+ * Supports ?category= filter and pagination.
+ */
+router.get('/v1/communication/templates', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const category = c.req.query('category');
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10) || 1);
+  const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const conditions: ReturnType<typeof and>[] = [
+    eq(whatsappTemplates.businessId, businessId),
+  ];
+
+  if (category) {
+    conditions.push(eq(whatsappTemplates.category, category));
+  }
+
+  const where = and(...conditions);
+
+  const [totalResult] = await db
+    .select({ total: count() })
+    .from(whatsappTemplates)
+    .where(where);
+
+  const total = Number(totalResult?.total ?? 0);
+
+  const items = await db
+    .select()
+    .from(whatsappTemplates)
+    .where(where)
+    .orderBy(desc(whatsappTemplates.createdAt))
+    .limit(perPage)
+    .offset((page - 1) * perPage);
+
+  return c.json({
+    data: items,
+    meta: { total, page, per_page: perPage },
+  });
+});
+
+// ============================================================================
+// POST /v1/communication/templates
+// ============================================================================
+
+/**
+ * POST /v1/communication/templates
+ *
+ * Create a new WhatsApp template entry.
+ */
+router.post('/v1/communication/templates', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const body = await c.req.json<{
+    name: string;
+    language: string;
+    category: string;
+    body: string;
+  }>();
+
+  if (!body.name || !body.language || !body.category || !body.body) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'name, language, category, and body are required' } },
+      400,
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const [inserted] = await db
+    .insert(whatsappTemplates)
+    .values({
+      businessId,
+      name: body.name,
+      language: body.language,
+      category: body.category,
+      body: body.body,
+    })
+    .returning();
+
+  return c.json({ data: inserted }, 201);
+});
+
+// ============================================================================
+// GET /v1/communication/history
+// ============================================================================
+
+/**
+ * GET /v1/communication/history
+ *
+ * Paginated message log for the current business.
+ * Supports ?customer_id=, ?status= filters.
+ */
+router.get('/v1/communication/history', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const customerId = c.req.query('customer_id');
+  const statusFilter = c.req.query('status');
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10) || 1);
+  const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const conditions: ReturnType<typeof and>[] = [
+    eq(messageLog.businessId, businessId),
+    eq(messageLog.channel, 'whatsapp'),
+  ];
+
+  if (customerId) {
+    conditions.push(eq(messageLog.customerId, customerId));
+  }
+
+  if (statusFilter) {
+    conditions.push(eq(messageLog.status, statusFilter));
+  }
+
+  const where = and(...conditions);
+
+  const [totalResult] = await db
+    .select({ total: count() })
+    .from(messageLog)
+    .where(where);
+
+  const total = Number(totalResult?.total ?? 0);
+
+  const items = await db
+    .select()
+    .from(messageLog)
+    .where(where)
+    .orderBy(desc(messageLog.createdAt))
+    .limit(perPage)
+    .offset((page - 1) * perPage);
+
+  return c.json({
+    data: items,
+    meta: { total, page, per_page: perPage },
+  });
+});
+
+// ============================================================================
+// Webhook: Meta verification (GET)
+// ============================================================================
+
+/**
+ * GET /webhook
+ *
+ * Meta webhook verification endpoint.
+ * Responds to the hub.challenge with the challenge value when
+ * hub.mode=subscribe and hub.verify_token matches WHATSAPP_VERIFY_TOKEN.
+ */
+router.get('/webhook', async (c) => {
+  const mode = c.req.query('hub.mode');
+  const token = c.req.query('hub.verify_token');
+  const challenge = c.req.query('hub.challenge');
+
+  if (mode === 'subscribe' && token === c.env.WHATSAPP_VERIFY_TOKEN) {
+    return new Response(challenge, {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  }
+
+  return c.json(
+    { error: { code: 'VERIFICATION_FAILED', message: 'Verification token mismatch or invalid mode' } },
+    403,
+  );
+});
+
+// ============================================================================
+// Webhook: Meta callbacks (POST)
+// ============================================================================
+
+/**
+ * POST /webhook
+ *
+ * Receive Meta webhook callbacks:
+ * - inbound messages → insert into message_log with direction='inbound'
+ * - status callbacks → update message_log status by provider_message_id
+ *
+ * Always returns 200 OK to acknowledge receipt.
+ */
+router.post('/webhook', async (c) => {
+  const body = await c.req.json<{
+    entry?: Array<{
+      id?: string;
+      changes?: Array<{
+        value?: {
+          messaging_product?: string;
+          metadata?: { phone_number_id?: string };
+          messages?: Array<{
+            from: string;
+            id: string;
+            text?: { body: string };
+            type?: string;
+            timestamp?: string;
+          }>;
+          statuses?: Array<{
+            id: string;
+            status: string;
+            timestamp?: string;
+            recipient_id?: string;
+          }>;
+        };
+      }>;
+    }>;
+  }>();
+
+  const entry = body.entry?.[0];
+  const changes = entry?.changes?.[0];
+  const value = changes?.value;
+
+  if (!value) {
+    return c.json({ status: 'ok' }, 200);
+  }
+
+  // We need to resolve business_id from phone_number_id or similar context.
+  // For now, we store inbound messages without business_id when context is
+  // not available — the gateway auth bypass in PR 3 will resolve this.
+  const phoneNumberId = value.metadata?.phone_number_id;
+
+  const db = createDb(c.env.DATABASE_URL);
+
+  // Process inbound messages
+  if (value.messages) {
+    for (const msg of value.messages) {
+      const customerPhone = msg.from;
+
+      // Look up customer by phone to get customer_id + business_id
+      const [customer] = await db
+        .select({ id: customers.id, businessId: customers.businessId })
+        .from(customers)
+        .where(eq(customers.phone, customerPhone))
+        .limit(1);
+
+      if (!customer) {
+        console.warn(`[communication] Inbound message from unknown phone ${customerPhone} — skipping`);
+        continue;
+      }
+
+      await withRls(db, customer.businessId);
+
+      await db.insert(messageLog).values({
+        businessId: customer.businessId,
+        customerId: customer.id,
+        direction: 'inbound',
+        channel: 'whatsapp',
+        status: 'received',
+        providerMessageId: msg.id,
+        content: {
+          text: msg.text?.body,
+          type: msg.type,
+          from: msg.from,
+          timestamp: msg.timestamp,
+        },
+      });
+    }
+  }
+
+  // Process status callbacks
+  if (value.statuses) {
+    for (const status of value.statuses) {
+      await db
+        .update(messageLog)
+        .set({ status: mapMetaStatus(status.status), metadata: { status_timestamp: status.timestamp } })
+        .where(eq(messageLog.providerMessageId, status.id));
+    }
+  }
+
+  return c.json({ status: 'ok' }, 200);
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Map Meta API status values to our internal message_log status values.
+ */
+function mapMetaStatus(metaStatus: string): string {
+  switch (metaStatus) {
+    case 'sent':
+      return 'sent';
+    case 'delivered':
+      return 'delivered';
+    case 'read':
+      return 'read';
+    case 'failed':
+      return 'failed';
+    default:
+      return metaStatus;
+  }
+}
+
+export default router;
