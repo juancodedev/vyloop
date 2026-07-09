@@ -7,6 +7,8 @@ import {
   pointsTransactions,
   rewards,
   rewardGrants,
+  messageLog,
+  whatsappTemplates,
 } from './schema';
 
 /**
@@ -74,6 +76,24 @@ export const idxRewardGrantsCustomer = index('idx_reward_grants_customer')
   .on(sql`${rewardGrants.customerId}`, sql`${rewardGrants.rewardId}`);
 
 /**
+ * Index: find message_log entries per customer, newest first.
+ */
+export const idxMessageLogCustomer = index('idx_message_log_customer')
+  .on(sql`${messageLog.businessId}`, sql`${messageLog.customerId}`, sql`${messageLog.createdAt} DESC`);
+
+/**
+ * Index: filter message_log entries by status, newest first.
+ */
+export const idxMessageLogStatus = index('idx_message_log_status')
+  .on(sql`${messageLog.businessId}`, sql`${messageLog.status}`, sql`${messageLog.createdAt} DESC`);
+
+/**
+ * Index: look up WhatsApp templates by business and name.
+ */
+export const idxWhatsappTemplatesName = index('idx_whatsapp_templates_name')
+  .on(sql`${whatsappTemplates.businessId}`, sql`${whatsappTemplates.name}`);
+
+/**
  * Convenience array of all indexes for bulk creation / export.
  */
 export const allIndexes = [
@@ -86,4 +106,7 @@ export const allIndexes = [
   idxRewardsCategory,
   idxRewardsAutoGrant,
   idxRewardGrantsCustomer,
+  idxMessageLogCustomer,
+  idxMessageLogStatus,
+  idxWhatsappTemplatesName,
 ];
