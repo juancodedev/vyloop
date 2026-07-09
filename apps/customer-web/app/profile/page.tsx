@@ -69,6 +69,8 @@ export default function ProfilePage() {
   const [animatePoints, setAnimatePoints] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [consentWhatsapp, setConsentWhatsapp] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !customer) {
@@ -85,6 +87,9 @@ export default function ProfilePage() {
       .then((data) => {
         setProfile(data);
         localStorage.setItem(CID_KEY, data.id);
+        const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+        const consent = (metadata.consent ?? {}) as Record<string, unknown>;
+        setConsentWhatsapp(consent.whatsapp === true);
         // Trigger number animation after render
         setTimeout(() => setAnimatePoints(true), 200);
       })
@@ -109,6 +114,22 @@ export default function ProfilePage() {
       // silently fail — QR is non-critical
     }
   }, [profile, qrDataUrl]);
+
+  // ─── Consent toggle ─────────────────────────────────────────────
+
+  const handleConsentToggle = useCallback(async () => {
+    if (!profile) return;
+    const newValue = !consentWhatsapp;
+    setSavingConsent(true);
+    try {
+      await api.updateConsent({ whatsapp: newValue });
+      setConsentWhatsapp(newValue);
+    } catch {
+      // Revert on error
+    } finally {
+      setSavingConsent(false);
+    }
+  }, [profile, consentWhatsapp]);
 
   // Toggle QR section
   const handleQrToggle = useCallback(() => {
@@ -269,6 +290,31 @@ export default function ProfilePage() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* ─── Preferencias de comunicación ─── */}
+      <div className="profile-section">
+        <h2 className="section-title">Preferencias de comunicación</h2>
+        <div className="card card--compact profile-consent-card">
+          <label className="profile-consent-row">
+            <div className="profile-consent-info">
+              <span className="profile-consent-label">Recibir mensajes por WhatsApp</span>
+              <span className="profile-consent-desc">Recibí notificaciones, promociones y alertas por WhatsApp</span>
+            </div>
+            <div className="toggle-wrapper">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={consentWhatsapp}
+                disabled={savingConsent}
+                onClick={handleConsentToggle}
+                className={`toggle ${consentWhatsapp ? 'toggle--on' : ''}`}
+              >
+                <span className="toggle-knob" />
+              </button>
+            </div>
+          </label>
+        </div>
       </div>
 
       {/* ─── Achievement / Tier Progress ─── */}

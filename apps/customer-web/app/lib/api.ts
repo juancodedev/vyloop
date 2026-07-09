@@ -80,6 +80,7 @@ export interface CustomerProfile {
   tier?: { id: string; name: string; multiplier: number } | null;
   customer_events?: CustomerEvent[];
   recent_transactions?: RecentTransaction[];
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -144,6 +145,13 @@ export const api = {
   async getProfile(): Promise<CustomerProfile> {
     const result = await apiFetch('/v1/customers/me') as { data: CustomerProfile };
     return result.data;
+  },
+
+  async updateConsent(consent: { whatsapp: boolean }): Promise<unknown> {
+    return apiFetch('/v1/customers/me/consent', {
+      method: 'PUT',
+      body: JSON.stringify(consent),
+    });
   },
 
   async getTransactions(filters?: {
