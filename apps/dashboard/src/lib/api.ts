@@ -501,7 +501,7 @@ export interface KpiResponse {
 }
 
 export interface TimelineEvent {
-  type: 'customer.created' | 'points.earned' | 'points.redeemed' | 'customer.event';
+  type: 'customer.created' | 'points.earned' | 'points.redeemed' | 'customer.event' | 'customer.profile_viewed';
   customerName: string;
   description: string;
   timestamp: string;

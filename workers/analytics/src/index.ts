@@ -8,7 +8,7 @@ import { HTTPException } from 'hono/http-exception';
 // ---------------------------------------------------------------------------
 
 interface TimelineItem {
-  type: 'customer.created' | 'points.earned' | 'points.redeemed' | 'customer.event';
+  type: 'customer.created' | 'points.earned' | 'points.redeemed' | 'customer.event' | 'customer.profile_viewed';
   customerName: string;
   description: string;
   timestamp: string;
@@ -170,9 +170,15 @@ app.get('/v1/analytics/timeline', async (c) => {
 
       -- Recent customer events
       SELECT
-        'customer.event' AS type,
+        CASE ce.event_type
+          WHEN 'customer.profile_viewed' THEN 'customer.profile_viewed'
+          ELSE 'customer.event'
+        END AS type,
         c.full_name AS customer_name,
-        ce.event_type AS description,
+        CASE ce.event_type
+          WHEN 'customer.profile_viewed' THEN 'Perfil consultado'
+          ELSE ce.event_type
+        END AS description,
         ce.created_at AS timestamp
       FROM customer_events ce
       JOIN customers c ON c.id = ce.customer_id
