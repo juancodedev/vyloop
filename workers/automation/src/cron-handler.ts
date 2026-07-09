@@ -190,7 +190,7 @@ export async function handleInactivityCron(env: Bindings): Promise<void> {
       const actions = (workflow.actions ?? []) as Array<{ type: string; config?: Record<string, unknown> }>;
 
       // Read inactivity threshold from workflow config (default 30 days)
-      const workflowConfig = (workflow.actions?.[0]?.config ?? {}) as Record<string, unknown>;
+      const workflowConfig = (actions[0]?.config ?? {}) as Record<string, unknown>;
       const inactivityDays = (workflowConfig.inactivity_days as number) ?? 30;
 
       // Query customers who haven't visited in N days

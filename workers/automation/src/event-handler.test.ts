@@ -52,7 +52,7 @@ vi.mock('@vyloop/db', () => ({
 
 vi.mock('@vyloop/event-bus', () => ({
   publish: (...args: unknown[]) => mockPublish(...args),
-  createEnvelope: (...args: unknown[]) => mockCreateEnvelope(...args),
+  createEnvelope: (...args: Parameters<typeof mockCreateEnvelope>) => mockCreateEnvelope(...args),
   WHATSAPP_OUTBOUND_REQUESTED: 'WhatsAppOutboundRequested',
   WORKFLOW_TRIGGERED: 'WorkflowTriggered',
 }));
