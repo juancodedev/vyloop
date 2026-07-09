@@ -229,7 +229,7 @@ describe('POST /v1/communication/templates', () => {
 
 describe('GET /v1/communication/history', () => {
   it('returns empty list', async () => {
-    dbMock.select
+    (dbMock.select as any)
       .mockReturnValueOnce(createQueryChain([{ total: 0 }]))
       .mockReturnValueOnce(createQueryChain([]));
 
@@ -239,7 +239,7 @@ describe('GET /v1/communication/history', () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body: any = await res.json();
     expect(body.data).toEqual([]);
   });
 });
@@ -285,7 +285,7 @@ describe('POST /webhook — Meta callbacks', () => {
   });
 
   it('returns 200 on status callback and updates message status', async () => {
-    dbMock.select.mockReturnValue(
+    (dbMock.select as any).mockReturnValue(
       createQueryChain([{ id: 'cust-1', businessId: 'biz-1' }]),
     );
 
@@ -314,7 +314,7 @@ describe('POST /webhook — Meta callbacks', () => {
   });
 
   it('returns 200 on inbound message and inserts it', async () => {
-    dbMock.select.mockReturnValue(
+    (dbMock.select as any).mockReturnValue(
       createQueryChain([{ id: 'cust-1', businessId: 'biz-1' }]),
     );
 
