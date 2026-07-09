@@ -330,9 +330,24 @@ importers:
 
   workers/automation:
     dependencies:
+      '@vyloop/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@vyloop/event-bus':
+        specifier: workspace:*
+        version: link:../../packages/event-bus
+      '@vyloop/schema-registry':
+        specifier: workspace:*
+        version: link:../../packages/schema-registry
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+      hono:
+        specifier: ^4.12.28
+        version: 4.12.28
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260708.1
@@ -346,9 +361,24 @@ importers:
 
   workers/communication:
     dependencies:
+      '@vyloop/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@vyloop/event-bus':
+        specifier: workspace:*
+        version: link:../../packages/event-bus
+      '@vyloop/schema-registry':
+        specifier: workspace:*
+        version: link:../../packages/schema-registry
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+      hono:
+        specifier: ^4.12.28
+        version: 4.12.28
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260708.1

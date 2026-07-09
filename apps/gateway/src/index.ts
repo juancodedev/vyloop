@@ -36,6 +36,13 @@ app.get('/health', (c) => {
 app.route('/', ingestor);
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Webhook paths bypass auth (Meta callbacks don't have X-User-Id etc.) */
+const WEBHOOK_PREFIX = '/v1/communication/webhook';
+
+// ---------------------------------------------------------------------------
 // Middleware chain for /v1/* routes
 // ---------------------------------------------------------------------------
 
@@ -47,6 +54,7 @@ app.use('/v1/*', async (c, next) => {
   // Public routes — no JWT required
   if (
     path.startsWith('/v1/auth/') ||
+    path.startsWith(WEBHOOK_PREFIX) ||
     (method === 'PUT' && path === '/v1/customers')
   ) {
     await next();
@@ -75,6 +83,7 @@ app.use('/v1/*', async (c, next) => {
   // Skip for public routes — no JWT to inject from
   if (
     path.startsWith('/v1/auth/') ||
+    path.startsWith(WEBHOOK_PREFIX) ||
     (method === 'PUT' && path === '/v1/customers')
   ) {
     await next();
@@ -84,12 +93,13 @@ app.use('/v1/*', async (c, next) => {
   return authInjectMiddleware()(c, next);
 });
 
-// Middleware 3: X-Business-ID enforcement — skip /v1/auth/* + registration
+// Middleware 3: X-Business-ID enforcement — skip /v1/auth/* + registration + webhooks
 app.use('/v1/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   const method = c.req.method;
   if (
     path.startsWith('/v1/auth/') ||
+    path.startsWith(WEBHOOK_PREFIX) ||
     (method === 'PUT' && path === '/v1/customers')
   ) {
     await next();
