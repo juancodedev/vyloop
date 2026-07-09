@@ -25,7 +25,7 @@ interface ApiTierRecord {
   displayOrder: number;
 }
 
-async function apiFetch(path: string, options: RequestInit = {}): Promise<unknown> {
+export async function apiFetch(path: string, options: RequestInit = {}): Promise<unknown> {
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
