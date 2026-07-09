@@ -18,7 +18,7 @@ function createQueryChain<T>(resolveValue: T) {
     returning: vi.fn().mockResolvedValue(
       Array.isArray(resolveValue) ? resolveValue : [resolveValue],
     ),
-    then: (onfulfilled: (v: T) => unknown) =>
+    then: (onfulfilled: (v: any) => unknown) =>
       Promise.resolve(resolveValue).then(onfulfilled),
     execute: vi.fn().mockResolvedValue({ rows: [] }),
   };
@@ -185,7 +185,7 @@ describe('GET /v1/communication/templates', () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body: any = await res.json();
     expect(body.data).toEqual([]);
     expect(body.meta.total).toBe(0);
   });
