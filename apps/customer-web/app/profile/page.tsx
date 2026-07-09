@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
 import { useCallback, useEffect, useState } from 'react';
 
-import { api, type CustomerProfile, type CustomerEvent } from '../lib/api';
+import { api, type CustomerProfile } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
 const CID_KEY = 'vyloop_customer_id';
@@ -56,13 +56,6 @@ function getTierProgressMessage(points: number, tierName: string | null): string
   if (needed < 200) return `🔥 ¡Te faltan solo ${needed} pts para llegar a ${cfg.next}!`;
   if (needed < 500) return `💪 Sigue así, te faltan ${needed} pts para alcanzar ${cfg.next}.`;
   return `📈 Acumula ${needed} pts más y llega a ${cfg.next}`;
-}
-
-function getVisitStreak(events: CustomerEvent[]): number {
-  const visits = events.filter(e => e.eventType === 'visit');
-  if (visits.length === 0) return 0;
-  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-  return visits.filter(e => (Date.now() - new Date(e.createdAt).getTime()) < thirtyDays).length;
 }
 
 // ─── Page ────────────────────────────────────────────────────────────
@@ -160,7 +153,7 @@ export default function ProfilePage() {
   const pointsToNext = tierCfg.nextMin > 0 ? Math.max(0, tierCfg.nextMin - p.points) : 0;
   const memberDate = new Date(p.createdAt);
   const memberSince = memberDate.toLocaleDateString('es-CL', { month: 'long', year: 'numeric' });
-  const streak = getVisitStreak(p.customer_events ?? []);
+  const points30 = p.pointsLast30Days ?? 0;
   // Merge and sort events + transactions into a unified timeline
   type TimelineItem = {
     id: string;
@@ -239,7 +232,7 @@ export default function ProfilePage() {
           </div>
           <div className="profile-points-stat">
             <span className="profile-stat-value">
-              {streak > 0 ? `${streak} visitas` : '—'}
+              {points30 > 0 ? `+${points30.toLocaleString('es-CL')} pts` : '—'}
             </span>
             <span className="profile-stat-label">Últimos 30 días</span>
           </div>
