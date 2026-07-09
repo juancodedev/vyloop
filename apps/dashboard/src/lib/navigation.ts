@@ -60,8 +60,7 @@ export const BOTTOM_ITEMS: NavItem[] = [
 /** Check if a nav item matches the current pathname */
 export function isActive(pathname: string, item: NavItem): boolean {
   if (item.isAction) return false;
-  if (item.href === '/dashboard') return pathname === '/dashboard';
-  return pathname.startsWith(item.href);
+  return pathname === item.href;
 }
 
 const PAGE_TITLES: Record<string, string> = {
