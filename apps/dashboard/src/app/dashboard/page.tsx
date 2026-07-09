@@ -146,6 +146,12 @@ export default function DashboardHome() {
         <polyline points="12 6 12 12 16 14" />
       </svg>
     ),
+    'customer.profile_viewed': (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    ),
   };
 
   const timelineColors: Record<string, string> = {
@@ -153,6 +159,7 @@ export default function DashboardHome() {
     'points.earned': '#16a34a',
     'points.redeemed': '#dc2626',
     'customer.event': '#6b7280',
+    'customer.profile_viewed': '#6b7280',
   };
 
   const timelineLabels: Record<string, string> = {
@@ -160,6 +167,7 @@ export default function DashboardHome() {
     'points.earned': 'Puntos ganados',
     'points.redeemed': 'Puntos canjeados',
     'customer.event': 'Evento',
+    'customer.profile_viewed': 'Perfil visto',
   };
 
   return (
