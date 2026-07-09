@@ -189,6 +189,14 @@ export interface CustomerDetail extends Customer {
     points: number | null;
     createdAt: string;
   }>;
+  recent_transactions: Array<{
+    id: string;
+    type: string;
+    points: number;
+    balanceAfter: number;
+    note: string | null;
+    createdAt: string;
+  }>;
   consents: Array<Record<string, unknown>>;
 }
 
@@ -209,13 +217,13 @@ interface ApiRewardRecord {
   id: string;
   name: string;
   description?: string | null;
-  points_cost: number;
+  pointsCost: number;
   category?: string | null;
   stock?: number | null;
-  auto_grant_threshold?: number | null;
-  valid_from?: string | null;
-  valid_until?: string | null;
-  image_url?: string | null;
+  autoGrantThreshold?: number | null;
+  validFrom?: string | null;
+  validUntil?: string | null;
+  imageUrl?: string | null;
 }
 
 export const api = {
@@ -228,18 +236,27 @@ export const api = {
       points: e.points as number | null,
       createdAt: e.createdAt as string,
     }));
+    const transactions = (raw.recent_transactions as Array<Record<string, unknown>> || []).map((t) => ({
+      id: t.id as string,
+      type: t.type as string,
+      points: Number(t.points ?? 0),
+      balanceAfter: Number(t.balanceAfter ?? 0),
+      note: t.note as string | null,
+      createdAt: t.createdAt as string,
+    }));
 
     return Object.assign(
       {
         id: raw.id as string,
         fullName: raw.fullName as string,
         phone: raw.phone as string,
-        points: raw.points as number || 0,
-        totalPointsEarned: raw.totalPointsEarned as number || 0,
+        points: Number(raw.points ?? 0),
+        totalPointsEarned: Number(raw.totalPointsEarned ?? 0),
         currentTier: raw.currentTierId as string || '—',
         currentTierId: raw.currentTierId as string | undefined,
         createdAt: raw.createdAt ? (raw.createdAt as string).split('T')[0] : '—',
         customer_events: events,
+        recent_transactions: transactions,
         consents: raw.consents as Array<Record<string, unknown>> || [],
       },
       raw.email ? { email: raw.email as string } : {},
@@ -462,14 +479,14 @@ function mapReward(r: ApiRewardRecord): Reward {
   return {
     id: r.id,
     name: r.name,
-    pointsCost: r.points_cost,
+    pointsCost: r.pointsCost,
     ...(r.description != null && { description: r.description }),
     ...(r.category != null && { category: r.category }),
     ...(r.stock != null && { stock: r.stock }),
-    ...(r.auto_grant_threshold != null && { autoGrantThreshold: r.auto_grant_threshold }),
-    ...(r.valid_from != null && { validFrom: r.valid_from }),
-    ...(r.valid_until != null && { validUntil: r.valid_until }),
-    ...(r.image_url != null && { imageUrl: r.image_url }),
+    ...(r.autoGrantThreshold != null && { autoGrantThreshold: r.autoGrantThreshold }),
+    ...(r.validFrom != null && { validFrom: r.validFrom }),
+    ...(r.validUntil != null && { validUntil: r.validUntil }),
+    ...(r.imageUrl != null && { imageUrl: r.imageUrl }),
   };
 }
 

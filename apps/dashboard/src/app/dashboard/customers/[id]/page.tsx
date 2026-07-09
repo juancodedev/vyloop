@@ -11,29 +11,17 @@ import { api, type CustomerDetail } from '@/lib/api';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function eventLabel(type: string): string {
-  const map: Record<string, string> = {
-    CUSTOMER_REGISTERED: 'Registro',
-    POINTS_EARNED: 'Puntos ganados',
-    POINTS_REDEEMED: 'Puntos canjeados',
-    TIER_CHANGED: 'Cambio de nivel',
-    VISIT_RECORDED: 'Visita registrada',
-  };
-  return map[type] || type;
-}
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString('es-MX', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
+function formatRelative(time: string): string {
+  const diff = Date.now() - new Date(time).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Ahora';
+  if (mins < 60) return `Hace ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `Hace ${hrs} h`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return 'Ayer';
+  if (days < 7) return `Hace ${days} días`;
+  return `Hace ${Math.floor(days / 7)} sem`;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +160,67 @@ export default function CustomerDetailPage() {
   }
 
   const tierBaseColor = tierColor(tierName);
-  const recentEvents = customer.customer_events.slice(-10).reverse();
+
+  // Build unified timeline: merge events + transactions, sort newest first
+  const HIDDEN_EVENT_TYPES = ['customer.profile_viewed', 'profile_viewed', 'qr_displayed', 'customer.qr_displayed'];
+
+  type TimelineItem = {
+    id: string;
+    kind: 'event' | 'tx';
+    eventType: string;
+    points: number;
+    note: string | null;
+    createdAt: string;
+  };
+
+  const mappedEvents: TimelineItem[] = (customer.customer_events ?? [])
+    .filter((e) => !HIDDEN_EVENT_TYPES.includes(e.eventType))
+    .map((e) => ({
+      id: e.id,
+      kind: 'event' as const,
+      eventType: e.eventType,
+      points: (e.payload?.points ?? 0) as number,
+      note: null,
+      createdAt: e.createdAt,
+    }));
+
+  const mappedTxs: TimelineItem[] = (customer.recent_transactions ?? []).map((t) => ({
+    id: t.id,
+    kind: 'tx' as const,
+    eventType: t.type === 'earn' || t.type === 'earned' ? 'points.earned'
+              : t.type === 'redeem' ? 'points.redeemed' : t.type,
+    points: t.points,
+    note: t.note ?? null,
+    createdAt: t.createdAt,
+  }));
+
+  const timelineItems = [...mappedEvents, ...mappedTxs]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 20);
+
+  function timelineLabel(item: TimelineItem): string {
+    if (item.kind === 'tx' && item.note) return item.note;
+    const labels: Record<string, string> = {
+      'points.earned': 'Puntos ganados',
+      'points.redeemed': 'Puntos canjeados',
+      'customer.registered': 'Registro',
+      'visit': 'Visita al local',
+      'CUSTOMER_REGISTERED': 'Registro',
+      'POINTS_EARNED': 'Puntos ganados',
+      'POINTS_REDEEMED': 'Puntos canjeados',
+      'TIER_CHANGED': 'Cambio de nivel',
+      'VISIT_RECORDED': 'Visita registrada',
+    };
+    return labels[item.eventType] || item.eventType;
+  }
+
+  function timelineColor(type: string): string {
+    if (type === 'points.earned') return '#16a34a';
+    if (type === 'points.redeemed') return '#dc2626';
+    if (type === 'visit') return '#2563eb';
+    if (type === 'customer.registered') return '#7c3aed';
+    return '#6b7280';
+  }
 
   return (
     <>
@@ -242,29 +290,33 @@ export default function CustomerDetailPage() {
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h2 className="card-title">Actividad reciente</h2>
 
-        {recentEvents.length === 0 ? (
+        {timelineItems.length === 0 ? (
           <p className="text-muted" style={{ padding: '1rem 0' }}>
             Sin actividad registrada
           </p>
         ) : (
           <div className="event-timeline">
-            {recentEvents.map((ev, i) => (
-              <div key={ev.id || i} className="event-row">
-                <div className="event-dot" />
-                <div className="event-body">
-                  <span className="event-type">{eventLabel(ev.eventType)}</span>
-                  {ev.points != null && ev.points !== 0 && (
-                    <span
-                      className="event-points"
-                      style={{ color: ev.points > 0 ? '#16a34a' : '#dc2626' }}
-                    >
-                      {ev.points > 0 ? '+' : ''}{ev.points} pts
-                    </span>
-                  )}
-                  <span className="event-date">{formatDate(ev.createdAt)}</span>
+            {timelineItems.map((ev) => {
+              const color = timelineColor(ev.eventType);
+              const isRedeem = ev.eventType === 'points.redeemed';
+              return (
+                <div key={`${ev.kind}-${ev.id}`} className="event-row">
+                  <div className="event-dot" style={{ background: color }} />
+                  <div className="event-body">
+                    <span className="event-type">{timelineLabel(ev)}</span>
+                    {ev.points > 0 && (
+                      <span
+                        className="event-points"
+                        style={{ color: isRedeem ? color : '#16a34a' }}
+                      >
+                        {isRedeem ? '-' : '+'}{ev.points.toLocaleString()} pts
+                      </span>
+                    )}
+                    <span className="event-date">{formatRelative(ev.createdAt)}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

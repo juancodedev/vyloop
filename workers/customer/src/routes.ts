@@ -302,8 +302,8 @@ router.get('/v1/customers/me', async (c) => {
     );
   }
 
-  // Fetch balance, total earned, events, and recent transactions in parallel
-  const [balanceResult, earnedResult, eventsResult, txResult] = await Promise.all([
+  // Fetch balance, total earned, events, recent transactions, and last-30-days points
+  const [balanceResult, earnedResult, eventsResult, txResult, points30Result] = await Promise.all([
     // Latest balance (uses customer.id PK — matches FK on points_transactions)
     db
       .select({ balance_after: pointsTransactions.balanceAfter })
@@ -342,10 +342,22 @@ router.get('/v1/customers/me', async (c) => {
       .where(eq(pointsTransactions.customerId, customer.id))
       .orderBy(desc(pointsTransactions.createdAt))
       .limit(5),
+    // Points earned in last 30 days
+    db
+      .select({ total: sum(pointsTransactions.points) })
+      .from(pointsTransactions)
+      .where(
+        and(
+          eq(pointsTransactions.customerId, customer.id),
+          or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
+          sql`${pointsTransactions.createdAt} >= now() - interval '30 days'`,
+        ),
+      ),
   ]);
 
   const points = balanceResult[0]?.balance_after ?? 0;
   const totalPointsEarned = Number(earnedResult[0]?.total ?? 0);
+  const pointsLast30Days = Number(points30Result[0]?.total ?? 0);
 
   // Resolve tier name if customer has a tier assigned
   let tier: { id: string; name: string; multiplier: number } | null = null;
@@ -400,6 +412,7 @@ router.get('/v1/customers/me', async (c) => {
       birthDate: customer.birthDate,
       points,
       totalPointsEarned,
+      pointsLast30Days,
       currentTierId: customer.currentTierId,
       currentTier: tier?.name ?? null,
       tier,
@@ -487,8 +500,8 @@ router.get('/v1/customers/:id', async (c) => {
   const id = c.req.param('id');
   const db = createDb(c.env.DATABASE_URL);
 
-  // Run customer query + events + consents in parallel
-  const [customerResult, eventsResult, consentsResult] = await Promise.all([
+  // Run customer query + events + consents + points in parallel
+  const [customerResult, eventsResult, consentsResult, balanceResult, earnedResult, txResult] = await Promise.all([
     db
       .select()
       .from(customers)
@@ -500,6 +513,7 @@ router.get('/v1/customers/:id', async (c) => {
         ),
       )
       .limit(1),
+    // Last 20 events, newest first
     db
       .select()
       .from(customerEvents)
@@ -509,7 +523,8 @@ router.get('/v1/customers/:id', async (c) => {
           eq(customerEvents.businessId, businessId),
         ),
       )
-      .orderBy(customerEvents.createdAt),
+      .orderBy(desc(customerEvents.createdAt))
+      .limit(20),
     db
       .select()
       .from(consents)
@@ -519,6 +534,37 @@ router.get('/v1/customers/:id', async (c) => {
           eq(consents.businessId, businessId),
         ),
       ),
+    // Latest balance
+    db
+      .select({ balance_after: pointsTransactions.balanceAfter })
+      .from(pointsTransactions)
+      .where(eq(pointsTransactions.customerId, id))
+      .orderBy(desc(pointsTransactions.createdAt))
+      .limit(1),
+    // Total points earned
+    db
+      .select({ total: sum(pointsTransactions.points) })
+      .from(pointsTransactions)
+      .where(
+        and(
+          eq(pointsTransactions.customerId, id),
+          or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
+        ),
+      ),
+    // Last 5 transactions for activity timeline
+    db
+      .select({
+        id: pointsTransactions.id,
+        type: pointsTransactions.type,
+        points: pointsTransactions.points,
+        balanceAfter: pointsTransactions.balanceAfter,
+        note: pointsTransactions.note,
+        createdAt: pointsTransactions.createdAt,
+      })
+      .from(pointsTransactions)
+      .where(eq(pointsTransactions.customerId, id))
+      .orderBy(desc(pointsTransactions.createdAt))
+      .limit(5),
   ]);
 
   if (customerResult.length === 0) {
@@ -528,9 +574,15 @@ router.get('/v1/customers/:id', async (c) => {
     );
   }
 
+  const points = balanceResult[0]?.balance_after ?? 0;
+  const totalPointsEarned = Number(earnedResult[0]?.total ?? 0);
+
   return c.json({
     ...customerResult[0],
+    points,
+    totalPointsEarned,
     customer_events: eventsResult,
+    recent_transactions: txResult,
     consents: consentsResult,
   });
 });
