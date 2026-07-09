@@ -1,7 +1,7 @@
 import type { Message } from '@cloudflare/workers-types';
 import { createDb, customers, workflows } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
-import { WHATSAPP_OUTBOUND_REQUESTED, WORKFLOW_TRIGGERED, createEnvelope, publish } from '@vyloop/event-bus';
+import { WHATSAPP_OUTBOUND_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { eq, and } from 'drizzle-orm';
 
 import type { Bindings, Condition } from './helpers';
@@ -70,7 +70,7 @@ function buildOutboundPayload(
   customerId: string,
   businessId: string,
   action: { config?: { template_name?: string; parameters?: string[] } },
-  idempotencyKey: string,
+  _idempotencyKey: string,
 ): { template_name: string; parameters: Record<string, string> } | null {
   const templateName = action.config?.template_name;
   if (!templateName) {

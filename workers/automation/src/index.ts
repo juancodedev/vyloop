@@ -4,8 +4,8 @@ import type { EventEnvelope } from '@vyloop/event-bus';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
-import { handleEvent } from './event-handler';
 import { handleBirthdayCron, handleInactivityCron } from './cron-handler';
+import { handleEvent } from './event-handler';
 import type { Bindings } from './helpers';
 import { extractAuthHeaders } from './helpers';
 import router from './routes';
