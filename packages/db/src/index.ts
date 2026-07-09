@@ -30,6 +30,8 @@ export {
   localizationConfigs,
   rewards,
   rewardGrants,
+  messageLog,
+  whatsappTemplates,
 } from './schema';
 
 // Re-export all type exports
@@ -64,6 +66,10 @@ export type {
   NewChurnPrediction,
   LocalizationConfig,
   NewLocalizationConfig,
+  MessageLog,
+  NewMessageLog,
+  WhatsAppTemplate,
+  NewWhatsAppTemplate,
   Reward,
   NewReward,
   RewardGrant,
@@ -90,5 +96,8 @@ export {
   idxRewardsCategory,
   idxRewardsAutoGrant,
   idxRewardGrantsCustomer,
+  idxMessageLogCustomer,
+  idxMessageLogStatus,
+  idxWhatsappTemplatesName,
   allIndexes,
 } from './indexes';

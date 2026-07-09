@@ -188,6 +188,36 @@ export const workflowExecutions = pgTable('workflow_executions', {
 });
 
 // ============================================================================
+// Communication Domain
+// ============================================================================
+
+export const messageLog = pgTable('message_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+  direction: text('direction').notNull(),
+  channel: text('channel').notNull().default('whatsapp'),
+  status: text('status').notNull().default('queued'),
+  providerMessageId: text('provider_message_id'),
+  content: jsonb('content').default({}),
+  metadata: jsonb('metadata').default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const whatsappTemplates = pgTable('whatsapp_templates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  language: text('language').notNull(),
+  category: text('category').notNull(),
+  body: text('body').notNull(),
+  status: text('status').notNull().default('pending'),
+  metaTemplateId: text('meta_template_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+// ============================================================================
 // AI Domain
 // ============================================================================
 
@@ -305,6 +335,12 @@ export type NewChurnPrediction = typeof churnPredictions.$inferInsert;
 
 export type LocalizationConfig = typeof localizationConfigs.$inferSelect;
 export type NewLocalizationConfig = typeof localizationConfigs.$inferInsert;
+
+export type MessageLog = typeof messageLog.$inferSelect;
+export type NewMessageLog = typeof messageLog.$inferInsert;
+
+export type WhatsAppTemplate = typeof whatsappTemplates.$inferSelect;
+export type NewWhatsAppTemplate = typeof whatsappTemplates.$inferInsert;
 
 export type Reward = typeof rewards.$inferSelect;
 export type NewReward = typeof rewards.$inferInsert;
