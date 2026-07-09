@@ -151,46 +151,48 @@ export default function LoyaltyRewardsPage() {
           </div>
         </div>
       ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Nombre</th>
-                <th>Puntos</th>
-                <th>Categoría</th>
-                <th>Stock</th>
-                <th>Auto-grant</th>
-                <th>Vigencia</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rewards.map((reward) => (
-                <tr key={reward.id}>
-                  <td className="fw-500">{reward.name}</td>
-                  <td>{reward.pointsCost.toLocaleString()}</td>
-                  <td>{reward.category || '—'}</td>
-                  <td>{reward.stock !== undefined ? reward.stock.toLocaleString() : '∞'}</td>
-                  <td>{reward.autoGrantThreshold ? `${reward.autoGrantThreshold.toLocaleString()} pts` : '—'}</td>
-                  <td>
-                    {reward.validFrom || reward.validUntil
-                      ? `${formatDate(reward.validFrom)} — ${formatDate(reward.validUntil)}`
-                      : '—'}
-                  </td>
-                  <td>
-                    <div className="flex gap-1">
-                      <button className="btn btn-secondary btn-xs" onClick={() => openEdit(reward)}>
-                        Editar
-                      </button>
-                      <button className="btn btn-danger btn-xs" onClick={() => handleDelete(reward)}>
-                        Eliminar
-                      </button>
-                    </div>
-                  </td>
+        <div className="card">
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Puntos</th>
+                  <th>Categoría</th>
+                  <th>Stock</th>
+                  <th>Auto-grant</th>
+                  <th>Vigencia</th>
+                  <th className="actions">Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rewards.map((reward) => (
+                  <tr key={reward.id}>
+                    <td style={{ fontWeight: 500 }}>{reward.name}</td>
+                    <td>{reward.pointsCost.toLocaleString()}</td>
+                    <td>{reward.category || '—'}</td>
+                    <td>{reward.stock !== undefined ? reward.stock.toLocaleString() : '∞'}</td>
+                    <td>{reward.autoGrantThreshold ? `${reward.autoGrantThreshold.toLocaleString()} pts` : '—'}</td>
+                    <td>
+                      {reward.validFrom || reward.validUntil
+                        ? `${formatDate(reward.validFrom)} — ${formatDate(reward.validUntil)}`
+                        : '—'}
+                    </td>
+                    <td className="actions">
+                      <div className="flex gap-1">
+                        <button className="btn btn-secondary btn-sm" onClick={() => openEdit(reward)}>
+                          Editar
+                        </button>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(reward)}>
+                          Eliminar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
