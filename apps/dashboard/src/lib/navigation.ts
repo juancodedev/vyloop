@@ -7,6 +7,7 @@ import {
   QrCode,
   Settings,
   LogOut,
+  MessageSquare,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -46,6 +47,14 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    title: 'Comunicación',
+    items: [
+      { label: 'Plantillas', href: '/dashboard/communication/templates', icon: MessageSquare },
+      { label: 'Mensajes', href: '/dashboard/communication/messages', icon: MessageSquare },
+      { label: 'Flujos', href: '/dashboard/communication/workflows', icon: MessageSquare },
+    ],
+  },
+  {
     title: 'Cuenta',
     items: [
       { label: 'Configuración', href: '/dashboard/settings', icon: Settings },
@@ -74,6 +83,10 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard/loyalty/customers': 'Puntos de Clientes',
   '/dashboard/qr': 'QR del Negocio',
   '/dashboard/settings': 'Configuración',
+  '/dashboard/communication/templates': 'Plantillas',
+  '/dashboard/communication/messages': 'Mensajes',
+  '/dashboard/communication/workflows': 'Flujos',
+  '/dashboard/communication/send': 'Enviar Mensaje',
 };
 
 /** Resolve a human-readable page title from the current pathname */
