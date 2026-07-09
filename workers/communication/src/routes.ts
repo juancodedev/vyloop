@@ -371,7 +371,6 @@ router.post('/webhook', async (c) => {
   // We need to resolve business_id from phone_number_id or similar context.
   // For now, we store inbound messages without business_id when context is
   // not available — the gateway auth bypass in PR 3 will resolve this.
-  const phoneNumberId = value.metadata?.phone_number_id;
 
   const db = createDb(c.env.DATABASE_URL);
 
