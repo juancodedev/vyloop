@@ -74,6 +74,7 @@ export interface CustomerProfile {
   birthDate?: string;
   points: number;
   totalPointsEarned: number;
+  pointsLast30Days?: number;
   currentTierId?: string;
   currentTier: string | null;
   tier?: { id: string; name: string; multiplier: number } | null;
