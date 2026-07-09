@@ -22,6 +22,8 @@ export const BUSINESS_ID_TABLES = [
   'localization_configs',
   'rewards',
   'reward_grants',
+  'message_log',
+  'whatsapp_templates',
 ] as const;
 
 /**

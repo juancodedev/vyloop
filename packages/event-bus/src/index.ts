@@ -10,6 +10,8 @@ export const REWARD_REDEEMED = 'RewardRedeemed';
 export const REWARD_AUTO_GRANTED = 'RewardAutoGranted';
 export const PROFILE_VIEWED = 'ProfileViewed';
 export const QR_DISPLAYED = 'QRDisplayed';
+export const WHATSAPP_OUTBOUND_REQUESTED = 'WhatsAppOutboundRequested';
+export const WORKFLOW_TRIGGERED = 'WorkflowTriggered';
 
 // ---------------------------------------------------------------------------
 // Event envelope format

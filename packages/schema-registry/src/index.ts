@@ -299,3 +299,70 @@ export const rewardAutoGrantedSchema = {
   },
   additionalProperties: false,
 };
+
+// ---------------------------------------------------------------------------
+// WhatsApp & Automation event schemas
+// ---------------------------------------------------------------------------
+
+/**
+ * JSON Schema v1.0.0 for WhatsAppOutboundRequested events (envelope format).
+ *
+ * Validates the full envelope with header + payload.
+ * Payload: customer_id, business_id, template_name, parameters, idempotency_key.
+ */
+export const whatsappOutboundRequestedSchema = {
+  $id: 'https://schema.vyloop.app/events/WhatsAppOutboundRequested/v1.0.0',
+  type: 'object',
+  title: 'WhatsAppOutboundRequested',
+  description: 'Envelope schema for WhatsAppOutboundRequested events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['customer_id', 'business_id', 'template_name', 'parameters', 'idempotency_key'],
+      properties: {
+        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
+        business_id: { type: 'string', format: 'uuid', description: 'Business scoping identifier' },
+        template_name: { type: 'string', minLength: 1, description: 'Registered Meta template name' },
+        parameters: { type: 'object', description: 'Template variable substitutions', additionalProperties: { type: 'string' } },
+        idempotency_key: { type: 'string', minLength: 1, description: 'Dedup key (workflow_execution.id)' },
+        phone: { type: 'string', description: 'Pre-resolved phone number in E.164 format' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
+/**
+ * JSON Schema v1.0.0 for WorkflowTriggered events (envelope format).
+ *
+ * Validates the full envelope with header + payload.
+ * Payload: workflow_id, customer_id, business_id, action_type, skipped state.
+ */
+export const workflowTriggeredSchema = {
+  $id: 'https://schema.vyloop.app/events/WorkflowTriggered/v1.0.0',
+  type: 'object',
+  title: 'WorkflowTriggered',
+  description: 'Envelope schema for WorkflowTriggered events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['workflow_id', 'customer_id', 'business_id', 'action_type'],
+      properties: {
+        workflow_id: { type: 'string', format: 'uuid', description: 'Workflow identifier' },
+        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
+        business_id: { type: 'string', format: 'uuid', description: 'Business scoping identifier' },
+        action_type: { type: 'string', description: 'Action type that was triggered (e.g. send_whatsapp)' },
+        template_name: { type: 'string', description: 'Template name if action was send_whatsapp' },
+        skipped: { type: 'boolean', description: 'Whether the action was skipped (e.g. due to consent)' },
+        skip_reason: { type: 'string', description: 'Reason the action was skipped' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};

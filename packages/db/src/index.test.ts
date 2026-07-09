@@ -56,7 +56,7 @@ describe('Database schema', () => {
     expect(db.idxCustomerEventsType).toBeDefined();
     expect(db.allIndexes).toBeDefined();
     expect(Array.isArray(db.allIndexes)).toBe(true);
-    expect(db.allIndexes.length).toBe(9);
+    expect(db.allIndexes.length).toBe(12);
   });
 
   it('should export createDb function using @neondatabase/serverless HTTP driver', async () => {
