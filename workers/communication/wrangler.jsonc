@@ -2,5 +2,28 @@
   "name": "communication",
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
-  "compatibility_flags": ["nodejs_compat"]
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {},
+  "kv_namespaces": [
+    {
+      "binding": "SCHEMA_REGISTRY",
+      "id": "732ccde5b0944db082d07667aba8104b"
+    }
+  ],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "vyloop-domain-events",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_concurrency": 1
+      }
+    ],
+    "producers": [
+      {
+        "binding": "DOMAIN_EVENTS_QUEUE",
+        "queue": "vyloop-domain-events"
+      }
+    ]
+  }
 }
