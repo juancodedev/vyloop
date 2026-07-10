@@ -105,7 +105,7 @@ describe('Queue cycle: published event → queue → handler → Meta API → st
     );
 
     // Mock Meta API
-    global.fetch = vi.fn().mockResolvedValue({
+    (globalThis as any).fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ messages: [{ id: 'wamid-abc123' }] }),
     } as Response);
@@ -115,9 +115,9 @@ describe('Queue cycle: published event → queue → handler → Meta API → st
 
     // Verify the full chain
     expect(dbMock.select).toHaveBeenCalled();
-    expect(global.fetch).toHaveBeenCalled();
+    expect((globalThis as any).fetch).toHaveBeenCalled();
 
-    const fetchUrl = vi.mocked(global.fetch).mock.calls[0]?.[0];
+    const fetchUrl = vi.mocked((globalThis as any).fetch).mock.calls[0]?.[0];
     expect(fetchUrl).toContain('graph.facebook.com');
 
     // Verify DB update with status='sent'
@@ -150,7 +150,7 @@ describe('Queue cycle: published event → queue → handler → Meta API → st
       chain([{ id: 'msg-002', status: 'queued', businessId: 'biz-1', metadata: {} }]),
     );
 
-    global.fetch = vi.fn().mockResolvedValue({
+    (globalThis as any).fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
       json: () => Promise.resolve({ error: { code: 429, message: 'Too many requests' } }),

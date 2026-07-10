@@ -107,7 +107,7 @@ async function handleWhatsAppOutboundRequested(
       )
       .limit(1);
 
-    phone = customer?.phone;
+    phone = customer?.phone ?? undefined;
   }
 
   if (!phone) {

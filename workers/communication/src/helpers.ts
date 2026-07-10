@@ -157,7 +157,7 @@ export function parseMetaResponse(
     // Successful send — extract the wamid from the response body
     return {
       ok: true,
-      providerMessageId: undefined, // parsed asynchronously below if needed
+      // providerMessageId is parsed asynchronously below if needed
     };
   }
 
