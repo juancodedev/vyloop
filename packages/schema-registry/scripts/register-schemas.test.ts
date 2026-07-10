@@ -29,6 +29,12 @@ vi.mock('../src/index', () => ({
     type: 'object',
     properties: {},
   },
+  workflowTriggeredSchema: {
+    $id: 'https://schema.vyloop.app/events/WorkflowTriggered/v1.0.0',
+    title: 'WorkflowTriggered',
+    type: 'object',
+    properties: {},
+  },
 }));
 
 const { registerAllSchemas } = await import('./register-schemas');
@@ -85,9 +91,20 @@ describe('registerAllSchemas', () => {
     );
   });
 
-  it('should register all four schemas', async () => {
+  it('should register WorkflowTriggered schema', async () => {
     await registerAllSchemas(kv);
 
-    expect(registerSchemaMock).toHaveBeenCalledTimes(4);
+    expect(registerSchemaMock).toHaveBeenCalledWith(
+      kv,
+      'WorkflowTriggered',
+      expect.objectContaining({ title: 'WorkflowTriggered' }),
+      '1.0.0',
+    );
+  });
+
+  it('should register all five schemas', async () => {
+    await registerAllSchemas(kv);
+
+    expect(registerSchemaMock).toHaveBeenCalledTimes(5);
   });
 });
