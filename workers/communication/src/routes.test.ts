@@ -29,7 +29,7 @@ function createQueryChain<T>(resolveValue: T) {
 // DB Mock — include setCurrentBusinessId used by withRls
 // ---------------------------------------------------------------------------
 
-const dbMock = {
+const dbMock: any = {
   insert: vi.fn(() => createQueryChain({ id: 'mock-id' })),
   select: vi.fn(() => createQueryChain([])),
   update: vi.fn(() => createQueryChain([])),
@@ -125,7 +125,7 @@ describe('POST /v1/communication/send', () => {
     });
 
     expect(res.status).toBe(400);
-    const body = await res.json();
+    const body: any = await res.json();
     expect(body.error.message).toContain('required');
   });
 
@@ -142,7 +142,7 @@ describe('POST /v1/communication/send', () => {
     });
 
     expect(res.status).toBe(409);
-    const body = await res.json();
+    const body: any = await res.json();
     expect(body.error.message).toContain('consent');
   });
 

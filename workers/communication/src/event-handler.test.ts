@@ -98,7 +98,7 @@ describe('handleWhatsAppOutboundRequested', () => {
     );
 
     // Mock successful Meta API response
-    global.fetch = vi.fn().mockResolvedValue({
+    (globalThis as any).fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ messages: [{ id: 'wamid-123' }] }),
     } as Response);
@@ -119,7 +119,7 @@ describe('handleWhatsAppOutboundRequested', () => {
       chain([{ id: 'msg-1', status: 'queued', businessId: 'biz-1', metadata: {} }]),
     );
 
-    global.fetch = vi.fn().mockResolvedValue({
+    (globalThis as any).fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
       json: () => Promise.resolve({ error: { code: 429, message: 'Rate limited' } }),
@@ -137,7 +137,7 @@ describe('handleWhatsAppOutboundRequested', () => {
       chain([{ id: 'msg-1', status: 'queued', businessId: 'biz-1', metadata: {} }]),
     );
 
-    global.fetch = vi.fn().mockResolvedValue({
+    (globalThis as any).fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 400,
       json: () => Promise.resolve({ error: { code: 400, message: 'Invalid template' } }),
@@ -164,7 +164,7 @@ describe('handleWhatsAppOutboundRequested', () => {
 
     // Should NOT have called update or fetch
     expect(dbMock.update).not.toHaveBeenCalled();
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect((globalThis as any).fetch).not.toHaveBeenCalled();
   });
 });
 
