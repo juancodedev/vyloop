@@ -11,14 +11,6 @@
     }
   ],
   "queues": {
-    "consumers": [
-      {
-        "queue": "vyloop-domain-events",
-        "max_batch_size": 5,
-        "max_batch_timeout": 5,
-        "max_concurrency": 1
-      }
-    ],
     "producers": [
       {
         "binding": "DOMAIN_EVENTS_QUEUE",

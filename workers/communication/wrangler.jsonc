@@ -3,7 +3,9 @@
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {},
+  "vars": {
+    "WHATSAPP_API_VERSION": "v21.0"
+  },
   "kv_namespaces": [
     {
       "binding": "SCHEMA_REGISTRY",
@@ -11,14 +13,6 @@
     }
   ],
   "queues": {
-    "consumers": [
-      {
-        "queue": "vyloop-domain-events",
-        "max_batch_size": 5,
-        "max_batch_timeout": 5,
-        "max_concurrency": 1
-      }
-    ],
     "producers": [
       {
         "binding": "DOMAIN_EVENTS_QUEUE",

@@ -87,6 +87,11 @@ jobs:
           if [ "${{ matrix.service }}" = "gateway" ]; then
             ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
           fi
+          if [ "${{ matrix.service }}" = "communication" ]; then
+            ARGS="$ARGS --var WHATSAPP_PHONE_ID:${{ secrets.WHATSAPP_PHONE_ID }}"
+            ARGS="$ARGS --var WHATSAPP_TOKEN:${{ secrets.WHATSAPP_TOKEN }}"
+            ARGS="$ARGS --var WHATSAPP_VERIFY_TOKEN:${{ secrets.WHATSAPP_VERIFY_TOKEN }}"
+          fi
           npx --yes wrangler deploy $ARGS
         working-directory: ${{ matrix.dir }}
         env:
