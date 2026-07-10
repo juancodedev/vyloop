@@ -23,6 +23,12 @@ vi.mock('../src/index', () => ({
     type: 'object',
     properties: {},
   },
+  whatsappOutboundRequestedSchema: {
+    $id: 'https://schema.vyloop.app/events/WhatsAppOutboundRequested/v1.0.0',
+    title: 'WhatsAppOutboundRequested',
+    type: 'object',
+    properties: {},
+  },
 }));
 
 const { registerAllSchemas } = await import('./register-schemas');
@@ -68,9 +74,20 @@ describe('registerAllSchemas', () => {
     );
   });
 
-  it('should register all three schemas', async () => {
+  it('should register WhatsAppOutboundRequested schema', async () => {
     await registerAllSchemas(kv);
 
-    expect(registerSchemaMock).toHaveBeenCalledTimes(3);
+    expect(registerSchemaMock).toHaveBeenCalledWith(
+      kv,
+      'WhatsAppOutboundRequested',
+      expect.objectContaining({ title: 'WhatsAppOutboundRequested' }),
+      '1.0.0',
+    );
+  });
+
+  it('should register all four schemas', async () => {
+    await registerAllSchemas(kv);
+
+    expect(registerSchemaMock).toHaveBeenCalledTimes(4);
   });
 });
