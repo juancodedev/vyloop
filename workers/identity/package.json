@@ -15,7 +15,7 @@
     "@vyloop/types": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.28",
-    "jose": "^6.2.3"
+    "jose": "^6.2.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260708.1",
