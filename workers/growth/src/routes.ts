@@ -131,9 +131,104 @@ router.get('/v1/loyalty/tiers', async (c) => {
 });
 
 /**
+ * The slice of a tier that decides where it sits in the ladder.
+ *
+ * `name` travels with it only so a conflict can be reported in terms the
+ * merchant can act on.
+ */
+export interface TierOrdering {
+  name: string;
+  minPoints: number;
+  displayOrder: number;
+}
+
+export interface TierOrderingConflict {
+  /** The tier that asks for fewer points than the tier it sorts after. */
+  name: string;
+  minPoints: number;
+  displayOrder: number;
+  /** The already-placed tier that the one above contradicts. */
+  conflictsWith: string;
+  conflictingMinPoints: number;
+  conflictingDisplayOrder: number;
+}
+
+/** Stable, specific code. Callers can branch on this without parsing prose. */
+const TIER_ORDERING_CONFLICT = 'TIER_ORDERING_CONFLICT';
+
+/**
+ * Find the first rung that breaks the ladder, or `null` when the ladder holds.
+ *
+ * The ordering here is exactly the one `GET /v1/loyalty/tiers` and the customer
+ * app render by: `(displayOrder ASC, minPoints ASC)`. A ladder is coherent when
+ * `minPoints` is non-decreasing in that order — that is precisely the condition
+ * under which a rung with a lower threshold can still appear after one with a
+ * higher threshold, which is what made the customer pass claim the top level
+ * while listing a reached rung underneath it.
+ *
+ * Non-decreasing, not strictly increasing: two tiers sharing a threshold is a
+ * legitimate alias and leaves the sequence valid. Only a real decrease fails.
+ *
+ * Takes the *whole resulting set*, not the candidate alone, so a single rule
+ * governs both create and update. The caller is responsible for the tenant
+ * scope and for leaving the tier being updated out of `tiers`.
+ */
+export function findTierOrderingConflict(
+  tiers: readonly TierOrdering[],
+): TierOrderingConflict | null {
+  const ordered = tiers
+    .map((tier) => ({
+      ...tier,
+      minPoints: Number(tier.minPoints ?? 0),
+      displayOrder: Number(tier.displayOrder ?? 0),
+    }))
+    .sort((a, b) => a.displayOrder - b.displayOrder || a.minPoints - b.minPoints);
+
+  for (let i = 1; i < ordered.length; i += 1) {
+    const previous = ordered[i - 1];
+    const current = ordered[i];
+
+    if (current.minPoints < previous.minPoints) {
+      return {
+        name: current.name,
+        minPoints: current.minPoints,
+        displayOrder: current.displayOrder,
+        conflictsWith: previous.name,
+        conflictingMinPoints: previous.minPoints,
+        conflictingDisplayOrder: previous.displayOrder,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Turn a conflict into a sentence the caller can act on: which tier, which
+ * number, and the one it collides with.
+ *
+ * Only ever names tiers from the tenant's own set — the comparison is scoped
+ * before it reaches here, so this cannot surface another tenant's data.
+ */
+function describeTierOrderingConflict(conflict: TierOrderingConflict): string {
+  return (
+    `Tier "${conflict.name}" asks for ${conflict.minPoints} points at display_order ` +
+    `${conflict.displayOrder}, so it sorts after "${conflict.conflictsWith}" ` +
+    `(${conflict.conflictingMinPoints} points, display_order ${conflict.conflictingDisplayOrder}) ` +
+    `while requiring fewer points. Tiers ordered by (display_order, min_points) must never ` +
+    `decrease in min_points. Raise "${conflict.name}" to at least ` +
+    `${conflict.conflictingMinPoints} points, or move it earlier in display_order.`
+  );
+}
+
+/**
  * POST /v1/loyalty/tiers
  *
  * Create a new membership tier.
+ *
+ * The tenant's ladder must stay coherent: the new tier is placed into the
+ * existing ones and the whole set is checked, so a rung cannot be written that
+ * asks for fewer points than the rung displayed before it.
  */
 router.post('/v1/loyalty/tiers', async (c) => {
   const { businessId } = extractAuthHeaders(c);
@@ -169,6 +264,30 @@ router.post('/v1/loyalty/tiers', async (c) => {
     );
   }
 
+  // Tenant-scoped: only this business's tiers are ever compared. The candidate
+  // is folded into that set and the whole set is validated, so the check is
+  // identical to the one PUT runs.
+  const existingTiers = await db
+    .select()
+    .from(membershipTiers)
+    .where(eq(membershipTiers.businessId, businessId));
+
+  const conflict = findTierOrderingConflict([
+    ...existingTiers,
+    {
+      name: body.name,
+      minPoints: body.min_points,
+      displayOrder: body.display_order ?? 0,
+    },
+  ]);
+
+  if (conflict) {
+    return c.json(
+      { error: { code: TIER_ORDERING_CONFLICT, message: describeTierOrderingConflict(conflict) } },
+      400,
+    );
+  }
+
   const [inserted] = await db
     .insert(membershipTiers)
     .values({
@@ -189,6 +308,10 @@ router.post('/v1/loyalty/tiers', async (c) => {
  * PUT /v1/loyalty/tiers/:id
  *
  * Update an existing membership tier.
+ *
+ * The tenant's ladder must stay coherent. The candidate is the merged result —
+ * the body overlaid on the stored tier — not the raw request, so a change to
+ * `min_points` is judged against the value that will actually be written.
  */
 router.put('/v1/loyalty/tiers/:id', async (c) => {
   const { businessId } = extractAuthHeaders(c);
@@ -227,6 +350,29 @@ router.put('/v1/loyalty/tiers/:id', async (c) => {
 
   if (Object.keys(updateData).length === 0) {
     return c.json({ data: existing });
+  }
+
+  // Tenant-scoped, and the tier being updated is excluded: leaving it in would
+  // make a name-only PUT collide with its own threshold and fail.
+  const siblingTiers = await db
+    .select()
+    .from(membershipTiers)
+    .where(eq(membershipTiers.businessId, businessId));
+
+  const conflict = findTierOrderingConflict([
+    ...siblingTiers.filter((tier) => tier.id !== existing.id),
+    {
+      name: body.name ?? existing.name,
+      minPoints: body.min_points ?? existing.minPoints,
+      displayOrder: body.display_order ?? existing.displayOrder,
+    },
+  ]);
+
+  if (conflict) {
+    return c.json(
+      { error: { code: TIER_ORDERING_CONFLICT, message: describeTierOrderingConflict(conflict) } },
+      400,
+    );
   }
 
   const [updated] = await db
