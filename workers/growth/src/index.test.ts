@@ -2,12 +2,26 @@
 // Module-level mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@vyloop/db', () => {
+vi.mock('@vyloop/db', async () => {
+  // `membershipTiers` gets a real pgTable so the predicates the routes build
+  // compile to SQL a test can read. A flat `{}` would render an opaque chunk
+  // and the tenant scope would be unobservable — the mock would accept a
+  // cross-tenant comparison as happily as a correct one.
+  const { pgTable, uuid, integer, numeric, text } = await import('drizzle-orm/pg-core');
+  const tierTable = pgTable('membership_tiers', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    programId: uuid('program_id').notNull(),
+    name: text('name').notNull(),
+    minPoints: integer('min_points').notNull(),
+    multiplier: numeric('multiplier').notNull(),
+    displayOrder: integer('display_order').notNull(),
+  });
   const table = {};
   return {
     createDb: vi.fn(),
     loyaltyPrograms: table,
-    membershipTiers: table,
+    membershipTiers: tierTable,
     customers: table,
     rewards: table,
     rewardGrants: table,
@@ -40,6 +54,7 @@ vi.mock('@vyloop/event-bus', () => ({
 
 import { createDb } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import app from './index';
@@ -318,6 +333,371 @@ describe('Growth Worker', () => {
       expect(res.status).toBe(404);
       const json = await res.json() as Record<string, Record<string, unknown>>;
       expect(json.error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  // ==========================================================================
+  // Tier ladder coherence
+  //
+  // Ordered by (displayOrder ASC, minPoints ASC) — the same order
+  // `GET /v1/loyalty/tiers` and the customer app render — a tenant's minPoints
+  // must be non-decreasing. A rung that asks for fewer points than the rung
+  // displayed before it is the `barro` defect: the customer pass announces the
+  // highest level and then lists a reached rung underneath that claim.
+  // ==========================================================================
+
+  const dialect = new PgDialect();
+
+  /**
+   * A ladder read that behaves like the real tenant-scoped query.
+   *
+   * The predicate the route hands drizzle is compiled to SQL, and only the rows
+   * that predicate admits are returned. Drop the `business_id` filter from the
+   * query and the filter disappears with it, foreign rows leak in, and a
+   * coherent ladder reads as broken. Without this the mock would ignore the
+   * predicate and the tenant scope could not be tested at all.
+   */
+  function tenantScopedTiers(rows: Array<Record<string, unknown>>) {
+    let admitted = rows;
+    const predicates: Array<{ sql: string; params: unknown[] }> = [];
+
+    const builder: Record<string, unknown> = {};
+    builder.from = vi.fn(() => builder);
+    builder.orderBy = vi.fn(() => builder);
+    builder.limit = vi.fn(() => builder);
+    builder.where = vi.fn((clause: unknown) => {
+      if (clause === undefined) return builder;
+      const query = dialect.sqlToQuery(clause as never);
+      predicates.push(query);
+      const businessId = query.params[0];
+      admitted = rows.filter((row) => row.businessId === businessId);
+      return builder;
+    });
+    builder.then = (
+      onFulfilled?: (value: unknown) => unknown,
+      onRejected?: (reason: unknown) => unknown,
+    ) => Promise.resolve(admitted).then(onFulfilled, onRejected);
+    builder.catch = (onRejected?: (reason: unknown) => unknown) =>
+      Promise.resolve(admitted).catch(onRejected);
+    builder.finally = (onFinally?: () => void) => Promise.resolve(admitted).finally(onFinally);
+
+    return Object.assign(builder, { predicates });
+  }
+
+  /** The dev tenant's ladder, exactly as it stood before the bad row. */
+  const DEV_TENANT = 'biz-1';
+  const devTenantLadder = [
+    { id: 'tier-bronce', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+    { id: 'tier-plata', businessId: DEV_TENANT, name: 'Plata', minPoints: 1000, displayOrder: 2 },
+    { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+  ];
+
+  describe('POST /v1/loyalty/tiers — ladder coherence', () => {
+    /** program lookup, then the ladder read. */
+    function mockProgramThenLadder(ladder: unknown) {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'prog-1', name: 'Loyalty Program' }]));
+      mockDb.select.mockReturnValueOnce(ladder as never);
+    }
+
+    it('rejects a tier whose minPoints is below an existing tier with a lower displayOrder (the barro case)', async () => {
+      mockProgramThenLadder(tenantScopedTiers(devTenantLadder));
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'barro',
+        min_points: 1,
+        multiplier: 1.0,
+        display_order: 4,
+      });
+
+      expect(res.status).toBe(400);
+      const json = await res.json() as Record<string, Record<string, string>>;
+      expect(json.error.code).toBe('TIER_ORDERING_CONFLICT');
+      // Names both the offending tier and the tier it contradicts, with the
+      // numbers — not a bare "invalid input" the caller cannot act on.
+      expect(json.error.message).toContain('"barro"');
+      expect(json.error.message).toContain('"Oro"');
+      expect(json.error.message).toContain('1 points');
+      expect(json.error.message).toContain('3000 points');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('accepts a normal tier that keeps the sequence non-decreasing', async () => {
+      mockProgramThenLadder(tenantScopedTiers(devTenantLadder));
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-diamante', name: 'Diamante', minPoints: 9000, displayOrder: 4 }]),
+      );
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'Diamante',
+        min_points: 9000,
+        multiplier: 3.0,
+        display_order: 4,
+      });
+
+      expect(res.status).toBe(201);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.name).toBe('Diamante');
+      expect(mockDb.insert).toHaveBeenCalledOnce();
+    });
+
+    it('accepts two tiers sharing the same displayOrder and the same minPoints', async () => {
+      // A shared threshold is a legitimate alias. Strictly-increasing would
+      // over-constrain here and is exactly the mistake to avoid.
+      mockProgramThenLadder(
+        tenantScopedTiers([
+          { id: 'tier-a', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-b', businessId: DEV_TENANT, name: 'Bronce Promo', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-c', businessId: DEV_TENANT, name: 'Plata', minPoints: 1000, displayOrder: 2 },
+        ]),
+      );
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-c', name: 'Plata', minPoints: 1000, displayOrder: 2 }]),
+      );
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'Plata',
+        min_points: 1000,
+        multiplier: 1.5,
+        display_order: 2,
+      });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('accepts a tier that shares displayOrder with an existing tier but asks for fewer points', async () => {
+      // minPoints ASC is the tie-break inside a shared displayOrder. Without it
+      // the 100-point tier lands after the 5000-point one and the ladder looks
+      // broken when it is not.
+      mockProgramThenLadder(
+        tenantScopedTiers([
+          { id: 'tier-a', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-b', businessId: DEV_TENANT, name: 'Oro', minPoints: 5000, displayOrder: 2 },
+        ]),
+      );
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-c', name: 'Plata', minPoints: 100, displayOrder: 2 }]),
+      );
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'Plata',
+        min_points: 100,
+        multiplier: 1.5,
+        display_order: 2,
+      });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('rejects when the ladder is already incoherent, not just when the new tier is the offender', async () => {
+      // `barro` already in place: a new top rung is innocent, but the resulting
+      // set still decreases. A check that only looks at the candidate's
+      // immediate predecessor would wave this through.
+      mockProgramThenLadder(
+        tenantScopedTiers([
+          ...devTenantLadder,
+          { id: 'tier-barro', businessId: DEV_TENANT, name: 'barro', minPoints: 1, displayOrder: 4 },
+        ]),
+      );
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'Diamante',
+        min_points: 9000,
+        multiplier: 3.0,
+        display_order: 5,
+      });
+
+      expect(res.status).toBe(400);
+      const json = await res.json() as Record<string, Record<string, string>>;
+      expect(json.error.code).toBe('TIER_ORDERING_CONFLICT');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('does not compare against another tenant\'s tiers', async () => {
+      // The foreign ladder is incoherent on its own. Scoped correctly, only
+      // this business's single rung is visible, so 100/2 is a valid first rung.
+      const ladder = tenantScopedTiers([
+        { id: 'mine', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+        { id: 'theirs-oro', businessId: 'biz-other', name: 'Oro', minPoints: 3000, displayOrder: 2 },
+        { id: 'theirs-barro', businessId: 'biz-other', name: 'barro', minPoints: 1, displayOrder: 3 },
+      ]);
+      mockProgramThenLadder(ladder);
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-plata', name: 'Plata', minPoints: 100, displayOrder: 2 }]),
+      );
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'Plata',
+        min_points: 100,
+        multiplier: 1.5,
+        display_order: 2,
+      });
+
+      expect(res.status).toBe(201);
+      // The read really was filtered, and by this business's own id.
+      expect(ladder.predicates).toHaveLength(1);
+      expect(ladder.predicates[0].sql).toContain('business_id');
+      expect(ladder.predicates[0].params).toEqual([DEV_TENANT]);
+    });
+
+    it('never names another tenant\'s tier in the rejection message', async () => {
+      const ladder = tenantScopedTiers([
+        ...devTenantLadder,
+        { id: 'theirs', businessId: 'biz-other', name: 'Whisper', minPoints: 1, displayOrder: 9 },
+      ]);
+      mockProgramThenLadder(ladder);
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'barro',
+        min_points: 1,
+        multiplier: 1.0,
+        display_order: 4,
+      });
+
+      expect(res.status).toBe(400);
+      const json = await res.json() as Record<string, Record<string, string>>;
+      expect(json.error.message).toContain('"Oro"');
+      expect(json.error.message).not.toContain('Whisper');
+    });
+  });
+
+  describe('PUT /v1/loyalty/tiers/:id — ladder coherence', () => {
+    /** the tier lookup, then the ladder read. */
+    function mockTierThenLadder(existing: unknown, ladder: unknown) {
+      mockDb.select.mockReturnValueOnce(createBuilder([existing]));
+      mockDb.select.mockReturnValueOnce(ladder as never);
+    }
+
+    it('rejects a change that would break the invariant', async () => {
+      mockTierThenLadder(
+        { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+        tenantScopedTiers([
+          { id: 'tier-bronce', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-plata', businessId: DEV_TENANT, name: 'Plata', minPoints: 1000, displayOrder: 2 },
+          { id: 'tier-diamante', businessId: DEV_TENANT, name: 'Diamante', minPoints: 9000, displayOrder: 4 },
+        ]),
+      );
+
+      const res = await PUT('/v1/loyalty/tiers/tier-oro', { min_points: 12000 });
+
+      expect(res.status).toBe(400);
+      const json = await res.json() as Record<string, Record<string, string>>;
+      expect(json.error.code).toBe('TIER_ORDERING_CONFLICT');
+      expect(json.error.message).toContain('"Oro"');
+      expect(json.error.message).toContain('"Diamante"');
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('accepts a name-only change', async () => {
+      // A rename that touches no threshold must go through, even though another
+      // tier in the ladder shares this one's exact threshold.
+      mockTierThenLadder(
+        { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+        tenantScopedTiers([
+          { id: 'tier-bronce', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-oro-legacy', businessId: DEV_TENANT, name: 'Oro Legacy', minPoints: 3000, displayOrder: 2 },
+        ]),
+      );
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-oro', name: 'Oro', minPoints: 3000, displayOrder: 3 }]),
+      );
+
+      const res = await PUT('/v1/loyalty/tiers/tier-oro', { name: 'Oro' });
+
+      expect(res.status).toBe(200);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.id).toBe('tier-oro');
+      expect(mockDb.update).toHaveBeenCalledOnce();
+    });
+
+    it('accepts a tier moved earlier in display_order, so it is not compared against its own stored row', async () => {
+      // Moving Oro to display_order 1 leaves the merged set coherent:
+      // Bronce 0/1, Oro 3000/1, Diamante 9000/2. If the tier being updated stayed
+      // in the comparison set at its stored position (3000/3), Diamante's 9000
+      // would follow a 3000 and the ladder would read as broken.
+      mockTierThenLadder(
+        { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+        tenantScopedTiers([
+          { id: 'tier-bronce', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-diamante', businessId: DEV_TENANT, name: 'Diamante', minPoints: 9000, displayOrder: 2 },
+          // this row IS the tier being updated, at its stored position
+          { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+        ]),
+      );
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-oro', name: 'Oro', minPoints: 3000, displayOrder: 1 }]),
+      );
+
+      const res = await PUT('/v1/loyalty/tiers/tier-oro', { display_order: 1 });
+
+      expect(res.status).toBe(200);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.displayOrder).toBe(1);
+    });
+
+    it('evaluates the merged result: raising min_points in step with display_order is accepted', async () => {
+      // 12000 alone would break the ladder. Moving to display_order 5 makes the
+      // stored result coherent, so judging the body without the stored
+      // display_order would wrongly refuse the write.
+      mockTierThenLadder(
+        { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+        tenantScopedTiers([
+          { id: 'tier-bronce', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-plata', businessId: DEV_TENANT, name: 'Plata', minPoints: 1000, displayOrder: 2 },
+          { id: 'tier-diamante', businessId: DEV_TENANT, name: 'Diamante', minPoints: 9000, displayOrder: 4 },
+        ]),
+      );
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-oro', name: 'Oro', minPoints: 12000, displayOrder: 5 }]),
+      );
+
+      const res = await PUT('/v1/loyalty/tiers/tier-oro', {
+        min_points: 12000,
+        display_order: 5,
+      });
+
+      expect(res.status).toBe(200);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.minPoints).toBe(12000);
+      expect(json.data.displayOrder).toBe(5);
+    });
+
+    it('evaluates the merged result: lowering min_points without lowering display_order is rejected', async () => {
+      // The stored display_order is what stays put, so Diamante still sorts
+      // after Oro and the merged sequence 0 / 1000 / 3000 / 500 decreases.
+      mockTierThenLadder(
+        { id: 'tier-diamante', businessId: DEV_TENANT, name: 'Diamante', minPoints: 9000, displayOrder: 4 },
+        tenantScopedTiers([
+          { id: 'tier-bronce', businessId: DEV_TENANT, name: 'Bronce', minPoints: 0, displayOrder: 1 },
+          { id: 'tier-plata', businessId: DEV_TENANT, name: 'Plata', minPoints: 1000, displayOrder: 2 },
+          { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+        ]),
+      );
+
+      const res = await PUT('/v1/loyalty/tiers/tier-diamante', { min_points: 500 });
+
+      expect(res.status).toBe(400);
+      const json = await res.json() as Record<string, Record<string, string>>;
+      expect(json.error.code).toBe('TIER_ORDERING_CONFLICT');
+      expect(json.error.message).toContain('"Diamante"');
+      expect(json.error.message).toContain('"Oro"');
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('reads the ladder under this tenant\'s own id', async () => {
+      const ladder = tenantScopedTiers(devTenantLadder);
+      mockTierThenLadder(
+        { id: 'tier-oro', businessId: DEV_TENANT, name: 'Oro', minPoints: 3000, displayOrder: 3 },
+        ladder,
+      );
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-oro', name: 'Oro', minPoints: 3000, displayOrder: 3 }]),
+      );
+
+      await PUT('/v1/loyalty/tiers/tier-oro', { name: 'Oro' });
+
+      expect(ladder.predicates).toHaveLength(1);
+      expect(ladder.predicates[0].sql).toContain('business_id');
+      expect(ladder.predicates[0].params).toEqual([DEV_TENANT]);
     });
   });
 
