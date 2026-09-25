@@ -2275,11 +2275,11 @@ a {
 /* ========================================
    Stage 4 — Club Barrio Pass
    ========================================
-   Depth comes from the Stage 0 token layer only: --club-surface over
-   --club-paper, a --club-line hairline, --club-radius for corners and
-   --club-shadow-quiet for the single raised surface. No new elevation scale is
-   introduced here, because the pass is the same kind of object as the login
-   and register cards — one quiet shadow, not a stack of them.
+   Depth follows the convention the Stage 1-3 sections already set: --club-surface
+   over --club-paper, a --club-line hairline, --club-radius for corners, and
+   --club-shadow-quiet as the only raised surface. No new elevation scale is
+   introduced here, because the pass is the same kind of object as the login,
+   register and entry cards — one quiet shadow, not a stack of them.
    ======================================== */
 
 .club-pass-shell {
@@ -2428,6 +2428,12 @@ a {
 
 .club-ladder__gap--top {
   color: var(--club-ink);
+}
+
+/* No milestone is claimed in this state, so it keeps the quiet weight rather
+   than inheriting the emphasis of a real achievement. */
+.club-ladder__gap--unresolved {
+  color: var(--club-ink-soft);
 }
 
 .club-ladder__rungs {

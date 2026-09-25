@@ -58,6 +58,12 @@ vi.mock('qrcode', () => ({
 
 const GLOBAL_ID = '3f8a1c2e-7b4d-4e91-a6c5-0d2b9e8f1a37';
 
+/** Copy shown when no milestone can honestly be claimed. */
+const UNRESOLVED_COPY = 'No vemos un nivel siguiente en tu programa por ahora.';
+
+/** The milestone copy, referenced negatively by the incoherence tests. */
+const TOP_COPY = /Llegaste al nivel m[áa]s alto/;
+
 const TIERS = [
   { id: 'tier-bronce', name: 'Bronce', minPoints: 0, multiplier: 1, displayOrder: 1 },
   { id: 'tier-plata', name: 'Plata', minPoints: 500, multiplier: 1.5, displayOrder: 2 },
@@ -96,6 +102,22 @@ function makeProfile(overrides: ProfileOverrides = {}) {
 
 function ladder(): HTMLElement {
   return screen.getByRole('list', { name: 'Niveles del programa' });
+}
+
+function rungNames(): (string | null | undefined)[] {
+  return within(ladder())
+    .getAllByRole('listitem')
+    .map((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent);
+}
+
+function rungNamed(name: string): HTMLElement {
+  const match = within(ladder())
+    .getAllByRole('listitem')
+    .find((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent === name);
+
+  if (!match) throw new Error(`No rung named "${name}" was rendered. Saw: ${rungNames().join(', ')}`);
+
+  return match;
 }
 
 function balanceText(): string {
@@ -187,28 +209,33 @@ describe('profile pass behavior', () => {
     expect(gapText()).toBe('Te faltan 800 estampitas para llegar a Oro');
   });
 
-  it('does not re-derive next tier: a balance past the top tier keeps the server null', async () => {
-    // 2500 points is above every threshold, so the server returned null. A
-    // client that scanned `tiers` for the first tier above the balance would
-    // find none too — this proves the message keys off the field, and the
-    // case below proves it for a balance that is NOT past the top.
-    mocks.getProfile.mockResolvedValue(makeProfile({ points: 2500, nextTier: null }));
+  it('keeps the top-of-programme copy for a customer genuinely on the last rung', async () => {
+    // 2500 points is above every threshold (Oro is 2000) AND the assigned tier
+    // is Oro, the last rung. Both halves agree, so the milestone is earned and
+    // must survive the guard that exists for merchants who mis-order tiers.
+    mocks.getProfile.mockResolvedValue(
+      makeProfile({ points: 2500, currentTierId: 'tier-oro', currentTier: 'Oro', nextTier: null }),
+    );
 
     await renderPage();
 
     expect(gapText()).toBe('Llegaste al nivel más alto de Club del Barrio.');
+    expect(screen.queryByText(UNRESOLVED_COPY)).toBeNull();
   });
 
-  it('claims no distance when the server says there is no next tier, even mid-ladder', async () => {
-    // Below the middle threshold, but the server explicitly returned null.
-    // The component must report the server's answer, not second-guess it.
+  it('does not re-derive next tier: a null from the server produces no invented gap', async () => {
+    // Below the middle threshold and the server explicitly returned null. The
+    // component must report that answer and not scan `tiers` for a target of
+    // its own — a client-side re-derivation would find Plata here and print a
+    // distance the server never claimed.
     mocks.getProfile.mockResolvedValue(
       makeProfile({ points: 10, currentTierId: 'tier-bronce', currentTier: 'Bronce', nextTier: null }),
     );
 
     await renderPage();
 
-    expect(gapText()).toBe('Llegaste al nivel más alto de Club del Barrio.');
+    expect(gapText()).not.toContain('Te faltan');
+    expect(gapText()).toBe(UNRESOLVED_COPY);
   });
 
   // ─── Signature element: the ladder of the tenant own tiers ─────────────
@@ -249,6 +276,81 @@ describe('profile pass behavior', () => {
       .map((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent);
     expect(names).toEqual(['Vecino', 'Habitual']);
     expect(screen.queryByText('Bronce')).toBeNull();
+  });
+
+  // ─── Coherence: never claim a milestone the ladder contradicts ─────────
+
+  it('refuses the top-of-programme claim when a rung sits above the current one', async () => {
+    // The state reported from the running app. The tenant has a junk tier:
+    // `barro` is ordered last (displayOrder 4) but its threshold is 1, below
+    // this customer's balance. The server correctly returned nextTier: null
+    // because no tier threshold sits above 96942 — and the customer is on Oro,
+    // which is NOT the last rung. The old code read the null alone and
+    // printed a milestone directly above a ladder that disproved it.
+    const incoherentTiers = [
+      { id: 'tier-bronce', name: 'Bronce', minPoints: 0, multiplier: 1, displayOrder: 1 },
+      { id: 'tier-plata', name: 'Plata', minPoints: 1000, multiplier: 1.5, displayOrder: 2 },
+      { id: 'tier-oro', name: 'Oro', minPoints: 3000, multiplier: 2, displayOrder: 3 },
+      { id: 'tier-barro', name: 'barro', minPoints: 1, multiplier: 1, displayOrder: 4 },
+    ];
+
+    mocks.getProfile.mockResolvedValue(
+      makeProfile({
+        points: 96942,
+        tiers: incoherentTiers,
+        currentTierId: 'tier-oro',
+        currentTier: 'Oro',
+        nextTier: null,
+      }),
+    );
+
+    await renderPage();
+
+    // No milestone. This is the whole point of the change.
+    expect(screen.queryByText(TOP_COPY)).toBeNull();
+    expect(gapText()).toBe(UNRESOLVED_COPY);
+
+    // The junk tier is still shown, so a merchant can see what is wrong.
+    expect(rungNames()).toEqual(['Bronce', 'Plata', 'Oro', 'barro']);
+    expect(within(rungNamed('barro')).getByText('Alcanzado')).toBeTruthy();
+    expect(rungNamed('Oro').getAttribute('aria-current')).toBe('true');
+    // And the reached marking stays truthful: 1 <= 96942.
+    expect(within(rungNamed('Bronce')).getByText('Alcanzado')).toBeTruthy();
+  });
+
+  it('withholds the milestone when the assigned tier is not the last rung but the balance is past the top', async () => {
+    // Also real: a stale assignment. 2500 points clears every threshold, but
+    // the stored tier is Plata, with Oro still listed above. Nothing on screen
+    // may say the customer is at the top while Oro sits above them.
+    mocks.getProfile.mockResolvedValue(
+      makeProfile({ points: 2500, currentTierId: 'tier-plata', currentTier: 'Plata', nextTier: null }),
+    );
+
+    await renderPage();
+
+    expect(screen.queryByText(TOP_COPY)).toBeNull();
+    expect(gapText()).toBe(UNRESOLVED_COPY);
+    expect(within(rungNamed('Oro')).getByText('Alcanzado')).toBeTruthy();
+  });
+
+  it('withholds the milestone when the customer has no assigned tier at all', async () => {
+    // No currentTierId and no nextTier: there is no position to celebrate, and
+    // the page must not imply a level the customer was never given.
+    mocks.getProfile.mockResolvedValue(
+      makeProfile({
+        points: 5000,
+        currentTierId: undefined,
+        currentTier: null,
+        tier: null,
+        nextTier: null,
+      }),
+    );
+
+    await renderPage();
+
+    expect(screen.queryByText(TOP_COPY)).toBeNull();
+    expect(gapText()).toBe(UNRESOLVED_COPY);
+    expect(screen.queryByText(/^Nivel /)).toBeNull();
   });
 
   // ─── Honest empty states ──────────────────────────────────────────────
