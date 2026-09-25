@@ -1,26 +1,37 @@
 'use client';
 
-import { Clock, Gift, ChevronDown, ChevronUp, QrCode, Sparkles } from 'lucide-react';
+import { Clock, Gift } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import QRCode from 'qrcode';
 import { useCallback, useEffect, useState } from 'react';
 
+import { ClubShell } from '../components/club-shell';
+import { ClubError, ClubStatus } from '../components/club-status';
+import { ConsentList } from '../components/consent-list';
+import { ActivitySkeleton, MemberPass } from '../components/member-pass';
+import { MemberQr } from '../components/member-qr';
 import { api, type CustomerProfile } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
 const CID_KEY = 'vyloop_customer_id';
 
-// ─── Tier configuration ──────────────────────────────────────────────
+const ERROR_TITLE = 'No pudimos cargar tu pase';
+const ERROR_DESCRIPTION =
+  'Hubo un problema al traer tus datos. Podés reintentar; no modificamos nada en tu cuenta.';
 
-const TIER_CONFIG: Record<string, { min: number; next: string; nextMin: number; color: string; label: string }> = {
-  Bronce:  { min: 0,    next: 'Plata', nextMin: 1000, color: 'var(--brand-600)', label: 'Bronce' },
-  Plata:   { min: 1000, next: 'Oro',   nextMin: 3000, color: 'var(--stone-500)', label: 'Plata' },
-  Oro:     { min: 3000, next: '',      nextMin: 0,     color: 'var(--brand-500)', label: 'Oro' },
-};
+const HIDDEN_TYPES = [
+  'customer.profile_viewed',
+  'profile_viewed',
+  'qr_displayed',
+  'customer.qr_displayed',
+];
 
-function getTierConfig(tierName: string | null) {
-  return TIER_CONFIG[tierName ?? ''] ?? TIER_CONFIG.Bronce;
+interface TimelineItem {
+  id: string;
+  eventType: string;
+  points: number;
+  note: string | null;
+  createdAt: string;
 }
 
 function formatRelative(time: string): string {
@@ -36,41 +47,176 @@ function formatRelative(time: string): string {
   return `Hace ${Math.floor(days / 7)} sem`;
 }
 
-function getInitials(name: string): string {
-  return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+function describeEvent(eventType: string, note: string | null): string {
+  if (note) return note;
+  if (eventType === 'points.earned') return 'Puntos ganados';
+  if (eventType === 'points.redeemed') return 'Puntos canjeados';
+  if (eventType === 'visit') return 'Visita al local';
+  if (eventType === 'customer.registered') return 'Registro';
+  return eventType;
 }
 
-function getTierEmoji(tier: string | null): string {
-  switch (tier) {
-    case 'Oro': return '👑';
-    case 'Plata': return '⭐';
-    default: return '🌱';
+function eventSign(eventType: string): '+' | '−' | '•' {
+  if (eventType === 'points.earned') return '+';
+  if (eventType === 'points.redeemed') return '−';
+  return '•';
+}
+
+/**
+ * Merges the two real activity sources into one chronological list.
+ *
+ * Events and transactions overlap, so both are read and de-duplicated by id
+ * rather than picking a source and pretending the other does not exist.
+ */
+function buildTimeline(profile: CustomerProfile): TimelineItem[] {
+  const fromEvents: TimelineItem[] = (profile.customer_events ?? [])
+    .filter((event) => !HIDDEN_TYPES.includes(event.eventType))
+    .map((event) => ({
+      id: event.id,
+      eventType: event.eventType,
+      points: Number(event.payload?.points ?? 0),
+      note: null,
+      createdAt: event.createdAt,
+    }));
+
+  const fromTransactions: TimelineItem[] = (profile.recent_transactions ?? []).map((tx) => ({
+    id: tx.id,
+    eventType:
+      tx.type === 'earn' || tx.type === 'earned'
+        ? 'points.earned'
+        : tx.type === 'redeem'
+          ? 'points.redeemed'
+          : tx.type,
+    points: tx.points,
+    note: tx.note ?? null,
+    createdAt: tx.createdAt,
+  }));
+
+  const byId = new Map<string, TimelineItem>();
+  for (const item of [...fromEvents, ...fromTransactions]) {
+    if (!byId.has(item.id)) byId.set(item.id, item);
   }
+
+  return [...byId.values()]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 5);
 }
 
-function getTierProgressMessage(points: number, tierName: string | null): string {
-  const cfg = getTierConfig(tierName);
-  if (!cfg.next) return '🎉 ¡Has alcanzado el nivel máximo! Disfruta de tus beneficios exclusivos.';
-  const needed = cfg.nextMin - points;
-  if (needed <= 0) return `⭐ ¡Estás listo para subir a ${cfg.next}!`;
-  if (needed < 200) return `🔥 ¡Te faltan solo ${needed} pts para llegar a ${cfg.next}!`;
-  if (needed < 500) return `💪 Sigue así, te faltan ${needed} pts para alcanzar ${cfg.next}.`;
-  return `📈 Acumula ${needed} pts más y llega a ${cfg.next}`;
+function PassSkeleton() {
+  return (
+    <section className="club-pass" aria-label="Cargando tu pase">
+      <div className="club-pass__skeleton-head" aria-hidden="true">
+        <span className="club-pass__skeleton-line club-pass__skeleton-line--short" />
+        <span className="club-pass__skeleton-line club-pass__skeleton-line--title" />
+      </div>
+
+      <div className="club-pass__balance" aria-hidden="true">
+        <span className="club-pass__skeleton-line club-pass__skeleton-line--tiny" />
+        <span className="club-pass__skeleton-line club-pass__skeleton-line--hero" />
+      </div>
+
+      <div className="club-pass__meta" aria-hidden="true">
+        <span className="club-pass__skeleton-line" />
+        <span className="club-pass__skeleton-line" />
+        <span className="club-pass__skeleton-line" />
+      </div>
+
+      <div className="club-ladder" aria-hidden="true">
+        <span className="club-pass__skeleton-line club-pass__skeleton-line--tiny" />
+        <span className="club-pass__skeleton-line" />
+        <span className="club-pass__skeleton-line" />
+        <span className="club-pass__skeleton-line" />
+      </div>
+    </section>
+  );
 }
 
-// ─── Page ────────────────────────────────────────────────────────────
+function QrSkeleton() {
+  return (
+    <div className="club-qr" aria-hidden="true">
+      <span className="club-pass__skeleton-line club-pass__skeleton-line--tiny" />
+      <span className="club-pass__skeleton-line club-pass__skeleton-line--qr" />
+      <span className="club-pass__skeleton-line" />
+    </div>
+  );
+}
+
+/**
+ * The loading screen is a skeleton of the real screen, not a spinner and not a
+ * word. The pass, the ladder, the QR and the activity each have a shape here,
+ * so the page does not jump when the data lands.
+ */
+function ProfileLoading() {
+  return (
+    <ClubShell className="club-pass-shell">
+      <ClubStatus variant="loading">
+        <span className="club-status__description">Cargando tu pase…</span>
+      </ClubStatus>
+      <PassSkeleton />
+      <QrSkeleton />
+      <ActivitySkeleton />
+    </ClubShell>
+  );
+}
+
+function Activity({ items, currency }: { items: TimelineItem[]; currency: string | null }) {
+  if (items.length === 0) {
+    return (
+      <section className="club-activity" aria-label="Actividad reciente">
+        <h2 className="club-activity__title">Actividad</h2>
+        <p className="club-activity__empty">
+          Todavía no hay movimientos. Cuando acumules puntos en el local, los vas a ver acá.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="club-activity" aria-label="Actividad reciente">
+      <h2 className="club-activity__title">Actividad</h2>
+      <ul className="club-activity__list">
+        {items.map((item) => {
+          const sign = eventSign(item.eventType);
+          const isDebit = item.eventType === 'points.redeemed';
+
+          return (
+            <li className="club-activity__item" key={item.id}>
+              <span
+                className={`club-activity__sign${isDebit ? ' club-activity__sign--debit' : ''}`}
+                aria-hidden="true"
+              >
+                {sign}
+              </span>
+
+              <span className="club-activity__body">
+                <span className="club-activity__label">{describeEvent(item.eventType, item.note)}</span>
+                {/* The sign is decorative, so the spoken text carries the
+                    direction too — never colour or glyph alone. */}
+                <span className="club-activity__amount">
+                  {sign === '+'
+                    ? `Ganaste ${item.points.toLocaleString('es-CL')}${currency ? ` ${currency}` : ''}`
+                    : sign === '−'
+                      ? `Canjeaste ${Math.abs(item.points).toLocaleString('es-CL')}${currency ? ` ${currency}` : ''}`
+                      : formatRelative(item.createdAt)}
+                </span>
+              </span>
+
+              <span className="club-activity__date">{formatRelative(item.createdAt)}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 export default function ProfilePage() {
   const router = useRouter();
   const { customer, logout, isLoading: authLoading } = useAuth();
+
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [fetching, setFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [animatePoints, setAnimatePoints] = useState(false);
-  const [qrOpen, setQrOpen] = useState(false);
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-  const [consentWhatsapp, setConsentWhatsapp] = useState(false);
-  const [savingConsent, setSavingConsent] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !customer) {
@@ -78,365 +224,78 @@ export default function ProfilePage() {
     }
   }, [authLoading, customer, router]);
 
-  useEffect(() => {
-    if (!customer) return;
-
+  const load = useCallback(() => {
     setFetching(true);
-    api
+    setError(null);
+
+    return api
       .getProfile()
       .then((data) => {
         setProfile(data);
         localStorage.setItem(CID_KEY, data.id);
-        const metadata = (data.metadata ?? {}) as Record<string, unknown>;
-        const consent = (metadata.consent ?? {}) as Record<string, unknown>;
-        setConsentWhatsapp(consent.whatsapp === true);
-        // Trigger number animation after render
-        setTimeout(() => setAnimatePoints(true), 200);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setFetching(false));
-  }, [customer]);
+  }, []);
 
-  // ─── QR generation ───────────────────────────────────────────────
-
-  const generateQr = useCallback(async () => {
-    if (qrDataUrl) return;
-    if (!profile) return;
-    const url = `/c/${profile.globalId}`;
-    try {
-      const dataUrl = await QRCode.toDataURL(url, {
-        width: 200,
-        margin: 2,
-        color: { dark: '#1c1917', light: '#ffffff' },
-      });
-      setQrDataUrl(dataUrl);
-    } catch {
-      // silently fail — QR is non-critical
-    }
-  }, [profile, qrDataUrl]);
-
-  // ─── Consent toggle ─────────────────────────────────────────────
-
-  const handleConsentToggle = useCallback(async () => {
-    if (!profile) return;
-    const newValue = !consentWhatsapp;
-    setSavingConsent(true);
-    try {
-      await api.updateConsent({ whatsapp: newValue });
-      setConsentWhatsapp(newValue);
-    } catch {
-      // Revert on error
-    } finally {
-      setSavingConsent(false);
-    }
-  }, [profile, consentWhatsapp]);
-
-  // Toggle QR section
-  const handleQrToggle = useCallback(() => {
-    if (!qrOpen) {
-      generateQr();
-    }
-    setQrOpen((prev) => !prev);
-  }, [qrOpen, generateQr]);
-
-  // ─── Loading state ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!customer) return;
+    void load();
+  }, [customer, load]);
 
   if (authLoading || fetching) {
-    return (
-      <div className="page page--centered fade-in">
-        <div className="loading-pulse">
-          <div className="loading-avatar" />
-          <div className="loading-line" style={{ width: 160 }} />
-          <div className="loading-line" style={{ width: 120 }} />
-        </div>
-      </div>
-    );
+    return <ProfileLoading />;
   }
 
+  // No session: reveal nothing, including whether an error occurred.
   if (!customer) return null;
 
-  if (error) {
+  // An error is reported as an error. There is deliberately no fallback profile
+  // with a borrowed name, tier or balance — a plausible-looking pass is worse
+  // than an honest failure, because the user would act on invented numbers.
+  if (error || !profile) {
     return (
-      <div className="page fade-in">
-        <div className="error-box">{error}</div>
-        <button type="button" className="btn btn--primary" onClick={() => window.location.reload()}>
-          Reintentar
-        </button>
-      </div>
+      <ClubShell className="club-pass-shell">
+        <ClubError
+          title={ERROR_TITLE}
+          description={ERROR_DESCRIPTION}
+          action={
+            <button type="button" className="btn btn--outline" onClick={() => void load()}>
+              Reintentar
+            </button>
+          }
+        />
+      </ClubShell>
     );
   }
 
-  const p = profile;
-  if (!p) return null;
-
-  const tierCfg = getTierConfig(p.currentTier);
-  const progress = tierCfg.nextMin > 0 ? Math.min(100, (p.points / tierCfg.nextMin) * 100) : 100;
-  const pointsToNext = tierCfg.nextMin > 0 ? Math.max(0, tierCfg.nextMin - p.points) : 0;
-  const memberDate = new Date(p.createdAt);
-  const memberSince = memberDate.toLocaleDateString('es-CL', { month: 'long', year: 'numeric' });
-  const points30 = p.pointsLast30Days ?? 0;
-  // Merge and sort events + transactions into a unified timeline
-  type TimelineItem = {
-    id: string;
-    kind: 'event' | 'tx';
-    eventType: string;
-    points: number;
-    note: string | null;
-    createdAt: string;
-  };
-  const hiddenTypes = ['customer.profile_viewed', 'profile_viewed', 'qr_displayed', 'customer.qr_displayed'];
-  const mappedEvents: TimelineItem[] = (p.customer_events ?? [])
-    .filter((e) => !hiddenTypes.includes(e.eventType))
-    .map((e) => ({
-      id: e.id,
-      kind: 'event' as const,
-      eventType: e.eventType,
-      points: (e.payload?.points ?? 0) as number,
-      note: null,
-      createdAt: e.createdAt,
-    }));
-  const mappedTxs: TimelineItem[] = (p.recent_transactions ?? []).map((t) => ({
-    id: t.id,
-    kind: 'tx' as const,
-    eventType: t.type === 'earn' || t.type === 'earned' ? 'points.earned'
-              : t.type === 'redeem' ? 'points.redeemed' : t.type,
-    points: t.points,
-    note: t.note ?? null,
-    createdAt: t.createdAt,
-  }));
-  const timelineItems = [...mappedEvents, ...mappedTxs]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 5);
-  const isOro = p.currentTier === 'Oro';
+  const timeline = buildTimeline(profile);
+  const currency = profile.program?.pointsCurrency ?? null;
 
   return (
-    <div className="page fade-in">
-      {/* ─── Branding bar ─── */}
-      <div className="profile-brand-bar">
-        <span className="profile-brand-label">Mi Perfil</span>
-      </div>
+    <ClubShell className="club-pass-shell">
+      <MemberPass profile={profile} />
 
-      {/* ─── Avatar & Greeting ─── */}
-      <div className="profile-hero">
-        <div className={`profile-avatar ${isOro ? 'profile-avatar--oro' : ''}`}>
-          {getInitials(p.fullName)}
-        </div>
-        <h1 className="profile-name">
-          {p.fullName.split(' ')[0]}
-        </h1>
-        <p className="profile-member">Miembro desde {memberSince}</p>
-      </div>
+      <MemberQr globalId={profile.globalId} fullName={profile.fullName} />
 
-      {/* ─── Points hero card ─── */}
-      <div className={`profile-points-card ${isOro ? 'profile-points-card--oro' : ''}`}>
-        <div className="profile-points-card-bg" />
-        <div className="profile-points-tier">
-          <span className="profile-tier-badge">
-            {getTierEmoji(p.currentTier)} {p.currentTier ?? 'Bronce'}
-          </span>
-          {p.tier && (
-            <span className="profile-tier-mult">{p.tier.multiplier}x multiplicador</span>
-          )}
-        </div>
+      <Activity items={timeline} currency={currency} />
 
-        <div className="profile-points-main">
-          <span className="profile-points-label">Tus puntos</span>
-          <div className={`profile-points-value ${animatePoints ? 'profile-points-animate' : ''}`}>
-            {p.points.toLocaleString('es-CL')}
-          </div>
-        </div>
-
-        <div className="profile-points-meta">
-          <div className="profile-points-stat">
-            <span className="profile-stat-value">{p.totalPointsEarned.toLocaleString('es-CL')}</span>
-            <span className="profile-stat-label">Acumulados</span>
-          </div>
-          <div className="profile-points-stat">
-            <span className="profile-stat-value">
-              {points30 > 0 ? `+${points30.toLocaleString('es-CL')} pts` : '—'}
-            </span>
-            <span className="profile-stat-label">Últimos 30 días</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ─── QR Section ─── */}
-      <div className={`profile-qr-card card ${qrOpen ? 'profile-qr-card--open' : ''}`}>
-        <button
-          type="button"
-          className="profile-qr-trigger"
-          onClick={handleQrToggle}
-          aria-expanded={qrOpen}
-        >
-          <QrCode size={20} />
-          <span>Mi código QR</span>
-          {qrOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-        </button>
-        {qrOpen && (
-          <div className="profile-qr-body">
-            <p className="profile-qr-hint">
-              Mostrá este código en el local para que te reconozcan
-            </p>
-            <div className="profile-qr-code">
-              {qrDataUrl ? (
-                <img src={qrDataUrl} alt="Código QR de perfil" width={200} height={200} />
-              ) : (
-                <div className="profile-qr-placeholder">
-                  <div className="loading-pulse">
-                    <div className="loading-line" style={{ width: 180, height: 180 }} />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ─── Preferencias de comunicación ─── */}
-      <div className="profile-section">
-        <h2 className="section-title">Preferencias de comunicación</h2>
-        <div className="card card--compact profile-consent-card">
-          <label className="profile-consent-row">
-            <div className="profile-consent-info">
-              <span className="profile-consent-label">Recibir mensajes por WhatsApp</span>
-              <span className="profile-consent-desc">Recibí notificaciones, promociones y alertas por WhatsApp</span>
-            </div>
-            <div className="toggle-wrapper">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={consentWhatsapp}
-                disabled={savingConsent}
-                onClick={handleConsentToggle}
-                className={`toggle ${consentWhatsapp ? 'toggle--on' : ''}`}
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
-          </label>
-        </div>
-      </div>
-
-      {/* ─── Achievement / Tier Progress ─── */}
-      {isOro ? (
-        <div className="profile-achievement-card">
-          <div className="profile-achievement-glow" />
-          <Sparkles size={24} className="profile-achievement-icon" />
-          <h3 className="profile-achievement-title">Nivel Oro</h3>
-          <p className="profile-achievement-desc">
-            ¡Sos nuestro cliente más valioso! Disfrutá de todos los beneficios exclusivos.
-          </p>
-          <div className="profile-achievement-badge">
-            {getTierEmoji(p.currentTier)} Oro
-          </div>
-        </div>
-      ) : (
-        tierCfg.next && (
-          <div className="profile-progress-card card">
-            <div className="profile-progress-header">
-              <span className="profile-progress-title">
-                Progreso a {tierCfg.next}
-              </span>
-              <span className="profile-progress-points">
-                {pointsToNext > 0 ? `${pointsToNext.toLocaleString()} pts` : '¡Listo!'}
-              </span>
-            </div>
-            <div className="profile-progress-bar-track">
-              <div
-                className="profile-progress-bar-fill"
-                style={{ width: `${Math.min(100, progress)}%` }}
-              />
-            </div>
-            <p className="profile-progress-msg">
-              {getTierProgressMessage(p.points, p.currentTier)}
-            </p>
-          </div>
-        )
-      )}
-
-      {/* ─── Recent Activity / Empty State ─── */}
-      {timelineItems.length > 0 ? (
-        <div className="profile-section">
-          <h2 className="section-title">Actividad Reciente</h2>
-          <div className="profile-timeline">
-            {timelineItems.map((ev) => {
-              const isEarn = ev.eventType === 'points.earned';
-              const isRedeem = ev.eventType === 'points.redeemed';
-              const isVisit = ev.eventType === 'visit';
-              const isRegister = ev.eventType === 'customer.registered';
-
-              let icon: string;
-              let label: string;
-              let colorValue: string;
-
-              if (isEarn) {
-                icon = '+';
-                label = ev.note ?? 'Puntos ganados';
-                colorValue = '#16a34a';
-              } else if (isRedeem) {
-                icon = '−';
-                label = ev.note ?? 'Puntos canjeados';
-                colorValue = '#dc2626';
-              } else if (isVisit) {
-                icon = '→';
-                label = 'Visita al local';
-                colorValue = '#2563eb';
-              } else if (isRegister) {
-                icon = '✓';
-                label = 'Registro';
-                colorValue = 'var(--brand-500)';
-              } else {
-                icon = '•';
-                label = ev.eventType;
-                colorValue = 'var(--text-muted)';
-              }
-
-              const pts = ev.points;
-
-              return (
-                <div key={ev.id} className="profile-timeline-item">
-                  <div className="profile-timeline-icon" style={{ background: `color-mix(in srgb, ${colorValue} 10%, transparent)`, color: colorValue }}>
-                    {icon}
-                  </div>
-                  <div className="profile-timeline-body">
-                    <span className="profile-timeline-label">{label}</span>
-                    {pts > 0 && (
-                      <span className="profile-timeline-pts" style={{ color: isRedeem ? colorValue : '#16a34a' }}>
-                        {isRedeem ? '-' : '+'}{pts.toLocaleString('es-CL')} pts
-                      </span>
-                    )}
-                  </div>
-                  <span className="profile-timeline-date">{formatRelative(ev.createdAt)}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="profile-empty-state">
-          <div className="profile-empty-icon">
-            <Gift size={32} />
-          </div>
-          <h3 className="profile-empty-title">Todavía no tenés actividad</h3>
-          <p className="profile-empty-desc">
-            Visitá el local para empezar a acumular puntos y acceder a beneficios exclusivos.
-          </p>
-        </div>
-      )}
-
-      {/* ─── Actions row ─── */}
-      <div className="profile-actions">
+      <nav className="club-pass__actions" aria-label="Tu cuenta">
         <Link href="/profile/history" className="btn btn--secondary">
-          <Clock size={18} />
+          <Clock size={18} aria-hidden="true" />
           Ver historial
         </Link>
         <Link href="/profile/rewards" className="btn btn--primary">
-          <Gift size={18} />
+          <Gift size={18} aria-hidden="true" />
           Canjear puntos
         </Link>
-      </div>
+      </nav>
 
-      {/* ─── Logout ─── */}
+      {/* The register page states plainly that these controls store nothing, and
+          the profile says the same thing in the same words. Two pages
+          describing the same unavailable capability must not disagree. */}
+      <ConsentList />
+
       <button
         type="button"
         className="logout-btn"
@@ -448,6 +307,6 @@ export default function ProfilePage() {
       >
         Cerrar sesión
       </button>
-    </div>
+    </ClubShell>
   );
 }
