@@ -13,13 +13,13 @@
     "@vyloop/event-bus": "workspace:*",
     "@vyloop/schema-registry": "workspace:*",
     "@vyloop/types": "workspace:*",
-    "hono": "^4.12.28",
+    "hono": "^4.13.5",
     "jose": "^6.2.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260708.1",
+    "@cloudflare/workers-types": "^5.20260722.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "wrangler": "^4.107.0"
   }
 }
