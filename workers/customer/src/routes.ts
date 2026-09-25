@@ -1,7 +1,7 @@
-import { createDb, customers, customerEvents, consents, tenants, pointsTransactions, membershipTiers } from '@vyloop/db';
+import { createDb, customers, customerEvents, consents, tenants, loyaltyPrograms, pointsTransactions, membershipTiers } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
-import { eq, and, isNull, like, or, count, desc, sum, sql, type SQL } from 'drizzle-orm';
+import { eq, and, isNull, like, or, count, desc, asc, sum, sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
@@ -302,8 +302,9 @@ router.get('/v1/customers/me', async (c) => {
     );
   }
 
-  // Fetch balance, total earned, events, recent transactions, and last-30-days points
-  const [balanceResult, earnedResult, eventsResult, txResult, points30Result] = await Promise.all([
+  // Fetch balance, total earned, events, recent transactions, last-30-days
+  // points, and the loyalty "pass" context (business, program, tiers).
+  const [balanceResult, earnedResult, eventsResult, txResult, points30Result, businessResult, programResult, tiersResult] = await Promise.all([
     // Latest balance (uses customer.id PK — matches FK on points_transactions)
     db
       .select({ balance_after: pointsTransactions.balanceAfter })
@@ -353,6 +354,50 @@ router.get('/v1/customers/me', async (c) => {
           sql`${pointsTransactions.createdAt} >= now() - interval '30 days'`,
         ),
       ),
+
+    // ------------------------------------------------------------------
+    // Loyalty "web pass" context.
+    //
+    // There is NO row-level security on these tables: enableRls() and
+    // createRlsPolicies() in packages/db/src/rls.ts are never applied by any
+    // migration, and no route calls withRls. Tenant isolation therefore rests
+    // ENTIRELY on an explicit business filter in every query below. Removing
+    // one of these filters would leak another tenant's program and tiers.
+    // ------------------------------------------------------------------
+
+    // Business (tenant). `tenants.id` IS the business id — the table is the
+    // root of the model and has no business_id column, so scope by primary key.
+    db
+      .select({ id: tenants.id, name: tenants.name, slug: tenants.slug })
+      .from(tenants)
+      .where(eq(tenants.id, businessId))
+      .limit(1),
+
+    // Loyalty program. businessId is UNIQUE here, so at most one row can match.
+    // Only id/name/pointsCurrency are exposed — earnRate, minRedeemPoints and
+    // pointsExpiryDays are intentionally not surfaced to the customer app.
+    db
+      .select({
+        id: loyaltyPrograms.id,
+        name: loyaltyPrograms.name,
+        pointsCurrency: loyaltyPrograms.pointsCurrency,
+      })
+      .from(loyaltyPrograms)
+      .where(eq(loyaltyPrograms.businessId, businessId))
+      .limit(1),
+
+    // All tiers for this business, canonical display order.
+    db
+      .select({
+        id: membershipTiers.id,
+        name: membershipTiers.name,
+        minPoints: membershipTiers.minPoints,
+        multiplier: membershipTiers.multiplier,
+        displayOrder: membershipTiers.displayOrder,
+      })
+      .from(membershipTiers)
+      .where(eq(membershipTiers.businessId, businessId))
+      .orderBy(asc(membershipTiers.displayOrder), asc(membershipTiers.minPoints)),
   ]);
 
   const points = balanceResult[0]?.balance_after ?? 0;
@@ -376,6 +421,46 @@ router.get('/v1/customers/me', async (c) => {
       };
     }
   }
+
+  // ------------------------------------------------------------------
+  // Loyalty "web pass" payload.
+  // ------------------------------------------------------------------
+
+  // Business: null when the tenant row cannot be resolved. Returning null (not
+  // throwing) keeps the profile renderable for a customer whose tenant is gone.
+  const [businessRow] = businessResult;
+  const business = businessRow
+    ? { id: businessRow.id, name: businessRow.name, slug: businessRow.slug }
+    : null;
+
+  // Program: null when the tenant has no program yet, so the UI can say
+  // "your program is being set up" instead of rendering a fabricated name.
+  const [programRow] = programResult;
+  const program = programRow
+    ? {
+        id: programRow.id,
+        name: programRow.name,
+        pointsCurrency: programRow.pointsCurrency,
+      }
+    : null;
+
+  // NOTE: `multiplier` is numeric(4,2), which Drizzle returns as a STRING.
+  // These new fields normalise it to a number. The pre-existing `tier` object
+  // below/above still leaks the string form — that inconsistency is left in
+  // place on purpose because changing it would be a breaking contract change.
+  const tiers = tiersResult.map((t) => ({
+    id: t.id,
+    name: t.name,
+    minPoints: t.minPoints,
+    multiplier: Number(t.multiplier),
+    displayOrder: t.displayOrder,
+  }));
+
+  // nextTier is derived HERE, on the server, on purpose: the rule has exactly
+  // one owner and the client only renders what it is told. The first tier in
+  // canonical order whose minPoints is strictly greater than the current
+  // balance; null when the customer is at or above the top tier.
+  const nextTier = tiers.find((t) => t.minPoints > points) ?? null;
 
   // Fire-and-forget: record profile_viewed event for dashboards
   c.executionCtx.waitUntil(
@@ -416,6 +501,10 @@ router.get('/v1/customers/me', async (c) => {
       currentTierId: customer.currentTierId,
       currentTier: tier?.name ?? null,
       tier,
+      business,
+      program,
+      tiers,
+      nextTier,
       customer_events: eventsResult,
       recent_transactions: txResult,
       createdAt: customer.createdAt,
