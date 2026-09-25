@@ -3,6 +3,30 @@
 const API_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8787';
 const JWT_KEY = 'vyloop_jwt';
 
+/**
+ * Error thrown by `apiFetch` for every non-2xx response.
+ *
+ * It exists so callers can tell an HTTP outcome apart from a local failure.
+ * The previous bare `Error` discarded both `status` and `code`, which forced
+ * the UI to guess whether a request failed because of the user or because the
+ * gateway was down.
+ *
+ * `ApiError` extends `Error`, so every existing `instanceof Error` guard and
+ * every `err.message` read keeps working exactly as before. The human-readable
+ * `message` is unchanged, so no user-visible copy shifts.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem(JWT_KEY);
@@ -20,13 +44,21 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<unknow
 
   if (res.status === 204) return null;
 
-  const data = await res.json();
-
   if (!res.ok) {
-    throw new Error(data?.error?.message || `Error ${res.status}`);
+    // A gateway, proxy or crash page can answer an error status with HTML or
+    // text instead of JSON. The status is the only thing the caller classifies
+    // on, so parsing must never be able to mask it: a rejected parse falls back
+    // to a synthetic code and message while preserving the real status.
+    const data = await res.json().catch(() => null);
+
+    throw new ApiError(
+      res.status,
+      data?.error?.code || 'UNKNOWN_ERROR',
+      data?.error?.message || `Error ${res.status}`,
+    );
   }
 
-  return data;
+  return res.json();
 }
 
 // ---------------------------------------------------------------------------
