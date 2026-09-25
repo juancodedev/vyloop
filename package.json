@@ -21,9 +21,9 @@
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.31.0",
-    "prettier": "^3.4.0",
+    "prettier": "^3.9.6",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.63.0",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10",
     "wrangler": "^4.107.0"
   },

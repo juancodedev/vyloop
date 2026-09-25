@@ -16,20 +16,20 @@
     "@vyloop/types": "workspace:*",
     "clsx": "^2.1.1",
     "html5-qrcode": "^2.3.8",
-    "lucide-react": "^1.23.0",
-    "next": "^15.5.24",
+    "lucide-react": "^1.25.0",
+    "next": "^15.5.18",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@cloudflare/next-on-pages": "^1.13.16",
-    "@cloudflare/workers-types": "^5.20260708.1",
+    "@cloudflare/workers-types": "^5.20260722.1",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "wrangler": "^4.107.0"
   }
 }
