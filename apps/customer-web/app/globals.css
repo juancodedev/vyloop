@@ -17,8 +17,15 @@ html {
 
 body {
   margin: 0;
-  font-family: var(--font-body), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    'Helvetica Neue', Arial, sans-serif;
+  font-family:
+    var(--font-body),
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
   background: var(--surface-page);
   color: var(--text-body);
   line-height: var(--leading-normal);
@@ -167,7 +174,6 @@ a {
   font-size: var(--text-lg);
   border: 1.5px solid var(--border-input);
   border-radius: var(--radius-lg);
-  outline: none;
   font-family: inherit;
   background: var(--surface-input);
   transition: border-color var(--transition-fast);
@@ -509,7 +515,10 @@ a {
   cursor: pointer;
   font-family: inherit;
   color: var(--text-body);
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--club-transition-fast) var(--club-ease-out),
+    border-color var(--club-transition-fast) var(--club-ease-out),
+    color var(--club-transition-fast) var(--club-ease-out);
 }
 
 .filter-tab--active {
@@ -695,8 +704,13 @@ a {
 
 /* --- Loading skeleton --- */
 @keyframes pulse {
-  0%, 100% { opacity: 0.5; }
-  50%      { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .loading-pulse {
@@ -761,7 +775,9 @@ a {
 }
 
 .profile-avatar--oro {
-  box-shadow: 0 0 0 4px var(--brand-200), 0 0 20px rgba(255, 193, 7, 0.3);
+  box-shadow:
+    0 0 0 4px var(--brand-200),
+    0 0 20px rgba(255, 193, 7, 0.3);
 }
 
 .profile-name {
@@ -1121,17 +1137,20 @@ a {
   height: 200%;
   z-index: 0;
   pointer-events: none;
-  background: radial-gradient(
-    circle at center,
-    rgba(255, 255, 255, 0.4) 0%,
-    transparent 60%
-  );
+  background: radial-gradient(circle at center, rgba(255, 255, 255, 0.4) 0%, transparent 60%);
   animation: glowPulse 3s ease-in-out infinite;
 }
 
 @keyframes glowPulse {
-  0%, 100% { opacity: 0.5; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.05); }
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
 }
 
 .profile-achievement-card > * {
@@ -1307,3 +1326,194 @@ a {
 .toggle--on .toggle-knob {
   transform: translateX(23px);
 }
+
+/* ========================================
+   Stage 0 — Club Barrio Foundation
+   ======================================== */
+.customer-web {
+  --club-ink: #27201d;
+  --club-ink-soft: #6f625b;
+  --club-paper: #f3eee5;
+  --club-surface: #fffdf7;
+  --club-cherry: #a9362b;
+  --club-cherry-dark: #74231d;
+  --club-gold: #c38a35;
+  --club-line: rgba(39, 32, 29, 0.16);
+  --club-line-soft: rgba(39, 32, 29, 0.09);
+  --club-focus: #1e67b1;
+  --club-radius: 18px;
+  --club-space-unit: var(--space-1);
+  --club-shadow-quiet: 0 8px 24px rgba(39, 32, 29, 0.08);
+  --club-transition-fast: var(--transition-fast);
+  --club-ease-out: var(--ease-out);
+  --club-font-body: var(--font-body), system-ui, sans-serif;
+  --club-font-display: var(--font-body), system-ui, sans-serif;
+  --club-reading-width: 42rem;
+  --font-display: var(--club-font-display);
+
+  color: var(--club-ink);
+  background: var(--club-paper);
+  font-family: var(--club-font-body);
+}
+
+.customer-web .page {
+  width: min(100%, var(--club-reading-width));
+  margin-inline: auto;
+}
+
+.customer-web .card {
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-radius: var(--club-radius);
+  box-shadow: var(--club-shadow-quiet);
+}
+
+.customer-web .title,
+.customer-web .section-title,
+.customer-web .profile-name {
+  color: var(--club-ink);
+  text-wrap: balance;
+}
+
+.customer-web .subtitle,
+.customer-web .profile-member {
+  color: var(--club-ink-soft);
+  text-wrap: pretty;
+}
+
+.customer-web .btn--primary {
+  color: var(--club-surface);
+  background: var(--club-cherry);
+}
+
+.customer-web .btn--primary:hover {
+  background: var(--club-cherry-dark);
+}
+
+.customer-web .btn--outline {
+  color: var(--club-cherry-dark);
+  border-color: var(--club-cherry);
+}
+
+.customer-web :where(a, button, input, select, textarea):focus-visible {
+  outline: 3px solid var(--club-focus);
+  outline-offset: 3px;
+}
+
+.customer-web .input:focus-visible,
+.customer-web input:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--club-focus) 35%, transparent);
+}
+
+.club-shell {
+  min-height: 100dvh;
+  padding: var(--space-4);
+  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  color: var(--club-ink);
+  background: var(--club-paper);
+}
+
+.club-shell__frame {
+  width: min(100%, var(--club-reading-width));
+  min-width: 0;
+  margin-inline: auto;
+}
+
+.club-shell__header {
+  margin-bottom: var(--space-6);
+}
+
+.club-back-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  margin-bottom: var(--space-2);
+  color: var(--club-ink-soft);
+  font-weight: var(--font-semibold);
+  transition: color var(--club-transition-fast) var(--club-ease-out);
+}
+
+.club-back-link:hover {
+  color: var(--club-cherry-dark);
+}
+
+.club-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 10rem;
+  padding: var(--space-6);
+  color: var(--club-ink-soft);
+  text-align: center;
+}
+
+.club-status--error {
+  border: 1px solid var(--club-line);
+  border-left: 3px solid var(--club-cherry);
+  border-radius: var(--club-radius);
+  background: var(--club-surface);
+}
+
+.club-status__indicator {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid var(--club-line);
+  border-top-color: var(--club-cherry);
+  border-radius: var(--radius-full);
+  animation: club-status-spin 800ms linear infinite;
+}
+
+.club-status__title,
+.club-empty-state__title {
+  margin: 0;
+  color: var(--club-ink);
+  font-size: var(--text-lg);
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+.club-status__description,
+.club-empty-state__description {
+  max-width: 38ch;
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.club-status__action,
+.club-empty-state__action {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.club-status__action > a,
+.club-status__action > button,
+.club-empty-state__action > a,
+.club-empty-state__action > button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+
+@keyframes club-status-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-web,
+  .customer-web *,
+  .customer-web *::before,
+  .customer-web *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
