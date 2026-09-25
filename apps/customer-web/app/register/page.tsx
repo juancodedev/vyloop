@@ -1,11 +1,16 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 
+import { ClubShell } from '../components/club-shell';
+import { ClubLoading } from '../components/club-status';
+import { ConsentList } from '../components/consent-list';
+import { FormField } from '../components/form-field';
 import { api } from '../lib/api';
 
-interface FormData {
+interface RegisterFormValues {
   fullName: string;
   phone: string;
   email: string;
@@ -17,9 +22,67 @@ interface FormErrors {
   phone?: string;
 }
 
-export default function RegisterPage() {
+class CustomerCreationError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'CustomerCreationError';
+    this.status = status;
+  }
+}
+
+function buildBusinessHref(pathname: string, businessSlug: string | null) {
+  if (!businessSlug) return pathname;
+
+  const searchParams = new URLSearchParams();
+  searchParams.set('biz', businessSlug);
+  return `${pathname}?${searchParams.toString()}`;
+}
+
+function getClientErrorMessage(status: number, serverMessage: string | null) {
+  if (status === 404) {
+    return 'No encontramos este programa. Volvé al inicio y elegí el comercio correcto.';
+  }
+
+  if (serverMessage) {
+    const safeMessage = serverMessage.replace(/[\r\n]+/g, ' ').trim();
+    if (safeMessage && safeMessage.length <= 180) return safeMessage;
+  }
+
+  return 'No pudimos completar el registro con estos datos. Revisá los campos e intentá de nuevo.';
+}
+
+function isNetworkError(error: unknown) {
+  // An HTTP response that already reached us is a server outcome, not a local
+  // outage, even when the gateway text happens to read like a fetch failure.
+  if (error instanceof CustomerCreationError) return false;
+
+  return (
+    error instanceof TypeError ||
+    (error instanceof Error && /failed to fetch|networkerror|load failed/i.test(error.message))
+  );
+}
+
+function RegisterLoading() {
+  return (
+    <ClubShell backLink={{ href: '/', label: 'Volver al inicio' }} className="club-register-shell">
+      <div className="club-register-loading">
+        <ClubLoading label="Preparando tu registro…" />
+      </div>
+    </ClubShell>
+  );
+}
+
+function RegisterContent() {
   const router = useRouter();
-  const [form, setForm] = useState<FormData>({
+  const searchParams = useSearchParams();
+  const businessSlug = searchParams.get('biz') || null;
+  const hasBusinessContext = businessSlug !== null;
+  const homeHref = buildBusinessHref('/', businessSlug);
+  const loginHref = buildBusinessHref('/login', businessSlug);
+
+  const [form, setForm] = useState<RegisterFormValues>({
     fullName: '',
     phone: '',
     email: '',
@@ -28,41 +91,78 @@ export default function RegisterPage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [accountCreated, setAccountCreated] = useState(false);
+  const fullNameRef = useRef<HTMLInputElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+  const shouldFocusErrors = useRef(false);
 
-  // Extract business slug from URL (e.g. ?biz=cafe-central)
-  const businessSlug =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('biz')
-      : null;
+  useEffect(() => {
+    if (!shouldFocusErrors.current) return;
 
-  function validate(): FormErrors {
-    const errs: FormErrors = {};
-    if (!form.fullName.trim()) errs.fullName = 'El nombre es obligatorio';
-    if (!form.phone.trim()) errs.phone = 'El teléfono es obligatorio';
-    return errs;
+    shouldFocusErrors.current = false;
+    if (errors.fullName) {
+      fullNameRef.current?.focus();
+    } else if (errors.phone) {
+      phoneRef.current?.focus();
+    }
+  }, [errors]);
+
+  function updateField(field: keyof RegisterFormValues, event: ChangeEvent<HTMLInputElement>) {
+    const value = event.target.value;
+    setForm((current) => ({ ...current, [field]: value }));
+
+    if (field === 'fullName' || field === 'phone') {
+      setErrors((current) => {
+        if (!current[field]) return current;
+        const next = { ...current };
+        delete next[field];
+        return next;
+      });
+    }
   }
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  function validate(): FormErrors {
+    const nextErrors: FormErrors = {};
+    if (!form.fullName.trim()) nextErrors.fullName = 'Ingresá tu nombre completo.';
+    if (!form.phone.trim()) nextErrors.phone = 'Ingresá tu teléfono.';
+    return nextErrors;
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setServerError(null);
 
-    const validationErrors = validate();
-    setErrors(validationErrors);
+    if (!businessSlug) {
+      setServerError(
+        'Falta el contexto del comercio. Volvé al inicio para abrir el enlace correcto.',
+      );
+      return;
+    }
 
-    if (Object.keys(validationErrors).length > 0) return;
+    const validationErrors = validate();
+    if (Object.keys(validationErrors).length > 0) {
+      shouldFocusErrors.current = true;
+      setErrors(validationErrors);
+      return;
+    }
 
     setSubmitting(true);
+    let customerCreated = false;
+
+    const fullName = form.fullName.trim();
+    const phone = form.phone.trim();
+    const email = form.email.trim();
 
     try {
       const payload: Record<string, string> = {
-        fullName: form.fullName.trim(),
-        phone: form.phone.trim(),
+        fullName,
+        phone,
+        businessSlug,
       };
-      if (businessSlug) payload.businessSlug = businessSlug;
-      if (form.email.trim()) payload.email = form.email.trim();
+      if (email) payload.email = email;
       if (form.birthDate) payload.birthDate = form.birthDate;
 
-      const res = await fetch(
+      const response = await fetch(
         `${process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8787'}/v1/customers`,
         {
           method: 'PUT',
@@ -71,15 +171,19 @@ export default function RegisterPage() {
         },
       );
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(
-          body?.error?.message ?? `Error ${res.status}: no se pudo registrar`,
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          error?: { message?: unknown };
+        } | null;
+        const serverMessage = typeof body?.error?.message === 'string' ? body.error.message : null;
+        throw new CustomerCreationError(
+          response.status,
+          getClientErrorMessage(response.status, serverMessage),
         );
       }
 
-      // Auto-login: issue JWT for the registered phone and redirect to profile
-      const authResult = await api.loginCustomer(form.phone.trim(), businessSlug ?? undefined);
+      customerCreated = true;
+      const authResult = await api.loginCustomer(phone, businessSlug);
       localStorage.setItem('vyloop_jwt', authResult.token);
       localStorage.setItem(
         'vyloop_customer',
@@ -89,186 +193,185 @@ export default function RegisterPage() {
         }),
       );
       router.push('/profile');
-    } catch (err) {
-      setServerError(
-        err instanceof Error ? err.message : 'Error inesperado',
-      );
+    } catch (error) {
+      if (customerCreated) {
+        setAccountCreated(true);
+      } else if (
+        error instanceof CustomerCreationError &&
+        error.status >= 400 &&
+        error.status < 500
+      ) {
+        setServerError(error.message);
+      } else if (isNetworkError(error)) {
+        setServerError(
+          'No pudimos conectar con el gateway local. Revisá que esté disponible e intentá de nuevo.',
+        );
+      } else {
+        setServerError('No pudimos completar el registro. Revisá los datos e intentá de nuevo.');
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <main style={styles.main}>
-      <div style={styles.card}>
-        <h1 style={styles.title}>Registrate</h1>
-        <p style={styles.subtitle}>Completá tus datos para empezar</p>
+    <ClubShell
+      backLink={{ href: homeHref, label: 'Volver al inicio' }}
+      className="club-register-shell"
+    >
+      <section className="club-register" aria-labelledby="club-register-title">
+        <div className="club-register__intro">
+          <p className="club-register__eyebrow">Club del barrio</p>
+          <h1 id="club-register-title" className="club-register__title">
+            Entrá a tu club
+          </h1>
+          <p className="club-register__summary">
+            Con tu nombre y teléfono ya podés seguir con este programa.
+          </p>
+        </div>
 
-        {serverError && <div style={styles.serverError}>{serverError}</div>}
+        <div className="club-register__context" aria-label="Contexto del programa">
+          <p className="club-register__context-label">Estás registrando tu cuenta en</p>
+          <h2 className="club-register__context-title">Este programa</h2>
+          <p className="club-register__context-copy">
+            El contexto viene del enlace del comercio que abriste.
+          </p>
+        </div>
 
-        <form onSubmit={handleSubmit} noValidate>
-          <div style={styles.field}>
-            <label style={styles.label} htmlFor="fullName">
-              Nombre completo *
-            </label>
-            <input
-              id="fullName"
-              style={{
-                ...styles.input,
-                ...(errors.fullName ? styles.inputError : {}),
-              }}
-              value={form.fullName}
-              onChange={(e) =>
-                setForm({ ...form, fullName: e.target.value })
-              }
-              placeholder="Juan Pérez"
-            />
-            {errors.fullName && (
-              <span style={styles.errorText}>{errors.fullName}</span>
-            )}
-          </div>
-
-          <div style={styles.field}>
-            <label style={styles.label} htmlFor="phone">
-              Teléfono *
-            </label>
-            <input
-              id="phone"
-              type="tel"
-              style={{
-                ...styles.input,
-                ...(errors.phone ? styles.inputError : {}),
-              }}
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              placeholder="+56 9 1234 5678"
-            />
-            {errors.phone && (
-              <span style={styles.errorText}>{errors.phone}</span>
-            )}
-          </div>
-
-          <div style={styles.field}>
-            <label style={styles.label} htmlFor="email">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              style={styles.input}
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              placeholder="cliente@ejemplo.com"
-            />
-          </div>
-
-          <div style={styles.field}>
-            <label style={styles.label} htmlFor="birthDate">
-              Fecha de nacimiento
-            </label>
-            <input
-              id="birthDate"
-              type="date"
-              style={styles.input}
-              value={form.birthDate}
-              onChange={(e) =>
-                setForm({ ...form, birthDate: e.target.value })
-              }
-            />
-          </div>
-
-          <button
-            type="submit"
-            style={styles.button}
-            disabled={submitting}
+        {!hasBusinessContext ? (
+          <div
+            className="club-register__status club-register__status--missing"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
           >
-            {submitting ? 'Registrando...' : 'Registrarme'}
-          </button>
+            <strong>Falta el contexto del comercio.</strong>
+            <p>Volvé al inicio y abrí el enlace del club que querés visitar.</p>
+            <Link className="btn btn--outline club-register__status-action" href={homeHref}>
+              Volver al inicio
+            </Link>
+          </div>
+        ) : null}
+
+        {serverError ? (
+          <div
+            className="club-register__status club-register__status--error"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <strong>No pudimos completar el registro.</strong>
+            <p>{serverError}</p>
+          </div>
+        ) : null}
+
+        {accountCreated ? (
+          <div
+            className="club-register__status club-register__status--partial"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <strong>Tu cuenta fue creada.</strong>
+            <p>
+              No pudimos iniciar sesión automáticamente. Ingresá con tu teléfono para continuar.
+            </p>
+            <Link className="btn btn--outline club-register__status-action" href={loginHref}>
+              Ir a ingresar
+            </Link>
+          </div>
+        ) : null}
+
+        <form
+          className="club-register__form"
+          onSubmit={handleSubmit}
+          noValidate
+          aria-busy={submitting}
+        >
+          <fieldset className="club-register__fieldset" disabled={!hasBusinessContext}>
+            <legend className="club-register__legend">Datos para tu cuenta</legend>
+            <div className="club-register__fields">
+              <FormField
+                id="fullName"
+                name="fullName"
+                label="Nombre completo"
+                type="text"
+                value={form.fullName}
+                onChange={(event) => updateField('fullName', event)}
+                autoComplete="name"
+                helperText="Así te reconocemos cuando vuelvas a tu local."
+                error={errors.fullName}
+                required
+                inputRef={fullNameRef}
+              />
+              <FormField
+                id="phone"
+                name="phone"
+                label="Teléfono"
+                type="tel"
+                inputMode="tel"
+                value={form.phone}
+                onChange={(event) => updateField('phone', event)}
+                autoComplete="tel"
+                helperText="Incluí el código de país. Por ejemplo, +56 9..."
+                error={errors.phone}
+                required
+                inputRef={phoneRef}
+              />
+            </div>
+
+            <details className="club-register__optional">
+              <summary className="club-register__optional-summary">
+                ¿Querés completar algo más ahora?
+              </summary>
+              <p className="club-register__optional-copy">
+                Estos datos son opcionales y podés dejarlos para más adelante.
+              </p>
+              <div className="club-register__optional-fields">
+                <FormField
+                  id="email"
+                  name="email"
+                  label="Email"
+                  type="email"
+                  value={form.email}
+                  onChange={(event) => updateField('email', event)}
+                  autoComplete="email"
+                  helperText="Solo si te resulta cómodo."
+                  spellCheck={false}
+                />
+                <FormField
+                  id="birthDate"
+                  name="birthDate"
+                  label="Fecha de nacimiento"
+                  type="date"
+                  value={form.birthDate}
+                  onChange={(event) => updateField('birthDate', event)}
+                  autoComplete="off"
+                  helperText="Opcional."
+                />
+              </div>
+            </details>
+
+            <button
+              className="btn btn--primary club-register__submit"
+              type="submit"
+              disabled={submitting || accountCreated}
+            >
+              {submitting ? 'Registrando…' : accountCreated ? 'Cuenta creada' : 'Registrarme'}
+            </button>
+          </fieldset>
         </form>
-      </div>
-    </main>
+
+        <ConsentList />
+      </section>
+    </ClubShell>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  main: {
-    minHeight: '100dvh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '16px',
-    background: 'var(--surface-page)',
-    fontFamily: 'var(--font-body), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-  },
-  card: {
-    background: 'var(--surface-card)',
-    borderRadius: 'var(--radius-xl)',
-    padding: '32px 24px',
-    maxWidth: '360px',
-    width: '100%',
-    boxShadow: 'var(--shadow-md)',
-  },
-  title: {
-    fontSize: 'var(--text-2xl)',
-    fontWeight: 700,
-    margin: '0 0 4px',
-    color: 'var(--text-primary)',
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 'var(--text-base)',
-    color: 'var(--text-secondary)',
-    margin: '0 0 var(--space-6)',
-    textAlign: 'center',
-  },
-  serverError: {
-    background: 'var(--error-bg)',
-    color: 'oklch(0.35 0.15 28)',
-    padding: '10px 14px',
-    borderRadius: 'var(--radius-md)',
-    fontSize: 'var(--text-sm)',
-    marginBottom: 'var(--space-4)',
-  },
-  field: {
-    marginBottom: 'var(--space-4)',
-  },
-  label: {
-    display: 'block',
-    fontSize: 'var(--text-sm)',
-    fontWeight: 600,
-    color: 'var(--text-body)',
-    marginBottom: '6px',
-  },
-  input: {
-    width: '100%',
-    padding: '12px 14px',
-    fontSize: 'var(--text-base)',
-    border: '1px solid var(--border-input)',
-    borderRadius: 'var(--radius-md)',
-    outline: 'none',
-    boxSizing: 'border-box',
-    minHeight: '44px',
-  },
-  inputError: {
-    borderColor: 'var(--error)',
-  },
-  errorText: {
-    display: 'block',
-    color: 'var(--error)',
-    fontSize: 'var(--text-xs)',
-    marginTop: '4px',
-  },
-  button: {
-    width: '100%',
-    padding: '14px 0',
-    background: 'var(--brand-500)',
-    color: 'var(--text-inverse)',
-    fontSize: 'var(--text-lg)',
-    fontWeight: 600,
-    borderRadius: 'var(--radius-md)',
-    border: 'none',
-    cursor: 'pointer',
-    minHeight: '48px',
-    marginTop: '8px',
-  },
-};
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<RegisterLoading />}>
+      <RegisterContent />
+    </Suspense>
+  );
+}
