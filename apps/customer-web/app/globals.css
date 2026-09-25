@@ -2095,3 +2095,177 @@ a {
     width: 100%;
   }
 }
+
+/* --- Stage 3: Club Barrio Login --- */
+.club-login-shell {
+  overflow-x: clip;
+}
+
+.club-login {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: var(--space-5);
+  padding-block: var(--space-3) var(--space-6);
+}
+
+.club-login__intro {
+  min-width: 0;
+}
+
+.club-login__eyebrow {
+  margin: 0 0 var(--space-3);
+  color: var(--club-cherry-dark);
+  font-size: var(--text-sm);
+  font-weight: var(--font-bold);
+  letter-spacing: 0.02em;
+}
+
+.club-login__title {
+  margin: 0;
+  color: var(--club-ink);
+  font-family: var(--club-font-display);
+  font-size: clamp(2.25rem, 5vw, 3rem);
+  font-weight: var(--font-bold);
+  letter-spacing: -0.045em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+.club-login__summary {
+  max-width: 34rem;
+  margin: var(--space-3) 0 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-lg);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.club-login__context {
+  min-width: 0;
+  padding: var(--space-4);
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-left: 3px solid var(--club-cherry);
+  border-radius: var(--club-radius);
+  box-shadow: var(--club-shadow-quiet);
+}
+
+.club-login__context-label,
+.club-login__context-copy {
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.club-login__context-title {
+  margin: var(--space-1) 0;
+  color: var(--club-ink);
+  font-size: var(--text-xl);
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+.club-login__form {
+  min-width: 0;
+  padding: var(--space-5);
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-radius: var(--club-radius);
+  box-shadow: var(--club-shadow-quiet);
+}
+
+/* The shared FormField renders its wrapper with the `club-register__field`
+   class, so the field itself already inherits the Stage 2 input, label,
+   helper and error treatment. Only the login-specific pieces are declared
+   here — duplicating the field rules would ship dead CSS. */
+.club-login__submit {
+  width: 100%;
+  min-width: 0;
+  margin-top: var(--space-5);
+  white-space: nowrap;
+}
+
+.club-login__status {
+  min-width: 0;
+  padding: var(--space-4);
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-left: 3px solid var(--club-ink-soft);
+  border-radius: var(--club-radius);
+}
+
+.club-login__status--error {
+  border-left-color: var(--club-cherry);
+}
+
+.club-login__status strong {
+  display: block;
+  font-size: var(--text-base);
+  line-height: 1.35;
+}
+
+.club-login__status p {
+  max-width: 48ch;
+  margin: var(--space-1) 0 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.club-login__status-action {
+  width: auto;
+  min-width: 10rem;
+  margin-top: var(--space-3);
+  padding-inline: var(--space-4);
+  white-space: nowrap;
+}
+
+.club-login__switch {
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-base);
+  text-align: center;
+  text-wrap: pretty;
+}
+
+.club-login__switch a {
+  color: var(--club-cherry-dark);
+  font-weight: var(--font-semibold);
+}
+
+.club-login__switch a:hover {
+  text-decoration: underline;
+}
+
+.club-login-loading {
+  display: grid;
+  min-height: calc(100dvh - var(--space-8));
+  place-items: center;
+}
+
+@media (max-width: 47.99rem) {
+  .club-login {
+    gap: var(--space-4);
+  }
+
+  .club-login__form,
+  .club-login__context,
+  .club-login__status {
+    padding: var(--space-4);
+  }
+
+  .club-login__summary {
+    font-size: var(--text-base);
+  }
+
+  .club-login__status-action {
+    width: 100%;
+  }
+}
