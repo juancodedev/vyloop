@@ -13,8 +13,6 @@ import { MemberQr } from '../components/member-qr';
 import { api, type CustomerProfile } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
-const CID_KEY = 'vyloop_customer_id';
-
 const ERROR_TITLE = 'No pudimos cargar tu pase';
 const ERROR_DESCRIPTION =
   'Hubo un problema al traer tus datos. Podés reintentar; no modificamos nada en tu cuenta.';
@@ -232,7 +230,6 @@ export default function ProfilePage() {
       .getProfile()
       .then((data) => {
         setProfile(data);
-        localStorage.setItem(CID_KEY, data.id);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setFetching(false));
@@ -300,7 +297,6 @@ export default function ProfilePage() {
         type="button"
         className="logout-btn"
         onClick={() => {
-          localStorage.removeItem(CID_KEY);
           logout();
           router.push('/');
         }}

@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls } from './helpers';
+import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -581,16 +581,28 @@ router.post('/v1/loyalty/points/assign', async (c) => {
  *
  * Paginated transaction history scoped by X-Business-Id.
  * Supports ?customer_id=, ?type=earn|redeem, ?page=, ?limit= filters.
+ *
+ * `customer_id` is optional, and who it may name depends on the role. A
+ * customer is always narrowed to their own record — derived from the token,
+ * never from the query string — so omitting the parameter means "mine", not
+ * "everyone in this tenant". Naming someone else is a 403. An operator may
+ * still name any customer, and naming none still lists the whole tenant.
  */
 router.get('/v1/loyalty/points/transactions', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
-  const customerId = c.req.query('customer_id');
+  const auth = extractAuthHeaders(c);
+  const { businessId } = auth;
   const typeFilter = c.req.query('type');
   const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') ?? '20', 10) || 20));
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
+
+  const effective = await resolveEffectiveCustomer(db, auth, c.req.query('customer_id'));
+  if (!effective.ok) {
+    return c.json({ error: { code: effective.code, message: effective.message } }, effective.status);
+  }
+  const customerId = effective.customerId;
 
   // Build WHERE conditions
   const conditions: ReturnType<typeof and>[] = [
@@ -937,11 +949,17 @@ router.delete('/v1/loyalty/rewards/:id', async (c) => {
  *   available points and reports partial fulfillment.
  * - Dedup: referenceId unique per customer → 409
  * - After success, publishes a RewardRedeemed event with reward_id.
+ * - Ownership: `customer_id` is optional and role-aware. A customer redeems
+ *   against their own balance only — resolved from the token, never from the
+ *   body — so naming another customer is a 403 and no transaction is written.
+ *   An operator may still name any customer in the tenant, which is what the
+ *   dashboard POS does with a scanned customer.
  */
 router.post('/v1/loyalty/rewards/redeem', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  const { businessId } = auth;
   const body = await c.req.json<{
-    customer_id: string;
+    customer_id?: string;
     points: number;
     reward_id?: string;
     reward_name?: string;
@@ -949,7 +967,11 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
     reference_id: string;
   }>();
 
-  if (!body.customer_id || !body.points || !body.reference_id) {
+  // A customer may omit `customer_id` — it then means "my own record", so it
+  // is only required of an operator, who has no other way to say whose
+  // balance to spend.
+  const customerIdMissing = !isCustomerRole(auth) && !body.customer_id;
+  if (customerIdMissing || !body.points || !body.reference_id) {
     return c.json(
       { error: { code: 'VALIDATION_ERROR', message: 'customer_id, points, and reference_id are required' } },
       400,
@@ -965,6 +987,17 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
+
+  // Ownership before anything is read about a reward or written about a
+  // balance: the reward catalog is tenant-scoped, but the balance is not, and
+  // a 403 here must leave no transaction behind.
+  const effective = await resolveEffectiveCustomer(db, auth, body.customer_id);
+  if (!effective.ok) {
+    return c.json({ error: { code: effective.code, message: effective.message } }, effective.status);
+  }
+  // Non-null by construction: an operator who named no customer was rejected
+  // above, and a customer always resolves to their own row.
+  const customerId = effective.customerId as string;
 
   // -----------------------------------------------------------------------
   // Validate reward catalog (if reward_id provided)
@@ -1025,7 +1058,7 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
   // -----------------------------------------------------------------------
   const balanceResult = await db.execute(sql`
     SELECT COALESCE(
-      (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid ORDER BY created_at DESC LIMIT 1),
+      (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid ORDER BY created_at DESC LIMIT 1),
       0
     ) AS balance
   `);
@@ -1075,11 +1108,11 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
             INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
             VALUES (
               ${businessId}::uuid,
-              ${body.customer_id}::uuid,
+              ${customerId}::uuid,
               'redeem',
               ${redeemPoints}::integer,
               COALESCE(
-                (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid ORDER BY created_at DESC LIMIT 1),
+                (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid ORDER BY created_at DESC LIMIT 1),
                 0
               ) - ${redeemPoints}::integer,
               ${body.reference_id},
@@ -1102,11 +1135,11 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
         INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
         VALUES (
           ${businessId}::uuid,
-          ${body.customer_id}::uuid,
+          ${customerId}::uuid,
           'redeem',
           ${redeemPoints}::integer,
           COALESCE(
-            (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid ORDER BY created_at DESC LIMIT 1),
+            (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid ORDER BY created_at DESC LIMIT 1),
             0
           ) - ${redeemPoints}::integer,
           ${body.reference_id},
@@ -1131,7 +1164,7 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
     // Publish RewardRedeemed event
     // -----------------------------------------------------------------------
     const event = buildRewardRedeemedEvent(
-      body.customer_id,
+      customerId,
       businessId,
       redeemPoints,
       balanceAfter,
