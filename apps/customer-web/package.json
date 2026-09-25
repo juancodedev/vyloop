@@ -14,7 +14,7 @@
   "dependencies": {
     "@vyloop/design-system": "workspace:*",
     "@vyloop/types": "workspace:*",
-    "lucide-react": "^1.23.0",
+    "lucide-react": "^1.25.0",
     "next": "^15.5.18",
     "qrcode": "^1.5.4",
     "react": "^19.2.7",

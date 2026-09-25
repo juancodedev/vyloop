@@ -59,8 +59,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       lucide-react:
-        specifier: ^1.23.0
-        version: 1.23.0(react@19.2.7)
+        specifier: ^1.25.0
+        version: 1.25.0(react@19.2.7)
       next:
         specifier: ^15.5.18
         version: 15.5.18(react-dom@19.2.8(react@19.2.7))(react@19.2.7)
@@ -117,8 +117,8 @@ importers:
         specifier: ^2.3.8
         version: 2.3.8
       lucide-react:
-        specifier: ^1.23.0
-        version: 1.23.0(react@19.2.7)
+        specifier: ^1.25.0
+        version: 1.25.0(react@19.2.7)
       next:
         specifier: ^15.5.18
         version: 15.5.18(react-dom@19.2.8(react@19.2.7))(react@19.2.7)
@@ -136,8 +136,8 @@ importers:
         specifier: ^1.13.16
         version: 1.13.16(@cloudflare/workers-types@5.20260708.1)(next@15.5.18(react-dom@19.2.8(react@19.2.7))(react@19.2.7))(wrangler@4.107.0(@cloudflare/workers-types@5.20260708.1))
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
@@ -155,7 +155,7 @@ importers:
         version: 4.1.11(@types/node@26.1.1)(jsdom@29.1.1)(vite@7.3.6(@types/node@26.1.1)(jiti@2.7.0)(tsx@4.23.1))
       wrangler:
         specifier: ^4.107.0
-        version: 4.107.0(@cloudflare/workers-types@5.20260708.1)
+        version: 4.107.0(@cloudflare/workers-types@5.20260722.1)
 
   apps/gateway:
     dependencies:
@@ -169,15 +169,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.5
+        version: 4.13.5
       jose:
-        specifier: ^6.2.3
-        version: 6.2.3
+        specifier: ^6.2.4
+        version: 6.2.4
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -186,7 +186,7 @@ importers:
         version: 4.1.11(@types/node@26.1.1)(jsdom@29.1.1)(vite@7.3.6(@types/node@26.1.1)(jiti@2.7.0)(tsx@4.23.1))
       wrangler:
         specifier: ^4.107.0
-        version: 4.107.0(@cloudflare/workers-types@5.20260708.1)
+        version: 4.107.0(@cloudflare/workers-types@5.20260722.1)
 
   packages/config:
     devDependencies:
@@ -204,7 +204,7 @@ importers:
         version: 1.1.0
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       pg:
         specifier: ^8.0.0
         version: 8.22.0
@@ -263,8 +263,8 @@ importers:
         version: link:../types
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -285,8 +285,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -313,14 +313,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.5
+        version: 4.13.5
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -344,14 +344,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.5
+        version: 4.13.5
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -375,14 +375,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.5
+        version: 4.13.5
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -397,8 +397,8 @@ importers:
         version: link:../../packages/types
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -425,14 +425,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.5
+        version: 4.13.5
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -456,14 +456,14 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.5
+        version: 4.13.5
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -487,17 +487,17 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.5
+        version: 4.13.5
       jose:
-        specifier: ^6.2.3
-        version: 6.2.3
+        specifier: ^6.2.4
+        version: 6.2.4
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260708.1
-        version: 5.20260708.1
+        specifier: ^5.20260722.1
+        version: 5.20260722.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -615,8 +615,8 @@ packages:
   '@cloudflare/workers-types@4.20260702.1':
     resolution: {integrity: sha512-mOhf5TUEB1m2vPrxtqoIGfz0fUC9xyxRDx5gWHy5s+OCo6dcV+g7wI1R7gYCMFohhqF/2y2xeKVwMwCJjfn/WA==}
 
-  '@cloudflare/workers-types@5.20260708.1':
-    resolution: {integrity: sha512-FSRyCsxALKmmNnk/2HMkTiX9Iz9yqTiTWX/BJZdffGznMSunXmQgb3mKy9wGBX2BCTLOuRYWL36uh7/3Gm05Eg==}
+  '@cloudflare/workers-types@5.20260722.1':
+    resolution: {integrity: sha512-8+kivCgFGzwrAfNOWgSpzy/VDvmT/i5KWBgQhnygv3d1kajNn6mCYTbLKpouG0aY8mXjhv+IQm1a8r2K/H4pqQ==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -1134,11 +1134,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@esbuild/win32-x64@0.28.2':
-    resolution: {integrity: sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [win32]
+  '@eslint-community/eslint-utils@4.10.1':
+    resolution: {integrity: sha512-cuadcxVFE8sDK6iWJbs8Sn0av2Nrh2QSGQhVlBW9AaAHqHwjWsZHT8LJ4hFGPh7ASBV2deFdM7H/DPjulmh8rg==}
+    engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
+    peerDependencies:
+      eslint: ^6.0.0 || ^7.0.0 || >=8.0.0
 
   '@eslint-community/eslint-utils@4.9.1':
     resolution: {integrity: sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ==}
@@ -1762,63 +1762,63 @@ packages:
   '@types/react@19.2.17':
     resolution: {integrity: sha512-MXfmqaVPEVgkBT/aY0aGCkRWWtByiYQXo3xdQ8r5RzuFrPiRn8Gar2tQdXSUQ2GKV3bkXckek89V8wQBY2Q/Aw==}
 
-  '@typescript-eslint/eslint-plugin@8.63.0':
-    resolution: {integrity: sha512-rvwSgqT+DHpWdzfSzPatRLm02a0GlESt++9iy3hLCDY4BgkaLcl8LBi9Yh7XGFBpwcBE/K3024QuXWTpbz4FfQ==}
+  '@typescript-eslint/eslint-plugin@8.65.0':
+    resolution: {integrity: sha512-IEgob78X12rHpUmtcwFsXhZdVGJtwTVP8FiCLZkR6GlYVrl2PcuB+KhCE5BlVC/eQpQnu8WXRtkHZuPar+gCRA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
-      '@typescript-eslint/parser': ^8.63.0
+      '@typescript-eslint/parser': ^8.65.0
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/parser@8.63.0':
-    resolution: {integrity: sha512-gwh4gvvlaVDKKxyfxMG+Gnu1u9X0OQBwyGLkbwB65dIzBKnxeRiJlNFqlI3zwVhNXJIs6qV7mlFCn/BIajlVig==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-    peerDependencies:
-      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
-      typescript: '>=4.8.4 <6.1.0'
-
-  '@typescript-eslint/project-service@8.63.0':
-    resolution: {integrity: sha512-e5dh0/UI0ok53AlZ5wRkXCB32z/f2jUZqPR/ygAw5WYaSw8j9EoJWlS7wQjr/dmOaqWjnPIn2m+HhVPCMWGZVQ==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-    peerDependencies:
-      typescript: '>=4.8.4 <6.1.0'
-
-  '@typescript-eslint/scope-manager@8.63.0':
-    resolution: {integrity: sha512-uUyfMWCnDSN8bCpcrY8nGP2BLkQ9Xn0GsipcONcpIDWhwhO4ZSyHvyS14U3X75mzxWxL3I2UZIrenTzdzcJO8A==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-
-  '@typescript-eslint/tsconfig-utils@8.63.0':
-    resolution: {integrity: sha512-sUAbkulqBAsncKnbRP3+7CtQFRKicexnj7ZwNC6ddCR7EmrXvjvdCYMJbUIqMd6lwoEriZjwLo08aS5tSjVMHg==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-    peerDependencies:
-      typescript: '>=4.8.4 <6.1.0'
-
-  '@typescript-eslint/type-utils@8.63.0':
-    resolution: {integrity: sha512-Nzzh/OGxVCOjObjaj1CQF2RUasyYy2Jfuh+zZ3PjLzG2fYRriAiZLib9UKtO+CpQAS3YHiAS+ckZDclwqI1TPA==}
+  '@typescript-eslint/parser@8.65.0':
+    resolution: {integrity: sha512-CZ4nMxWwgu1HEEFNkeaCptra9QCtkmKdgf3sWh1rl1trIhmxLilgTV4cwcbQ4wemnT4sWQN8CaKOmdYx+g2gMA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/types@8.63.0':
-    resolution: {integrity: sha512-xyLtl9DUBBFrcJS4x2pIqGLH68/tC2uOa4Z7pUteW09D3bXnnXUom4dyPikzWgB7llmIc1zoeI3aoUdC4rPK/Q==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
-
-  '@typescript-eslint/typescript-estree@8.63.0':
-    resolution: {integrity: sha512-ygBkU+B7ex5UI/gKhaqexWev79uISfIv7XQCRNYO/jmD8rGLPyWLAb3KMRT6nd8Gt9bmUBi9+iX6tBdYfOY81Q==}
+  '@typescript-eslint/project-service@8.65.0':
+    resolution: {integrity: sha512-SxnPhbTsGahizDgbu7oqFH/xVtzIqMd/s+WtnSxNxJZJpLbdT5IPdzg8EZxO3+PoKahXmwJLeNQOpKJb3/bi7Q==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/utils@8.63.0':
-    resolution: {integrity: sha512-fUKaeAvrTuQg/Tgt3nliAUSZHJM6DlCcfyEmxCvlX8kieWSStBX+5O5Fnidtc3i2JrH+9c/GL4RY2iasd/GPTA==}
+  '@typescript-eslint/scope-manager@8.65.0':
+    resolution: {integrity: sha512-Esbl8OSYiVxBokYgWPf7VVWg/BE798wXhimnn9ML9Pt5qoDf8bfQlgjlKXR/k98+AcNzlLKYrpCcrcuZ9DZLgg==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/tsconfig-utils@8.65.0':
+    resolution: {integrity: sha512-j6GzGqCiRdA7Qhur2VVmKZAkBLfnHFQfx4TaJGL9RMveZqCo48jSHHO0DTgizEnGhtWnqmbtCUSrqSkdiY/0Hg==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/type-utils@8.65.0':
+    resolution: {integrity: sha512-YjaZ7PRI5qY7ax2L3PbvX0rRyGtipAReCWs0mhhDBHjH/vl0g0BonaGXrKdKpMbIIsMIwDgbk/xzkBTyAltS5g==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  '@typescript-eslint/visitor-keys@8.63.0':
-    resolution: {integrity: sha512-UexrHGnGTpbuQHct2ExOc2ZcFbGUS9FOesCxxqdBGcpI1BxYu/LZ6U8Aq6/72XtF/qRBk9nhuGHFJIXXMhPMdw==}
+  '@typescript-eslint/types@8.65.0':
+    resolution: {integrity: sha512-JSSwWNy+H0E/01jJEM+hrX6N0OFDzFzeIhHFSAS01tlVaevpG8cFyYRPhS5yjGOvBUx3sqQHVMjCL1CAZZMxBg==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/typescript-estree@8.65.0':
+    resolution: {integrity: sha512-JboAE2swaYt4tb1fHhHTABE2K+OLy09XfcTbhnk4Pw96f9dd2e9iYsJ28gBggHlo5z5x1rkyWvcPoTuNTd4oGg==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/utils@8.65.0':
+    resolution: {integrity: sha512-gXiwIHsYreboxeJucHKPvgwl7dXt50mF8s1/c00cP/WoVTyWKFdtfhRWwZiXYFU5H2O8vVoSLNrexFZjYS/SGA==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/visitor-keys@8.65.0':
+    resolution: {integrity: sha512-8C71BQkGjiMmXtop7pHVJu1l2NNShFdkCyD6a2ezzs5vU/L3LRtb69EtcteFwz0mYMPzIgOw0n6OV4VBUWZd7A==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
   '@vitest/expect@4.1.11':
@@ -2535,8 +2535,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.12.31:
-    resolution: {integrity: sha512-zJIHFrl6bq3RDd2YusFNCDlM8qUprxKswyi/OPzPyzKDdyBXDqWx8bZlZ7R+saTdSTatUmb3O7K4SspGPaEOQg==}
+  hono@4.13.5:
+    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
     engines: {node: '>=16.9.0'}
 
   html-encoding-sniffer@6.0.0:
@@ -2695,8 +2695,8 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
-  jose@6.2.3:
-    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
+  jose@6.2.4:
+    resolution: {integrity: sha512-N8acGzVsQy6M/fjFcxtysNc4Q379TcM5dM/qKkNtsHFji88yANnXTr7BLeP75iPnFwBfQzM/jg2BZ9+HZrHCZA==}
 
   js-yaml@4.3.0:
     resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
@@ -2755,6 +2755,11 @@ packages:
 
   lucide-react@1.23.0:
     resolution: {integrity: sha512-38BpJcD0JhFosxHApP/BYsBetLpQFRoTRzEzstM/XCc3jsAG7wqaY1lgVwxiUe3xqYE+lNxo2PkCmYwXWrwwIw==}
+    peerDependencies:
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  lucide-react@1.25.0:
+    resolution: {integrity: sha512-/mdJTRbiwcLOQ1NZZK1amZF9rIZyvO18D6r9TngE6TG1NmqHgFuT4eE7Xrkm9UsXMbBJD1NlfwHVltCDWHrOTw==}
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
@@ -2981,6 +2986,10 @@ packages:
   picomatch@2.3.2:
     resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
+
+  picomatch@4.0.7:
+    resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
+    engines: {node: '>=12'}
 
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
@@ -3389,8 +3398,8 @@ packages:
     resolution: {integrity: sha512-phPGCwqr2+Qo0fwniCE8e4pKnGu/yFb5nD5Y8bf0EEeiI5GklnACYA9GFy/DrAeRrKHXvHn+1SUsOWgJp6RO+g==}
     engines: {node: '>= 0.4'}
 
-  typescript-eslint@8.63.0:
-    resolution: {integrity: sha512-xgwXyzG4sK9ALkBxbyGkTMMOS+imnW65iPhxCQMK83KhxyoDNW7l+IDqEf9vMdoUidHpOoS967RCq4eMiTexwQ==}
+  typescript-eslint@8.65.0:
+    resolution: {integrity: sha512-/ggrHAwyjENDusvyxbuqxAC2dTnZg/Z8F+fgQtYIz+L6n/9HfSlEZcFGV/NsMNa6CkGk0xUjUAFwC0vHOflvIA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
@@ -3719,9 +3728,9 @@ snapshots:
       package-manager-manager: 0.2.0
       pcre-to-regexp: 1.1.0
       semver: 7.8.5
-      wrangler: 4.107.0(@cloudflare/workers-types@5.20260708.1)
+      wrangler: 4.107.0(@cloudflare/workers-types@5.20260722.1)
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260708.1
+      '@cloudflare/workers-types': 5.20260722.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3765,7 +3774,7 @@ snapshots:
   '@cloudflare/workers-types@4.20260702.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20260708.1': {}
+  '@cloudflare/workers-types@5.20260722.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -4218,6 +4227,9 @@ snapshots:
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
+  '@napi-rs/lzma-linux-x64-gnu@1.5.1':
+    optional: true
+
   '@neondatabase/serverless@1.1.0': {}
 
   '@next/env@15.5.18': {}
@@ -4537,31 +4549,31 @@ snapshots:
 
   '@typescript-eslint/parser@8.63.0(eslint@9.39.5(jiti@2.7.0))(typescript@6.0.3)':
     dependencies:
-      '@typescript-eslint/scope-manager': 8.63.0
-      '@typescript-eslint/types': 8.63.0
-      '@typescript-eslint/typescript-estree': 8.63.0(typescript@6.0.3)
-      '@typescript-eslint/visitor-keys': 8.63.0
+      '@typescript-eslint/scope-manager': 8.65.0
+      '@typescript-eslint/types': 8.65.0
+      '@typescript-eslint/typescript-estree': 8.65.0(typescript@6.0.3)
+      '@typescript-eslint/visitor-keys': 8.65.0
       debug: 4.4.3
       eslint: 9.39.5(jiti@2.7.0)
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/project-service@8.63.0(typescript@6.0.3)':
+  '@typescript-eslint/project-service@8.65.0(typescript@6.0.3)':
     dependencies:
-      '@typescript-eslint/tsconfig-utils': 8.63.0(typescript@6.0.3)
-      '@typescript-eslint/types': 8.63.0
+      '@typescript-eslint/tsconfig-utils': 8.65.0(typescript@6.0.3)
+      '@typescript-eslint/types': 8.65.0
       debug: 4.4.3
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/scope-manager@8.63.0':
+  '@typescript-eslint/scope-manager@8.65.0':
     dependencies:
-      '@typescript-eslint/types': 8.63.0
-      '@typescript-eslint/visitor-keys': 8.63.0
+      '@typescript-eslint/types': 8.65.0
+      '@typescript-eslint/visitor-keys': 8.65.0
 
-  '@typescript-eslint/tsconfig-utils@8.63.0(typescript@6.0.3)':
+  '@typescript-eslint/tsconfig-utils@8.65.0(typescript@6.0.3)':
     dependencies:
       typescript: 6.0.3
 
@@ -4577,14 +4589,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/types@8.63.0': {}
+  '@typescript-eslint/types@8.65.0': {}
 
-  '@typescript-eslint/typescript-estree@8.63.0(typescript@6.0.3)':
+  '@typescript-eslint/typescript-estree@8.65.0(typescript@6.0.3)':
     dependencies:
-      '@typescript-eslint/project-service': 8.63.0(typescript@6.0.3)
-      '@typescript-eslint/tsconfig-utils': 8.63.0(typescript@6.0.3)
-      '@typescript-eslint/types': 8.63.0
-      '@typescript-eslint/visitor-keys': 8.63.0
+      '@typescript-eslint/project-service': 8.65.0(typescript@6.0.3)
+      '@typescript-eslint/tsconfig-utils': 8.65.0(typescript@6.0.3)
+      '@typescript-eslint/types': 8.65.0
+      '@typescript-eslint/visitor-keys': 8.65.0
       debug: 4.4.3
       minimatch: 10.2.5
       semver: 7.8.5
@@ -4605,9 +4617,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/visitor-keys@8.63.0':
+  '@typescript-eslint/visitor-keys@8.65.0':
     dependencies:
-      '@typescript-eslint/types': 8.63.0
+      '@typescript-eslint/types': 8.65.0
       eslint-visitor-keys: 5.0.1
 
   '@vitest/expect@4.1.11':
@@ -4938,9 +4950,9 @@ snapshots:
       esbuild: 0.25.12
       tsx: 4.23.1
 
-  drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260708.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9):
+  drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9):
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260708.1
+      '@cloudflare/workers-types': 5.20260722.1
       '@neondatabase/serverless': 1.1.0
       '@types/pg': 8.11.6
       gel: 2.2.0
@@ -5286,6 +5298,10 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
+  fdir@6.5.0(picomatch@4.0.7):
+    optionalDependencies:
+      picomatch: 4.0.7
+
   file-entry-cache@8.0.0:
     dependencies:
       flat-cache: 4.0.1
@@ -5426,7 +5442,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.12.31: {}
+  hono@4.13.5: {}
 
   html-encoding-sniffer@6.0.0:
     dependencies:
@@ -5582,7 +5598,7 @@ snapshots:
 
   jiti@2.7.0: {}
 
-  jose@6.2.3: {}
+  jose@6.2.4: {}
 
   js-yaml@4.3.0:
     dependencies:
@@ -5650,6 +5666,10 @@ snapshots:
   lru-cache@11.5.2: {}
 
   lucide-react@1.23.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
+
+  lucide-react@1.25.0(react@19.2.7):
     dependencies:
       react: 19.2.7
 
@@ -5900,6 +5920,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@2.3.2: {}
+
+  picomatch@4.0.7: {}
 
   picomatch@4.0.7: {}
 
@@ -6569,7 +6591,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  wrangler@4.107.0(@cloudflare/workers-types@5.20260708.1):
+  wrangler@4.107.0(@cloudflare/workers-types@5.20260722.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260701.1)
@@ -6580,7 +6602,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260701.1
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260708.1
+      '@cloudflare/workers-types': 5.20260722.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil
