@@ -1762,3 +1762,336 @@ a {
     justify-self: start;
   }
 }
+
+/* --- Stage 2: Club Barrio Registration --- */
+.club-register-shell {
+  overflow-x: clip;
+}
+
+.club-register {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: var(--space-5);
+  padding-block: var(--space-3) var(--space-6);
+}
+
+.club-register__intro {
+  min-width: 0;
+}
+
+.club-register__eyebrow {
+  margin: 0 0 var(--space-3);
+  color: var(--club-cherry-dark);
+  font-size: var(--text-sm);
+  font-weight: var(--font-bold);
+  letter-spacing: 0.02em;
+}
+
+.club-register__title {
+  margin: 0;
+  color: var(--club-ink);
+  font-family: var(--club-font-display);
+  font-size: clamp(2.25rem, 5vw, 3rem);
+  font-weight: var(--font-bold);
+  letter-spacing: -0.045em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+.club-register__summary {
+  max-width: 34rem;
+  margin: var(--space-3) 0 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-lg);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.club-register__context {
+  min-width: 0;
+  padding: var(--space-4);
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-left: 3px solid var(--club-cherry);
+  border-radius: var(--club-radius);
+  box-shadow: var(--club-shadow-quiet);
+}
+
+.club-register__context-label,
+.club-register__context-copy {
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.club-register__context-title {
+  margin: var(--space-1) 0;
+  color: var(--club-ink);
+  font-size: var(--text-xl);
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+.club-register__form {
+  min-width: 0;
+  padding: var(--space-5);
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-radius: var(--club-radius);
+  box-shadow: var(--club-shadow-quiet);
+}
+
+.club-register__fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.club-register__legend {
+  width: 100%;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  color: var(--club-ink);
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  line-height: var(--leading-tight);
+}
+
+.club-register__fields,
+.club-register__optional-fields {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.club-register__field,
+.club-register__field.field {
+  min-width: 0;
+  margin: 0;
+}
+
+.club-register__field .label {
+  margin-bottom: var(--space-2);
+  color: var(--club-ink);
+}
+
+.club-register__field .input {
+  min-width: 0;
+  color: var(--club-ink);
+  background: var(--club-paper);
+  border-color: var(--club-line);
+}
+
+.club-register__field .input:hover:not(:disabled) {
+  border-color: var(--club-ink-soft);
+}
+
+.club-register__field .input:disabled {
+  color: var(--club-ink-soft);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.club-register__helper {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.club-register__field .error-text {
+  margin-top: var(--space-1);
+  color: var(--club-cherry-dark);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.club-register__optional {
+  min-width: 0;
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--club-line-soft);
+}
+
+.club-register__optional-summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--club-cherry-dark);
+  cursor: pointer;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  line-height: 1.4;
+  list-style-position: inside;
+  text-wrap: pretty;
+  touch-action: manipulation;
+}
+
+.club-register__optional-summary:hover {
+  color: var(--club-ink);
+}
+
+.club-register__optional-copy {
+  max-width: 42ch;
+  margin: var(--space-1) 0 var(--space-4);
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.club-register__submit {
+  width: 100%;
+  min-width: 0;
+  margin-top: var(--space-5);
+  white-space: nowrap;
+}
+
+.club-register__status {
+  min-width: 0;
+  padding: var(--space-4);
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-left: 3px solid var(--club-ink-soft);
+  border-radius: var(--club-radius);
+}
+
+.club-register__status--error,
+.club-register__status--partial {
+  border-left-color: var(--club-cherry);
+}
+
+.club-register__status strong {
+  display: block;
+  font-size: var(--text-base);
+  line-height: 1.35;
+}
+
+.club-register__status p {
+  max-width: 48ch;
+  margin: var(--space-1) 0 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.club-register__status-action {
+  width: auto;
+  min-width: 10rem;
+  margin-top: var(--space-3);
+  padding-inline: var(--space-4);
+  white-space: nowrap;
+}
+
+.club-consent {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.club-consent__title {
+  width: 100%;
+  padding: 0;
+  color: var(--club-ink);
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  line-height: var(--leading-tight);
+}
+
+.club-consent__intro {
+  max-width: 48ch;
+  margin: var(--space-1) 0 var(--space-3);
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.club-consent__rows {
+  border-top: 1px solid var(--club-line);
+}
+
+.club-consent__row {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--space-3) 0;
+  color: var(--club-ink);
+  border-bottom: 1px solid var(--club-line-soft);
+  cursor: not-allowed;
+}
+
+.club-consent__row input {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0;
+  accent-color: var(--club-cherry);
+}
+
+.club-consent__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.club-consent__label {
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+.club-consent__description,
+.club-consent__state {
+  color: var(--club-ink-soft);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.club-consent__state {
+  grid-column: 2;
+  font-weight: var(--font-semibold);
+}
+
+.club-register-loading {
+  display: grid;
+  min-height: calc(100dvh - var(--space-8));
+  place-items: center;
+}
+
+@media (max-width: 47.99rem) {
+  .club-register {
+    gap: var(--space-4);
+  }
+
+  .club-register__form,
+  .club-register__context,
+  .club-register__status {
+    padding: var(--space-4);
+  }
+
+  .club-register__summary {
+    font-size: var(--text-base);
+  }
+
+  .club-register__status-action {
+    width: 100%;
+  }
+}
