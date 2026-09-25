@@ -26,9 +26,11 @@ const config = tseslint.config(
     },
   },
   {
-    files: ['**/*.test.ts'],
+    files: ['**/*.test.ts', '**/*.test.tsx'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
+      // The plugin cannot follow Testing Library's `export *` re-exports.
+      'import/named': 'off',
     },
   },
   prettier,
