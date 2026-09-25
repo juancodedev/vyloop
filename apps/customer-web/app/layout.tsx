@@ -20,18 +20,13 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  themeColor: '#d97706',
+  themeColor: '#f3eee5',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es" className={inter.variable}>
-      <body>
+      <body className="customer-web">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
