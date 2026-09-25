@@ -97,6 +97,30 @@ export interface RecentTransaction {
   createdAt: string;
 }
 
+/** The tenant the customer belongs to. `null` when the row cannot be resolved. */
+export interface CustomerBusiness {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+/** The tenant's loyalty program. `null` when the tenant has none configured. */
+export interface CustomerProgram {
+  id: string;
+  name: string;
+  /** Tenant-authored unit label for points, e.g. "puntos" or "pts". */
+  pointsCurrency: string;
+}
+
+/** One rung of the tenant's tier ladder, in canonical display order. */
+export interface CustomerTier {
+  id: string;
+  name: string;
+  minPoints: number;
+  multiplier: number;
+  displayOrder: number;
+}
+
 export interface CustomerProfile {
   id: string;
   globalId: string;
@@ -112,7 +136,18 @@ export interface CustomerProfile {
   tier?: { id: string; name: string; multiplier: number } | null;
   customer_events?: CustomerEvent[];
   recent_transactions?: RecentTransaction[];
-  metadata?: Record<string, unknown>;
+  business: CustomerBusiness | null;
+  program: CustomerProgram | null;
+  tiers: CustomerTier[];
+  /**
+   * The first tier whose `minPoints` is strictly greater than the current
+   * balance, or `null` when the customer is at or above the top tier.
+   *
+   * This is derived SERVER-SIDE and must stay that way: the client renders it,
+   * it never recomputes it. A second implementation of the rule is a second
+   * source of truth, and the two would silently drift.
+   */
+  nextTier: CustomerTier | null;
   createdAt: string;
 }
 
@@ -177,13 +212,6 @@ export const api = {
   async getProfile(): Promise<CustomerProfile> {
     const result = await apiFetch('/v1/customers/me') as { data: CustomerProfile };
     return result.data;
-  },
-
-  async updateConsent(consent: { whatsapp: boolean }): Promise<unknown> {
-    return apiFetch('/v1/customers/me/consent', {
-      method: 'PUT',
-      body: JSON.stringify(consent),
-    });
   },
 
   async getTransactions(filters?: {
