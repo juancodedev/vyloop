@@ -1,14 +1,45 @@
 'use client';
 
+import { ArrowRight } from 'lucide-react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect } from 'react';
 
+import { ClubQrExplainer } from './components/club-qr-explainer';
+import { ClubShell } from './components/club-shell';
+import { ClubLoading } from './components/club-status';
 import { useAuth } from './lib/auth';
 
-export default function Home() {
+function EntryLoading() {
+  return (
+    <ClubShell className="club-entry-shell">
+      <div className="club-entry-loading">
+        <ClubLoading />
+      </div>
+    </ClubShell>
+  );
+}
+
+function buildBusinessHref(pathname: string, businessSlug: string | null) {
+  if (!businessSlug) return pathname;
+
+  const searchParams = new URLSearchParams();
+  searchParams.set('biz', businessSlug);
+  return `${pathname}?${searchParams.toString()}`;
+}
+
+function HomeEntry() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { customer, isLoading } = useAuth();
+  const businessSlug = searchParams.get('biz');
+  const loginHref = buildBusinessHref('/login', businessSlug);
+  const registerHref = buildBusinessHref('/register', businessSlug);
+  // Registration needs a tenant: the page refuses to create a customer without
+  // one, so offering the action here without a `biz` parameter would send the
+  // visitor to a screen that can only tell them to go back. Login has no such
+  // requirement, so it stays available either way.
+  const canRegister = businessSlug !== null;
 
   useEffect(() => {
     if (!isLoading && customer) {
@@ -16,165 +47,44 @@ export default function Home() {
     }
   }, [isLoading, customer, router]);
 
-  if (isLoading) {
-    return <div className="loading">Cargando...</div>;
-  }
-
-  if (customer) {
-    return null;
-  }
+  if (isLoading) return <EntryLoading />;
+  if (customer) return null;
 
   return (
-    <div className="page page--centered fade-in">
-      <div className="card" style={{ textAlign: 'center' }}>
-        <div className="qr-icon">
-          <svg width="100" height="100" viewBox="0 0 120 120" fill="none">
-            <rect
-              x="8"
-              y="8"
-              width="44"
-              height="44"
-              rx="4"
-              fill="var(--brand-200)"
-            />
-            <rect
-              x="18"
-              y="18"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="34"
-              y="18"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="18"
-              y="34"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="68"
-              y="8"
-              width="44"
-              height="44"
-              rx="4"
-              fill="var(--brand-200)"
-            />
-            <rect
-              x="78"
-              y="18"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="94"
-              y="18"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="78"
-              y="34"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="8"
-              y="68"
-              width="44"
-              height="44"
-              rx="4"
-              fill="var(--brand-200)"
-            />
-            <rect
-              x="18"
-              y="78"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="34"
-              y="78"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="18"
-              y="94"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="68"
-              y="68"
-              width="44"
-              height="44"
-              rx="4"
-              fill="var(--brand-200)"
-            />
-            <rect
-              x="78"
-              y="78"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="94"
-              y="78"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-            <rect
-              x="78"
-              y="94"
-              width="8"
-              height="8"
-              rx="1"
-              fill="var(--brand-500)"
-            />
-          </svg>
-        </div>
+    <ClubShell className="club-entry-shell">
+      <div className="club-entry">
+        <section className="club-entry__copy" aria-labelledby="club-entry-title">
+          <p className="club-entry__eyebrow">Fidelización sin instalar nada</p>
+          <h1 id="club-entry-title" className="club-entry__title">
+            <span>Tu local de siempre,</span> <span>con un motivo para volver.</span>
+          </h1>
+          <p className="club-entry__summary">
+            Acumulá progreso, revisá las recompensas de tu programa y volvé a tu local de siempre.
+          </p>
 
-        <h1 className="title">¡Bienvenido!</h1>
-        <p className="subtitle">
-          Escaneá el código QR en el local para registrarte y empezar a
-          acumular puntos.
-        </p>
+          <nav className="club-entry__actions" aria-label="Acciones para entrar al club">
+            <Link href={loginHref} className="btn btn--primary club-entry__action">
+              <span>Ingresar</span>
+              <ArrowRight className="club-entry__action-arrow" size={18} aria-hidden="true" />
+            </Link>
+            {canRegister ? (
+              <Link href={registerHref} className="btn btn--outline club-entry__action">
+                Registrarme
+              </Link>
+            ) : null}
+          </nav>
+        </section>
 
-        <div className="landing-buttons">
-          <Link href="/login" className="btn btn--primary">
-            Ingresar
-          </Link>
-          <Link href="/register" className="btn btn--outline">
-            Registrarme
-          </Link>
-        </div>
+        <ClubQrExplainer />
       </div>
-    </div>
+    </ClubShell>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<EntryLoading />}>
+      <HomeEntry />
+    </Suspense>
   );
 }
