@@ -1932,4 +1932,348 @@ describe('Growth Worker', () => {
       expect(json.error.code).toBe('VALIDATION_ERROR');
     });
   });
+
+  // ==========================================================================
+  // Operator-only write routes — the customer role is refused
+  //
+  // `X-Business-Id` says which tenant, never who inside it, and the gateway
+  // enforces no scopes, so before this guard any authenticated customer token
+  // could rewrite the loyalty program, reshape the tier ladder, restock the
+  // reward catalog, and — through `points/assign`, whose `points` is validated
+  // only as `>= 1` — mint an arbitrary balance and then spend it through the
+  // one route that is legitimately theirs.
+  //
+  // Two properties are asserted for every route, not just the status:
+  //
+  //   1. Nothing was written. The guard runs before the body is parsed, before
+  //      the program or catalog is read, and before `withRls` — so the whole
+  //      database is untouched, not merely un-mutated.
+  //   2. The answer is the same either way. The guard reads nothing, so a
+  //      request that would have succeeded and one that would have failed get
+  //      the same 403 with the same body. The tenant's ids, names and balances
+  //      are not observable through it.
+  //
+  // Reads stay open: the customer app legitimately reads the reward catalog and
+  // its own transaction history, so a refusal here is about writes only.
+  // `POST /v1/loyalty/rewards/redeem` is the one write that stays open, and the
+  // PR #115 tests above pin both of its roles.
+  // ==========================================================================
+
+  /** A second operator role, to show the guard keys on `customer` alone. */
+  const STAFF: TestAuth = { userId: 'user-2', businessId: DEV_TENANT, userRole: 'staff' };
+
+  /**
+   * Not one statement was sent, and no event was published.
+   *
+   * `createDb` is included because that is the earliest point a guarded route
+   * could have touched the database: the guard is ahead of it.
+   */
+  function expectNoDbContact() {
+    expect(createDb).not.toHaveBeenCalled();
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.delete).not.toHaveBeenCalled();
+    expect(mockDb.execute).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  }
+
+  describe('PUT /v1/loyalty/config — operator only', () => {
+    it('refuses a customer rewriting the loyalty program and writes nothing', async () => {
+      const res = await reqAs('PUT', '/v1/loyalty/config', CUSTOMER, {
+        earn_rate: '999',
+        program_name: 'Owned By Me',
+      });
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      // The 403 says nothing about whether a program exists, and rewrites
+      // nothing: an earn_rate of 999 would otherwise apply to every customer.
+      expect(raw).not.toContain('999');
+      expectNoDbContact();
+    });
+
+    it('still lets an operator rewrite the loyalty program', async () => {
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '3.0', name: 'Gold' }]),
+      );
+
+      const res = await reqAs('PUT', '/v1/loyalty/config', OPERATOR_AUTH, {
+        earn_rate: '3.0',
+        program_name: 'Gold',
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(201);
+      expect(mockDb.insert).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('POST /v1/loyalty/tiers — operator only', () => {
+    it('refuses a customer creating a tier and writes nothing', async () => {
+      const res = await reqAs('POST', '/v1/loyalty/tiers', CUSTOMER, {
+        name: 'Diamond',
+        min_points: 9000,
+        multiplier: 3.0,
+      });
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expectNoDbContact();
+    });
+
+    it('still lets an operator create a tier', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'prog-1', name: 'Loyalty Program' }]));
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-1', name: 'Diamond', minPoints: 9000, displayOrder: 4 }]),
+      );
+
+      const res = await POST('/v1/loyalty/tiers', {
+        name: 'Diamond',
+        min_points: 9000,
+        multiplier: 3.0,
+        display_order: 4,
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(201);
+      expect(mockDb.insert).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('PUT /v1/loyalty/tiers/:id — operator only', () => {
+    it('refuses a customer and does not reveal whether the tier exists', async () => {
+      // The very same request from an operator answers 404 for this id (pinned
+      // above). Identical 403 here, so the id space is not a probe.
+      const res = await reqAs('PUT', '/v1/loyalty/tiers/tier-unknown', CUSTOMER, {
+        name: 'Mine Now',
+      });
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expectNoDbContact();
+    });
+
+    it('still lets an operator update a tier', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-1', name: 'Bronze', minPoints: 0, displayOrder: 1 }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-1', name: 'Silver', minPoints: 100, displayOrder: 1 }]),
+      );
+
+      const res = await PUT('/v1/loyalty/tiers/tier-1', { name: 'Silver', min_points: 100 });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(200);
+      expect(mockDb.update).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('POST /v1/loyalty/points/assign — operator only', () => {
+    it('refuses a customer crediting themselves and inserts no points_transactions row', async () => {
+      // The exploit: `points` is only ever checked for `>= 1`, so an unbounded
+      // credit would land in points_transactions and then be spendable through
+      // `redeem`, which is a route the customer app may legitimately call.
+      const res = await reqAs('POST', '/v1/loyalty/points/assign', CUSTOMER, {
+        customer_id: 'cust-alice',
+        points: 1000000,
+        reference_id: 'self-credit',
+      });
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      // The raw INSERT is the only thing that ever writes this table, and it
+      // was never reached — no row, no balance_after, no PointsAssigned event.
+      expect(mockDb.execute).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+      expectNoDbContact();
+      // The refusal echoes neither the amount nor the customer's own id.
+      expect(raw).not.toContain('1000000');
+      expect(raw).not.toContain('cust-alice');
+    });
+
+    it('still lets an operator (staff) assign points', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'prog-1', earnRate: '1.0' }]));
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({
+        rows: [{ id: 'tx-1', balance_after: 50, customer_id: 'cust-1' }],
+      });
+
+      const res = await reqAs('POST', '/v1/loyalty/points/assign', STAFF, {
+        customer_id: 'cust-1',
+        points: 50,
+        reference_id: 'staff-credit',
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(201);
+      expect(publish).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('POST /v1/loyalty/rewards — operator only', () => {
+    it('refuses a customer creating a reward and writes nothing', async () => {
+      const res = await reqAs('POST', '/v1/loyalty/rewards', CUSTOMER, {
+        name: 'Unlimited Points',
+        points_cost: 1,
+      });
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expectNoDbContact();
+    });
+
+    it('refuses before the reward catalog is even read', async () => {
+      // Mirrors the PR #115 test of the same name on `redeem`. This name is
+      // already taken, so an operator gets 409 DUPLICATE_REWARD_NAME out of a
+      // catalog read. A customer gets 403 without the read ever running, so the
+      // catalog cannot be used to learn which names are free.
+      const res = await reqAs('POST', '/v1/loyalty/rewards', CUSTOMER, {
+        name: 'Gift Card',
+        points_cost: 500,
+      });
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expect(json.error.code).not.toBe('DUPLICATE_REWARD_NAME');
+      expect(raw).not.toContain('Gift Card');
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+
+    it('still lets an operator create a reward', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card', pointsCost: 500 }]),
+      );
+
+      const res = await POST('/v1/loyalty/rewards', {
+        name: 'Gift Card',
+        points_cost: 500,
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(201);
+      expect(mockDb.insert).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('PUT /v1/loyalty/rewards/:id — operator only', () => {
+    it('refuses a customer and does not reveal whether the reward exists', async () => {
+      const res = await reqAs('PUT', '/v1/loyalty/rewards/rw-unknown', CUSTOMER, {
+        points_cost: 1,
+      });
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expectNoDbContact();
+    });
+
+    it('still lets an operator update a reward', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card', pointsCost: 500 }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card Plus', pointsCost: 600 }]),
+      );
+
+      const res = await PUT('/v1/loyalty/rewards/rw-1', {
+        name: 'Gift Card Plus',
+        points_cost: 600,
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(200);
+      expect(mockDb.update).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('DELETE /v1/loyalty/tiers/:id — operator only', () => {
+    it('refuses a customer deleting a tier and deletes no row', async () => {
+      const res = await reqAs('DELETE', '/v1/loyalty/tiers/tier-1', CUSTOMER);
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      // The handler would otherwise answer 404 for this id, 409 for the base
+      // tier, 409 for a tier with members, and 204 for a deletable one. The
+      // refusal is the same in all four cases and reaches no query.
+      expectNoDbContact();
+    });
+
+    it('still lets an operator delete a tier', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'tier-1', name: 'Silver', minPoints: 100 }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ total: 0 }]));
+
+      const res = await DELETE('/v1/loyalty/tiers/tier-1');
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(204);
+      expect(mockDb.delete).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('DELETE /v1/loyalty/rewards/:id — operator only', () => {
+    it('refuses a customer soft-deleting a reward and deletes no row', async () => {
+      const res = await reqAs('DELETE', '/v1/loyalty/rewards/rw-1', CUSTOMER);
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      // The soft-delete is an UPDATE, and the pre-existing 404 for an unknown id
+      // is not observable through the refusal.
+      expect(mockDb.update).not.toHaveBeenCalled();
+      expectNoDbContact();
+    });
+
+    it('still lets an operator soft-delete a reward', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card' }]),
+      );
+
+      const res = await DELETE('/v1/loyalty/rewards/rw-1');
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(200);
+      expect(mockDb.update).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('read routes — still open to a customer', () => {
+    it('lets a customer read the loyalty config', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios', isActive: true }]),
+      );
+
+      const res = await reqAs('GET', '/v1/loyalty/config', CUSTOMER);
+
+      expect(res.status).toBe(200);
+    });
+
+    it('lets a customer read the reward catalog', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ total: 1 }]));
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'rw-1', name: 'Gift Card' }]));
+
+      const res = await reqAs('GET', '/v1/loyalty/rewards', CUSTOMER);
+
+      expect(res.status).toBe(200);
+    });
+  });
 });
