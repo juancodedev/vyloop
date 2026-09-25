@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { api } from './api';
+import { api, ApiError } from './api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,9 +21,23 @@ export interface CustomerInfo {
   globalId: string;
 }
 
+/**
+ * Why a login attempt did not produce a session.
+ *
+ * - `not_registered`: the gateway answered 401 — the phone is unknown or the
+ *   customer was deleted. Retrying the same number will not help.
+ * - `unavailable`: the request never produced a trustworthy answer (network
+ *   failure, or a 5xx from a misconfigured/overloaded gateway). Retrying is
+ *   reasonable and the user did nothing wrong.
+ * - `unknown`: any other outcome. Treated as a generic, non-committal failure.
+ */
+export type LoginFailureReason = 'not_registered' | 'unavailable' | 'unknown';
+
+export type LoginResult = { ok: true } | { ok: false; reason: LoginFailureReason };
+
 interface AuthContextValue {
   customer: CustomerInfo | null;
-  login: (phone: string, businessSlug?: string) => Promise<boolean>;
+  login: (phone: string, businessSlug?: string) => Promise<LoginResult>;
   isAuthenticated: () => boolean;
   logout: () => void;
   isLoading: boolean;
@@ -31,7 +45,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue>({
   customer: null,
-  login: async () => false,
+  login: async () => ({ ok: false, reason: 'unknown' }),
   isAuthenticated: () => false,
   logout: () => {},
   isLoading: true,
@@ -56,6 +70,34 @@ function isTokenValid(token: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Detects a request that never produced a response.
+ *
+ * An HTTP response that already reached us is a server outcome, not a local
+ * outage, even when the gateway text happens to read like a fetch failure.
+ */
+function isNetworkError(error: unknown): boolean {
+  if (error instanceof ApiError) return false;
+
+  return (
+    error instanceof TypeError ||
+    (error instanceof Error && /failed to fetch|networkerror|load failed/i.test(error.message))
+  );
+}
+
+/** Maps a thrown value from the login call onto an honest, actionable reason. */
+function classifyLoginFailure(error: unknown): LoginFailureReason {
+  if (error instanceof ApiError) {
+    if (error.status === 401) return 'not_registered';
+    if (error.status >= 500) return 'unavailable';
+    return 'unknown';
+  }
+
+  if (isNetworkError(error)) return 'unavailable';
+
+  return 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (phone: string, businessSlug?: string): Promise<boolean> => {
+    async (phone: string, businessSlug?: string): Promise<LoginResult> => {
       try {
         const result = await api.loginCustomer(phone, businessSlug);
         const info: CustomerInfo = {
@@ -100,9 +142,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(JWT_KEY, result.token);
         localStorage.setItem(CUSTOMER_KEY, JSON.stringify(info));
         setCustomer(info);
-        return true;
-      } catch {
-        return false;
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, reason: classifyLoginFailure(error) };
       }
     },
     [],
