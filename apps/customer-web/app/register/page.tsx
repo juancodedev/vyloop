@@ -238,6 +238,7 @@ function RegisterContent() {
           </p>
         </div>
 
+        {/* A refused registration, above the form. Read in document order. */}
         {!hasBusinessContext ? (
           <div
             className="club-register__status club-register__status--missing"
@@ -253,11 +254,26 @@ function RegisterContent() {
           </div>
         ) : null}
 
+        {/*
+          `role="alert"` on both post-submission boxes, and not on the
+          "falta el contexto" notice above.
+
+          A live region inserted into the DOM already containing its text is not
+          reliably announced when it is `polite`, and both of these arrive the
+          moment the server answers, with focus still on the submit button: a
+          refused registration, and the partial success where the account exists
+          but the session could not be started. A refusal and a half-finished
+          registration are exactly the two events where silence is the worse
+          mistake, and `alert` is announced on insertion where `status` is not.
+
+          The missing-context notice stays `status` because it is present on the
+          first render rather than arriving after an action, so it is read in
+          document order and does not need to interrupt anything.
+        */}
         {serverError ? (
           <div
             className="club-register__status club-register__status--error"
-            role="status"
-            aria-live="polite"
+            role="alert"
             aria-atomic="true"
           >
             <strong>No pudimos completar el registro.</strong>
@@ -268,8 +284,7 @@ function RegisterContent() {
         {accountCreated ? (
           <div
             className="club-register__status club-register__status--partial"
-            role="status"
-            aria-live="polite"
+            role="alert"
             aria-atomic="true"
           >
             <strong>Tu cuenta fue creada.</strong>
