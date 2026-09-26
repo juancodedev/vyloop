@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole } from './helpers';
+import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole, requireOperatorRole } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -62,7 +62,13 @@ router.get('/v1/loyalty/config', async (c) => {
  * Upsert the loyalty program configuration (earn_rate, program_name).
  */
 router.put('/v1/loyalty/config', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the body, before the program is read, before anything is written.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const body = await c.req.json<{
     earn_rate?: string | number;
     program_name?: string;
@@ -231,7 +237,14 @@ function describeTierOrderingConflict(conflict: TierOrderingConflict): string {
  * asks for fewer points than the rung displayed before it.
  */
 router.post('/v1/loyalty/tiers', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the body and before the ladder is read: the ladder is the tenant's
+  // own merchandising, which a customer token has no business observing.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const body = await c.req.json<{
     name: string;
     min_points: number;
@@ -314,7 +327,14 @@ router.post('/v1/loyalty/tiers', async (c) => {
  * `min_points` is judged against the value that will actually be written.
  */
 router.put('/v1/loyalty/tiers/:id', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the id is even looked up, so a 403 here cannot be told apart from
+  // the 404 an unknown tier would have produced.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const id = c.req.param('id');
   const body = await c.req.json<{
     name?: string;
@@ -392,7 +412,15 @@ router.put('/v1/loyalty/tiers/:id', async (c) => {
  * Guard: Cannot delete the lowest tier (min_points = 0).
  */
 router.delete('/v1/loyalty/tiers/:id', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the id is looked up, so a 403 cannot be told apart from the 404 an
+  // unknown tier would have produced, and before the customer count that a
+  // would-be delete reports on.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const id = c.req.param('id');
 
   const db = createDb(c.env.DATABASE_URL);
@@ -452,7 +480,16 @@ router.delete('/v1/loyalty/tiers/:id', async (c) => {
  * After success, publishes a PointsAssigned event.
  */
 router.post('/v1/loyalty/points/assign', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the body, before the earn rate is resolved, and above all before the
+  // INSERT. `points` is only ever validated as >= 1, so a customer reaching this
+  // line could mint an arbitrary balance and then spend it on `redeem`. The
+  // whole path has to be unreachable, not just unprofitable.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const body = await c.req.json<{
     customer_id: string;
     points: number;
@@ -659,7 +696,14 @@ router.get('/v1/loyalty/points/transactions', async (c) => {
  * Name must be unique per business.
  */
 router.post('/v1/loyalty/rewards', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the body and before the duplicate-name read, so the catalog cannot
+  // be used to learn which names are taken.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const body = await c.req.json<{
     name: string;
     description?: string;
@@ -823,7 +867,14 @@ router.get('/v1/loyalty/rewards/:id', async (c) => {
  * Name uniqueness enforced per business.
  */
 router.put('/v1/loyalty/rewards/:id', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the id is looked up, so a 403 cannot be told apart from the 404 an
+  // unknown reward would have produced.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const id = c.req.param('id');
   const body = await c.req.json<{
     name?: string;
@@ -902,7 +953,14 @@ router.put('/v1/loyalty/rewards/:id', async (c) => {
  * Soft-delete a reward by setting deleted_at.
  */
 router.delete('/v1/loyalty/rewards/:id', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  // Before the id is looked up, so a 403 cannot be told apart from the 404 an
+  // unknown reward would have produced.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const id = c.req.param('id');
 
   const db = createDb(c.env.DATABASE_URL);
