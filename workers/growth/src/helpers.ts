@@ -77,6 +77,51 @@ export function isCustomerRole(auth: AuthHeaders): boolean {
   return auth.userRole === CUSTOMER_ROLE;
 }
 
+/** Stable, specific code. Callers can branch on this without parsing prose. */
+export const OPERATOR_ROLE_REQUIRED = 'OPERATOR_ROLE_REQUIRED';
+
+export type OperatorRoleGuard = { ok: true } | { ok: false; status: 403; code: string; message: string };
+
+/**
+ * Refuse the customer app's token on a route that configures the loyalty
+ * program rather than spending the customer's own points.
+ *
+ * Rewriting the program, the tier ladder, the earn rate or the reward catalog
+ * is a merchant decision, and the customer app has no surface for making one.
+ * What made that an authorization defect rather than a missing feature is
+ * `POST /v1/loyalty/points/assign`: `points` is validated only as `>= 1`, so a
+ * customer could mint an arbitrary balance and then spend it through the one
+ * route that is legitimately theirs. Every operator-only write is refused here
+ * rather than only the one that was exploited, so the next route added does not
+ * have to remember.
+ *
+ * Deliberately the *same* answer whatever the request would otherwise have
+ * done. The guard reads nothing, so it cannot tell an absent program from a
+ * present one, a missing tier from an existing one, or a taken reward name from
+ * a free one — there is no existence oracle to probe the tenant with, and
+ * nothing is written on the way out.
+ *
+ * The counterpart to `isCustomerRole`, not a second source of truth about the
+ * role: it denies by asking that question rather than by re-reading
+ * `X-User-Role` or holding a list of operator roles. `issueToken` types `role`
+ * as a free-form string, so an allow-list would have to invent a vocabulary the
+ * issuer does not define and would refuse every role added after this was
+ * written.
+ */
+export function requireOperatorRole(auth: AuthHeaders): OperatorRoleGuard {
+  if (isCustomerRole(auth)) {
+    return {
+      ok: false,
+      status: 403,
+      code: OPERATOR_ROLE_REQUIRED,
+      message:
+        'This endpoint configures the loyalty program for the business. Redeeming your own rewards is done through POST /v1/loyalty/rewards/redeem.',
+    };
+  }
+
+  return { ok: true };
+}
+
 export type EffectiveCustomer =
   /**
    * `undefined` only for an operator who named no customer: on the read path
