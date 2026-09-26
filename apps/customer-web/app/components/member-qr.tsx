@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronUp, QrCode } from 'lucide-react';
 import QRCode from 'qrcode';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 
 /** Rendered pixel size. Also set on the <img> so the image cannot reflow. */
 const QR_SIZE = 200;
@@ -56,6 +56,23 @@ export function MemberQr({ globalId, fullName }: { globalId: string; fullName: s
   const [state, setState] = useState<QrState>({ status: 'closed' });
   const isOpen = state.status !== 'closed';
 
+  const toggleRef = useRef<HTMLButtonElement>(null);
+
+  /**
+   * Whether the customer still wants the panel, independent of what is in it.
+   *
+   * Generating a code takes long enough to be interrupted — a slow phone, a big
+   * canvas — and the panel can be closed while it is in flight, with the button
+   * or with Escape. Without this flag the promise resolves afterwards and calls
+   * `setState({ status: 'ready' })`, which puts the panel back on screen: the
+   * customer dismisses the code and it springs open again a moment later.
+   *
+   * A ref rather than the `status` state because the check has to be the
+   * *latest* value at the moment the promise lands, not the one captured when
+   * the request went out.
+   */
+  const wanted = useRef(false);
+
   const generate = useCallback(async () => {
     setState({ status: 'generating' });
 
@@ -65,8 +82,11 @@ export function MemberQr({ globalId, fullName }: { globalId: string; fullName: s
         margin: 2,
         color: { dark: '#27201d', light: '#ffffff' },
       });
+
+      if (!wanted.current) return;
       setState({ status: 'ready', dataUrl });
     } catch {
+      if (!wanted.current) return;
       // The readable id above stays on screen, and the retry is offered. A
       // placeholder image would be worse than nothing: at the counter it looks
       // like a working code that simply will not scan.
@@ -74,21 +94,53 @@ export function MemberQr({ globalId, fullName }: { globalId: string; fullName: s
     }
   }, [globalId]);
 
+  const close = useCallback(() => {
+    wanted.current = false;
+    setState({ status: 'closed' });
+  }, []);
+
   const toggle = useCallback(() => {
     if (isOpen) {
-      setState({ status: 'closed' });
+      close();
       return;
     }
 
+    wanted.current = true;
     void generate();
-  }, [isOpen, generate]);
+  }, [isOpen, close, generate]);
 
   const retry = useCallback(() => {
     void generate();
   }, [generate]);
 
+  /**
+   * Escape closes the panel.
+   *
+   * The panel is a disclosure the customer opened with the keyboard, and
+   * Escape is the key the specification expects to dismiss one. It is handled on
+   * the section rather than on the toggle so it works from anywhere inside the
+   * panel too — the retry button is the one focusable thing in there, and a user
+   * who failed to generate a code is exactly the person who will reach for
+   * Escape.
+   *
+   * Focus returns to the toggle. Without that, closing the panel would drop
+   * focus on the removed subtree and send it to the top of the document, which
+   * is the one way a disclosure can strand somebody at the start of the page.
+   * Not a trap: Tab from the toggle continues down the page as it always did.
+   */
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (event.key !== 'Escape' || !isOpen) return;
+
+      event.stopPropagation();
+      close();
+      toggleRef.current?.focus();
+    },
+    [isOpen, close],
+  );
+
   return (
-    <section className="club-qr" aria-labelledby="club-qr-title">
+    <section className="club-qr" aria-labelledby="club-qr-title" onKeyDown={handleKeyDown}>
       <h2 className="club-qr__title" id="club-qr-title">
         Mostrar en el local
       </h2>
@@ -96,6 +148,7 @@ export function MemberQr({ globalId, fullName }: { globalId: string; fullName: s
       <MemberId globalId={globalId} />
 
       <button
+        ref={toggleRef}
         type="button"
         className="club-qr__toggle"
         onClick={toggle}
