@@ -368,3 +368,71 @@ describe('history, session', () => {
     expect(document.querySelectorAll('.movement')).toHaveLength(0);
   });
 });
+
+describe('history, announcing the answer', () => {
+  /**
+   * A live region has to exist before its content changes, or several screen
+   * reader and browser pairs announce nothing at all. The visible `ClubStatus`
+   * is mounted already filled, so the region that carries the result is a
+   * separate, permanently mounted one — and what it carries is the row count,
+   * which is not on screen anywhere.
+   */
+  function announcer(): HTMLElement | null {
+    return document.querySelector('[role="status"][aria-live="polite"].club-sr-only');
+  }
+
+  it('keeps one live region mounted across a filter change', async () => {
+    mocks.getOwnTransactions.mockResolvedValue(page([makeTransaction()]));
+
+    render(<HistoryPage />);
+    await screen.findByRole('list', { name: 'Tus movimientos de puntos' });
+
+    const before = announcer();
+
+    expect(before).toBeTruthy();
+    expect(before?.textContent).toBe('1 movimiento para todos.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ganados' }));
+
+    await waitFor(() => expect(announcer()?.textContent).toContain('ganados'));
+
+    // The same DOM node, not a replacement: a region that is torn down and
+    // rebuilt is the arrangement this exists to avoid.
+    expect(announcer()).toBe(before);
+  });
+
+  it('counts what arrived, in words a screen reader can read', async () => {
+    mocks.getOwnTransactions.mockResolvedValue(
+      page([makeTransaction({ id: 'a' }), makeTransaction({ id: 'b' })]),
+    );
+
+    render(<HistoryPage />);
+    await screen.findByRole('list', { name: 'Tus movimientos de puntos' });
+
+    expect(announcer()?.textContent).toBe('2 movimientos para todos.');
+  });
+
+  it('says an empty answer is an answer, and does not repeat the visible copy', async () => {
+    mocks.getOwnTransactions.mockResolvedValue(page([]));
+
+    render(<HistoryPage />);
+    await screen.findByText('Sin movimientos');
+
+    // Different wording from the visible "Sin movimientos" on purpose: a
+    // visually hidden copy of a sentence the customer can already see would be
+    // read twice by anyone who browses the page after the announcement.
+    expect(announcer()?.textContent).toBe('Ningún movimiento para todos.');
+  });
+
+  it('holds no height and adds no element the eye can see', async () => {
+    mocks.getOwnTransactions.mockResolvedValue(page([makeTransaction()]));
+
+    render(<HistoryPage />);
+    await screen.findByRole('list', { name: 'Tus movimientos de puntos' });
+
+    // `club-sr-only` is the clip technique, not `display: none`, so it is in the
+    // accessibility tree while taking no space.
+    expect(announcer()?.className).toBe('club-sr-only');
+    expect(announcer()?.getAttribute('aria-atomic')).toBe('true');
+  });
+});

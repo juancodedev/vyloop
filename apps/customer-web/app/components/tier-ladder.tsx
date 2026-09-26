@@ -161,9 +161,16 @@ export function TierLadder({ points, currentTierId, program, tiers, nextTier }: 
 
   return (
     <section className="club-ladder" aria-labelledby="club-ladder-title">
-      <h3 className="club-ladder__title" id="club-ladder-title">
+      {/*
+        An `h2`, not an `h3`. The ladder is a section inside the pass, and the
+        pass's own heading is the page's `h1` — so an `h3` here skipped a level
+        and left screen-reader users on a heading outline with a hole in it. The
+        visual treatment comes from `club-ladder__title`, so this changes the
+        document structure and nothing about how it looks.
+      */}
+      <h2 className="club-ladder__title" id="club-ladder-title">
         Tu nivel
-      </h3>
+      </h2>
 
       {headline.kind === 'gap' ? (
         <GapMessage

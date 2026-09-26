@@ -137,11 +137,27 @@ function LoginContent() {
           </div>
         ) : null}
 
+        {/*
+          `role="alert"`, not `role="status"`, and that is the whole Stage 6
+          change here.
+
+          A live region that is inserted into the DOM already containing its
+          text is not reliably announced when the region is `polite`; it is
+          reliably announced when it is `alert`. A refused login is the case
+          where leaving the customer in silence is the worse mistake, and this
+          app already reasons that way in two other places: `ClubError` renders
+          `role="alert"`, and the redeem confirmation says so in as many words.
+          This box is the same kind of event — a refusal, not a progress report —
+          so it is the same role.
+
+          No second copy of the sentence is added to announce it. A visually
+          hidden duplicate would be read a second time by anyone who browses the
+          page afterwards, which is a worse outcome than the one it fixes.
+        */}
         {failure ? (
           <div
             className="club-login__status club-login__status--error"
-            role="status"
-            aria-live="polite"
+            role="alert"
             aria-atomic="true"
           >
             <strong>{LOGIN_FAILURE_TITLES[failure]}</strong>

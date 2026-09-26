@@ -113,8 +113,20 @@ a {
   opacity: 0.85;
 }
 
+/**
+ * Disabled, at 0.7 rather than the usual 0.5.
+ *
+ * A disabled primary button is a cherry fill on the paper background, so the
+ * label's contrast is whatever survives the alpha compositing. At 0.5 it
+ * measures 2.25:1 — the "Registrando…" and "Entrando…" labels were
+ * effectively unreadable while the request was in flight, which is the one
+ * moment the user most needs to read them. At 0.7 the same label measures
+ * 3.25:1, clearing the 3:1 bar for a non-text indicator and legible in
+ * practice. The state itself is never carried by this alpha alone: every
+ * disabled button also changes its own label.
+ */
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.7;
   cursor: not-allowed;
 }
 
@@ -182,15 +194,6 @@ a {
   color: var(--error);
   font-size: var(--text-xs);
   margin-top: 4px;
-}
-
-.error-box {
-  background: var(--error-bg);
-  color: oklch(0.35 0.15 28);
-  padding: 10px 14px;
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  margin-bottom: var(--space-4);
 }
 
 /* --- Movement Item --- */
@@ -284,6 +287,7 @@ a {
   font-weight: var(--font-bold);
   flex-shrink: 0;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .movement__points--earned {
@@ -298,12 +302,21 @@ a {
   font-size: 11px;
   color: var(--text-muted);
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- Logout --- */
+/**
+ * 44px tall, not 45 by accident.
+ *
+ * The `12px` block padding plus the inherited line height happened to land just
+ * over 44px, which is not a target anyone aims at. Stated, so a font change
+ * cannot quietly take a hit target under the minimum.
+ */
 .logout-btn {
   display: block;
   width: 100%;
+  min-height: 44px;
   text-align: center;
   background: none;
   border: none;
@@ -315,19 +328,21 @@ a {
   margin-top: 8px;
 }
 
+/* The club's own dark red rather than the legacy `--error`. Both clear AA here
+   (cherry-dark is 9.08:1 on the paper, `--error` is 4.89:1), so this is palette
+   consistency, not a contrast fix: the hover on the one button that sits
+   directly on the page background should not be the only design-system red on
+   screen. */
 .logout-btn:hover {
-  color: var(--error);
+  color: var(--club-cherry-dark);
 }
 
 /* --- Loading --- */
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100dvh;
-  color: var(--text-muted);
-  font-size: var(--text-base);
-}
+/* `.loading` went with the last page that used it: the registration confirmation
+   now falls back to `ClubShell` + `ClubLoading` like every other route, so a
+   status never appears in one visual language while the rest of the screen is in
+   another. The first-paint state is now a `ClubStatus` with a real accessible
+   name, not a bare centred word. */
 
 /* --- Filter tabs (history) --- */
 .filter-tabs {
@@ -336,9 +351,23 @@ a {
   margin-bottom: var(--space-4);
 }
 
+/**
+ * Three tabs, one row, at every width.
+ *
+ * `min-width: 0` is what makes 320px work: without it each tab refuses to go
+ * below its min-content width, and three tabs of "Canjeados" plus their gaps
+ * need about 310px, which is wider than the 272px left inside the frame. The
+ * labels then wrap to two lines instead of pushing the page sideways.
+ *
+ * `min-height: 44px` is the 44x44 target, which the previous `10px` padding did
+ * not reach: 15.6px of line plus 20px of padding plus 3px of border is about
+ * 38.6px.
+ */
 .filter-tab {
   flex: 1;
-  padding: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 6px;
   text-align: center;
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
@@ -348,6 +377,8 @@ a {
   cursor: pointer;
   font-family: inherit;
   color: var(--text-body);
+  text-wrap: pretty;
+  touch-action: manipulation;
   transition:
     background-color var(--club-transition-fast) var(--club-ease-out),
     border-color var(--club-transition-fast) var(--club-ease-out),
@@ -360,48 +391,14 @@ a {
   color: var(--brand-500);
 }
 
-/* --- Refresh button --- */
-.refresh-btn {
-  width: 100%;
-  padding: 12px;
-  background: var(--stone-100);
-  border: none;
-  border-radius: var(--radius-lg);
-  font-size: var(--text-base);
-  font-weight: var(--font-semibold);
-  color: var(--text-body);
-  cursor: pointer;
-  font-family: inherit;
-  margin-top: 12px;
-  transition: background var(--transition-fast);
-}
-
-.refresh-btn:active {
-  background: var(--stone-150);
-}
-
 /* --- Back link --- */
-.back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-base);
-  color: var(--text-secondary);
-  margin-bottom: var(--space-4);
-  font-weight: var(--font-medium);
-}
-
-.back-link:hover {
-  color: var(--text-primary);
-}
+/* `.back-link` is gone: `ClubShell` renders `club-back-link`, which carries the
+   44x44 target the old rule never had. */
 
 /* --- Empty state --- */
-.empty-state {
-  text-align: center;
-  padding: 40px 0;
-  color: var(--text-muted);
-  font-size: var(--text-base);
-}
+/* `.empty-state` is gone: every empty answer in the app is a `ClubStatus`, which
+   owns the announcement, the minimum height and the 44px actions. A second empty
+   style could not have kept those three in step. */
 
 /* --- Rewards grid (catalog) --- */
 .rewards-grid {
@@ -454,17 +451,25 @@ a {
   line-height: 1.4;
 }
 
+/* Wraps rather than squeezes. At 320px — and at the 320 CSS px that 400%
+   browser zoom produces — a five-figure cost next to the "Stock no controlado"
+   badge does not fit on one line, and a non-wrapping flex row pushes the card
+   past the viewport. Wrapping keeps both figures legible at the cost of a
+   second line, which is the right trade at that width. */
 .reward-card__meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .reward-card__cost {
   font-size: 18px;
   font-weight: var(--font-extrabold);
   color: var(--brand-500);
+  font-variant-numeric: tabular-nums;
 }
 
 .reward-card__stock {
@@ -472,6 +477,7 @@ a {
   font-weight: var(--font-semibold);
   padding: 3px 8px;
   border-radius: 6px;
+  font-variant-numeric: tabular-nums;
 }
 
 .reward-card__stock--ok {
@@ -522,18 +528,25 @@ a {
 }
 
 /* --- Confirmation page --- */
+/**
+ * The success indicator.
+ *
+ * One indicator, shared by the redeem confirmation and by the registration
+ * confirmation, so a "this worked" screen looks the same wherever it is reached
+ * from. The glyph inside is decorative and `aria-hidden`: the outcome is
+ * carried by the heading and the message beside it, which is the same rule the
+ * movement arrows and the loading spinners already follow.
+ */
 .confirm-icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: var(--success-bg);
-  color: var(--success);
-  font-size: 32px;
-  font-weight: var(--font-extrabold);
   display: flex;
+  width: var(--space-16);
+  height: var(--space-16);
   align-items: center;
   justify-content: center;
-  margin: 0 auto 20px;
+  border-radius: var(--radius-full);
+  background: var(--success-bg);
+  color: var(--success);
+  margin: 0 auto var(--space-5);
 }
 
 .confirm-message {
@@ -544,10 +557,20 @@ a {
   margin: 0 0 var(--space-5);
 }
 
+/**
+ * Label above, figure below, side by side.
+ *
+ * `flex-wrap` for the same reason as the reward cost row: at 320px a six-figure
+ * balance with its "Saldo restante" label does not fit on one line, and this
+ * row is the one place the customer looks to find out what is left.
+ */
 .confirm-balance {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
   margin-bottom: var(--space-6);
 }
 
@@ -560,6 +583,7 @@ a {
   font-size: var(--text-2xl);
   font-weight: var(--font-extrabold);
   color: var(--brand-500);
+  font-variant-numeric: tabular-nums;
 }
 
 .confirm-actions {
@@ -601,56 +625,14 @@ a {
    Profile Page — Components
    ======================================== */
 
-/* --- Loading skeleton --- */
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-/* --- Points Hero Card --- */
-/* Number count-up animation */
-@keyframes countUp {
-  from {
-    opacity: 0.3;
-    transform: scale(0.85);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* --- QR Card --- */
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    max-height: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    max-height: 400px;
-    transform: translateY(0);
-  }
-}
-
-/* --- Achievement Card (Oro) --- */
-@keyframes glowPulse {
-  0%,
-  100% {
-    opacity: 0.5;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.05);
-  }
-}
+/* The pulse, count-up, QR reveal and achievement glow that used to live here as
+   `pulse`, `countUp`, `slideDown` and `glowPulse` are gone. Nothing referenced
+   them: the club-barrio redesign replaced the loading pulse with
+   `club-pass-pulse`, the QR reveal with `club-pass-reveal` and the two spinners
+   with `club-status-spin`, and the pass has no glow to pulse. They were dead
+   weight that also made `prefers-reduced-motion` look like it had four more
+   animations to cover than it actually did. A contract test now fails if a
+   `@keyframes` block is ever added back without an `animation:` that uses it. */
 
 /* --- Animation --- */
 @keyframes fadeIn {
@@ -679,6 +661,8 @@ a {
   --club-cherry: #a9362b;
   --club-cherry-dark: #74231d;
   --club-gold: #c38a35;
+  --club-gold-strong: #8a5f1f;
+  --club-success: #1c6b45;
   --club-line: rgba(39, 32, 29, 0.16);
   --club-line-soft: rgba(39, 32, 29, 0.09);
   --club-focus: #1e67b1;
@@ -692,9 +676,65 @@ a {
   --club-reading-width: 42rem;
   --font-display: var(--club-font-display);
 
+  /**
+   * The three design-system neutrals that cannot carry text on the club
+   * surfaces, remapped to the club ink scale rather than to a darker shade of
+   * their own. Measured against `--club-surface` / `--club-paper`:
+   *
+   *   --text-muted     2.78:1 / 2.49:1   FAIL  movement date, balance, logout
+   *   --success        3.93:1 / 3.68:1   FAIL  earned points, the stock badge
+   *   --text-secondary 5.65:1            pass  kept anyway, see below
+   *
+   * The first two fail WCAG AA's 4.5:1 for body text, and both are ordinary
+   * text: a movement's date is 12px, the balance under it is 11px, and the
+   * logout label is a button. `--text-secondary` clears the bar on its own and
+   * is remapped only so the site has exactly one secondary ink instead of two
+   * near-identical ones.
+   *
+   * Remapping the token, rather than writing a club override per rule, is what
+   * fixes the legacy `.movement-*` classes that survived the redesign and keeps
+   * the next component from having to know any of this.
+   */
+  --text-muted: var(--club-ink-soft);
+  --text-secondary: var(--club-ink-soft);
+  --success: var(--club-success);
+
+  /**
+   * No design-system amber survives in the customer web.
+   *
+   * `--brand-500` resolves to `#cf8a00`, which measures 2.83:1 on the club
+   * surface, 2.49:1 on the paper and 2.77:1 on its own `--brand-50` tint. As
+   * body text that is a failure three times over, and it is used as text three
+   * times: the active history filter, the reward's cost and the remaining
+   * balance. All three are figures a customer reads to make a decision.
+   *
+   * Mapping the amber onto the club's own cherry (6.35:1) fixes the contrast
+   * and the palette leak together. The two rules that were already overridden in
+   * club colours — the primary and the outline button — are unaffected.
+   */
+  --brand-500: var(--club-cherry);
+  --brand-600: var(--club-cherry-dark);
+  --brand-50: var(--club-paper);
+
   color: var(--club-ink);
   background: var(--club-paper);
   font-family: var(--club-font-body);
+
+  /**
+   * Any single word may break, anywhere in the app.
+   *
+   * Almost every interesting string on these pages is written by somebody else
+   * and can arrive as one unbreakable token: the merchant's business name, a
+   * reward name, a tier name, a movement note, a customer's own name, a member
+   * uuid. Set once at the root instead of per component, because the rule that
+   * matters is the one that cannot be forgotten on the next new component.
+   *
+   * `anywhere` rather than `break-word` on purpose: only `anywhere` also lowers
+   * a flex or grid child's min-content contribution, which is what stops a long
+   * word from forcing its container wide in the first place. `break-word` would
+   * break the word but only after the overflow had already happened.
+   */
+  overflow-wrap: anywhere;
 }
 
 .customer-web .page {
@@ -740,6 +780,30 @@ a {
 .customer-web :where(a, button, input, select, textarea):focus-visible {
   outline: 3px solid var(--club-focus);
   outline-offset: 3px;
+}
+
+/**
+ * No double-tap delay on any control.
+ *
+ * `touch-action: manipulation` keeps panning and pinch-zoom exactly as they are
+ * and only drops the legacy 300ms double-tap-to-zoom wait, so a tap is a tap.
+ * Set on the whole interactive set rather than on the two components that
+ * happened to declare it, so a new control inherits it.
+ */
+.customer-web :where(a, button, input, select, textarea, summary, label) {
+  touch-action: manipulation;
+}
+
+/**
+ * The focus border follows the club palette.
+ *
+ * The base `.input:focus` rule is a design-system amber, which is not a colour
+ * the club uses anywhere else; the outline above still carries focus for
+ * assistive tech, so this is presentation only. Same state, same trigger, the
+ * site's own colour.
+ */
+.customer-web .input:focus {
+  border-color: var(--club-cherry);
 }
 
 .customer-web .input:focus-visible,
@@ -846,14 +910,27 @@ a {
   }
 }
 
+/**
+ * Reduced motion, as a kill switch rather than a shorter duration.
+ *
+ * `animation: none` means no animation runs at all, so there is not even a
+ * single 0.01ms frame of movement to catch the eye, and nothing is left waiting
+ * on an iteration counter. The rule reaches the pseudo-elements too, so a
+ * `::before` cannot animate past its parent's back.
+ *
+ * The two spinners are the case worth stating: with the animation removed they
+ * render as a static ring, whose top edge is still tinted, and the word beside
+ * them ("Cargando…", "Generando tu código…") is what actually reports the
+ * state. No information is lost by stopping them, because the spin was never
+ * the message.
+ */
 @media (prefers-reduced-motion: reduce) {
   .customer-web,
   .customer-web *,
   .customer-web *::before,
   .customer-web *::after {
     scroll-behavior: auto !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
+    animation: none !important;
     transition-duration: 0.01ms !important;
   }
 }
@@ -1077,8 +1154,13 @@ a {
     flex-direction: column;
   }
 
+  /* `min-width: 0` in the stacked layout. The `9.5rem` floor exists to stop the
+     two buttons squeezing each other when they sit side by side; stacked, it is
+     a hard 152px minimum that a narrow viewport cannot honour, and the button
+     would then be wider than the frame it lives in. */
   .club-entry__action {
     width: 100%;
+    min-width: 0;
   }
 
   .club-qr-explainer {
@@ -1433,8 +1515,11 @@ a {
     font-size: var(--text-base);
   }
 
+  /* Stacked, the action takes the frame's width rather than a 10rem minimum
+     that a narrow viewport cannot honour. */
   .club-register__status-action {
     width: 100%;
+    min-width: 0;
   }
 }
 
@@ -1607,8 +1692,11 @@ a {
     font-size: var(--text-base);
   }
 
+  /* Stacked, the action takes the frame's width rather than a 10rem minimum
+     that a narrow viewport cannot honour. */
   .club-login__status-action {
     width: 100%;
+    min-width: 0;
   }
 }
 
@@ -1838,9 +1926,18 @@ a {
 
 /* Rung states. The marker and the border carry the state; the visible state
    label carries it for assistive tech, so nothing depends on colour alone. */
+
+/**
+ * `--club-gold-strong`, not `--club-gold`.
+ *
+ * The plain gold measures 2.95:1 on the club surface, under the 3:1 a
+ * graphical indicator needs. The stronger tone is 5.52:1 and keeps the same
+ * hue, so a reached rung still reads as gold. `--club-gold` itself is now only
+ * used for decoration that carries no information — the stamp's inner ring.
+ */
 .club-ladder__rung--reached .club-ladder__rung-marker {
-  background: var(--club-gold);
-  border-color: var(--club-gold);
+  background: var(--club-gold-strong);
+  border-color: var(--club-gold-strong);
 }
 
 .club-ladder__rung--next {
@@ -1918,6 +2015,9 @@ a {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
+  /* Tabular figures so a uuid read digit-group by digit-group lines up, and
+     because the hex columns are what the customer reads aloud at the counter. */
+  font-variant-numeric: tabular-nums;
   /* Long uuids must break rather than push the layout sideways. */
   overflow-wrap: anywhere;
 }
@@ -1942,6 +2042,12 @@ a {
 
 .club-qr__toggle:hover {
   background: color-mix(in srgb, var(--club-cherry) 8%, transparent);
+}
+
+.club-qr__toggle svg {
+  /* The two chevrons and the QR glyph are fixed-size UI, not prose: they must
+     not be the flex items that give way when the label wraps. */
+  flex: 0 0 auto;
 }
 
 .club-qr__toggle svg:last-child {
@@ -2051,10 +2157,14 @@ a {
   border-bottom: none;
 }
 
+/* Not gold. This glyph sits on the club surface, where `--club-gold` measures
+   2.95:1 — below AA for 16px text. The sign is decorative and already carries
+   the ink the rest of the row uses; the amount beside it is what states the
+   direction, and the spoken label states it for a screen reader. */
 .club-activity__sign {
   flex-shrink: 0;
   width: 1.5rem;
-  color: var(--club-gold);
+  color: var(--club-ink-soft);
   font-weight: var(--font-bold);
   text-align: center;
 }
@@ -2181,3 +2291,123 @@ a {
 }
 
 
+/* ========================================
+   Stage 6 — Responsive and accessibility
+   ========================================
+   Only the styles Stage 6 needed. Everything above is Stage 0-5, left as
+   approved except where a contrast measurement or a hit-target count forced a
+   change, and each of those says so where it sits.
+   ======================================== */
+
+/* --- Registration confirmation ---
+   `/confirm` predates the club-barrio redesign and was the last page still
+   outside `ClubShell`. It now uses the shell like every other route, and this
+   block is the only thing it needs of its own: a vertically centred column, a
+   greeting that cannot be pushed around by a query parameter, and one
+   full-width action. */
+.club-confirm-shell {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Centred with an auto margin rather than `justify-content: center`, which
+   clips the top of an over-tall column in some engines. The shell is
+   `min-height`, not `height`, so the margin resolves to zero on a short
+   viewport and the content simply flows from the top. */
+.club-confirm-shell .club-shell__frame {
+  margin-block: auto;
+}
+
+.club-confirm {
+  display: grid;
+  gap: var(--space-5);
+  justify-items: center;
+  width: 100%;
+  min-width: 0;
+  margin-inline: auto;
+  text-align: center;
+}
+
+/* The greeting is the only string on any route that comes out of a query
+   parameter, so it is the only one that can be arbitrarily long at the width
+   that matters most. `overflow-wrap: anywhere` on the root already stops it
+   pushing the page sideways; `text-wrap: balance` stops it from stranding one
+   word on a line of its own. */
+.club-confirm__title {
+  max-width: 100%;
+  margin: 0;
+  color: var(--club-ink);
+  font-family: var(--club-font-display);
+  /* The entry page's own scale, because this is a full page with a single
+     greeting on it rather than an outcome inside a flow. */
+  font-size: clamp(2.25rem, 3.4vw, 3rem);
+  font-weight: var(--font-bold);
+  line-height: 1.02;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.club-confirm__message {
+  max-width: 34ch;
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-lg);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.club-confirm__action {
+  width: min(100%, 22rem);
+  min-width: 0;
+  padding-inline: var(--space-5);
+  white-space: nowrap;
+}
+
+.club-confirm-loading {
+  display: grid;
+  min-height: calc(100dvh - var(--space-8));
+  place-items: center;
+}
+
+/* --- 404 ---
+   The one page that had a class and no rule, which the CSS contract was forced
+   to exempt by name. It now has the same card, the same type and the same
+   44px-plus action as every other route, and the exemption is gone with it. */
+.not-found {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--space-4);
+  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  color: var(--club-ink);
+  background: var(--club-paper);
+}
+
+.not-found__card {
+  width: min(100%, var(--club-reading-width));
+  text-align: center;
+}
+
+.not-found__title {
+  margin: 0 0 var(--space-2);
+  color: var(--club-ink);
+  font-size: var(--text-2xl);
+  font-weight: var(--font-bold);
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+.not-found__description {
+  max-width: 34ch;
+  margin: 0 0 var(--space-5);
+  color: var(--club-ink-soft);
+  font-size: var(--text-base);
+  text-wrap: pretty;
+}
+
+.not-found__action {
+  width: min(100%, 20rem);
+  min-width: 0;
+  padding-inline: var(--space-5);
+  white-space: nowrap;
+}

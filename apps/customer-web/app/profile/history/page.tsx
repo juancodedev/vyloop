@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { Announcer } from '../../components/announcer';
 import { ClubShell } from '../../components/club-shell';
 import { ClubError, ClubStatus } from '../../components/club-status';
 import { MovementList } from '../../components/movement-list';
@@ -138,6 +139,23 @@ export default function HistoryPage() {
 
   const currency = profile?.program?.pointsCurrency ?? null;
 
+  /**
+   * What the list slot just answered, for a screen reader only.
+   *
+   * Deliberately additive: the count, and which filter it answers, neither of
+   * which is on screen. Repeating the visible "Sin movimientos" or the visible
+   * loading word would be read twice by anyone who browses the page after
+   * hearing the announcement, so the wording here says something the page does
+   * not.
+   */
+  const activeFilterLabel = FILTERS.find(({ key }) => key === filter)?.label.toLowerCase() ?? '';
+
+  const announcement = fetching
+    ? `Actualizando tus movimientos de ${activeFilterLabel}.`
+    : transactions.length === 0
+      ? `Ningún movimiento para ${activeFilterLabel}.`
+      : `${transactions.length} ${transactions.length === 1 ? 'movimiento' : 'movimientos'} para ${activeFilterLabel}.`;
+
   return (
     <ClubShell backLink={{ href: '/profile', label: 'Volver a mi pase' }}>
       <h1 className="title title--sm">Historial</h1>
@@ -155,6 +173,14 @@ export default function HistoryPage() {
           </button>
         ))}
       </div>
+
+      {/*
+        Mounted here, above the slot, and never unmounted by a filter change:
+        this is the region that makes the result below audible. It reuses
+        `club-sr-only`, so it is announced and invisible, and it holds no height,
+        so adding it does not move the tabs.
+      */}
+      <Announcer message={announcement} />
 
       {/*
         The list slot is what swaps while re-filtering, not the whole page, so

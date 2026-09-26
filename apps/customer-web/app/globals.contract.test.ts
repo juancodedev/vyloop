@@ -241,18 +241,16 @@ function classesInUse(): Set<string> {
 /**
  * Classes the app applies that deliberately have no rule of their own.
  *
- * There is exactly one. `app/not-found.tsx` puts it on `<main>`, and nothing in
- * `globals.css` targets it: the club-barrio redesign gave the 404 page no
- * component class, so it renders on the `body` rules alone — `.customer-web`
- * supplies the palette and the font. It is a hook waiting for a design pass, not
- * a rule that went missing.
+ * There are none. It used to be exactly one: `app/not-found.tsx` put
+ * `not-found` on its `<main>` with nothing in `globals.css` targeting it, and
+ * the test pinned the exemption by exact equality so it could not quietly
+ * widen. Stage 6 gave that page a design pass and the exemption went with it.
  *
- * This is one entry with a stated reason, not a name list to grow quietly, and
- * the test below pins it by exact equality: giving `not-found` a real rule, or
- * applying some other class without one, turns the suite red so the exemption
- * has to be re-argued instead of widening by accident.
+ * The list stays, and the test below still pins it by exact equality, so the
+ * next class applied without a rule has to be re-argued here instead of
+ * appearing by accident.
  */
-const UNSTYLED_BY_DESIGN = ['not-found'];
+const UNSTYLED_BY_DESIGN: string[] = [];
 
 describe('Stage 0 club-barrio CSS contract', () => {
   it('defines the approved semantic tokens', () => {
@@ -272,6 +270,10 @@ describe('Stage 0 club-barrio CSS contract', () => {
     expect(css).toMatch(/--club-transition-fast:\s*var\(--transition-fast\)/);
     expect(css).toMatch(/--club-ease-out:\s*var\(--ease-out\)/);
     expect(css).toMatch(/--club-font-display:\s*var\(--font-body\), system-ui, sans-serif/);
+    // Stage 6 added two tones, both measured against the club surfaces rather
+    // than chosen by eye. See the contrast floor suite below.
+    expect(css).toMatch(/--club-gold-strong:\s*#8a5f1f/);
+    expect(css).toMatch(/--club-success:\s*#1c6b45/);
   });
 
   it('provides focus, reduced motion, and transition safeguards', () => {
@@ -279,6 +281,247 @@ describe('Stage 0 club-barrio CSS contract', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
     expect(css).not.toMatch(/transition\s*:\s*all/);
     expect(css).not.toMatch(/outline\s*:\s*none/);
+    expect(css).not.toMatch(/outline\s*:\s*0\b/);
+  });
+});
+
+/**
+ * Stage 6: the parts of the acceptance criteria that live in the stylesheet and
+ * cannot be observed from jsdom.
+ *
+ * These are static measurements of the source, not of a rendered page. They
+ * exist so a regression is caught by `pnpm test` rather than by a person with a
+ * browser at 320px — not to replace that check, which still has to happen for
+ * anything a text file cannot say.
+ */
+
+/** sRGB hex -> WCAG relative luminance. */
+function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+
+  const linear = channels.map((channel) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+/** WCAG 2.x contrast ratio between two opaque sRGB hex colours. */
+function contrastRatio(foreground: string, background: string): number {
+  const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].sort(
+    (a, b) => b - a,
+  );
+
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** The body-text threshold. WCAG 1.4.3 AA. */
+const AA_TEXT = 4.5;
+
+/** The threshold for large text and for graphical objects. WCAG 1.4.11. */
+const AA_LARGE = 3;
+
+const CLUB_PAPER = '#f3eee5';
+const CLUB_SURFACE = '#fffdf7';
+
+/**
+ * The declarations of every rule whose selector list contains `selector`.
+ *
+ * A plain `\.name\s*\{…\}` does not do: the file has rules that serve two
+ * selectors at once — `.club-ladder__gap-value, .club-ladder__gap-tier` is one
+ * rule, and a regex that stops at the first `{` reads the comma as if the body
+ * began there, then finds nothing. Each selector in a list is checked on its
+ * own, and a selector that appears in several rules gets all of their
+ * declarations, so a test reads the real accumulated treatment.
+ */
+function ruleBody(selector: string): string {
+  const bodies: string[] = [];
+
+  for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectorList = match[1].split(',').map((part) => part.trim());
+
+    if (selectorList.some((part) => new RegExp(`(^|\\s|,)${selector}(\\s|,|$|:|\\.)`).test(part))) {
+      bodies.push(match[2]);
+    }
+  }
+
+  return bodies.join('\n');
+}
+
+describe('Stage 6 club-barrio contrast floor', () => {
+  it.each([
+    ['club ink on the card surface', '#27201d', CLUB_SURFACE, AA_TEXT],
+    ['club ink on the page', '#27201d', CLUB_PAPER, AA_TEXT],
+    ['club secondary ink on the card surface', '#6f625b', CLUB_SURFACE, AA_TEXT],
+    ['club secondary ink on the page', '#6f625b', CLUB_PAPER, AA_TEXT],
+    ['cherry on the card surface, the primary label', '#a9362b', CLUB_SURFACE, AA_TEXT],
+    ['cherry on the page', '#a9362b', CLUB_PAPER, AA_TEXT],
+    ['cherry-dark, the outline button and the error text', '#74231d', CLUB_SURFACE, AA_TEXT],
+    ['cherry-dark on the page', '#74231d', CLUB_PAPER, AA_TEXT],
+    // The two tones Stage 6 added, measured rather than eyeballed.
+    ['club success, the earned amount and the stock badge', '#1c6b45', CLUB_SURFACE, AA_TEXT],
+    ['club success-strong gold, the reached rung marker', '#8a5f1f', CLUB_SURFACE, AA_LARGE],
+    // The focus ring, measured on both backgrounds it can land on.
+    ['club focus ring on the card surface', '#1e67b1', CLUB_SURFACE, AA_LARGE],
+    ['club focus ring on the page', '#1e67b1', CLUB_PAPER, AA_LARGE],
+  ])('%s clears %s:1', (_label, foreground, background, minimum) => {
+    const ratio = contrastRatio(foreground as string, background as string);
+
+    expect(
+      ratio,
+      `${foreground} on ${background} is ${ratio.toFixed(2)}:1, below the ${minimum}:1 floor`,
+    ).toBeGreaterThanOrEqual(minimum as number);
+  });
+
+  it('keeps no design-system tone in a foreground role on the club surfaces', () => {
+    // The values the design system resolves these to, which were the measured
+    // failures that forced the remaps in `.customer-web`. Pinned so a future
+    // unmapping is a deliberate act with a stated reason.
+    expect(contrastRatio('#cf8a00', CLUB_SURFACE)).toBeLessThan(AA_TEXT);
+    expect(contrastRatio('#9e9994', CLUB_SURFACE)).toBeLessThan(AA_TEXT);
+    expect(contrastRatio('#9e9994', CLUB_PAPER)).toBeLessThan(AA_TEXT);
+    expect(contrastRatio('#299236', CLUB_SURFACE)).toBeLessThan(AA_TEXT);
+
+    // And so `.customer-web` must actually remap all four. Amber was a text
+    // colour in three rules — the active history filter, the reward cost and the
+    // remaining balance — every one of them a figure the customer reads to
+    // decide something.
+    const scope = /\.customer-web\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+
+    expect(scope).toMatch(/--brand-500:\s*var\(--club-cherry\)/);
+    expect(scope).toMatch(/--brand-50:\s*var\(--club-paper\)/);
+    expect(scope).toMatch(/--text-muted:\s*var\(--club-ink-soft\)/);
+    expect(scope).toMatch(/--success:\s*var\(--club-success\)/);
+  });
+
+  it('reaches 3:1 for a disabled button label rather than 2:1', () => {
+    // `.btn:disabled` was 0.5 alpha over the page, which composited the cherry
+    // label down to 2.25:1 — the "Registrando…" and "Entrando…" labels were
+    // unreadable while the request they describe was in flight. Inactive
+    // controls are exempt from 1.4.3, but a label nobody can read is not a
+    // working affordance, so the floor is asserted anyway.
+    const opacity = Number(/^\.btn:disabled\s*\{[\s\S]*?opacity:\s*([\d.]+);/m.exec(css)?.[1]);
+
+    expect(opacity).toBeGreaterThanOrEqual(0.7);
+
+    // Cherry at that alpha, over the page background.
+    const paper = [1, 3, 5].map((offset) => parseInt(CLUB_PAPER.slice(offset, offset + 2), 16));
+    const composited = `#${[169, 54, 43]
+      .map((channel, index) =>
+        Math.round(channel * opacity + paper[index] * (1 - opacity))
+          .toString(16)
+          .padStart(2, '0'),
+      )
+      .join('')}`;
+
+    expect(contrastRatio(composited, CLUB_PAPER)).toBeGreaterThanOrEqual(AA_LARGE);
+  });
+});
+
+describe('Stage 6 club-barrio responsive floor', () => {
+  it('gives every action a 44px target', () => {
+    // Counted from the rules, not from a browser: any rule that sizes a control
+    // has to reach the floor or state why it cannot.
+    const minHeights = [
+      '.btn',
+      '.filter-tab',
+      '.club-back-link',
+      '.club-qr__toggle',
+      '.club-qr__retry',
+      '.logout-btn',
+      '.club-register__optional-summary',
+      '.club-consent__row',
+    ];
+
+    for (const selector of minHeights) {
+      const declared = /min-height:\s*(\d+)px/.exec(ruleBody(selector))?.[1];
+
+      // 44px is the floor and 48px clears it. A rule with no `min-height` at all
+      // has to justify itself some other way, and none of these do.
+      expect(declared, `${selector} declares no pixel min-height`).toBeDefined();
+      expect(Number(declared), `${selector} min-height is ${declared}px`).toBeGreaterThanOrEqual(44);
+    }
+
+    // The filter tabs were the real failure: 10px of padding plus a 15.6px line
+    // plus 3px of border is about 38.6px, so every filter was under the target.
+    expect(ruleBody('.filter-tab')).toMatch(/min-height:\s*44px/);
+    expect(ruleBody('.filter-tab')).toMatch(/min-width:\s*0/);
+  });
+
+  it('lets the three filter tabs fit 320px instead of forcing the page wide', () => {
+    // The mechanism: a zero min-width so the labels wrap, and no `nowrap`.
+    expect(ruleBody('.filter-tab')).not.toMatch(/white-space:\s*nowrap/);
+  });
+
+  it('breaks a long unbreakable word anywhere rather than per component', () => {
+    // Merchant business names, reward names, tier names, movement notes and
+    // member uuids all arrive as data. The rule lives once, at the app root, so
+    // the next component inherits it.
+    const scope = /\.customer-web\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+
+    expect(scope).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('gives the numeric figures tabular figures', () => {
+    // Balances, point amounts, ladder thresholds and the member id. Each of
+    // these is compared against another, either by eye down a column or aloud.
+    const tabular = [
+      '.club-pass__balance-value',
+      '.club-pass__meta-item dd',
+      '.club-ladder__gap-value',
+      '.club-ladder__rung-threshold',
+      '.movement__points',
+      '.movement__balance',
+      '.reward-card__cost',
+      '.reward-card__stock',
+      '.confirm-balance__value',
+      '.confirm-available',
+      '.club-qr__id-value',
+    ];
+
+    for (const selector of tabular) {
+      expect(ruleBody(selector), `${selector} has no tabular figures`).toMatch(
+        /font-variant-numeric:\s*tabular-nums/,
+      );
+    }
+  });
+
+  it('drops the fixed minimum that a stacked layout cannot honour', () => {
+    // `min-width: 9.5rem` on the entry actions was meant to stop two side-by-side
+    // buttons squeezing. Stacked, it is a hard 152px floor that a narrow
+    // viewport cannot honour, so the button ends up wider than its own frame.
+    const mobile = /@media \(max-width: 47\.99rem\)\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+
+    expect(mobile).toMatch(/\.club-entry__action\s*\{[\s\S]*?min-width:\s*0/);
+  });
+});
+
+describe('Stage 6 club-barrio motion floor', () => {
+  it('only declares keyframes that something animates', () => {
+    // The stylesheet carried `pulse`, `countUp`, `slideDown` and `glowPulse` for
+    // a design that no longer exists. Beyond being dead weight, they made the
+    // reduced-motion story look like it had four more animations to cover than
+    // it did. Nothing references them now, and a new orphan fails here.
+    const declared = [...css.matchAll(/@keyframes\s+([A-Za-z0-9_-]+)/g)].map((match) => match[1]);
+    const animated = [...css.matchAll(/animation:\s*([A-Za-z0-9_-]+)/g)].map((match) => match[1]);
+
+    expect(declared.length).toBeGreaterThan(0);
+
+    const orphans = declared.filter((name) => !animated.includes(name)).sort();
+
+    expect(orphans).toEqual([]);
+  });
+
+  it('kills animations outright under reduced motion, for the whole subtree', () => {
+    const block = /@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+
+    // `animation: none`, not a shortened duration: a 0.01ms iteration is still an
+    // iteration, and `none` leaves nothing running at all.
+    expect(block).toMatch(/animation:\s*none\s*!important/);
+    expect(block).toMatch(/transition-duration:\s*0\.01ms\s*!important/);
+    // The pseudo-elements, or a `::before` can animate past its parent's back.
+    expect(block).toMatch(/\.customer-web \*::before/);
+    expect(block).toMatch(/\.customer-web \*::after/);
   });
 });
 
