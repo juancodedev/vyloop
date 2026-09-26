@@ -1,5 +1,5 @@
 import type { Queue, KVNamespace } from '@cloudflare/workers-types';
-import { setCurrentBusinessId } from '@vyloop/db';
+import { setCurrentBusinessId, customers } from '@vyloop/db';
 import {
   POINTS_ASSIGNED,
   REWARD_REDEEMED,
@@ -7,6 +7,7 @@ import {
   createEnvelope,
 } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
@@ -49,6 +50,133 @@ export function extractAuthHeaders(c: Context): AuthHeaders {
   }
 
   return { userId, businessId, userRole };
+}
+
+// ---------------------------------------------------------------------------
+// Customer ownership
+// ---------------------------------------------------------------------------
+
+/**
+ * The role the customer app's token carries. Scopes `rewards:read` /
+ * `rewards:redeem` to the holder's own loyalty record.
+ */
+const CUSTOMER_ROLE = 'customer';
+
+/** Stable, specific code. Callers can branch on this without parsing prose. */
+export const CUSTOMER_ID_MISMATCH = 'CUSTOMER_ID_MISMATCH';
+export const CUSTOMER_SELF_NOT_FOUND = 'CUSTOMER_SELF_NOT_FOUND';
+
+/**
+ * Is this the customer app's own token?
+ *
+ * The single owner of that question. A route deciding it any other way is how
+ * the read and redeem paths end up disagreeing about whose data they are
+ * allowed to touch.
+ */
+export function isCustomerRole(auth: AuthHeaders): boolean {
+  return auth.userRole === CUSTOMER_ROLE;
+}
+
+export type EffectiveCustomer =
+  /**
+   * `undefined` only for an operator who named no customer: on the read path
+   * that still means "the whole tenant", exactly as before. A customer can
+   * never reach that state — for that role the id is always resolved first.
+   */
+  | { ok: true; customerId: string | undefined }
+  | { ok: false; status: 403; code: string; message: string };
+
+/**
+ * Resolve the token subject to the tenant's own customer row.
+ *
+ * `X-User-Id` is the JWT subject, which is the customer's `globalId` — not the
+ * `customers.id` primary key that `points_transactions.customer_id` holds. The
+ * join has to happen somewhere, and doing it here is what lets the two loyalty
+ * routes stop trusting a client-supplied id.
+ *
+ * Both halves of the key are mandatory. `businessId` is not decoration: the
+ * same person is a row per merchant, so a lookup on `globalId` alone is a
+ * cross-tenant lookup that happens to be one of many equally valid answers.
+ * `deletedAt` is excluded for the same reason `GET /v1/customers/me` excludes
+ * it — a withdrawn membership must not keep transacting.
+ */
+export async function resolveOwnCustomer(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  businessId: string,
+  globalId: string,
+): Promise<{ id: string } | undefined> {
+  const [customer] = await db
+    .select({ id: customers.id })
+    .from(customers)
+    .where(
+      and(
+        eq(customers.globalId, globalId),
+        eq(customers.businessId, businessId),
+        isNull(customers.deletedAt),
+      ),
+    )
+    .limit(1);
+
+  return customer as { id: string } | undefined;
+}
+
+/**
+ * Decide which customer a loyalty request is allowed to act on.
+ *
+ * Both `GET /v1/loyalty/points/transactions` and `POST
+ * /v1/loyalty/rewards/redeem` take a `customer_id` from the client, and
+ * `X-Business-Id` alone only says which tenant — never which customer inside
+ * it. Honouring the supplied id unchecked therefore let any customer read the
+ * tenant's whole movement history (by omitting it) or spend another
+ * customer's balance (by naming them). Both routes resolve through this one
+ * function so they cannot drift apart again.
+ *
+ * Operator and admin are unchanged: they may name any customer, and the read
+ * route still falls back to the tenant-wide listing when they name none. The
+ * dashboard POS depends on that — it redeems on behalf of a scanned customer.
+ *
+ * For a customer the token is the only authority. An id that disagrees is a
+ * 403 rather than a silent rewrite to the caller's own: a mismatch is the
+ * signal that the client is reading a stale id, and coercing it would spend
+ * the caller's points to hide a bug the caller needs to see. The supplied id
+ * is never looked up, so the 403 cannot be told apart from one for an id that
+ * does not exist — no existence oracle, and nothing of another tenant's is
+ * read to produce the answer.
+ */
+export async function resolveEffectiveCustomer(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  auth: AuthHeaders,
+  requestedCustomerId?: string,
+): Promise<EffectiveCustomer> {
+  if (!isCustomerRole(auth)) {
+    return { ok: true, customerId: requestedCustomerId };
+  }
+
+  const own = await resolveOwnCustomer(db, auth.businessId, auth.userId);
+
+  if (!own) {
+    return {
+      ok: false,
+      status: 403,
+      code: CUSTOMER_SELF_NOT_FOUND,
+      message:
+        'This account has no customer record in this business, so it cannot read or spend loyalty points here.',
+    };
+  }
+
+  if (requestedCustomerId !== undefined && requestedCustomerId !== own.id) {
+    return {
+      ok: false,
+      status: 403,
+      code: CUSTOMER_ID_MISMATCH,
+      message:
+        'customer_id must identify the authenticated customer. Omit it to act on your own record.',
+    };
+  }
+
+  return { ok: true, customerId: own.id };
 }
 
 // ---------------------------------------------------------------------------
