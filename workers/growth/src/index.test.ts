@@ -6,8 +6,10 @@ vi.mock('@vyloop/db', async () => {
   // `membershipTiers` gets a real pgTable so the predicates the routes build
   // compile to SQL a test can read. A flat `{}` would render an opaque chunk
   // and the tenant scope would be unobservable — the mock would accept a
-  // cross-tenant comparison as happily as a correct one.
-  const { pgTable, uuid, integer, numeric, text } = await import('drizzle-orm/pg-core');
+  // cross-tenant comparison as happily as a correct one. `customers` and
+  // `pointsTransactions` are real for the same reason: they are the two tables
+  // the loyalty ownership check and the points read are scoped against.
+  const { pgTable, uuid, integer, numeric, text, timestamp } = await import('drizzle-orm/pg-core');
   const tierTable = pgTable('membership_tiers', {
     id: uuid('id').primaryKey(),
     businessId: uuid('business_id').notNull(),
@@ -17,12 +19,31 @@ vi.mock('@vyloop/db', async () => {
     multiplier: numeric('multiplier').notNull(),
     displayOrder: integer('display_order').notNull(),
   });
+  const customerTable = pgTable('customers', {
+    id: uuid('id').primaryKey(),
+    globalId: uuid('global_id').notNull(),
+    businessId: uuid('business_id').notNull(),
+    currentTierId: uuid('current_tier_id'),
+    deletedAt: timestamp('deleted_at'),
+  });
+  const pointsTable = pgTable('points_transactions', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    type: text('type').notNull(),
+    points: integer('points').notNull(),
+    balanceAfter: integer('balance_after').notNull(),
+    referenceId: text('reference_id'),
+    note: text('note'),
+    createdAt: timestamp('created_at').notNull(),
+  });
   const table = {};
   return {
     createDb: vi.fn(),
     loyaltyPrograms: table,
     membershipTiers: tierTable,
-    customers: table,
+    customers: customerTable,
+    pointsTransactions: pointsTable,
     rewards: table,
     rewardGrants: table,
     schema: {},
@@ -56,6 +77,8 @@ import { createDb } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+import { isCustomerRole } from './helpers';
 
 import app from './index';
 
@@ -116,14 +139,23 @@ function createMockDb(): MockDb {
 
 let mockDb: MockDb;
 
-function req(method: string, path: string, body?: unknown) {
+interface TestAuth {
+  userId: string;
+  businessId: string;
+  userRole: string;
+}
+
+/** The operator the pre-existing tests were all written against. */
+const OPERATOR_AUTH: TestAuth = { userId: 'user-1', businessId: 'biz-1', userRole: 'admin' };
+
+function reqAs(method: string, path: string, auth: TestAuth, body?: unknown) {
   const r = new Request(`http://localhost${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      'X-User-Id': 'user-1',
-      'X-Business-Id': 'biz-1',
-      'X-User-Role': 'admin',
+      'X-User-Id': auth.userId,
+      'X-Business-Id': auth.businessId,
+      'X-User-Role': auth.userRole,
     },
     body: body !== undefined ? JSON.stringify(body) : null,
   });
@@ -132,6 +164,10 @@ function req(method: string, path: string, body?: unknown) {
     DOMAIN_EVENTS_QUEUE: {} as Queue,
     SCHEMA_REGISTRY: {} as KVNamespace,
   } as Record<string, unknown>);
+}
+
+function req(method: string, path: string, body?: unknown) {
+  return reqAs(method, path, OPERATOR_AUTH, body);
 }
 
 const GET = (p: string) => req('GET', p);
@@ -1431,6 +1467,469 @@ describe('Growth Worker', () => {
       expect(json.partial).toBe(false);
       expect(txExec).toHaveBeenCalledTimes(2);
       expect(publish).toHaveBeenCalledOnce();
+    });
+  });
+
+  // ==========================================================================
+  // Customer ownership
+  //
+  // `X-Business-Id` scopes to the TENANT and says nothing about which customer
+  // inside it. Both loyalty routes also took a `customer_id` from the client,
+  // so a customer could omit it and read the whole tenant's movement history,
+  // or name someone else and spend their balance.
+  //
+  // The token is now the only authority for the `customer` role: the subject
+  // (`X-User-Id`, a `globalId`) is resolved to the tenant's own customer row,
+  // and a `customer_id` that disagrees is a 403 rather than a silent rewrite.
+  // Operator and admin are untouched — the dashboard POS redeems on behalf of a
+  // scanned customer, and the read route still lists the tenant when they name
+  // nobody.
+  // ==========================================================================
+
+  const CUSTOMER = { userId: 'gid-alice', businessId: DEV_TENANT, userRole: 'customer' };
+
+  /** A second merchant: the tenant an id from here must never be honoured in. */
+  const OTHER_TENANT = 'biz-2';
+
+  /**
+   * `cust-alice-biz2` deliberately comes FIRST. It is the same person in
+   * another merchant, and it shares her `globalId` — so a lookup that resolves
+   * the subject but forgets the `business_id` scope lands on the wrong
+   * customer instead of accidentally landing on the right one. Ordering the
+   * rows this way is what makes that mistake observable rather than invisible.
+   */
+  const CUSTOMER_ROWS = [
+    { id: 'cust-alice-biz2', globalId: 'gid-alice', businessId: OTHER_TENANT, deletedAt: null },
+    { id: 'cust-alice', globalId: 'gid-alice', businessId: DEV_TENANT, deletedAt: null },
+    { id: 'cust-bob', globalId: 'gid-bob', businessId: DEV_TENANT, deletedAt: null },
+    { id: 'cust-withdrawn', globalId: 'gid-dana', businessId: DEV_TENANT, deletedAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'cust-carol', globalId: 'gid-carol', businessId: OTHER_TENANT, deletedAt: null },
+  ];
+
+  const TRANSACTION_ROWS = [
+    { id: 'tx-alice-1', businessId: DEV_TENANT, customerId: 'cust-alice', type: 'earn', points: 500, balanceAfter: 500, referenceId: 'sale-1', note: 'compra', createdAt: '2026-01-03T00:00:00.000Z' },
+    { id: 'tx-alice-2', businessId: DEV_TENANT, customerId: 'cust-alice', type: 'redeem', points: 200, balanceAfter: 300, referenceId: 'redeem-1', note: 'Gift Card', createdAt: '2026-01-02T00:00:00.000Z' },
+    { id: 'tx-bob-1', businessId: DEV_TENANT, customerId: 'cust-bob', type: 'earn', points: 900, balanceAfter: 900, referenceId: 'sale-2', note: 'compra', createdAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'tx-carol-1', businessId: OTHER_TENANT, customerId: 'cust-carol', type: 'earn', points: 4000, balanceAfter: 4000, referenceId: 'sale-3', note: 'compra', createdAt: '2026-01-01T00:00:00.000Z' },
+  ];
+
+  /**
+   * Read the `col = $n` pairs out of a compiled predicate, mapped to the
+   * fixture key they constrain.
+   *
+   * A column the SQL does not mention is simply absent from the result: that
+   * is the whole point. A lookup that stops filtering on a column stops
+   * filtering on it, foreign rows are admitted, and the test sees them.
+   */
+  function predicateScope(
+    clause: unknown,
+    columns: Record<string, string>,
+  ): { entries: Array<{ column: string; key: string; value: unknown }>; isNull: (column: string) => boolean } {
+    const query = dialect.sqlToQuery(clause as never);
+    const entries: Array<{ column: string; key: string; value: unknown }> = [];
+
+    for (const [column, key] of Object.entries(columns)) {
+      const match = new RegExp(`"${column}" = \\$(\\d+)`).exec(query.sql);
+      if (match) {
+        entries.push({ column, key, value: query.params[Number(match[1]) - 1] });
+      }
+    }
+
+    return {
+      entries,
+      isNull: (column: string) => query.sql.includes(`"${column}" is null`),
+    };
+  }
+
+  /**
+   * A `select` that behaves like the real one: the predicate is compiled to
+   * SQL and only the rows that predicate admits are returned. `limit` is
+   * honoured, because a scope that admits the wrong rows is only dangerous
+   * when the wrong row survives the `limit(1)`.
+   */
+  function filteredBuilder<T>(resolve: (clause: unknown) => T[]): Builder {
+    let result: T[] = [];
+    let take = Number.POSITIVE_INFINITY;
+
+    const builder: Record<string, unknown> = {};
+    builder.from = vi.fn(() => builder);
+    builder.orderBy = vi.fn(() => builder);
+    builder.where = vi.fn((clause: unknown) => {
+      result = resolve(clause);
+      return builder;
+    });
+    builder.limit = vi.fn((n: number) => {
+      take = n;
+      return builder;
+    });
+    builder.offset = vi.fn(() => builder);
+    const settled = () => Promise.resolve(result.slice(0, take));
+    builder.then = (onFulfilled?: (v: unknown) => unknown, onRejected?: (r: unknown) => unknown) =>
+      settled().then(onFulfilled, onRejected);
+    builder.catch = (onRejected?: (r: unknown) => unknown) => settled().catch(onRejected);
+    builder.finally = (onFinally?: () => void) => settled().finally(onFinally);
+
+    return builder as Builder;
+  }
+
+  /** The subject lookup, scoped by exactly the columns it filters on. */
+  function subjectLookup(rows: Array<Record<string, unknown>>) {
+    return filteredBuilder((clause) => {
+      const scope = predicateScope(clause, { global_id: 'globalId', business_id: 'businessId' });
+      return rows.filter(
+        (row) =>
+          scope.entries.every(({ key, value }) => row[key] === value) &&
+          (!scope.isNull('deleted_at') || row.deletedAt == null),
+      );
+    });
+  }
+
+  /** The points read, tenant- and customer-scoped by whatever it filters on. */
+  function pointsRead(rows: Array<Record<string, unknown>>) {
+    const admitted = (clause: unknown) => {
+      const scope = predicateScope(clause, {
+        business_id: 'businessId',
+        customer_id: 'customerId',
+        type: 'type',
+      });
+      return rows.filter((row) => scope.entries.every(({ key, value }) => row[key] === value));
+    };
+
+    return {
+      // The route runs the count and the page together; count is built first.
+      count: filteredBuilder((clause) => [{ total: admitted(clause).length }]),
+      items: filteredBuilder((clause) =>
+        admitted(clause).map((row) => ({
+          id: row.id,
+          customer_id: row.customerId,
+          type: row.type,
+          points: row.points,
+          balance_after: row.balanceAfter,
+          reference_id: row.referenceId,
+          note: row.note,
+          created_at: row.createdAt,
+        })),
+      ),
+    };
+  }
+
+  /** Compile the raw statements a route handed `db.execute`, params included. */
+  function executedStatements(): string[] {
+    return mockDb.execute.mock.calls
+      .map((call) => call[0])
+      .filter((arg) => arg !== undefined && arg !== null)
+      .map((arg) => {
+        const { sql: text, params } = dialect.sqlToQuery(arg as never);
+        return `${text} :: ${JSON.stringify(params)}`;
+      });
+  }
+
+  /** Nothing in the response may name a customer other than the caller's. */
+  function expectNoLeakedIds(raw: string, forbidden: string[]) {
+    for (const id of forbidden) {
+      expect(raw).not.toContain(id);
+    }
+  }
+
+  describe('GET /v1/loyalty/points/transactions — customer ownership', () => {
+    /** subject lookup, then the count and the page. */
+    function mockReadAs(
+      auth: TestAuth,
+      customers: Array<Record<string, unknown>> = CUSTOMER_ROWS,
+      rows: Array<Record<string, unknown>> = TRANSACTION_ROWS,
+    ) {
+      const read = pointsRead(rows);
+      // Queued off the same predicate the route uses, so the mock cannot
+      // quietly stop matching the route's shape if that predicate changes.
+      const selects = isCustomerRole({ userId: auth.userId, businessId: auth.businessId, userRole: auth.userRole })
+        ? [subjectLookup(customers), read.count, read.items]
+        : [read.count, read.items];
+      for (const builder of selects) {
+        mockDb.select.mockReturnValueOnce(builder as never);
+      }
+    }
+
+    it('gives a customer their own transactions when customer_id is omitted', async () => {
+      mockReadAs(CUSTOMER);
+
+      const res = await reqAs('GET', '/v1/loyalty/points/transactions', CUSTOMER);
+
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as { data: Array<{ id: string; customer_id: string }>; meta: { total: number } };
+      // Omitting the id used to mean "the whole tenant". It means "me" now.
+      expect(json.meta.total).toBe(2);
+      expect(json.data.map((tx) => tx.id).sort()).toEqual(['tx-alice-1', 'tx-alice-2']);
+      expect(json.data.every((tx) => tx.customer_id === 'cust-alice')).toBe(true);
+      expectNoLeakedIds(raw, ['cust-bob', 'cust-carol', 'cust-alice-biz2']);
+    });
+
+    it('accepts a customer naming their own id', async () => {
+      mockReadAs(CUSTOMER);
+
+      const res = await reqAs(
+        'GET',
+        '/v1/loyalty/points/transactions?customer_id=cust-alice',
+        CUSTOMER,
+      );
+
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as { data: Array<{ id: string }>; meta: { total: number } };
+      expect(json.meta.total).toBe(2);
+      expect(json.data.map((tx) => tx.id).sort()).toEqual(['tx-alice-1', 'tx-alice-2']);
+    });
+
+    it('refuses a customer naming another customer in the same tenant (403)', async () => {
+      mockDb.select.mockReturnValueOnce(subjectLookup(CUSTOMER_ROWS) as never);
+
+      const res = await reqAs(
+        'GET',
+        '/v1/loyalty/points/transactions?customer_id=cust-bob',
+        CUSTOMER,
+      );
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('CUSTOMER_ID_MISMATCH');
+      expect(json.data).toBeUndefined();
+      // The points read never ran: the other customer's rows were never queried.
+      expect(mockDb.select).toHaveBeenCalledOnce();
+      expectNoLeakedIds(raw, ['cust-bob', 'tx-bob-1']);
+    });
+
+    it('refuses a customer naming a customer in another tenant, and leaks nothing', async () => {
+      mockDb.select.mockReturnValueOnce(subjectLookup(CUSTOMER_ROWS) as never);
+
+      const res = await reqAs(
+        'GET',
+        '/v1/loyalty/points/transactions?customer_id=cust-carol',
+        CUSTOMER,
+      );
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('CUSTOMER_ID_MISMATCH');
+      // The named id is never echoed and never looked up, so the 403 cannot be
+      // told apart from one for an id that does not exist.
+      expect(mockDb.select).toHaveBeenCalledOnce();
+      expectNoLeakedIds(raw, ['cust-carol', 'tx-carol-1', '4000']);
+    });
+
+    it('refuses a customer whose subject has no row in this tenant', async () => {
+      mockDb.select.mockReturnValueOnce(subjectLookup([]) as never);
+
+      const res = await reqAs('GET', '/v1/loyalty/points/transactions', {
+        ...CUSTOMER,
+        userId: 'gid-zed',
+      });
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('CUSTOMER_SELF_NOT_FOUND');
+    });
+
+    it('refuses a customer whose row in this tenant is withdrawn', async () => {
+      mockDb.select.mockReturnValueOnce(subjectLookup(CUSTOMER_ROWS) as never);
+
+      const res = await reqAs('GET', '/v1/loyalty/points/transactions', {
+        ...CUSTOMER,
+        userId: 'gid-dana',
+      });
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('CUSTOMER_SELF_NOT_FOUND');
+    });
+
+    it('still lets an operator name an explicit customer', async () => {
+      mockReadAs(OPERATOR_AUTH);
+
+      const res = await GET('/v1/loyalty/points/transactions?customer_id=cust-bob');
+
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as { data: Array<{ id: string }>; meta: { total: number } };
+      expect(json.meta.total).toBe(1);
+      expect(json.data[0].id).toBe('tx-bob-1');
+      // No subject lookup: the operator path does not resolve a customer.
+      expect(mockDb.select).toHaveBeenCalledTimes(2);
+    });
+
+    it('still lists the whole tenant for an operator who names no customer', async () => {
+      mockReadAs(OPERATOR_AUTH);
+
+      const res = await GET('/v1/loyalty/points/transactions');
+
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as { data: Array<{ id: string }>; meta: { total: number } };
+      expect(json.meta.total).toBe(3);
+      expect(json.data.map((tx) => tx.id).sort()).toEqual(['tx-alice-1', 'tx-alice-2', 'tx-bob-1']);
+    });
+
+    it('still honours the type filter for an operator', async () => {
+      mockReadAs(OPERATOR_AUTH);
+
+      const res = await GET('/v1/loyalty/points/transactions?type=redeem');
+
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as { data: Array<{ id: string }>; meta: { total: number } };
+      expect(json.meta.total).toBe(1);
+      expect(json.data[0].id).toBe('tx-alice-2');
+    });
+  });
+
+  describe('POST /v1/loyalty/rewards/redeem — customer ownership', () => {
+    /** subject lookup only; the balance and the insert are raw `execute` calls. */
+    function mockSubject(customers: Array<Record<string, unknown>> = CUSTOMER_ROWS) {
+      mockDb.select.mockReturnValueOnce(subjectLookup(customers) as never);
+    }
+
+    it('refuses a customer redeeming for another customer and writes nothing', async () => {
+      mockSubject();
+      // Only withRls should reach the database.
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const res = await reqAs('POST', '/v1/loyalty/rewards/redeem', CUSTOMER, {
+        customer_id: 'cust-bob',
+        points: 100,
+        reference_id: 'ref-steal',
+      });
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('CUSTOMER_ID_MISMATCH');
+      // One statement only: the RLS session variable. No balance read, no
+      // INSERT, no event — nothing was spent.
+      expect(mockDb.execute).toHaveBeenCalledOnce();
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+      expectNoLeakedIds(raw, ['cust-bob', '900']);
+    });
+
+    it('refuses before the reward catalog is even read', async () => {
+      mockSubject();
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const res = await reqAs('POST', '/v1/loyalty/rewards/redeem', CUSTOMER, {
+        customer_id: 'cust-bob',
+        points: 100,
+        reward_id: 'rw-1',
+        reference_id: 'ref-steal-2',
+      });
+
+      expect(res.status).toBe(403);
+      // Ownership is decided first, so a foreign id cannot even be used to
+      // probe which rewards the tenant stocks.
+      expect(mockDb.select).toHaveBeenCalledOnce();
+      expect(mockDb.execute).toHaveBeenCalledOnce();
+    });
+
+    it('refuses a customer naming a customer in another tenant, and leaks nothing', async () => {
+      mockSubject();
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const res = await reqAs('POST', '/v1/loyalty/rewards/redeem', CUSTOMER, {
+        customer_id: 'cust-carol',
+        points: 100,
+        reference_id: 'ref-cross-tenant',
+      });
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('CUSTOMER_ID_MISMATCH');
+      expect(mockDb.execute).toHaveBeenCalledOnce();
+      expectNoLeakedIds(raw, ['cust-carol', '4000']);
+    });
+
+    it('redeems a customer with no customer_id against their own balance', async () => {
+      mockSubject();
+      mockDb.execute.mockResolvedValueOnce({ rows: [] }); // withRls
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] }); // balance
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-new', balance_after: 400 }] }); // insert
+
+      const res = await reqAs('POST', '/v1/loyalty/rewards/redeem', CUSTOMER, {
+        points: 100,
+        reference_id: 'ref-own',
+      });
+
+      expect(res.status).toBe(201);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as { data: { id: string }; fulfilled: number };
+      expect(json.data.id).toBe('tx-new');
+      expect(json.fulfilled).toBe(100);
+      // Every statement names the caller's own resolved id.
+      const statements = executedStatements();
+      expect(statements.some((s) => s.includes('"cust-alice"'))).toBe(true);
+      expect(statements.some((s) => s.includes('cust-bob') || s.includes('cust-carol'))).toBe(false);
+      expect(publish).toHaveBeenCalledOnce();
+    });
+
+    it('accepts a customer naming their own id', async () => {
+      mockSubject();
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-new', balance_after: 400 }] });
+
+      const res = await reqAs('POST', '/v1/loyalty/rewards/redeem', CUSTOMER, {
+        customer_id: 'cust-alice',
+        points: 100,
+        reference_id: 'ref-own-explicit',
+      });
+
+      expect(res.status).toBe(201);
+      const statements = executedStatements();
+      expect(statements.some((s) => s.includes('"cust-alice"'))).toBe(true);
+    });
+
+    it('still lets an operator redeem for an explicit customer (the POS path)', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', stock: 10, pointsCost: 50, name: 'Gift Card' }]),
+      );
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 900 }] });
+
+      const txExec = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: 'tx-pos', balance_after: 800 }] })
+        .mockResolvedValueOnce({ rows: [] });
+      mockDb.transaction.mockImplementationOnce(async (cb: (tx: { execute: MockFn }) => unknown) =>
+        cb({ execute: txExec }),
+      );
+
+      const res = await POST('/v1/loyalty/rewards/redeem', {
+        customer_id: 'cust-bob',
+        points: 100,
+        reward_id: 'rw-1',
+        reference_id: 'pos-1',
+      });
+
+      expect(res.status).toBe(201);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as { data: { id: string } };
+      expect(json.data.id).toBe('tx-pos');
+      // No subject lookup: the operator id is honoured as sent.
+      expect(mockDb.select).toHaveBeenCalledOnce();
+      const posStatements = txExec.mock.calls
+        .map((call) => dialect.sqlToQuery(call[0] as never).params)
+        .flat();
+      expect(posStatements).toContain('cust-bob');
+    });
+
+    it('still rejects an operator who names no customer', async () => {
+      const res = await POST('/v1/loyalty/rewards/redeem', { points: 100, reference_id: 'ref-x' });
+
+      expect(res.status).toBe(400);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('VALIDATION_ERROR');
     });
   });
 });
