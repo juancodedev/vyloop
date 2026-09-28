@@ -29,6 +29,13 @@
       "when": 1783345804023,
       "tag": "0003_windy_magus",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790630375373,
+      "tag": "0004_chubby_crystal",
+      "breakpoints": true
     }
   ]
 }
