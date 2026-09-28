@@ -29,6 +29,7 @@
     { "binding": "analytics", "service": "analytics" },
     { "binding": "automation", "service": "automation" },
     { "binding": "communication", "service": "communication" },
-    { "binding": "compliance", "service": "compliance" }
+    { "binding": "compliance", "service": "compliance" },
+    { "binding": "wallet", "service": "wallet" }
   ]
 }
