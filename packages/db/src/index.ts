@@ -32,6 +32,8 @@ export {
   rewardGrants,
   messageLog,
   whatsappTemplates,
+  tenantWalletPrograms,
+  customerWalletPasses,
 } from './schema';
 
 // Re-export all type exports
@@ -74,6 +76,10 @@ export type {
   NewReward,
   RewardGrant,
   NewRewardGrant,
+  TenantWalletProgram,
+  NewTenantWalletProgram,
+  CustomerWalletPass,
+  NewCustomerWalletPass,
 } from './schema';
 
 // Re-export RLS helpers
@@ -82,7 +88,16 @@ export {
   createRlsPolicies,
   dropRlsPolicies,
   setCurrentBusinessId,
+  withTenantRls,
+  setCurrentTenantId,
+  enableTenantRls,
+  createTenantRlsPolicies,
+  dropTenantRlsPolicies,
   BUSINESS_ID_TABLES,
+  TENANT_ID_TABLES,
+  BUSINESS_ID_SETTING,
+  TENANT_ID_SETTING,
+  RLS_POLICY_NAME,
 } from './rls';
 
 // Re-export index definitions
@@ -99,5 +114,8 @@ export {
   idxMessageLogCustomer,
   idxMessageLogStatus,
   idxWhatsappTemplatesName,
+  idxCustomersMemberCode,
+  idxCustomerWalletPassesTenant,
+  indexByName,
   allIndexes,
 } from './indexes';
