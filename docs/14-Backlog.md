@@ -14,6 +14,16 @@ Objetivo: infraestructura base corriendo en producción. Sin esta fase, nada má
 - [ ] Configuración de entorno de desarrollo local (`wrangler dev` + Neon local)
 - [ ] Implementar schema de base de datos PostgreSQL (todos los dominios) con migraciones versionadas
 - [ ] Activar Row-Level Security (RLS) en todas las tablas con `business_id`
+      — *Estado real: el mecanismo existe, el rollout no.* `packages/db/src/rls.ts` ya expone
+      `createRlsPolicies()`, `RLS_POLICY_NAME` (`tenant_isolation`) y las listas `BUSINESS_ID_TABLES`
+      (17 tablas) y `TENANT_ID_TABLES` (las 2 de wallet, que no tienen `business_id` y usan
+      `app.current_tenant_id`). `workers/wallet` ya consume el mecanismo vía `openTenantSession`.
+      Lo que falta es el paso de despliegue: `createRlsPolicies()` no se llama en código de producción,
+      y `withRls()` por sí solo solo ejecuta un `SET` — sin políticas creadas y sin
+      `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` la sesión sigue viendo todas las filas. El aislamiento
+      de hoy descansa en filtros explícitos de `business_id` en los handlers de ruta.
+      Siguiente paso: habilitar RLS por tabla, empezando por las de wallet, y recién después
+      asumir que el filtro de la ruta es una defensa secundaria y no la única.
 - [ ] Configurar Schema Registry en Cloudflare Workers KV con esquemas de eventos iniciales
 
 ### Identity y autenticación
@@ -130,6 +140,37 @@ Estos ítems están en la visión del producto pero **no entran al PMV**. Se pri
 ### Plataforma
 - [ ] App nativa iOS y Android (Flutter o React Native)
 - [ ] Apple Wallet + Google Wallet con actualización de saldo en tiempo real
+      — *Parcial. La mitad de Google Wallet está construida; la de Apple no se ha tocado; el barrido
+      programado no existe.* El ítem no se tilda porque una promesa a medias no es una promesa cumplida.
+
+      **Hecho (Google Wallet), en `workers/wallet` + `packages/db`:**
+      - Modelo de pase completo: derivación de ids, member code Crockford Base32 de 6 caracteres
+        con salt por tenant, `LoyaltyClass`, `LoyaltyObject`, formato de saldo, firmante JWT y cliente
+        REST de Google detrás de una interfaz. PRs #121, #122, #123, #124.
+      - Superficie HTTP de 3 rutas (`GET /v1/wallet/status`, `GET /v1/wallet/pass`,
+        `POST /v1/wallet/program/sync`), enrutadas por el gateway bajo `/v1/wallet`.
+      - Schema: `tenant_wallet_programs`, `customer_wallet_passes`, `customers.member_code`,
+        con migración `0004` aplicada al schema.
+
+      **Bloqueado por aprobación de Google (no es código):** el acceso de publicación es **una sola
+      aprobación para todo el emisor**, no una por clase. Hasta que llegue, todo pase emitido solo
+      llega a las cuentas Admin/Developer de prueba del propio emisor. El worker lo declara explícito
+      con `WALLET_DEMO_MODE`, cuyo default es `true` a propósito, y las dos rutas de cliente responden
+      en negativo en vez de ofrecer un botón que falla. Mientras tanto, la fila de tier del pase se
+      omite porque no hay columna que guarde su header de display (`tier_row_available` es siempre
+      `false`), y un saldo sobre 9,999,999 se rechaza con `WALLET_BALANCE_NOT_DISPLAYABLE` en vez de
+      truncarse.
+
+      **No construido:**
+      - **Apple Wallet.** Sin trabajo en el repositorio. Este ítem sigue abierto en su mitad.
+      - **El barrido programado.** La reconciliación corre dentro de `GET /v1/wallet/pass`, después
+        de firmar el link, y sus fallas se registran y se ignoran para no comprometer el 200. No hay
+        cron, ni handler `scheduled`, ni worker de barrido: `workers/wallet/src/index.ts` solo exporta
+        `fetch`. Por lo tanto **no hay actualización de saldo en tiempo real**: el saldo se proyecta
+        cuando el cliente pide el link, y un pase que no se vuelve a abrir no se vuelve a actualizar.
+      - **El botón "Add to Google Wallet".** Intencionalmente ausente. `GET /v1/wallet/status` es
+        exactamente el endpoint que ese botón tendría que consultar antes de renderizarse, para que
+        nunca aparezca sobre un pase que va a fallar.
 - [ ] API pública documentada con Swagger (para integradores externos)
 - [ ] Webhooks para suscripción de sistemas externos a eventos de Vyloop
 - [ ] SDKs oficiales Node.js y Python

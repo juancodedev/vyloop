@@ -92,12 +92,20 @@ CREATE TABLE customers (
   language        TEXT DEFAULT 'es',
   opted_in_at     TIMESTAMPTZ,         -- fecha de registro al programa
   last_visit_at   TIMESTAMPTZ,
+  current_tier_id UUID REFERENCES membership_tiers(id),
+  member_code     TEXT,                -- código corto del pase de lealtad (Google Wallet); NULL = sin pase
   metadata        JSONB DEFAULT '{}',  -- atributos dinámicos extensibles
+  deleted_at      TIMESTAMPTZ,         -- soft delete
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(business_id, phone),
   UNIQUE(business_id, email)
 );
+-- Código del pase de lealtad, único por tenant. Parcial a propósito: la
+-- restricción no significa nada para NULL, y un índice no parcial cargaría una
+-- entrada por cada cliente existente, todas inútiles.
+CREATE UNIQUE INDEX uq_customers_business_member_code
+  ON customers(business_id, member_code) WHERE member_code IS NOT NULL;
 
 -- Log inmutable de eventos del cliente (Event Sourcing / Customer360)
 CREATE TABLE customer_events (
@@ -241,6 +249,79 @@ CREATE TABLE churn_predictions (
 );
 ```
 
+### Dominio Communication
+
+```sql
+-- Log de mensajes enviados y recibidos por el cliente final
+CREATE TABLE message_log (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id         UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  customer_id         UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  direction           TEXT NOT NULL,       -- texto libre; el schema no lo enumera
+  channel             TEXT NOT NULL DEFAULT 'whatsapp',
+  status              TEXT NOT NULL DEFAULT 'queued',  -- 'queued' y 'failed' son los que escribe el worker
+  provider_message_id TEXT,
+  content             JSONB DEFAULT '{}',
+  metadata            JSONB DEFAULT '{}',
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Historial de mensajes de un cliente, más reciente primero
+CREATE INDEX idx_message_log_customer
+  ON message_log(business_id, customer_id, created_at DESC);
+-- Filtrado del dashboard de entrega por estado
+CREATE INDEX idx_message_log_status
+  ON message_log(business_id, status, created_at DESC);
+
+-- Templates de WhatsApp por negocio
+CREATE TABLE whatsapp_templates (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,
+  language          TEXT NOT NULL,
+  category          TEXT NOT NULL,
+  body              TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'pending',
+  meta_template_id  TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Resolver un template por negocio y nombre al renderizar una campaña
+CREATE INDEX idx_whatsapp_templates_name ON whatsapp_templates(business_id, name);
+```
+
+### Dominio Wallet (Google Wallet)
+
+Ambas tablas son **solo estado de seguimiento**. El saldo y el programa se quedan donde ya estaban (`points_transactions`, `loyalty_programs`, `membership_tiers`): hay una sola fuente de verdad y el pase es una proyección, no un segundo ledger.
+
+```sql
+-- Un pase de clase de Google Wallet por negocio (tenant)
+CREATE TABLE tenant_wallet_programs (
+  tenant_id      UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  issuer_id      TEXT NOT NULL,        -- id de emisor entregado por Google
+  class_id       TEXT NOT NULL,        -- <issuerId>.tenant-<tenantId>
+  review_status  TEXT NOT NULL DEFAULT 'none',  -- none | draft | under_review | approved | rejected
+  last_synced_at TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Un pase de Google Wallet por cliente
+CREATE TABLE customer_wallet_passes (
+  customer_id   UUID PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+  tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  object_id     TEXT NOT NULL,        -- <issuerId>.member-<globalId>
+  state         TEXT NOT NULL DEFAULT 'not_issued',  -- not_issued | issued | inactive | expired | completed
+  last_synced_at TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(tenant_id, object_id)
+);
+-- Buscar el pase de un cliente por tenant
+CREATE INDEX idx_customer_wallet_passes_tenant ON customer_wallet_passes(tenant_id);
+```
+
+`issuer_id` es el mismo para todos los tenants, pero se guarda por fila para que migrar a otro emisor sea un cambio de datos y no de código. `tenant_wallet_programs.tenant_id` es a la vez clave primaria y única clave: exactamente una clase por tenant. `object_id` se deriva de `customers.global_id` y no de `customers.id`, para que el id del pase sobreviva a un restore o a un clon de base de datos.
+
 ### Dominio Compliance
 
 ```sql
@@ -263,6 +344,12 @@ CREATE TABLE localization_configs (
 
 ## 4. Row-Level Security (RLS) — implementación
 
+**Estado actual: RLS no está desplegado.** La estrategia de la sección 1 (multi-tenancy por `business_id` con RLS) sigue siendo la decisión de diseño, pero el rollout está staged, no completo. Los tres hechos que hay que conocer:
+
+1. `withRls(db, businessId)` en los workers solo ejecuta `SET app.current_business_id`. Eso, por sí solo, **no aísla nada**: sin políticas creadas y sin `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, la sesión ve todas las filas. El aislamiento real de hoy descansa en los filtros explícitos de `business_id` en los handlers de ruta.
+2. El mecanismo existe y está probado: `packages/db/src/rls.ts` expone `BUSINESS_ID_TABLES` (17 tablas con `business_id`), `TENANT_ID_TABLES`, `RLS_POLICY_NAME` (`tenant_isolation`) y `createRlsPolicies()`. `createRlsPolicies()` **no se llama en código de producción**; está disponible para el rollout.
+3. Hay dos formas de scope porque hay dos formas de clave. `app.current_business_id` para las tablas con `business_id`, y `app.current_tenant_id` para las dos tablas de wallet, que están indexadas por `tenant_id` y no tienen esa columna. Una política `USING (business_id = ...)` sobre una tabla sin `business_id` es un error duro al crearse, no un no-op silencioso, y el test suite lo verifica.
+
 ```sql
 -- Habilitar RLS en todas las tablas con business_id
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
@@ -275,9 +362,15 @@ ALTER TABLE points_transactions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON customers
   USING (business_id = current_setting('app.current_business_id')::UUID);
 
+-- Las tablas de wallet usan su propia variable, porque no tienen business_id
+CREATE POLICY tenant_isolation ON customer_wallet_passes
+  USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
 -- El API Gateway ejecuta antes de cada query:
 -- SET LOCAL app.current_business_id = 'uuid-del-tenant-autenticado';
 ```
+
+`workers/wallet` ya usa el mecanismo con scope de tenant: `openTenantSession` en `drizzle-store.ts` ejecuta `setCurrentBusinessId(tenantId)` y `setCurrentTenantId(tenantId)` antes de leer nada, usando los builders que exporta `@vyloop/db`. Poner las dos variables desde el inicio es deliberado: una variable faltante es invisible hasta que la política correspondiente se habilite, que es el peor momento para descubrirlo.
 
 ---
 
@@ -296,6 +389,16 @@ CREATE INDEX idx_points_balance ON points_transactions(business_id, customer_id,
 -- Atributos dinámicos del cliente (JSONB) para segmentación
 CREATE INDEX idx_customers_metadata ON customers USING GIN(business_id, metadata);
 ```
+
+### 5.1 La deuda de índices que existía en `main` hasta `0004`
+
+Un hallazgo que no aparece en el diseño sino en el historial, y que conviene documentar porque su causa no es la evidente:
+
+**Los índices estaban declarados en `packages/db/src/indexes.ts` como exports a nivel de módulo, y ninguno existía en la base de datos.** `index('x').on(...)` devuelve un `IndexBuilder`; solo `IndexBuilder.build(table)` lo adjunta, y eso ocurre dentro del callback de extra-config de una tabla. drizzle-kit lee el archivo, encuentra builders sin tabla propietaria y los **descarta en silencio**, reportando cero índices y ningún cambio. Agregar `indexes.ts` al array `schema` de `drizzle.config.ts` se probó y es un **no-op**.
+
+La migración `packages/db/drizzle/0004_chubby_crystal.sql` cierra esa deuda junto con dos tablas que estaban en el schema y en ninguna migración (`message_log` y `whatsapp_templates`, que el worker de communication leía y escribía sin que existieran). La migración emite **14 sentencias `CREATE (UNIQUE) INDEX`**: 12 declaraciones preexistentes ajenas a wallet, más 2 de wallet (`idx_customer_wallet_passes_tenant` y `uq_customers_business_member_code`).
+
+**Consecuencia de diseño que sigue vigente:** las declaraciones de índice viven ahora dentro del callback de extra-config de cada tabla en `schema.ts`, no en `indexes.ts`. `indexes.ts` pasó a ser un registro **derivado** (`getTableConfig(table).indexes` más `indexByName`), de modo que no puede quedar desalineado del schema: si un índice se elimina de un callback, el lookup lanza en vez de exportar un builder obsoleto.
 
 ---
 
