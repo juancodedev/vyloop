@@ -61,6 +61,45 @@ Los Workers que consumen eventos del bus pueden recibir el mismo evento más de 
 
 ---
 
+## Variables de entorno y secrets por Worker
+
+Cada Worker declara sus bindings en su propio `wrangler.jsonc` y sus tipos en el `*Bindings` del código. La regla general: **un secret nunca vive en un archivo del repositorio.** Llega por `wrangler secret put`, por entorno.
+
+```bash
+wrangler secret put <NOMBRE> --config workers/<worker>/wrangler.jsonc
+```
+
+### Worker `wallet` — Google Wallet
+
+**Secrets (por `wrangler secret put`, nunca en un archivo):**
+
+| Secret | Qué es |
+|---|---|
+| `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL` | El `client_email` de la clave JSON de la service account. Su email debe estar invitado a la cuenta de emisor en la consola de Google Pay & Wallet, con rol `Developer` |
+| `GOOGLE_WALLET_PRIVATE_KEY` | El `private_key` de esa misma clave, PEM-encoded. Firma el JWT de guardado del pase con RS256 |
+| `MEMBER_CODE_PEPPER` | Secret servidor para derivar el member code del pase. Ver la regla crítica abajo |
+
+En dev local, `.dev.vars` (gitignored) es la excepción habitual, porque `wrangler dev` no lee secrets del remoto. La regla de "nunca en el repositorio" sigue valiendo: `.dev.vars` no se commitea.
+
+**Variables que no son secret:**
+
+| Var | Dónde vive | Qué es |
+|---|---|---|
+| `GOOGLE_WALLET_ISSUER_ID` | `vars` en `wrangler.jsonc` | El id de emisor que entrega Google. No es secreto, pero es un valor real de la consola, así que se configura por entorno en vez de hardcodearlo en el código |
+| `WALLET_DEMO_MODE` | `vars` en `wrangler.jsonc` | `'true'` o `'false'`. Si el despliegue todavía no tiene acceso de publicación de Google. **El default es `true` a propósito**: ausente, vacío o no reconocido se interpreta como demo mode, porque el costo de equivocarse es asétrico — un despliegue en demo mode que responde "no estoy en demo" le entrega un pase a un cliente real que solo funciona en las cuentas de prueba, y eso es un incidente de soporte |
+| `DATABASE_URL` | por entorno (no commiteado) | Connection string de Neon, exactamente como la reciben los demás Workers |
+| `WALLET_ALLOWED_ORIGINS` | por entorno (no commiteado) | Lista separada por comas de origins donde se va a renderizar el control. Se convierte en el claim `origins` del token, y Google no renderiza el botón sin él. Si queda vacía, `GET /v1/wallet/pass` responde `WALLET_NOT_CONFIGURED` 500 en vez de firmar un token cuyo botón no hace nada |
+
+**Puerto de dev:** `8795` (`wrangler dev --port 8795` en el script `dev` de `workers/wallet/package.json`). Los puertos de los demás Workers van del 8788 al 8794 y el gateway en 8787.
+
+### Regla operativa: `MEMBER_CODE_PEPPER` debe ser idéntico en todos los entornos
+
+El member code del pase se deriva como un HMAC con salt por tenant, usando `MEMBER_CODE_PEPPER`. **El pepper tiene que ser el mismo en dev, staging y producción.** Si un entorno tiene un pepper distinto, el mismo cliente recibe un member code distinto en cada despliegue, y cualquier código que un cliente ya haya memorizado deja de funcionar.
+
+Es la razón por la que el pepper es un secret y no una constante en el código, y también la razón por la que no se puede "generar uno nuevo para cada entorno" siguiendo la costumbre de separar los entornos. Si el pepper se pierde, los códigos existentes no se pueden recuperar ni regenerar igual: habría que backfillearlos.
+
+---
+
 ## Estructura del monorepo
 
 ```
@@ -76,7 +115,8 @@ vyloop-core/
 │   ├── communication/    # Dominio Communication
 │   ├── automation/       # Dominio Automation
 │   ├── analytics/        # Dominio Analytics
-│   └── compliance/       # Dominio Compliance
+│   ├── compliance/       # Dominio Compliance
+│   └── wallet/           # Google Wallet loyalty passes
 ├── services/
 │   └── ai/               # FastAPI (Python) — IA y ML (predicción de churn, Copilot)
 ├── packages/
