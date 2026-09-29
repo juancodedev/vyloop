@@ -16,6 +16,7 @@ import { isValidMemberCode } from './member-code';
 import type {
   PassTrackingUpdate,
   WalletCustomerRow,
+  WalletPassRow,
   WalletProgramRow,
   WalletStore,
   WalletTierRow,
@@ -193,8 +194,33 @@ class FakeStore implements WalletStore {
     return null;
   }
 
-  async recordPassReconciliation(): Promise<void> {
+  async recordPassReconciliation(): Promise<number> {
     this.record('recordPassReconciliation', TENANT);
+    return 0;
+  }
+
+  // The sweep's three additions. Issuance never calls them, and a fake that
+  // threw would be a test that passes for the wrong reason; recording the call
+  // means a test that reaches one of them can see it happened. `0` is the honest
+  // answer for a store with no rows in it.
+  async recordPassLifecycle(): Promise<number> {
+    this.record('recordPassLifecycle', TENANT);
+    return 0;
+  }
+
+  async recordPassObservation(): Promise<number> {
+    this.record('recordPassObservation', TENANT);
+    return 0;
+  }
+
+  async listProgramTenants(): Promise<WalletProgramRow[]> {
+    this.record('listProgramTenants', '');
+    return [];
+  }
+
+  async findPassesByObjectIds(): Promise<WalletPassRow[]> {
+    this.record('findPassesByObjectIds', TENANT);
+    return [];
   }
 
   async updateProgramReviewStatus(tenantId: string, reviewStatus: string): Promise<void> {

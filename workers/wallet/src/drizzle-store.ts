@@ -44,9 +44,11 @@ import {
   setCurrentTenantId,
   tenantWalletPrograms,
 } from '@vyloop/db';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
 import type {
+  PassLifecycleUpdate,
+  PassObservationUpdate,
   PassReconciliationUpdate,
   PassTrackingUpdate,
   WalletCustomerRow,
@@ -58,6 +60,19 @@ import type {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = any;
+
+/**
+ * How many rows a `RETURNING` update actually changed.
+ *
+ * Every write in this store that can legitimately match nothing reports that
+ * through this, and a `Promise<void>` signature would throw the answer away. A
+ * `WHERE` guard is only real protection if the caller can find out whether it
+ * fired; otherwise a guard that rejects a write looks exactly like one that
+ * accepted it, and the sweep counts observations it never recorded.
+ */
+function countRows(result: unknown): number {
+  return (result as { rows?: unknown[] }).rows?.length ?? 0;
+}
 
 /**
  * Open a tenant-scoped database session.
@@ -331,29 +346,200 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
     /**
      * The write behind `reconcile.ts`, with the monotonicity guard in SQL.
      *
-     * The `state IN ('not_issued', 'not_saved')` predicate is the whole
-     * argument for never downgrading a state, and it lives here rather than in
-     * a `WHERE` the caller composed so that it cannot be forgotten by a future
-     * writer: reconciliation has no way to *ask* for a downgrade, and this
-     * statement refuses to perform one.
+     * The states rank, weakest to strongest:
      *
-     * `last_synced_at` is written on every call rather than only on a change.
-     * It answers "when did we last have a definitive answer from Google?", which
-     * is what makes a pass with a months-old timestamp visibly unverified — and
-     * a timestamp that only moved when the state changed could not distinguish
-     * "checked, unchanged" from "never checked".
+     *     not_issued  ->  not_saved  ->  inactive  ->  issued
+     *
+     * and `expired` and `completed` are terminal — Google cannot un-expire an
+     * object, and neither appears in the source set below, so nothing can move a
+     * row off them.
+     *
+     * The guard is in the `WHERE`; the state assignment is wrapped in `CASE` so
+     * that the guard covers **only the claim**, while `last_synced_at` is written
+     * on every call where the row exists:
+     *
+     *     SET state = CASE WHEN <guard> THEN <written> ELSE state END,
+     *         last_synced_at = <observedAt>
+     *
+     * That split is the point. `state` is a claim about the world and is
+     * rank-guarded; `last_synced_at` is an observation of Google having answered
+     * and is not. A guard that covered both meant a definitive answer about a
+     * terminal row — one in `expired` or `completed`, which this worker itself
+     * writes — matched nothing and was thrown away, leaving that pass permanently
+     * in the sweep's due set and re-read on every run.
+     *
+     * Note what `CASE` makes unnecessary: the old
+     * `OR state = <written>` idempotency clause. It only ever let a row be
+     * re-asserted as the value it already held, which is a no-op on the row's
+     * content, and it existed solely to stop `last_synced_at` freezing. The
+     * timestamp now moves unconditionally, so the guard can be a pure rank
+     * comparison with nothing incidental in it.
+     *
+     * `RETURNING customer_id` makes the effect observable. Under `Promise<void>`
+     * a caller could not distinguish "the row is gone" from "the state was
+     * refused", and both mean the pass will be due again next run.
      */
-    async recordPassReconciliation(update: PassReconciliationUpdate): Promise<void> {
-      await db.execute(sql`
+    async recordPassReconciliation(update: PassReconciliationUpdate): Promise<number> {
+      const result = await db.execute(sql`
+        UPDATE customer_wallet_passes
+           SET state = CASE
+                          WHEN state IN ('not_issued', 'not_saved', 'inactive')
+                          THEN ${update.state}
+                          ELSE state
+                        END,
+               last_synced_at = ${update.observedAt}::timestamptz,
+               updated_at = now()
+         WHERE customer_id = ${update.customerId}::uuid
+           AND tenant_id = ${update.tenantId}::uuid
+        RETURNING customer_id
+      `);
+
+      return countRows(result);
+    },
+
+    /**
+     * The lifecycle write, with its own predicate.
+     *
+     * `state IN ('issued', 'inactive')` is the source set, not the target set,
+     * and that is the whole safety argument: a lifecycle answer can only be
+     * recorded against a row that **already asserts the object exists**. So a
+     * lifecycle write can never make a pass claim an object Google does not
+     * have, which is the one thing the existence guard was protecting.
+     *
+     * It also means `expired` and `completed` are terminal. Neither appears in
+     * the source set, so no later observation can move a row off them — which
+     * is correct, because Google cannot un-expire an object. `inactive` *is* in
+     * the source set because a customer who reopens a deactivated pass really
+     * does have an `ACTIVE` object again, and the existence path's strict
+     * monotonicity would have forbidden recording that.
+     *
+     * This is the one write here that guards `last_synced_at` along with
+     * `state`, and that is not an oversight: a zero-row result here is the
+     * signal that our tracking state and Google's disagree — an object exists
+     * for a pass we never confirmed exists. Stamping such a row would imply the
+     * lifecycle claim was accepted, so the timestamp is left alone and the
+     * caller is expected to call `recordPassObservation` instead, which stamps
+     * without claiming. See the interface's return-value contract.
+     */
+    async recordPassLifecycle(update: PassLifecycleUpdate): Promise<number> {
+      const result = await db.execute(sql`
         UPDATE customer_wallet_passes
            SET state = ${update.state},
                last_synced_at = ${update.observedAt}::timestamptz,
                updated_at = now()
          WHERE customer_id = ${update.customerId}::uuid
            AND tenant_id = ${update.tenantId}::uuid
-           AND state IN ('not_issued', 'not_saved')
+           AND state IN ('issued', 'inactive')
+        RETURNING customer_id
       `);
+
+      return countRows(result);
     },
+
+    /**
+     * The observation, with no state written and no state predicate.
+     *
+     * `state` is absent from the `SET` clause and from the `WHERE`. Both are
+     * load-bearing: adding the column would let a caller that has no word for
+     * Google's answer invent one, and adding a state filter would reproduce the
+     * permanent-due starvation this method was written to end, for whichever
+     * states it excluded.
+     *
+     * The tenant filter is the third, and the reason the method is safe to call
+     * from a scheduled sweep: it writes `last_synced_at` on rows it did not
+     * verify the tenancy of, so the predicate has to carry `tenant_id` itself.
+     */
+    async recordPassObservation(update: PassObservationUpdate): Promise<number> {
+      const result = await db.execute(sql`
+        UPDATE customer_wallet_passes
+           SET last_synced_at = ${update.observedAt}::timestamptz,
+               updated_at = now()
+         WHERE customer_id = ${update.customerId}::uuid
+           AND tenant_id = ${update.tenantId}::uuid
+        RETURNING customer_id
+      `);
+
+      return countRows(result);
+    },
+
+    /**
+     * One page of tenants, ascending by primary key.
+     *
+     * Keyset, not `OFFSET`. `OFFSET n` re-reads and re-sorts the `n` rows it
+     * skips, so the last page of a large sweep costs proportionally more than
+     * the first, and a tenant inserted between two pages shifts every page after
+     * it — silently skipping tenants rather than merely reordering them.
+     * `tenant_id` is the primary key, so `>` is a total order and the cursor is
+     * exact.
+     *
+     * The `limit` is interpolated rather than parameterised because it is a
+     * validated integer from `sweep.ts` and Drizzle's `sql` template does not
+     * accept a bare number in a `LIMIT` position without casting it. It is
+     * clamped to `[1, 200]` here so a caller that passes something else cannot
+     * produce an unbounded read even by accident.
+     */
+    async listProgramTenants(options: {
+      limit: number;
+      afterTenantId: string | null;
+    }): Promise<WalletProgramRow[]> {
+      const limit = Math.min(200, Math.max(1, Math.trunc(options.limit)));
+
+      // `afterTenantId` is a uuid column compared against a uuid literal, and
+      // a null start is expressed as a branch rather than as a sentinel string
+      // so no tenant can be skipped by colliding with it.
+      if (options.afterTenantId === null) {
+        const rows = await db
+          .select(PROGRAM_COLUMNS)
+          .from(tenantWalletPrograms)
+          .orderBy(asc(tenantWalletPrograms.tenantId))
+          .limit(limit);
+        return (rows as WalletProgramRow[]) ?? [];
+      }
+
+      const rows = await db
+        .select(PROGRAM_COLUMNS)
+        .from(tenantWalletPrograms)
+        .where(gt(tenantWalletPrograms.tenantId, options.afterTenantId))
+        .orderBy(asc(tenantWalletPrograms.tenantId))
+        .limit(limit);
+
+      return (rows as WalletProgramRow[]) ?? [];
+    },
+
+    /**
+     * Resolve one page of Google object ids to our rows, within one tenant.
+     *
+     * `inArray` rather than N `eq` predicates so the statement stays one round
+     * trip with one plan shape regardless of batch size, and the tenant filter
+     * is present in the same `WHERE` as the id list so a row from another
+     * tenant cannot be returned even if the id list were wrong.
+     *
+     * An empty `objectIds` short-circuits to `[]` without a query: `inArray`
+     * with an empty array compiles to SQL that matches nothing, but issuing the
+     * round trip at all on an empty Google page is pure waste.
+     */
+    async findPassesByObjectIds(objectIds: string[], tenantId: string): Promise<WalletPassRow[]> {
+      if (objectIds.length === 0) return [];
+
+      const rows = await db
+        .select({
+          customerId: customerWalletPasses.customerId,
+          tenantId: customerWalletPasses.tenantId,
+          objectId: customerWalletPasses.objectId,
+          state: customerWalletPasses.state,
+          lastSyncedAt: customerWalletPasses.lastSyncedAt,
+        })
+        .from(customerWalletPasses)
+        .where(
+          and(
+            inArray(customerWalletPasses.objectId, objectIds),
+            eq(customerWalletPasses.tenantId, tenantId),
+          ),
+        );
+
+      return (rows as WalletPassRow[]) ?? [];
+    },
+
 
     async updateProgramReviewStatus(
       tenantId: string,
