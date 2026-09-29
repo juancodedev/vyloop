@@ -1,0 +1,12 @@
+# Cloudflare Pages static rewrites.
+#
+# `/program` must open the programme page on its own. Next.js serves files in
+# `public/` at the root but does not resolve a directory index, so
+# `public/program/index.html` is reachable at `/program/index.html` and nowhere
+# else. That URL was handed to Google's publishing review, and a link that has
+# to carry `.html` reads as unfinished.
+#
+# The `200` matters: a bare redirect would send the visitor to the `.html` URL
+# and change the address bar. A rewrite serves the file while keeping the clean
+# path, which is the whole point.
+/program  /program/index.html  200
