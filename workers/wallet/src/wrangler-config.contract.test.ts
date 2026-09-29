@@ -32,8 +32,16 @@ describe('wrangler.jsonc', () => {
     expect(config).toMatch(/"WALLET_DEMO_MODE"\s*:\s*"true"/);
   });
 
-  it('declares the daily sweep cron', () => {
-    expect(config).toContain('"0 6 * * *"');
+  it('declares no cron trigger, because the account has no room for one', () => {
+    // The account allows five cron triggers and already uses all five, so a
+    // sixth is rejected with error 10072 and fails the deploy. The sweep runs
+    // from `workers/automation`, which holds the shared `0 6 * * *` trigger and
+    // calls the `scheduled` export here over a service binding.
+    //
+    // A cron reappearing in this file is a plan upgrade that has not happened,
+    // or a merge that reverted the handoff. Either way it should stop CI rather
+    // than fail a deploy the user has to read a Cloudflare error to understand.
+    expect(config).not.toContain('"triggers"');
   });
 
   it('keeps the issuer id out of source control as a secret', () => {

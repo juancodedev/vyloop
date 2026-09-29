@@ -10,15 +10,21 @@
       "id": "732ccde5b0944db082d07667aba8104b"
     }
   ],
-  "queues": {
-    "producers": [
+    "queues": {
+      "producers": [
+        {
+          "binding": "DOMAIN_EVENTS_QUEUE",
+          "queue": "vyloop-domain-events"
+        }
+      ]
+    },
+    "services": [
       {
-        "binding": "DOMAIN_EVENTS_QUEUE",
-        "queue": "vyloop-domain-events"
+        "binding": "WALLET",
+        "service": "wallet"
       }
-    ]
-  },
-  "triggers": {
-    "crons": ["0 6 * * *"]
-  }
+    ],
+    "triggers": {
+      "crons": ["0 6 * * *"]
+    }
 }
