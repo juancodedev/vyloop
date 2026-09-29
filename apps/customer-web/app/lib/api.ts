@@ -1,6 +1,7 @@
 // API client — real fetch() calls against the backend API gateway
 
-const API_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8787';
+import { gatewayUrl } from './gateway-url';
+
 const JWT_KEY = 'vyloop_jwt';
 
 /**
@@ -40,7 +41,7 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<unknow
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${gatewayUrl()}${path}`, { ...options, headers });
 
   if (res.status === 204) return null;
 
