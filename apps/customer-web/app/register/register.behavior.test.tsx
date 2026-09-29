@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { gatewayUrl } from '../lib/gateway-url';
+
 import RegisterPage from './page';
 
 const mocks = vi.hoisted(() => ({
@@ -20,8 +22,6 @@ vi.mock('../lib/api', () => ({
     loginCustomer: mocks.loginCustomer,
   },
 }));
-
-const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8787';
 
 function createResponse(status: number, body: unknown = null): Response {
   return {
@@ -110,7 +110,7 @@ describe('registration behavior', () => {
     const fetchMock = vi.mocked(fetch);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`${gatewayUrl}/v1/customers`);
+    expect(url).toBe(`${gatewayUrl()}/v1/customers`);
     expect(options.method).toBe('PUT');
     expect(JSON.parse(options.body as string)).toEqual({
       fullName: 'Ada Lovelace',
