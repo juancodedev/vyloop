@@ -3,5 +3,8 @@
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {}
+  "//vars": "Secrets are never in this file. Every GOOGLE_WALLET_* value and MEMBER_CODE_PEPPER arrives through `wrangler secret put`.",
+  "vars": {
+    "GOOGLE_WALLET_ISSUER_ID": "3388000000023206930"
+  }
 }
