@@ -33,6 +33,18 @@ const config = tseslint.config(
       'import/named': 'off',
     },
   },
+  {
+    // Build and tooling configs run in Node, not in the browser bundle. Without
+    // this, reading `process.env` in `next.config.mjs` is a `no-undef` error
+    // while the identical line in application code is not.
+    files: ['**/*.config.mjs', '**/*.config.js'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
   prettier,
   {
     ignores: [

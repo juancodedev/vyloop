@@ -9,6 +9,7 @@ import { ClubLoading } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
 import { FormField } from '../components/form-field';
 import { api } from '../lib/api';
+import { gatewayUrl } from '../lib/gateway-url';
 
 interface RegisterFormValues {
   fullName: string;
@@ -163,7 +164,7 @@ function RegisterContent() {
       if (form.birthDate) payload.birthDate = form.birthDate;
 
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8787'}/v1/customers`,
+        `${gatewayUrl()}/v1/customers`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
