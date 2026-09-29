@@ -89,8 +89,51 @@ export interface GoogleWalletClient {
   insertObject(loyaltyObject: LoyaltyObject): Promise<LoyaltyObject>;
   /** `loyaltyobject.patch`. */
   patchObject(objectId: string, patch: LoyaltyObjectPatch): Promise<LoyaltyObject>;
+  /**
+   * `loyaltyobject.list`, one page.
+   *
+   * Scoped by `classId` rather than by `issuerId` on purpose, and this is the
+   * load-bearing choice for tenant isolation: a vyloop tenant owns exactly one
+   * class (`<issuerId>.tenant-<tenantId>`), so filtering by class is what makes
+   * "this tenant's objects" expressible as a server-side predicate rather than
+   * as a client-side `if` over every object the issuer holds. A sweep that
+   * listed by issuer and filtered locally would hold every merchant's passes in
+   * one worker's memory, which is the failure mode the tenant column exists to
+   * prevent.
+   *
+   * @see https://developers.google.com/wallet/reference/rest/v1/loyaltyobject/list
+   */
+  listObjects(request: LoyaltyObjectListRequest): Promise<LoyaltyObjectListPage>;
   /** `jwt.insert`. */
   saveUriForJwt(jwt: string): Promise<string>;
+}
+
+/**
+ * One page of `loyaltyobject.list`.
+ *
+ * `nextPageToken` is `null` rather than an empty string for "no more pages",
+ * because Google omits the field entirely on the last page and an absent field
+ * read as `''` would produce a second request with `token=` and an unbounded
+ * loop. The distinction is made unrepresentable at the type.
+ */
+export interface LoyaltyObjectListPage {
+  objects: LoyaltyObject[];
+  nextPageToken: string | null;
+}
+
+export interface LoyaltyObjectListRequest {
+  /** The class whose objects are listed. Also the tenant boundary. */
+  classId: string;
+  /** Sent as `maxResults`. See `OBJECT_PAGE_SIZE` in `sweep.ts`. */
+  maxResults: number;
+  /** Sent as `token`. Omitted on the first page. */
+  token?: string | undefined;
+}
+
+/** Google's `loyaltyobject.list` response envelope. */
+interface LoyaltyObjectListResponse {
+  resources?: LoyaltyObject[];
+  pagination?: { nextPageToken?: string | null } | null;
 }
 
 /** Thrown by every method of the unimplemented client. */
@@ -124,6 +167,7 @@ export function createUnimplementedGoogleWalletClient(): GoogleWalletClient {
     getObject: () => Promise.reject(new GoogleWalletClientNotImplementedError('getObject')),
     insertObject: () => Promise.reject(new GoogleWalletClientNotImplementedError('insertObject')),
     patchObject: () => Promise.reject(new GoogleWalletClientNotImplementedError('patchObject')),
+    listObjects: () => Promise.reject(new GoogleWalletClientNotImplementedError('listObjects')),
     saveUriForJwt: () => Promise.reject(new GoogleWalletClientNotImplementedError('saveUriForJwt')),
   };
 }
@@ -536,6 +580,66 @@ export function createGoogleWalletRestClient(
         'loyaltyobject.insert',
         loyaltyObject,
       );
+    },
+
+    /**
+     * `listObjects`, one page.
+     *
+     * ## Why the query is built by hand rather than with `URLSearchParams`
+     *
+     * Because `maxResults` is sent even when the caller passed a token, and
+     * because an empty `token` must be absent rather than blank: `?token=` is a
+     * distinct request from no token at all, and Google answers a blank token
+     * as an error rather than as page one. A `URLSearchParams` builder given
+     * `''` would emit the blank form.
+     *
+     * ## Why `resources` is validated rather than defaulted
+     *
+     * A `list` response whose `resources` is missing is a response this client
+     * does not understand, and the two available readings are both unacceptable
+     * for a sweep: "the tenant has no objects" would report a clean run having
+     * verified nothing, and "some objects" would be a guess. So it throws, and
+     * a scheduled job that threw here fails that tenant loudly instead of
+     * quietly marking a stale pass as fresh.
+     */
+    async listObjects(request) {
+      requireId(request.classId, 'listObjects');
+
+      const query = [
+        `classId=${encodeURIComponent(request.classId)}`,
+        `maxResults=${encodeURIComponent(String(request.maxResults))}`,
+      ];
+      if (request.token !== undefined && request.token !== '') {
+        query.push(`token=${encodeURIComponent(request.token)}`);
+      }
+
+      const resource = await call<LoyaltyObjectListResponse>(
+        'GET',
+        `/loyaltyobject?${query.join('&')}`,
+        'loyaltyobject.list',
+      );
+
+      // `call` only resolves to `null` for a 404 on a GET, and a list for a
+      // class that does not exist is a 200 with an empty page. Reaching `null`
+      // therefore means the class is genuinely gone, which is reported as an
+      // empty page rather than an error so a deleted class sweeps as "nothing
+      // to do" instead of retrying forever.
+      const resources = resource?.resources;
+      if (!Array.isArray(resources)) {
+        throw new GoogleWalletResponseError(
+          200,
+          'loyaltyobject.list answered success without a `resources` array, so the page cannot be ' +
+            'interpreted. Treating it as an empty page would report a clean sweep having verified ' +
+            'nothing.',
+        );
+      }
+
+      const next = resource?.pagination?.nextPageToken;
+
+      return {
+        objects: resources,
+        nextPageToken: typeof next === 'string' && next !== '' ? next : null,
+      };
     },
 
     async patchObject(objectId, patch) {
