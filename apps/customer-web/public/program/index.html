@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -329,11 +329,14 @@
     </footer>
 
     <script>
-      // Only a language switch. Everything else is static so the page renders with
-      // scripting unavailable, which is the state a reviewer may well load it in.
+      // Only the language switch. It is deliberately not responsible for making
+      // the page visible: `data-lang="en"` is already in the markup above, so the
+      // content renders with scripting unavailable. This page exists to be read
+      // by Google's publishing review, and a reader or crawler that does not
+      // execute scripts would otherwise see an empty document — which reads as
+      // a product with nothing on it rather than as a page that needs JavaScript.
       (function () {
         var root = document.documentElement;
-        root.setAttribute('data-lang', 'en');
         var buttons = document.querySelectorAll('[data-set-lang]');
         Array.prototype.forEach.call(buttons, function (button) {
           button.addEventListener('click', function () {

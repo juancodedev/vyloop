@@ -107,10 +107,38 @@ describe('public programme page', () => {
     expect(remote).toEqual([]);
   });
 
-  it('has a lang attribute and a viewport that do not depend on the script', () => {
+  it('sets the language in the markup rather than assuming English', () => {
     // The language switch is a script, and a script is exactly what a reviewer's
-    // reader or a crawler may not run. Both must be set in the markup.
-    expect(page).toMatch(/<html lang="en">/);
+    // reader or a crawler may not run. `lang` has to be in the markup.
+    expect(page).toMatch(/<html lang="en"/);
     expect(page).toMatch(/name="viewport"/);
+  });
+
+  it('shows content with scripting unavailable', () => {
+    // This page exists to be read by Google's publishing review, and every
+    // section is inside a `[data-lang]` element, which the stylesheet hides. The
+    // only rule that reveals it is `html[data-lang="en"] [data-lang="en"]`, so
+    // without `data-lang` in the markup the document renders empty — which a
+    // crawler or a text-only reader sees as a product with nothing on it.
+    //
+    // It shipped that way once: the attribute was added by the script instead of
+    // the markup, and the deployed page was blank.
+    expect(page).toMatch(/<html[^>]*\sdata-lang="en"/);
+
+    // And the rule that would hide the content must still be the only thing
+    // standing between the markup and a blank page, so this stays a real
+    // assertion rather than a comment: if both the attribute and the hiding rule
+    // are present, the page's visibility is decided by the markup alone.
+    expect(visible.length).toBeGreaterThan(0);
+    expect(/\[data-lang\]\s*\{\s*display:\s*none/.test(page)).toBe(true);
+  });
+
+  it('does not rely on the script to decide the initial language', () => {
+    // Belt and braces against the same regression: the script may read a
+    // language for the initial state, but it must not be the only thing that
+    // sets the attribute the stylesheet keys on.
+    const script = /<script>([\s\S]*?)<\/script>/.exec(page)?.[1] ?? '';
+    const initial = /setAttribute\(\s*'data-lang'\s*,\s*'en'\s*\)/.test(script);
+    expect(initial).toBe(false);
   });
 });
