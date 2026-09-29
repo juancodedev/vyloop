@@ -3,13 +3,23 @@
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
-  "//vars": "Secrets are never in this file. Every GOOGLE_WALLET_* value and MEMBER_CODE_PEPPER arrives through `wrangler secret put`.",
+  // Secrets are never in this file. Every GOOGLE_WALLET_* value and
+  // MEMBER_CODE_PEPPER arrives through `wrangler secret put`.
   "vars": {
     "GOOGLE_WALLET_ISSUER_ID": "3388000000023206930",
-    "//WALLET_DEMO_MODE": "Not a secret and not a fact we can read from Google. Google's publishing approval is a single grant for the whole issuer account and this deployment has not been granted it, so passes minted here only reach the issuer's own test accounts. Flipping this to \"false\" is what an environment with publishing access declares. See `parseDemoMode`, which treats anything unrecognised as demo mode on purpose.",
+    // Not a secret, and not a fact we can read from Google. Google's publishing
+    // approval is a single grant for the whole issuer account and this
+    // deployment has not been granted it, so passes minted here only reach the
+    // issuer's own test accounts. Flipping this to "false" is what an
+    // environment with publishing access declares. See `parseDemoMode`, which
+    // treats anything unrecognised as demo mode on purpose.
     "WALLET_DEMO_MODE": "true"
   },
-  "//triggers": "The daily reconciliation sweep. `0 6 * * *` is the same expression `workers/automation` uses for its daily crons, and the justification for the frequency — Google's three-notifications-per-pass-per-24h cap, and how often a points balance actually moves — is in `SWEEP_CRON` in `src/sweep.ts`. The handler is exported both by name and on the default object in `src/index.ts`.",
+  // The daily reconciliation sweep. `0 6 * * *` is the same expression
+  // `workers/automation` uses for its daily crons, and the justification for the
+  // frequency — Google's three-notifications-per-pass-per-24h cap, and how often
+  // a points balance actually moves — is in `SWEEP_CRON` in `src/sweep.ts`. The
+  // handler is exported both by name and on the default object in `src/index.ts`.
   "triggers": {
     "crons": ["0 6 * * *"]
   }
