@@ -25,6 +25,11 @@ export const ROUTE_MAP: ServiceBinding[] = [
   { prefix: '/v1/automation', binding: 'automation' },
   { prefix: '/v1/communication', binding: 'communication' },
   { prefix: '/v1/compliance', binding: 'compliance' },
+  // The wallet service binding was already declared in `wrangler.jsonc` but had
+  // no route, so the worker's routes were unreachable in any environment. The
+  // prefix is listed last because `matchRoute` sorts by length anyway, and the
+  // entry sits with the other leaf services.
+  { prefix: '/v1/wallet', binding: 'wallet' },
 ];
 
 /**
@@ -57,6 +62,7 @@ export type GatewayEnv = {
   automation: Fetcher;
   communication: Fetcher;
   compliance: Fetcher;
+  wallet: Fetcher;
 };
 
 /**
