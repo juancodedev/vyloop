@@ -121,8 +121,18 @@ interface FakeDb {
  * @param rows       the rows the table "contains", across every tenant.
  * @param key        the column the tenant filter is expected to compare, so the
  *                   fake can decide admission the way Postgres would.
+ * @param alsoKey    a second column admission must also match. `findPass` needs
+ *                   one because `customer_wallet_passes` is keyed by
+ *                   `customer_id` and scoped by `tenant_id`, and a fake that
+ *                   only honoured the tenant half would return the *wrong*
+ *                   customer's row and make the scoping test pass for the wrong
+ *                   reason.
  */
-function createFakeDb(rows: Row[], key: 'businessId' | 'tenantId'): FakeDb {
+function createFakeDb(
+  rows: Row[],
+  key: 'businessId' | 'tenantId',
+  alsoKey?: 'customerId',
+): FakeDb {
   const scoped: ScopedBuilder[] = [];
   const executed: Array<{ sql: string; params: unknown[] }> = [];
   const updates: Array<{ table: string; values: Record<string, unknown>; whereSql: string }> = [];
@@ -151,11 +161,16 @@ function createFakeDb(rows: Row[], key: 'businessId' | 'tenantId'): FakeDb {
 
     // Admission, the way Postgres would apply the policy: a row is admitted only
     // if the tenant it belongs to is one of the tenant parameters in the
-    // predicate.
+    // predicate, and — when a second key was named — only if that column matches
+    // a parameter too.
     const tenantParams = query.params.filter(
       (param) => typeof param === 'string' && isUuid(param),
     );
-    state.rows = rows.filter((row) => tenantParams.includes(String(row[key])));
+    state.rows = rows.filter((row) => {
+      if (!tenantParams.includes(String(row[key]))) return false;
+      if (alsoKey === undefined) return true;
+      return tenantParams.includes(String(row[alsoKey]));
+    });
 
     return builder;
   });
@@ -489,5 +504,158 @@ describe('openTenantSession', () => {
     for (const statement of executed) {
       expect(statement.sql).toMatch(/set_config\([^)]*,\s*\$\d+,\s*true\)/);
     }
+  });
+});
+
+// ============================================================================
+// Reading the pass row
+// ============================================================================
+
+describe('findPass', () => {
+  const PASSES: Row[] = [
+    {
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      objectId: '1.member-ours',
+      state: 'not_saved',
+      lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+    },
+    {
+      customerId: OTHER_CUSTOMER,
+      tenantId: OTHER_TENANT,
+      objectId: '1.member-theirs',
+      state: 'issued',
+    },
+  ];
+
+  it('returns this tenant\'s pass row and no other', async () => {
+    const fake = createFakeDb(PASSES, 'tenantId', 'customerId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const pass = await store.findPass(CUSTOMER, TENANT);
+
+    expect(pass?.objectId).toBe('1.member-ours');
+  });
+
+  it('returns null for a customer of another tenant', async () => {
+    // `customer_id` is the primary key, so the predicate already narrows to one
+    // row — and that row still carries a `tenant_id` this layer must check. A
+    // row written against another tenant would be patched at Google from this
+    // request.
+    const fake = createFakeDb(PASSES, 'tenantId', 'customerId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findPass(OTHER_CUSTOMER, TENANT)).toBeNull();
+  });
+
+  it('filters on the tenant column, not only on the primary key', async () => {
+    // A tenant filter that was present but ineffective would pass the first test
+    // and fail this one, which is the difference between scoping and appearing
+    // to scope.
+    const fake = createFakeDb(PASSES, 'tenantId', 'customerId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.findPass(CUSTOMER, TENANT);
+
+    const statement = fake.scoped[0]!.sql;
+    expect(statement).toContain('tenant_id');
+    expect(fake.scoped[0]!.params).toEqual([CUSTOMER, TENANT]);
+  });
+});
+
+// ============================================================================
+// Recording a reconciliation
+// ============================================================================
+
+describe('recordPassReconciliation', () => {
+  function reconcileWith(overrides: Partial<Parameters<typeof createDrizzleWalletStore>[0]> = {}) {
+    const fake = createFakeDb([], 'tenantId');
+    return { fake, store: createDrizzleWalletStore(overrides ? fake.db : fake.db) };
+  }
+
+  it('records the state it observed and the moment it observed it', async () => {
+    const { fake, store } = reconcileWith();
+    const observedAt = new Date('2026-09-28T12:00:00.000Z');
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'not_saved',
+      observedAt,
+    });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toContain('UPDATE customer_wallet_passes');
+    expect(statement).toContain('last_synced_at');
+    expect(fake.executed[0]!.params).toContain(observedAt);
+    expect(fake.executed[0]!.params).toContain('not_saved');
+  });
+
+  it('refuses to downgrade a state it has already advanced', async () => {
+    // A 404 observed after a confirmed 200 is far more likely a propagation
+    // artifact than a customer deleting their pass, and a state that flaps is
+    // worse for support than one that is a day late. The guard is in SQL so a
+    // future writer cannot forget it.
+    const { fake, store } = reconcileWith();
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'not_saved',
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toContain("state IN ('not_issued', 'not_saved')");
+  });
+
+  it('does not guard on the current state when recording `issued`', async () => {
+    // `issued` is a legitimate destination from either starting state, and a
+    // guard that excluded it would make the whole write a no-op.
+    const { fake, store } = reconcileWith();
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'issued',
+      observedAt: new Date(),
+    });
+
+    expect(fake.executed[0]!.params).toContain('issued');
+  });
+
+  it('writes the tenant as a bind parameter, so a row of another tenant is not touched', async () => {
+    const { fake, store } = reconcileWith();
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: OTHER_TENANT,
+      state: 'issued',
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('tenant_id');
+    expect(statement.params).toContain(OTHER_TENANT);
+  });
+
+  it('refreshes the observation time on every call, not only on a change', async () => {
+    // A timestamp that only moved when the state changed could not tell
+    // "checked and unchanged" from "never checked", and a months-old
+    // `last_synced_at` is how a stale pass becomes visibly untrustworthy.
+    const { fake, store } = reconcileWith();
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'issued',
+      observedAt: new Date(),
+    });
+
+    const setList = fake.executed[0]!.sql.slice(
+      fake.executed[0]!.sql.indexOf('SET') + 3,
+      fake.executed[0]!.sql.indexOf('WHERE'),
+    );
+    expect(setList).toContain('last_synced_at');
   });
 });

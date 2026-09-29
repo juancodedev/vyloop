@@ -4,6 +4,7 @@ import {
   BALANCE_DISPLAY_MAX,
   BALANCE_DISPLAY_MAX_LENGTH,
   BalanceNotDisplayableError,
+  balanceDisplayFailure,
   formatBalance,
 } from './balance';
 
@@ -99,5 +100,43 @@ describe('formatBalance', () => {
     // table would be a second ledger.
     expect(formatBalance(96942)).toBe('96942');
     expect(formatBalance(96942)).not.toBe('96,942');
+  });
+});
+
+describe('balanceDisplayFailure', () => {
+  it('is null for a balance the pass can render', () => {
+    for (const points of [0, 1, 42, 96942, 999999, 1234567, BALANCE_DISPLAY_MAX]) {
+      expect(balanceDisplayFailure(points)).toBeNull();
+    }
+  });
+
+  it('names the reason for a balance it cannot render', () => {
+    // The predicate the status route reads, so a client is told the same
+    // thing the builder would have refused with.
+    expect(balanceDisplayFailure(BALANCE_DISPLAY_MAX + 1)).toMatch(/character budget/);
+    expect(balanceDisplayFailure(Number.NaN)).toMatch(/not a finite number/);
+    expect(balanceDisplayFailure(Number.POSITIVE_INFINITY)).toMatch(/not a finite number/);
+    expect(balanceDisplayFailure(1.5)).toMatch(/fractional/);
+    expect(balanceDisplayFailure(-1)).toMatch(/negative balance/);
+  });
+
+  it('agrees with formatBalance on every boundary, because it is the same rule', () => {
+    // Two answers to one question is how a status endpoint promises a button
+    // that the builder then refuses. The only safe arrangement is for the
+    // predicate and the throw to be one function.
+    for (const points of [-1, 0, 1, 1.5, 999999, BALANCE_DISPLAY_MAX, BALANCE_DISPLAY_MAX + 1, Number.NaN]) {
+      const failure = balanceDisplayFailure(points);
+      let threw = false;
+      try {
+        formatBalance(points);
+      } catch (err: unknown) {
+        threw = err instanceof BalanceNotDisplayableError;
+        // And the thrown reason is the predicate's reason, not a paraphrase.
+        if (err instanceof BalanceNotDisplayableError) {
+          expect(err.message).toContain(failure ?? '');
+        }
+      }
+      expect(threw).toBe(failure !== null);
+    }
   });
 });
