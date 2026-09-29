@@ -15,10 +15,31 @@ export interface AuthHeaders {
   userRole: string;
 }
 
+/**
+ * The wallet worker's RPC surface, as this worker calls it.
+ *
+ * A plain `Fetcher` models only `fetch` and `connect`, so the target's exported
+ * `scheduled` function — which is the entire point of this binding — needs its
+ * own shape. Declaring it here also documents what the wallet must keep
+ * exporting: rename `scheduled` there and this stops typechecking.
+ */
+export interface WalletWorker {
+  scheduled(controller: unknown): Promise<void>;
+}
+
 export interface Bindings {
   DATABASE_URL: string;
   DOMAIN_EVENTS_QUEUE: Queue;
   SCHEMA_REGISTRY: KVNamespace;
+  /**
+   * The wallet worker, dispatched to from the daily cron.
+   *
+   * A service binding rather than a `fetch`: the wallet's own `scheduled` export
+   * is called over RPC, so the sweep runs with the *wallet's* bindings and its
+   * secrets. A fetch would have to forward them by hand and would leak them
+   * through this worker's request path.
+   */
+  WALLET: WalletWorker;
 }
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: AuthHeaders } };

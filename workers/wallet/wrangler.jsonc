@@ -15,12 +15,15 @@
     // treats anything unrecognised as demo mode on purpose.
     "WALLET_DEMO_MODE": "true"
   },
-  // The daily reconciliation sweep. `0 6 * * *` is the same expression
-  // `workers/automation` uses for its daily crons, and the justification for the
-  // frequency — Google's three-notifications-per-pass-per-24h cap, and how often
-  // a points balance actually moves — is in `SWEEP_CRON` in `src/sweep.ts`. The
-  // handler is exported both by name and on the default object in `src/index.ts`.
-  "triggers": {
-    "crons": ["0 6 * * *"]
-  }
+  // No cron trigger here on purpose.
+  //
+  // The account allows five cron triggers and already uses all five, so a sixth
+  // is rejected outright (Cloudflare error 10072) and fails the deploy. This
+  // worker's sweep wants the same `0 6 * * *` that `workers/automation` already
+  // holds, so `automation` keeps the single trigger and calls the `scheduled`
+  // export below over a service binding — which also means the sweep runs with
+  // this worker's own bindings and secrets, not forwarded ones.
+  //
+  // Adding a cron to this file will fail CI. That is the intended behaviour, not
+  // a bug to work around: it means the account needs a plan that has room.
 }
