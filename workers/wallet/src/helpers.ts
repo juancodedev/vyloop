@@ -1,6 +1,9 @@
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
+import { createGoogleWalletRestClient } from './google-client';
+import type { GoogleWalletClient } from './google-client';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -55,6 +58,21 @@ export interface WalletBindings {
    * `parseAllowedOrigins` and `jwt.ts`.
    */
   WALLET_ALLOWED_ORIGINS: string;
+  /**
+   * Whether this deployment still lacks Google's publishing access, as
+   * `'true'` or `'false'`.
+   *
+   * ## Why this is a var and not something we read from Google
+   *
+   * Google does not expose "is this issuer in demo mode" on any endpoint. A
+   * demo-mode issuer account simply does not accept a pass from anyone outside
+   * its own Admin/Developer/test accounts, and the only trace of it on our side
+   * is the `[TEST ONLY] ` prefix Google requires on the object's `accountName`.
+   * So the honest source for "are we still in demo mode" is a declaration this
+   * deployment makes, and the one thing that flips it is Google's publishing
+   * approval. See `parseDemoMode`.
+   */
+  WALLET_DEMO_MODE?: string | undefined;
 }
 
 /**
@@ -197,4 +215,62 @@ export function parseAllowedOrigins(raw: string | undefined | null): string[] {
   }
 
   return origins;
+}
+
+/**
+ * Build the Google Wallet client for a request's bindings.
+ *
+ * ## Why this exists rather than an inline `createGoogleWalletRestClient` call
+ *
+ * So a test can substitute it. The real client's `fetch` defaults to the global
+ * one, which in a Workers test environment means an actual attempt to reach
+ * `oauth2.googleapis.com`. A route that constructed the client inline could only
+ * be tested by letting that request fail, which is how a test ends up depending
+ * on the absence of a network and asserting a 502 that is really a DNS error.
+ *
+ * One function, taking the bindings, returning the interface, is the seam. Every
+ * caller that would otherwise reach for the network through it goes through this.
+ */
+export function googleWalletClientFor(env: WalletBindings): GoogleWalletClient {
+  return createGoogleWalletRestClient({
+    serviceAccountEmail: env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
+    privateKeyPem: env.GOOGLE_WALLET_PRIVATE_KEY,
+  });
+}
+
+/**
+ * Is this deployment still in Google Wallet's Demo Mode?
+ *
+ * ## The default is `true`, and that is the whole point
+ *
+ * Absent, blank or unrecognised means **demo mode**, not the opposite. The
+ * failure this guards is asymmetric: a deployment that *is* in demo mode and
+ * answers "not in demo mode" hands a real customer a pass that only works on
+ * the issuer's own test accounts, which is a support incident. A deployment
+ * that has publishing access and answers "demo mode" is unavailable for a while,
+ * which is a delay. Preferring the delay, and preferring it on a *typo* rather
+ * than only on an absent value, is what makes the default worth having.
+ *
+ * ## Why the whole surface answers `false` while it is true
+ *
+ * A pass that only reaches test accounts is not a pass. Reporting it as
+ * available would put "it is in your wallet" in front of a customer whose phone
+ * will reject it, so `GET /v1/wallet/status` reports `available: false` with
+ * `reason: 'demo_mode'` and `GET /v1/wallet/pass` refuses with a 409 carrying
+ * the same code. The two agreeing is the point: this endpoint exists so a
+ * client never renders a control that fails.
+ *
+ * The cost is real and worth naming: until publishing access is granted, the
+ * live save-link path cannot be exercised through these two endpoints. A
+ * developer or the issuer's own tester sets `WALLET_DEMO_MODE = 'false'` for
+ * their environment, which is exactly the operation the var exists for. What is
+ * *not* available is pretending a real customer's pass works.
+ */
+export function parseDemoMode(raw: string | undefined | null): boolean {
+  if (raw === undefined || raw === null) return true;
+
+  const normalised = raw.trim().toLowerCase();
+  if (normalised === 'false' || normalised === '0' || normalised === 'no') return false;
+
+  return true;
 }

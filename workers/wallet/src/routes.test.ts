@@ -32,6 +32,7 @@ vi.mock('@vyloop/db', async () => {
       tenantId: uuid('tenant_id').notNull(),
       objectId: text('object_id').notNull(),
       state: text('state').notNull(),
+      lastSyncedAt: timestamp('last_synced_at'),
     }),
     tenantWalletPrograms: pgTable('tenant_wallet_programs', {
       tenantId: uuid('tenant_id').primaryKey(),
@@ -67,11 +68,22 @@ vi.mock('@vyloop/db', async () => {
   };
 });
 
+// The real helpers, with the one seam replaced. `googleWalletClientFor` is the
+// only function in this worker that can reach the network, and without this
+// substitution every reconciliation in this file would attempt a real token
+// exchange with Google — which is both a network call in a unit test and a test
+// that passes only because DNS failed.
+vi.mock('./helpers', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./helpers')>();
+  return { ...original, googleWalletClientFor: vi.fn() };
+});
+
 import { createDb } from '@vyloop/db';
 import { getTableName } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { googleWalletClientFor } from './helpers';
 import { classIdFor, objectIdFor } from './ids';
 import { SAVE_TO_WALLET_URL_PREFIX } from './jwt';
 
@@ -114,6 +126,11 @@ beforeAll(async () => {
     GOOGLE_WALLET_PRIVATE_KEY: privateKeyPem,
     MEMBER_CODE_PEPPER: crypto.randomUUID(),
     WALLET_ALLOWED_ORIGINS: 'https://app.vyloop.app, https://pos.vyloop.app',
+    // The default is demo mode, and these tests are about what happens *after*
+    // publishing access, so the environment says so explicitly. The demo-mode
+    // behaviour is pinned separately in its own describe block, which omits
+    // this key on purpose: an absent var must also mean demo mode.
+    WALLET_DEMO_MODE: 'false',
   };
 });
 
@@ -175,6 +192,99 @@ let programs = [...PROGRAMS];
 let balances: Record<string, number> = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
 const statements: string[] = [];
 
+// ---------------------------------------------------------------------------
+// The Google client seam
+//
+// A fake over the same interface, stateful so a patch is visible to the next
+// read. `remoteObject` is what Google is pretending to hold; `getObject`
+// returns null when it is null, which is how "the customer has not saved this
+// pass" is expressed. No socket exists in this file.
+// ---------------------------------------------------------------------------
+
+interface PassRow extends Record<string, unknown> {
+  customerId: string;
+  tenantId: string;
+  objectId: string;
+  state: string;
+  lastSyncedAt: Date | null;
+}
+
+let passRows: PassRow[] = [];
+let remoteObject: Record<string, unknown> | null = null;
+let getObjectFails = false;
+let getClassFails = false;
+const googleCalls: Array<{ method: string; args: unknown[] }> = [];
+
+/**
+ * A client that behaves like Google's: stateful, and self-consistent.
+ *
+ * The state lives in the module-level `remoteObject` rather than in a closure,
+ * so a test can set what Google holds *after* `installFakeClient` ran and the
+ * client still sees it. A closure would make `remoteObject = null` in a test a
+ * silent no-op, and the test would pass for the wrong reason.
+ *
+ * `remoteObject` is null when Google has no object, which is how "the customer
+ * has not saved this pass" is expressed. No socket exists in this file.
+ */
+let fakeClientHandle: {
+  getClass: ReturnType<typeof vi.fn>;
+  getObject: ReturnType<typeof vi.fn>;
+  patchObject: ReturnType<typeof vi.fn>;
+};
+
+function installFakeClient() {
+  fakeClientHandle = {
+    getClass: vi.fn(async () => {
+      googleCalls.push({ method: 'getClass', args: [] });
+      if (getClassFails) throw new Error('Google is having a bad minute');
+      return null;
+    }),
+    // Echo the stored resource back, as Google's `callForResource` does, and
+    // leave it as the new truth. Without that, a second visit would see the
+    // pre-patch balance forever and the idempotency test would be measuring a
+    // fake that cannot represent the thing being tested.
+    getObject: vi.fn(async (id: string) => {
+      googleCalls.push({ method: 'getObject', args: [id] });
+      if (getObjectFails) throw new Error('Google is having a bad minute');
+      return remoteObject as never;
+    }),
+    patchObject: vi.fn(async (id: string, patch: Record<string, unknown>) => {
+      googleCalls.push({ method: 'patchObject', args: [id, patch] });
+      remoteObject = { ...(remoteObject ?? {}), ...patch };
+      return remoteObject as never;
+    }),
+  } as never;
+
+  vi.mocked(googleWalletClientFor).mockReturnValue({
+    getClass: fakeClientHandle.getClass,
+    insertClass: vi.fn(async () => {
+      throw new Error('not used');
+    }),
+    patchClass: vi.fn(async () => {
+      throw new Error('not used');
+    }),
+    getObject: fakeClientHandle.getObject,
+    insertObject: vi.fn(async () => {
+      throw new Error('not used');
+    }),
+    patchObject: fakeClientHandle.patchObject,
+    saveUriForJwt: vi.fn(async () => {
+      throw new Error('not used');
+    }),
+  } as never);
+}
+
+function objectAtGoogle(balance: string, state = 'ACTIVE'): Record<string, unknown> {
+  return {
+    id: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+    classId: classIdFor(ISSUER, TENANT),
+    state,
+    accountId: 'K7M2QX',
+    loyaltyPoints: { label: 'puntos', balance: { string: balance } },
+    barcode: { type: 'QR_CODE', value: CUSTOMER_GLOBAL_ID },
+  };
+}
+
 function installDb() {
   programs = [...PROGRAMS];
 
@@ -204,13 +314,21 @@ function installDb() {
   const admit = (): Row[] => {
     switch (tableName) {
       case 'points_transactions':
-        // The ledger. Only the customer predicate can admit a row, and there is
-        // exactly one row because the balance comes from a single ordered read.
-        return whereParams.includes(CUSTOMER_ID)
+        // The ledger. Admitted only where the predicate names both the customer
+        // and the business, which is what the real statement filters on. Honouring
+        // only the customer would make a balance read that dropped its tenant
+        // filter invisible here, and "it still passed" would be a property of the
+        // fake rather than of the code.
+        return whereParams.includes(CUSTOMER_ID) && whereParams.includes(TENANT)
           ? [{ balanceAfter: balances[`${TENANT}:${CUSTOMER_ID}`] ?? 0 }]
           : [];
       case 'loyalty_programs':
-        return whereParams.includes(TENANT) ? [{ pointsCurrency: 'puntos' }] : [];
+        // Any business the predicate names has a program. Hardcoding one tenant
+        // would make a second tenant's request fail on a fake rather than on the
+        // code under test.
+        return [TENANT, OTHER_TENANT].filter((t) => whereParams.includes(t)).length > 0
+          ? [{ pointsCurrency: 'puntos' }]
+          : [];
       case 'tenant_wallet_programs':
         return programs.filter((row) => whereParams.includes(String(row.tenantId)));
       case 'customers':
@@ -221,6 +339,15 @@ function installDb() {
         );
       case 'membership_tiers':
         return [];
+      case 'customer_wallet_passes':
+        // The tracking row. Admitted only where the predicate names both the
+        // customer and the tenant, so a read that dropped the tenant filter
+        // would return another tenant's pass and the cross-tenant tests would
+        // see it.
+        return passRows.filter(
+          (row) =>
+            whereParams.includes(row.customerId) && whereParams.includes(row.tenantId),
+        ) as unknown as Row[];
       default:
         return [];
     }
@@ -240,8 +367,13 @@ function installDb() {
 
       // The member-code compare-and-set. It is the only write the pass path
       // makes to `customers`, and it admits only where the code is still null.
+      // Keyed on whichever customer the statement named, not on one hardcoded
+      // id, so a test can exercise a second tenant's request the whole way
+      // through rather than tripping over the fake.
       if (query.sql.includes('UPDATE customers')) {
-        const customerId = query.params.find((p) => p === CUSTOMER_ID);
+        const customerId = query.params.find(
+          (p) => typeof p === 'string' && CUSTOMERS.some((c) => c.id === p),
+        );
         const row = CUSTOMERS.find((c) => c.id === customerId);
         if (row && row.memberCode === null) {
           const code = query.params.find(
@@ -249,6 +381,48 @@ function installDb() {
           );
           row.memberCode = code as string;
           return Promise.resolve({ rows: [{ member_code: row.memberCode }] });
+        }
+        return Promise.resolve({ rows: [] });
+      }
+
+      // `recordPass` inserting the tracking row. `not_issued` on insert and a
+      // no-op on conflict while the state is still `not_issued`, which is what
+      // the real statement's guard means for `object_id`.
+      if (query.sql.includes('INSERT INTO customer_wallet_passes')) {
+        const existing = passRows.find(
+          (r) => r.customerId === CUSTOMER_ID && r.tenantId === TENANT,
+        );
+        if (!existing) {
+          passRows.push({
+            customerId: CUSTOMER_ID,
+            tenantId: TENANT,
+            objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+            state: 'not_issued',
+            lastSyncedAt: null,
+          });
+        }
+        return Promise.resolve({ rows: [] });
+      }
+
+      // The reconciliation write. The monotonicity guard lives in the real
+      // statement, so the fake mirrors it rather than applying whatever it is
+      // handed: a test that relied on the fake being more forgiving would be
+      // testing the fake.
+      if (query.sql.includes('UPDATE customer_wallet_passes')) {
+        const customerId = query.params.find(
+          (p) => typeof p === 'string' && passRows.some((r) => r.customerId === p),
+        );
+        const tenantId = query.params.find(
+          (p) => typeof p === 'string' && passRows.some((r) => r.tenantId === p),
+        );
+        const state = query.params.find(
+          (p) => p === 'not_saved' || p === 'issued',
+        ) as string | undefined;
+        const observedAt = query.params.find((p) => p instanceof Date) as Date | undefined;
+        const row = passRows.find((r) => r.customerId === customerId && r.tenantId === tenantId);
+        if (row && (row.state === 'not_issued' || row.state === 'not_saved')) {
+          row.state = state ?? row.state;
+          row.lastSyncedAt = observedAt ?? row.lastSyncedAt;
         }
         return Promise.resolve({ rows: [] });
       }
@@ -306,10 +480,27 @@ const POST = (p: string) => reqAs('POST', p, OPERATOR_AUTH);
 beforeEach(() => {
   vi.clearAllMocks();
   statements.length = 0;
+  googleCalls.length = 0;
   balances = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
   for (const row of CUSTOMERS) row.memberCode = null;
+  passRows = [];
+  // Google holds a different balance by default, so the default request
+  // reconciles by patching. Tests that want the other branch set `remoteObject`
+  // themselves.
+  remoteObject = objectAtGoogle('0');
+  getObjectFails = false;
+  getClassFails = false;
+  // Restored every test, because the demo-mode block deliberately removes it and
+  // a test that ran after that one would otherwise inherit demo mode.
+  env.WALLET_DEMO_MODE = 'false';
+  installFakeClient();
   installDb();
 });
+
+/** Run a request as if the deployment had no `WALLET_DEMO_MODE` at all. */
+function withoutDemoModeVar() {
+  delete env.WALLET_DEMO_MODE;
+}
 
 // ============================================================================
 // Auth
@@ -696,11 +887,13 @@ describe('POST /v1/wallet/program/sync', () => {
   it('reports a Google failure without writing a status', async () => {
     // A bad minute at Google must not leave a business believing its class is
     // approved, or believing it is not.
+    //
+    // Previously this stubbed the global `fetch` and let the real client fail its
+    // token exchange, which meant the assertion passed because DNS was
+    // unavailable rather than because the route handles a Google failure. The
+    // failure is now produced where it belongs, on the client seam.
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.resolve(new Response('{}', { status: 500 }))),
-    );
+    getClassFails = true;
 
     const res = await POST('/v1/wallet/program/sync');
 
@@ -708,7 +901,437 @@ describe('POST /v1/wallet/program/sync', () => {
     const json = (await res.json()) as { error: { code: string } };
     expect(json.error.code).toBe('WALLET_SYNC_FAILED');
 
-    vi.unstubAllGlobals();
     error.mockRestore();
+  });
+});
+
+// ============================================================================
+// Reconciliation on GET /v1/wallet/pass
+//
+// The route-level half. `reconcile.test.ts` proves the function; these prove it
+// is actually wired into the request, in the right order, and that its failure
+// cannot take the pass link down with it.
+// ============================================================================
+
+describe('GET /v1/wallet/pass: reconciling the saved pass', () => {
+  it('asks Google about the object it just issued a link for', async () => {
+    await GET('/v1/wallet/pass');
+
+    const getObject = googleCalls.filter((call) => call.method === 'getObject');
+    expect(getObject).toHaveLength(1);
+    expect(getObject[0]!.args[0]).toBe(`${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`);
+  });
+
+  it('pushes the ledger balance onto an object the customer already saved', async () => {
+    // The defect this change exists for: the number on a saved pass was correct
+    // at issue time and stale forever. Google's copy holds 0 and the ledger
+    // holds 96942, so the pass must be brought forward to the ledger's number.
+    remoteObject = objectAtGoogle('0');
+
+    await GET('/v1/wallet/pass');
+
+    const patch = googleCalls.find((call) => call.method === 'patchObject');
+    expect(patch).toBeDefined();
+    expect(patch!.args[1]).toEqual({
+      loyaltyPoints: { label: 'puntos', balance: { string: '96942' } },
+    });
+  });
+
+  it('writes nothing to Google when it already holds the ledger balance', async () => {
+    remoteObject = objectAtGoogle('96942');
+
+    await GET('/v1/wallet/pass');
+
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
+  });
+
+  it('patches once across two visits with an unchanged balance', async () => {
+    // Idempotency as the customer experiences it: open the app twice without
+    // earning or spending anything, and Google is written to at most once.
+    await GET('/v1/wallet/pass');
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toHaveLength(1);
+
+    await GET('/v1/wallet/pass');
+
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toHaveLength(1);
+  });
+
+  it('records `not_saved` when Google has no object, so the row stops claiming otherwise', async () => {
+    remoteObject = null;
+
+    await GET('/v1/wallet/pass');
+
+    // The distinction the brief asks for. `not_issued` means we never checked;
+    // `not_saved` means we checked and the customer has not saved it yet.
+    expect(passRows[0]!.state).toBe('not_saved');
+    expect(passRows[0]!.state).not.toBe('not_issued');
+  });
+
+  it('records `issued` once Google does have the object', async () => {
+    await GET('/v1/wallet/pass');
+
+    expect(passRows[0]!.state).toBe('issued');
+  });
+
+  it('stamps the observation so an unverified pass is visibly unverified', async () => {
+    await GET('/v1/wallet/pass');
+
+    expect(passRows[0]!.lastSyncedAt).toBeInstanceOf(Date);
+  });
+
+  it('never drags an `issued` pass back to `not_saved`', async () => {
+    // First visit, Google has it.
+    await GET('/v1/wallet/pass');
+    expect(passRows[0]!.state).toBe('issued');
+
+    // Second visit, Google momentarily 404s. A state that flaps is worse for
+    // support than one that is a day late.
+    remoteObject = null;
+    await GET('/v1/wallet/pass');
+
+    expect(passRows[0]!.state).toBe('issued');
+  });
+
+  it('does not patch a pass Google reports as not active', async () => {
+    remoteObject = objectAtGoogle('0', 'INACTIVE');
+
+    await GET('/v1/wallet/pass');
+
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
+  });
+
+  it('asks nothing of Google for a class that is not approved', async () => {
+    programs = programs.map((row) => ({ ...row, reviewStatus: 'draft' }));
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    expect(googleCalls.filter((call) => call.method === 'getObject')).toEqual([]);
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
+  });
+
+  it('never reconciles a customer of another business', async () => {
+    // The other business's class is approved here, so the request runs the full
+    // path and the assertion is about *which* object Google was asked about
+    // rather than about an early refusal. A pass is never patched under another
+    // tenant's object id.
+    programs = programs.map((row) =>
+      row.tenantId === OTHER_TENANT ? { ...row, reviewStatus: 'approved' } : row,
+    );
+
+    const res = await reqAs('GET', '/v1/wallet/pass', {
+      userId: 'f0e1d2c3-b4a5-4968-8776-655544332211',
+      businessId: OTHER_TENANT,
+      userRole: 'customer',
+    });
+
+    expect(res.status).toBe(200);
+    const objectIds = googleCalls
+      .filter((call) => call.method === 'getObject')
+      .map((call) => call.args[0]);
+    expect(objectIds).not.toContain(`${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // The reconciliation cannot fail the request
+  // -------------------------------------------------------------------------
+
+  it('still returns the pass link when Google is unreachable', async () => {
+    // The contract that outlives the feature: a customer tapping a button does
+    // not get an error because Google's API is having a bad minute. A pass that
+    // is one app visit stale is much better than no pass at all.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getObjectFails = true;
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { data: { save_url: string; balance_points: number } };
+    expect(json.data.save_url).toContain(SAVE_TO_WALLET_URL_PREFIX);
+    expect(json.data.balance_points).toBe(96942);
+    error.mockRestore();
+  });
+
+  it('still returns the pass link when the patch itself fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fakeClientHandle.patchObject.mockRejectedValueOnce(new Error('Google rejected the patch'));
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { data: { save_url: string } };
+    expect(json.data.save_url).toContain(SAVE_TO_WALLET_URL_PREFIX);
+    error.mockRestore();
+  });
+
+  it('leaves the tracking state alone when the reconciliation could not run', async () => {
+    // The honest outcome of an unreachable Google is "we do not know", and
+    // `not_issued` with a null `last_synced_at` is exactly that. Writing
+    // `not_saved` here would claim we checked.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getObjectFails = true;
+
+    await GET('/v1/wallet/pass');
+
+    expect(passRows[0]!.state).toBe('not_issued');
+    expect(passRows[0]!.lastSyncedAt).toBeNull();
+    error.mockRestore();
+  });
+});
+
+// ============================================================================
+// Demo Mode
+// ============================================================================
+
+describe('Demo Mode', () => {
+  it('reports the pass as unavailable while the deployment is in demo mode', async () => {
+    // A pass that only reaches the issuer's own test accounts is not a pass.
+    // Saying `available: true` puts "it is in your wallet" in front of a
+    // customer whose own phone will reject it.
+    withoutDemoModeVar();
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { available: boolean; reason: string; reason_code: string } };
+    expect(json.data.available).toBe(false);
+    expect(json.data.reason).toBe('demo_mode');
+    expect(json.data.reason_code).toBe('WALLET_DEMO_MODE');
+  });
+
+  it('states the fact explicitly, so a client never has to infer it', async () => {
+    withoutDemoModeVar();
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { demo_mode: boolean } };
+    expect(json.data.demo_mode).toBe(true);
+  });
+
+  it('reports the pass as available once the deployment declares publishing access', async () => {
+    env.WALLET_DEMO_MODE = 'false';
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { available: boolean; demo_mode: boolean; reason: string } };
+    expect(json.data.demo_mode).toBe(false);
+    expect(json.data.available).toBe(true);
+    expect(json.data.reason).toBe('available');
+  });
+
+  it('refuses to issue a pass in demo mode, with a code that is not a class state', async () => {
+    // `WALLET_CLASS_NOT_APPROVED` would be a lie here: the class may well be
+    // approved, and the reason is a grant that has not been made.
+    withoutDemoModeVar();
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('WALLET_DEMO_MODE');
+  });
+
+  it('tells the customer the pass would not work for them, not just that it failed', async () => {
+    withoutDemoModeVar();
+
+    const res = await GET('/v1/wallet/pass');
+
+    const json = (await res.json()) as { error: { message: string } };
+    expect(json.error.message).toMatch(/only work on the accounts of the business/);
+  });
+
+  it('mints no member code and reads nothing while in demo mode', async () => {
+    // Checked before any database work, like the empty-origins fault. There is
+    // no point deriving a member code for a pass that will not be issued.
+    withoutDemoModeVar();
+
+    await GET('/v1/wallet/pass');
+
+    expect(statements).toEqual([]);
+    expect(googleCalls).toEqual([]);
+    for (const row of CUSTOMERS) expect(row.memberCode).toBeNull();
+  });
+
+  it('fails closed on a value it does not recognise', async () => {
+    // A typo in a deployment must not turn a demo deployment into a published
+    // one. The cost of guessing wrong here is a support incident, not a delay.
+    env.WALLET_DEMO_MODE = 'flase';
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { demo_mode: boolean; reason: string } };
+    expect(json.data.demo_mode).toBe(true);
+    expect(json.data.reason).toBe('demo_mode');
+  });
+
+  it('reports demo mode even when the class is also unusable', async () => {
+    // Demo mode survives a class being approved, so it is the wait the customer
+    // is actually in. Reporting the review instead would describe a wait that
+    // has already ended.
+    withoutDemoModeVar();
+    programs = programs.map((row) => ({ ...row, reviewStatus: 'draft' }));
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { reason: string } };
+    expect(json.data.reason).toBe('demo_mode');
+  });
+
+  it('still answers 200, so a client has no special case', async () => {
+    withoutDemoModeVar();
+
+    const res = await GET('/v1/wallet/status');
+
+    expect(res.status).toBe(200);
+  });
+});
+
+// ============================================================================
+// A balance above what a pass can display
+// ============================================================================
+
+describe('a balance past the display ceiling', () => {
+  it('is a 409 with its own code, not a 500', async () => {
+    // It used to fall through to the global error handler, which reported a
+    // server fault for a product condition about one customer's balance. A 500
+    // sends an operator hunting a broken deployment and a customer to support,
+    // and neither can fix it.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    balances[`${TENANT}:${CUSTOMER_ID}`] = 10_000_000;
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe('WALLET_BALANCE_NOT_DISPLAYABLE');
+    expect(json.error.message).toMatch(/balance itself is not affected/);
+    error.mockRestore();
+  });
+
+  it('is refused by the status endpoint too, so no control is ever rendered over it', async () => {
+    // The status endpoint exists so a client never renders a control that
+    // fails. A pass that 409s on tap is exactly such a control.
+    balances[`${TENANT}:${CUSTOMER_ID}`] = 10_000_000;
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { available: boolean; reason: string; reason_code: string } };
+    expect(json.data.available).toBe(false);
+    expect(json.data.reason).toBe('balance_not_displayable');
+    expect(json.data.reason_code).toBe('WALLET_BALANCE_NOT_DISPLAYABLE');
+  });
+
+  it('leaves a balance at the ceiling perfectly available', async () => {
+    balances[`${TENANT}:${CUSTOMER_ID}`] = 9_999_999;
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { available: boolean; reason: string } };
+    expect(json.data.available).toBe(true);
+    expect(json.data.reason).toBe('available');
+  });
+
+  it('issues a pass at the exact ceiling', async () => {
+    balances[`${TENANT}:${CUSTOMER_ID}`] = 9_999_999;
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+  });
+
+  it('pushes nothing to Google for a pass whose balance cannot be displayed', async () => {
+    balances[`${TENANT}:${CUSTOMER_ID}`] = 10_000_000;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await GET('/v1/wallet/pass');
+
+    // `balance.ts` refuses to truncate rather than show a member `9999999` when
+    // they hold 12345678. A truncated push is the same wrong number in a new
+    // place, so there is no push at all.
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
+    error.mockRestore();
+  });
+});
+
+// ============================================================================
+// The tracking state, surfaced
+// ============================================================================
+
+describe('GET /v1/wallet/status: the pass tracking state', () => {
+  it('is null for a customer who has never been issued a link', async () => {
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { pass_state: string | null } };
+    expect(json.data.pass_state).toBeNull();
+  });
+
+  it('is `not_issued` after a link was handed out and Google has not been asked', async () => {
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: TENANT,
+        objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+        state: 'not_issued',
+        lastSyncedAt: null,
+      },
+    ];
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { pass_state: string } };
+    expect(json.data.pass_state).toBe('not_issued');
+  });
+
+  it('distinguishes `not_saved` from `not_issued` for a client that asks', async () => {
+    // The whole point of the extra state: "we checked and it is not there" is a
+    // different thing to tell a customer than "we never checked".
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: TENANT,
+        objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+        state: 'not_saved',
+        lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+      },
+    ];
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { pass_state: string } };
+    expect(json.data.pass_state).toBe('not_saved');
+  });
+
+  it('reports `issued` for a saved pass, still 200 and still available', async () => {
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: TENANT,
+        objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+        state: 'issued',
+        lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+      },
+    ];
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { pass_state: string; available: boolean } };
+    expect(json.data.pass_state).toBe('issued');
+    expect(json.data.available).toBe(true);
+  });
+
+  it('never reports another business\'s pass state', async () => {
+    passRows = [
+      {
+        customerId: OTHER_CUSTOMER_ID,
+        tenantId: OTHER_TENANT,
+        objectId: `${ISSUER}.member-somebody-else`,
+        state: 'issued',
+        lastSyncedAt: null,
+      },
+    ];
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { pass_state: string | null } };
+    expect(json.data.pass_state).toBeNull();
   });
 });

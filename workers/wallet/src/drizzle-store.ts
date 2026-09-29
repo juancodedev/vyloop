@@ -36,6 +36,7 @@
 import {
   createDb,
   customers,
+  customerWalletPasses,
   loyaltyPrograms,
   membershipTiers,
   pointsTransactions,
@@ -46,8 +47,10 @@ import {
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 
 import type {
+  PassReconciliationUpdate,
   PassTrackingUpdate,
   WalletCustomerRow,
+  WalletPassRow,
   WalletProgramRow,
   WalletStore,
   WalletTierRow,
@@ -275,6 +278,12 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
      * `customers.global_id`, which never changes, so in practice the update is a
      * no-op that keeps the statement idempotent.
      *
+     * Note that reconciliation moves the state on to `not_saved`, which this
+     * guard does not list. That is deliberate and harmless: once a pass is
+     * `not_saved` we have already issued it, so refreshing `object_id` is no
+     * longer the only thing that could change, and the derivation is stable
+     * enough that the branch remains a no-op.
+     *
      * `last_synced_at` is left alone too. Nothing has been synced with Google.
      */
     async recordPass(update: PassTrackingUpdate): Promise<void> {
@@ -290,6 +299,59 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
            SET object_id = EXCLUDED.object_id,
                updated_at = now()
          WHERE customer_wallet_passes.state = 'not_issued'
+      `);
+    },
+
+    async findPass(customerId: string, tenantId: string): Promise<WalletPassRow | null> {
+      const [row] = await db
+        .select({
+          customerId: customerWalletPasses.customerId,
+          tenantId: customerWalletPasses.tenantId,
+          objectId: customerWalletPasses.objectId,
+          state: customerWalletPasses.state,
+          lastSyncedAt: customerWalletPasses.lastSyncedAt,
+        })
+        .from(customerWalletPasses)
+        .where(
+          and(
+            eq(customerWalletPasses.customerId, customerId),
+            // The second of the two tenant filters, and the one that matters
+            // here: `customer_id` is the primary key, so the predicate already
+            // narrows to a single row, and that row carries a `tenant_id` this
+            // layer must still check. A row written against another tenant would
+            // be patched at Google from this request.
+            eq(customerWalletPasses.tenantId, tenantId),
+          ),
+        )
+        .limit(1);
+
+      return (row as WalletPassRow | undefined) ?? null;
+    },
+
+    /**
+     * The write behind `reconcile.ts`, with the monotonicity guard in SQL.
+     *
+     * The `state IN ('not_issued', 'not_saved')` predicate is the whole
+     * argument for never downgrading a state, and it lives here rather than in
+     * a `WHERE` the caller composed so that it cannot be forgotten by a future
+     * writer: reconciliation has no way to *ask* for a downgrade, and this
+     * statement refuses to perform one.
+     *
+     * `last_synced_at` is written on every call rather than only on a change.
+     * It answers "when did we last have a definitive answer from Google?", which
+     * is what makes a pass with a months-old timestamp visibly unverified — and
+     * a timestamp that only moved when the state changed could not distinguish
+     * "checked, unchanged" from "never checked".
+     */
+    async recordPassReconciliation(update: PassReconciliationUpdate): Promise<void> {
+      await db.execute(sql`
+        UPDATE customer_wallet_passes
+           SET state = ${update.state},
+               last_synced_at = ${update.observedAt}::timestamptz,
+               updated_at = now()
+         WHERE customer_id = ${update.customerId}::uuid
+           AND tenant_id = ${update.tenantId}::uuid
+           AND state IN ('not_issued', 'not_saved')
       `);
     },
 

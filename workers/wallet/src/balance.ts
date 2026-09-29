@@ -43,29 +43,50 @@ export class BalanceNotDisplayableError extends Error {
 }
 
 /**
+ * Why `points` cannot be rendered in the primary balance row, or `null` when it
+ * can.
+ *
+ * ## One rule, two callers
+ *
+ * `formatBalance` throws on a non-null answer, and `GET /v1/wallet/status` reads
+ * the same answer to decide whether the Add to Wallet control would work before
+ * rendering it. Both call **this**, so there is exactly one statement of the
+ * ceiling in this repository. A second threshold check written at the route
+ * would be a second answer to the same question, and the two would eventually
+ * disagree — the route would promise a button that the builder then refuses,
+ * which is precisely the failure the status endpoint exists to prevent.
+ *
+ * The order of the checks is the order of the claims: a value that is not a
+ * number is not a balance, a fractional one has no representation on a pass that
+ * shows integers, a negative one is a data fault rather than a display limit,
+ * and only then does the character budget come into it.
+ */
+export function balanceDisplayFailure(points: number): string | null {
+  if (!Number.isFinite(points)) {
+    return 'the value is not a finite number';
+  }
+  if (!Number.isInteger(points)) {
+    return 'the value is fractional and the pass shows integers';
+  }
+  if (points < 0) {
+    return 'a negative balance has no representation in loyaltyPoints.balance';
+  }
+  if (points > BALANCE_DISPLAY_MAX) {
+    return `${String(points).length} digits exceeds the ${BALANCE_DISPLAY_MAX_LENGTH}-character budget`;
+  }
+  return null;
+}
+
+/**
  * Render a points balance for `loyaltyPoints.balance`.
  *
  * @throws {BalanceNotDisplayableError} for a non-finite, fractional, negative
  * or over-ceiling value.
  */
 export function formatBalance(points: number): string {
-  if (!Number.isFinite(points)) {
-    throw new BalanceNotDisplayableError(points, 'the value is not a finite number');
-  }
-  if (!Number.isInteger(points)) {
-    throw new BalanceNotDisplayableError(points, 'the value is fractional and the pass shows integers');
-  }
-  if (points < 0) {
-    throw new BalanceNotDisplayableError(
-      points,
-      'a negative balance has no representation in loyaltyPoints.balance',
-    );
-  }
-  if (points > BALANCE_DISPLAY_MAX) {
-    throw new BalanceNotDisplayableError(
-      points,
-      `${String(points).length} digits exceeds the ${BALANCE_DISPLAY_MAX_LENGTH}-character budget`,
-    );
+  const failure = balanceDisplayFailure(points);
+  if (failure !== null) {
+    throw new BalanceNotDisplayableError(points, failure);
   }
 
   // `Number.prototype.toLocaleString` is avoided entirely: the Workers ICU

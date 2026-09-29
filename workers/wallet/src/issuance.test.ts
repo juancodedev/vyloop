@@ -185,6 +185,18 @@ class FakeStore implements WalletStore {
     this.recorded.push(update);
   }
 
+  // Present only to satisfy the interface. `issuePass` never calls either, and
+  // a test that proved otherwise would be testing the mock rather than the
+  // code — so `reconcile.test.ts` owns their behaviour.
+  async findPass(): Promise<null> {
+    this.record('findPass', TENANT);
+    return null;
+  }
+
+  async recordPassReconciliation(): Promise<void> {
+    this.record('recordPassReconciliation', TENANT);
+  }
+
   async updateProgramReviewStatus(tenantId: string, reviewStatus: string): Promise<void> {
     this.record('updateProgramReviewStatus', tenantId);
     const row = this.programs[tenantId];
