@@ -115,6 +115,12 @@ interface FakeDb {
   scoped: ScopedBuilder[];
   executed: Array<{ sql: string; params: unknown[] }>;
   updates: Array<{ table: string; values: Record<string, unknown>; whereSql: string }>;
+  /**
+   * What `db.execute` resolves to. `UPDATE ... RETURNING` reports how many rows it
+   * actually changed, so a test has to be able to say "none" and see the caller
+   * act on the difference rather than assuming success.
+   */
+  executeRows: Array<Record<string, unknown>>;
 }
 
 /**
@@ -136,6 +142,11 @@ function createFakeDb(
   const scoped: ScopedBuilder[] = [];
   const executed: Array<{ sql: string; params: unknown[] }> = [];
   const updates: Array<{ table: string; values: Record<string, unknown>; whereSql: string }> = [];
+  // What `db.execute` resolves to. The `UPDATE ... RETURNING` writes report how
+  // many rows they actually changed, so the fake has to be able to say "none"
+  // as well as "one" — a fake that always returned a row would make a guard
+  // that rejects every write look identical to one that accepts it.
+  const executeRows: Array<Record<string, unknown>> = [];
 
   const builder: Record<string, unknown> = {};
   const state: ScopedBuilder = { sql: '', params: [], rows: [] };
@@ -146,8 +157,25 @@ function createFakeDb(
     state.rows = rows;
     return builder;
   });
-  builder.orderBy = vi.fn(() => builder);
-  builder.limit = vi.fn(() => builder);
+  builder.orderBy = vi.fn((clause: unknown) => {
+    // Recorded, because a keyset page with no `ORDER BY` is not resumable and
+    // the `listProgramTenants` tests have to be able to see that.
+    if (clause !== undefined) {
+      const query = dialect.sqlToQuery(clause as never);
+      state.sql = state.sql === '' ? query.sql : `${state.sql} ${query.sql}`;
+      state.params = [...state.params, ...query.params];
+    }
+    return builder;
+  });
+  builder.limit = vi.fn((n: unknown) => {
+    // Honoured rather than ignored. The sweep's entire safety argument for
+    // enumerating tenants is that it passes a bound, and a fake whose `limit`
+    // does nothing would let an unbounded read pass every test in this file.
+    if (typeof n === 'number' && Number.isFinite(n)) {
+      state.rows = state.rows.slice(0, n);
+    }
+    return builder;
+  });
   builder.set = vi.fn(() => {
     state.sql = 'UPDATE';
     return builder;
@@ -208,11 +236,11 @@ function createFakeDb(
       // same dialect drizzle would use. Reconstructing it by hand would test the
       // fake's idea of the statement rather than the statement.
       executed.push(dialect.sqlToQuery(chunk as never));
-      return Promise.resolve({ rows: [] });
+      return Promise.resolve({ rows: executeRows });
     }),
   };
 
-  return { db, scoped, executed, updates };
+  return { db, scoped, executed, updates, executeRows };
 }
 
 function isUuid(value: string): boolean {
@@ -606,7 +634,88 @@ describe('recordPassReconciliation', () => {
     });
 
     const statement = fake.executed[0]!.sql;
-    expect(statement).toContain("state IN ('not_issued', 'not_saved')");
+    // The rank guard: the write is refused unless the row is weaker than what is
+    // being written (`not_issued -> not_saved -> inactive -> issued`) or already
+    // exactly it. `expired` and `completed` are in neither set, so nothing can
+    // move a row off them.
+    expect(statement).toContain("state IN ('not_issued', 'not_saved', 'inactive')");
+    // And the guard is wrapped around the `state` assignment only. A `WHERE`
+    // guard would refuse the whole row, and a row refused there is a row whose
+    // definitive answer was thrown away — which is what left terminal passes
+    // permanently due. The claim is guarded; the observation is not.
+    expect(statement).toMatch(/SET\s+state\s*=\s*CASE/);
+    expect(statement).toContain('ELSE state');
+  });
+
+  it('lets a deactivated pass be recorded as issued again', async () => {
+    // A customer who reopens a pass Google deactivated has a genuinely ACTIVE
+    // object, and the observation path is the only thing that ever learns it.
+    // Excluding `inactive` from the source set would leave such a row reading
+    // `inactive` for ever — the same stale-tracking defect this guard exists to
+    // prevent, just in the other direction.
+    const { fake, store } = reconcileWith();
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'issued',
+      observedAt: new Date(),
+    });
+
+    expect(fake.executed[0]!.sql).toContain("state IN ('not_issued', 'not_saved', 'inactive')");
+  });
+
+  it('still refreshes the timestamp when the state is unchanged, so `issued` is not frozen', async () => {
+    // The property that used to be carried by an `OR state = <written>` clause in
+    // the `WHERE`, and is now carried by the timestamp simply not being inside
+    // the guard. Either way the rule the column documents must hold: a row
+    // already in `issued` still has its `last_synced_at` advanced, so the column
+    // means "last verified" rather than "first seen".
+    const { fake, store } = reconcileWith();
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'issued',
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!.sql;
+    // `last_synced_at` is assigned a bare bind parameter: no `CASE`, no `WHEN`,
+    // nothing conditional in front of it. If the guard ever grew to cover the
+    // timestamp, this stops matching and a terminal row goes permanently due.
+    expect(statement).toMatch(/last_synced_at\s*=\s*\$\d+::timestamptz/);
+    // And the state being written is a bind parameter, so the guard compares
+    // against the caller's value rather than a hardcoded one.
+    expect(fake.executed[0]!.params).toContain('issued');
+  });
+
+  it('advances the timestamp for a terminal row, whose state transition is refused', async () => {
+    // The case the old predicate got wrong. A row in `expired` matches nothing
+    // in `state IN (...)`, so a `WHERE` guard discarded the whole UPDATE — and
+    // with it a definitive answer from Google about a pass this worker had
+    // itself marked terminal. The pass then never left the sweep's due set.
+    //
+    // The statement is the same one; what matters is that nothing in it can
+    // refuse the timestamp. Asserted on the compiled SQL because that is the
+    // only place the decision is made.
+    const { fake, store } = reconcileWith();
+
+    await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'issued',
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!.sql;
+    // The guard mentions no state at all, so no state can exclude this write.
+    const whereList = statement.slice(statement.indexOf('WHERE'));
+    expect(whereList).not.toMatch(/state\s+IN/i);
+    // `last_synced_at` is assigned the bind parameter directly, with no `CASE`
+    // and no condition of any kind in front of it. `$2` is the observedAt of
+    // this call, per the params order above.
+    expect(statement).toMatch(/last_synced_at\s*=\s*\$\d+::timestamptz/);
   });
 
   it('does not guard on the current state when recording `issued`', async () => {
@@ -657,5 +766,389 @@ describe('recordPassReconciliation', () => {
       fake.executed[0]!.sql.indexOf('WHERE'),
     );
     expect(setList).toContain('last_synced_at');
+  });
+});
+
+// ============================================================================
+// Recording a lifecycle state
+// ============================================================================
+
+describe('recordPassLifecycle', () => {
+  function lifecycleWith() {
+    const fake = createFakeDb([], 'tenantId');
+    return { fake, store: createDrizzleWalletStore(fake.db) };
+  }
+
+  it('guards on the source state, not the target, so it cannot assert an existence it never saw', async () => {
+    // The one documented exception to the monotonicity guard, and the invariant
+    // that survives it: a lifecycle answer may only be written against a row
+    // that already says an object exists. Otherwise a Google state could turn
+    // "we have never seen an object for this customer" into "this pass is
+    // expired", asserting a pass Google was never confirmed to hold.
+    const { fake, store } = lifecycleWith();
+
+    await store.recordPassLifecycle({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'expired',
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toContain("state IN ('issued', 'inactive')");
+    // `not_issued` and `not_saved` are deliberately absent from that set.
+    expect(statement).not.toContain("'not_issued'");
+  });
+
+  it('makes expired and completed terminal by omitting them from the source set', async () => {
+    const { fake, store } = lifecycleWith();
+
+    await store.recordPassLifecycle({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'completed',
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toContain("state IN ('issued', 'inactive')");
+    expect(statement).not.toContain("'expired'");
+    expect(statement).not.toContain("'completed'");
+  });
+
+  it('scopes the write to one tenant', async () => {
+    const { fake, store } = lifecycleWith();
+
+    await store.recordPassLifecycle({
+      customerId: CUSTOMER,
+      tenantId: OTHER_TENANT,
+      state: 'inactive',
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('tenant_id');
+    expect(statement.params).toContain(OTHER_TENANT);
+  });
+
+  it('records the observation time, so a lifecycle write also refreshes the verification stamp', async () => {
+    const { fake, store } = lifecycleWith();
+    const observedAt = new Date('2026-09-28T12:00:00.000Z');
+
+    await store.recordPassLifecycle({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'inactive',
+      observedAt,
+    });
+
+    expect(fake.executed[0]!.sql).toContain('last_synced_at');
+    expect(fake.executed[0]!.params).toContain(observedAt);
+  });
+
+  it('reports how many rows it changed, so a refused write is not a silent success', async () => {
+    // The reason this method returns a number at all. `findPassesByObjectIds`
+    // resolves rows by object id with no state filter, so a `not_saved` row
+    // reaches this method and matches nothing. Under `Promise<void>` the caller
+    // could not tell that from a real write, and the sweep counted a lifecycle
+    // observation it had never recorded.
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const refused = await store.recordPassLifecycle({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'inactive',
+      observedAt: new Date(),
+    });
+    expect(refused).toBe(0);
+
+    // The same call against a row that does match reports 1, so a caller can act
+    // on the difference rather than assuming success.
+    fake.executeRows.push({ customer_id: CUSTOMER });
+    const accepted = await store.recordPassLifecycle({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'inactive',
+      observedAt: new Date(),
+    });
+    expect(accepted).toBe(1);
+  });
+
+  it('reports the row a reconciliation changed, rather than assuming one was', async () => {
+    // The same contract as `recordPassLifecycle`, on the other write. A caller
+    // that cannot tell "changed nothing" from "changed one row" is a caller that
+    // reports an observation it never recorded — the shape the sweep had.
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const refused = await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'not_saved',
+      observedAt: new Date(),
+    });
+    expect(refused).toBe(0);
+
+    fake.executeRows.push({ customer_id: CUSTOMER });
+    const accepted = await store.recordPassReconciliation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'not_saved',
+      observedAt: new Date(),
+    });
+    expect(accepted).toBe(1);
+  });
+
+  it('asks the database for the row it changed, rather than assuming one was', async () => {
+    // Without `RETURNING` there is nothing to count, and the count would have to
+    // be assumed — which is the bug this return value was introduced to end.
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.recordPassLifecycle({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      state: 'inactive',
+      observedAt: new Date(),
+    });
+
+    expect(fake.executed[0]!.sql).toContain('RETURNING');
+  });
+});
+
+// ============================================================================
+// Recording an observation with no state claim
+// ============================================================================
+
+describe('recordPassObservation', () => {
+  function observationWith() {
+    const fake = createFakeDb([], 'tenantId');
+    return { fake, store: createDrizzleWalletStore(fake.db) };
+  }
+
+  it('writes no state at all, so it cannot invent a tracking value', async () => {
+    // The caller knows the object exists and is not `ACTIVE`, and has no word
+    // for that in `PassTrackingState`. A method that could set `state` would be
+    // one line away from putting an unreadable word in the column.
+    const { fake, store } = observationWith();
+
+    await store.recordPassObservation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      observedAt: new Date(),
+    });
+
+    const setList = fake.executed[0]!.sql.slice(
+      fake.executed[0]!.sql.indexOf('SET') + 3,
+      fake.executed[0]!.sql.indexOf('WHERE'),
+    );
+    expect(setList).toContain('last_synced_at');
+    expect(setList).not.toContain('state');
+  });
+
+  it('filters on no state either, because a state filter would starve the rows it excludes', async () => {
+    // The liveness argument. This write exists so that a pass with no mappable
+    // lifecycle state still leaves the due set. Adding a `WHERE` on `state` here
+    // would reintroduce exactly the permanent-due defect for whichever states it
+    // excluded — including `expired` and `completed`, which this worker writes.
+    const { fake, store } = observationWith();
+
+    await store.recordPassObservation({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      observedAt: new Date(),
+    });
+
+    const whereList = fake.executed[0]!.sql.slice(fake.executed[0]!.sql.indexOf('WHERE'));
+    expect(whereList).toContain('customer_id');
+    expect(whereList).not.toMatch(/state/i);
+  });
+
+  it('keeps the tenant filter, because it writes rows it did not read', async () => {
+    // The one guard this method does have. A scheduled sweep calls it, and a
+    // write that stamps `last_synced_at` on a row belonging to another tenant
+    // would corrupt that tenant's due set from outside.
+    const { fake, store } = observationWith();
+
+    await store.recordPassObservation({
+      customerId: CUSTOMER,
+      tenantId: OTHER_TENANT,
+      observedAt: new Date(),
+    });
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('tenant_id');
+    expect(statement.params).toContain(OTHER_TENANT);
+  });
+
+  it('reports how many rows it changed, so a vanished row does not read as verified', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const observedAt = new Date('2026-09-28T12:00:00.000Z');
+    expect(
+      await store.recordPassObservation({ customerId: CUSTOMER, tenantId: TENANT, observedAt }),
+    ).toBe(0);
+
+    fake.executeRows.push({ customer_id: CUSTOMER });
+    expect(
+      await store.recordPassObservation({ customerId: CUSTOMER, tenantId: TENANT, observedAt }),
+    ).toBe(1);
+  });
+});
+
+// ============================================================================
+// The sweep's enumeration queries
+// ============================================================================
+
+describe('listProgramTenants', () => {
+  function programs(): Row[] {
+    return [
+      { tenantId: TENANT, issuerId: '3388', classId: 'c1', reviewStatus: 'approved' },
+      { tenantId: OTHER_TENANT, issuerId: '3388', classId: 'c2', reviewStatus: 'approved' },
+    ];
+  }
+
+  it('orders by the primary key, which is what makes the cursor exact', async () => {
+    const fake = createFakeDb(programs(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listProgramTenants({ limit: 10, afterTenantId: null });
+
+    // An unordered keyset page is not resumable: the next page's cursor would be
+    // meaningless, so a tenant could be read twice or skipped entirely. `asc` is
+    // what drizzle compiles an ascending `orderBy` column to.
+    expect(fake.scoped[0]!.sql).toContain('tenant_id" asc');
+  });
+
+  it('applies the bound it was given, so the read is never unbounded', async () => {
+    const fake = createFakeDb(programs(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const rows = await store.listProgramTenants({ limit: 1, afterTenantId: null });
+
+    expect(rows).toHaveLength(1);
+  });
+
+  it('clamps a nonsensical bound rather than passing it through', async () => {
+    const fake = createFakeDb(programs(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    // Zero or negative would return nothing at best and error at worst, and an
+    // enormous one would be the unbounded read this method exists to prevent.
+    expect(await store.listProgramTenants({ limit: 0, afterTenantId: null })).toHaveLength(1);
+    expect(await store.listProgramTenants({ limit: 10_000, afterTenantId: null })).toHaveLength(2);
+  });
+
+  it('resumes with a strict comparison on the cursor, and never with an offset', async () => {
+    const fake = createFakeDb(programs(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listProgramTenants({ limit: 10, afterTenantId: TENANT });
+
+    // `>` not `>=`, so a page never repeats the cursor row, and no OFFSET: an
+    // offset page re-reads and re-sorts everything it skips, and a tenant
+    // inserted mid-sweep shifts every page after it and skips rows silently.
+    //
+    // The compiled predicate is what is asserted, not the rows it returns: this
+    // fake admits by comparing every uuid parameter for equality, which is the
+    // right model for `eq(tenant_id, $1)` and the wrong one for a `>` cursor.
+    // Asserting the SQL is asserting the thing that is actually shipped.
+    const sql = fake.scoped[0]!.sql;
+    expect(sql).toContain('>');
+    expect(sql).not.toContain('OFFSET');
+    expect(sql).not.toContain('>=');
+    expect(fake.scoped[0]!.params).toContain(TENANT);
+  });
+
+  it('emits no predicate at all when starting from the beginning', async () => {
+    // A null cursor is a branch, not a sentinel string, so no tenant can be
+    // skipped by colliding with a magic value.
+    const fake = createFakeDb(programs(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listProgramTenants({ limit: 10, afterTenantId: null });
+
+    expect(fake.scoped[0]!.where).toBeUndefined();
+    expect(fake.scoped[0]!.params).toEqual([]);
+  });
+
+  it('reads every tenant when starting from the beginning, because enumerating is the point', async () => {
+    const fake = createFakeDb(programs(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    // The one cross-tenant query in the worker, cross-tenant on purpose. A
+    // tenant filter here would hide every tenant but one, and the sweep would
+    // reconcile a single merchant forever.
+    const rows = await store.listProgramTenants({ limit: 10, afterTenantId: null });
+
+    expect(rows.map((r) => r.tenantId)).toEqual([TENANT, OTHER_TENANT]);
+  });
+});
+
+describe('findPassesByObjectIds', () => {
+  function passRows(): Row[] {
+    return [
+      {
+        customerId: CUSTOMER,
+        tenantId: TENANT,
+        objectId: '3388000000023206930.member-c8b6-1',
+        state: 'issued',
+      },
+      {
+        customerId: OTHER_CUSTOMER,
+        tenantId: TENANT,
+        objectId: '3388000000023206930.member-c8b6-2',
+        state: 'issued',
+      },
+      {
+        customerId: OTHER_CUSTOMER,
+        tenantId: OTHER_TENANT,
+        objectId: '3388000000023206930.member-c8b6-3',
+        state: 'issued',
+      },
+    ];
+  }
+
+  it('returns only rows of the tenant it was asked about', async () => {
+    const fake = createFakeDb(passRows(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const rows = await store.findPassesByObjectIds(
+      ['3388000000023206930.member-c8b6-1', '3388000000023206930.member-c8b6-3'],
+      TENANT,
+    );
+
+    // The third row is another merchant's pass and is not returned, so the
+    // sweep cannot see it and therefore cannot act on it. This fake admits by
+    // tenant rather than by object id, so the assertion is on the tenant.
+    expect(rows.every((r) => r.tenantId === TENANT)).toBe(true);
+    expect(rows.map((r) => r.tenantId)).not.toContain(OTHER_TENANT);
+  });
+
+  it('carries the tenant filter in the same WHERE as the ids, as one statement', async () => {
+    const fake = createFakeDb(passRows(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.findPassesByObjectIds(['3388000000023206930.member-c8b6-1'], TENANT);
+
+    const sql = fake.scoped[0]!.sql;
+    // One statement, one plan shape, whatever the batch size: an `in` list
+    // rather than N equality predicates, and the tenant filter in the same
+    // `where` rather than applied in application code.
+    expect(sql).toContain('object_id" in');
+    expect(sql).toContain('tenant_id" =');
+    expect(fake.db.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('issues no query at all for an empty page', async () => {
+    const fake = createFakeDb(passRows(), 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    // Google returns empty pages, and a round trip that can never match is pure
+    // waste on a tenant with 50,000 passes.
+    expect(await store.findPassesByObjectIds([], TENANT)).toEqual([]);
+    expect(fake.db.select).not.toHaveBeenCalled();
   });
 });

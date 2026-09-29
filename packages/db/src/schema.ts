@@ -464,9 +464,25 @@ export const customerWalletPasses = pgTable('customer_wallet_passes', {
   // rather than `customers.id` so the pass id survives a restore or a clone
   // into another environment.
   objectId: text('object_id').notNull(),
-  // `not_issued` | `issued` | `inactive` | `expired` | `completed`.
-  // `not_issued` means no Google object exists yet.
+  // `not_issued` | `not_saved` | `issued` | `inactive` | `expired` | `completed`.
+  //
+  // `not_issued` means a save link was issued and no Google object has been
+  // observed. `not_saved` means Google was asked and has no object, so the
+  // customer has not saved the pass yet. The two are distinct because the
+  // first is a customer state and the second is a gap in our knowledge, and a
+  // merchant reading the second as the first is told a customer has no pass when
+  // we had simply never checked. See `workers/wallet/src/reconcile.ts`, the only
+  // writer of `not_saved`.
+  //
+  // `text` with no `check` constraint, on purpose, for the same reason
+  // `tenant_wallet_programs.review_status` is: readers must fail closed on an
+  // unrecognised value rather than the database refusing to store one. Adding a
+  // state is therefore a code change, not a migration.
   state: text('state').notNull().default('not_issued'),
+  // When we last got a definitive answer from Google about this object, whichever
+  // way it went. A stale value is therefore "unverified since", not "unchanged
+  // since", which is what makes a months-old row visibly untrustworthy without a
+  // second column.
   lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),

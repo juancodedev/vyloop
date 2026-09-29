@@ -9,7 +9,14 @@ import {
   PassPatchNotAppliedError,
   reconcilePass,
 } from './reconcile';
-import type { PassReconciliationUpdate, WalletPassRow, WalletProgramRow, WalletStore } from './store';
+import type {
+  PassLifecycleUpdate,
+  PassObservationUpdate,
+  PassReconciliationUpdate,
+  WalletPassRow,
+  WalletProgramRow,
+  WalletStore,
+} from './store';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -58,6 +65,9 @@ function passRow(overrides: Partial<WalletPassRow> = {}): WalletPassRow {
 class FakeStore implements WalletStore {
   readonly calls: Array<{ method: string; tenantId: string }> = [];
   readonly reconciliations: PassReconciliationUpdate[] = [];
+  readonly lifecycles: PassLifecycleUpdate[] = [];
+  readonly observations: PassObservationUpdate[] = [];
+  readonly tenantPageRequests: Array<{ limit: number; afterTenantId: string | null }> = [];
 
   constructor(
     public readonly programs: Record<string, WalletProgramRow | null>,
@@ -133,19 +143,88 @@ class FakeStore implements WalletStore {
     return row;
   }
 
-  async recordPassReconciliation(update: PassReconciliationUpdate): Promise<void> {
+  async recordPassReconciliation(update: PassReconciliationUpdate): Promise<number> {
     this.record('recordPassReconciliation', update.tenantId);
     this.reconciliations.push(update);
     const row = this.passes[update.tenantId];
     if (row && row.tenantId === update.tenantId) {
-      // The monotonicity guard the real store puts in SQL, mirrored here so a
-      // test that relies on it is relying on the same rule rather than on the
-      // fake being more forgiving.
-      if (row.state === 'not_issued' || row.state === 'not_saved') {
+      // The monotonicity guard the real store puts in a `CASE`, mirrored here so a
+      // test that relies on it is relying on the same rule rather than on the fake
+      // being more forgiving. The rule is `state IN ('not_issued', 'not_saved',
+      // 'inactive')`: the state only moves while the row is weaker than what is
+      // written, and nothing else.
+      //
+      // The timestamp is **not** inside that guard — it advances on every
+      // definitive answer, whatever the state transition was allowed to do. That
+      // split is the real store's, and it is load bearing: guarding the
+      // timestamp too left a terminal row permanently in the sweep's due set.
+      if (row.state === 'not_issued' || row.state === 'not_saved' || row.state === 'inactive') {
         row.state = update.state;
       }
       row.lastSyncedAt = update.observedAt;
+      return 1;
     }
+    return 0;
+  }
+
+  async recordPassLifecycle(update: PassLifecycleUpdate): Promise<number> {
+    this.record('recordPassLifecycle', update.tenantId);
+    this.lifecycles.push(update);
+    const row = this.passes[update.tenantId];
+    if (row && row.tenantId === update.tenantId) {
+      // The lifecycle guard: writable only from a row that already asserts the
+      // object exists, so `expired` and `completed` are terminal and
+      // `not_issued`/`not_saved` can never be advanced by a lifecycle answer.
+      //
+      // The timestamp is inside this guard, exactly as it is in the real
+      // statement, so a refused write leaves the row completely untouched and
+      // returns 0. Stamping it anyway would be the defect this fake used to
+      // have, and it would hide the case the sweep has to count as skipped.
+      if (row.state === 'issued' || row.state === 'inactive') {
+        row.state = update.state;
+        row.lastSyncedAt = update.observedAt;
+        return 1;
+      }
+    }
+    return 0;
+  }
+
+  async recordPassObservation(update: PassObservationUpdate): Promise<number> {
+    this.record('recordPassObservation', update.tenantId);
+    this.observations.push(update);
+    const row = this.passes[update.tenantId];
+    if (row && row.tenantId === update.tenantId) {
+      // No state, and no state predicate. The only guard is the tenant, because
+      // the only thing this writes is "Google answered, at this time".
+      row.lastSyncedAt = update.observedAt;
+      return 1;
+    }
+    return 0;
+  }
+
+  async listProgramTenants(options: {
+    limit: number;
+    afterTenantId: string | null;
+  }): Promise<WalletProgramRow[]> {
+    this.record('listProgramTenants', options.afterTenantId ?? '');
+    this.tenantPageRequests.push({ limit: options.limit, afterTenantId: options.afterTenantId });
+    const all = Object.values(this.programs)
+      .filter((row): row is WalletProgramRow => row !== null && row !== undefined)
+      .sort((a, b) => (a.tenantId < b.tenantId ? -1 : 1));
+    const start =
+      options.afterTenantId === null
+        ? 0
+        : all.findIndex((row) => row.tenantId === options.afterTenantId) + 1;
+    return all.slice(start, start + options.limit);
+  }
+
+  async findPassesByObjectIds(objectIds: string[], tenantId: string): Promise<WalletPassRow[]> {
+    this.record('findPassesByObjectIds', tenantId);
+    const row = this.passes[tenantId];
+    // Tenant-scoped, the way the real `= ANY(object_id)` predicate is. A row
+    // belonging to another tenant is not returned, so a sweep cannot see it.
+    if (!row || row.tenantId !== tenantId) return [];
+    return objectIds.includes(row.objectId) ? [row] : [];
   }
 
   async updateProgramReviewStatus(): Promise<void> {
@@ -198,6 +277,7 @@ type FakeClient = GoogleWalletClient & {
   patchObject: Mock;
   getClass: Mock;
   insertObject: Mock;
+  listObjects: Mock;
 };
 
 /**
@@ -235,10 +315,11 @@ function fakeClient(remote: LoyaltyObject | null): FakeClient {
       });
       return current;
     }),
+    listObjects: vi.fn(async () => ({ objects: [], nextPageToken: null })),
     saveUriForJwt: vi.fn(async () => {
       throw new Error('not used');
     }),
-  } as FakeClient;
+  } as unknown as FakeClient;
 }
 
 function readyStore(overrides: {
@@ -626,6 +707,11 @@ describe('reconcilePass: what the patch contains', () => {
 // ============================================================================
 
 describe('reconcilePass: a pass nobody is looking at', () => {
+  /** `reconcile` fixes the clock, so the observation tests need their own. */
+  function at(observedAt: Date) {
+    return reconcilePass({ store, client, now: observedAt }, { tenantId: TENANT, customerId: CUSTOMER_ID });
+  }
+
   it('does not patch an object Google reports as not ACTIVE', async () => {
     // A non-ACTIVE pass is not being displayed, and Google may reject a patch
     // against an expired or completed object. Pushing to it would be a write
@@ -636,21 +722,103 @@ describe('reconcilePass: a pass nobody is looking at', () => {
 
       const outcome = await reconcile(store, client);
 
-      expect(outcome).toEqual({ kind: 'object_not_active', state });
+      expect(outcome).toEqual({ kind: 'object_not_active', state, observationRecorded: true });
       expect(client.patchObject).not.toHaveBeenCalled();
     }
   });
 
-  it('records nothing for a non-ACTIVE object, so the pass is not called in sync', async () => {
-    // "In sync" is a statement about a displayed number. A pass nobody is
-    // looking at is in agreement with nothing, and a fresh `last_synced_at`
-    // would claim otherwise.
+  it('records no state for a non-ACTIVE object, so the pass is not called in sync', async () => {
+    // "In sync" is a statement about a displayed number, and a pass nobody is
+    // looking at is in agreement with nothing. So no `ReconciliationState` is
+    // written — this is what keeps `not_saved` from being read as a claim that
+    // the pass does not exist, and it is why the write that *does* happen is a
+    // separate, state-free method.
     store = readyStore();
     client = fakeClient(fakeObject({ state: 'INACTIVE' }));
 
     await reconcile(store, client);
 
     expect(store.reconciliations).toEqual([]);
+  });
+
+  it('records the observation, so a non-ACTIVE pass leaves the sweep due set', async () => {
+    // The liveness fix. The object exists and Google said so; that is a
+    // definitive answer and `last_synced_at` is exactly the column that records
+    // one. Without this the pass stays due for ever, is re-read on every run,
+    // and — with enough of them in one tenant — starves the rest of it.
+    store = readyStore();
+    client = fakeClient(fakeObject({ state: 'PENDING' }));
+    const observedAt = new Date('2026-09-28T06:00:00.000Z');
+
+    const outcome = await at(observedAt);
+
+    expect(store.observations).toHaveLength(1);
+    expect(store.observations[0]).toEqual({
+      customerId: CUSTOMER_ID,
+      tenantId: TENANT,
+      observedAt,
+    });
+    // And it is reported as recorded, so a caller tracking liveness can tell
+    // "verified, nothing to claim" from "believed verified".
+    expect(outcome).toEqual({
+      kind: 'object_not_active',
+      state: 'PENDING',
+      observationRecorded: true,
+    });
+    expect(store.passes[TENANT]!.lastSyncedAt).toEqual(observedAt);
+  });
+
+  it('stamps the timestamp without touching the state, for every non-ACTIVE shape', async () => {
+    // `INACTIVE` is what the sweep writes a lifecycle for; `PENDING` and
+    // `STATE_UNSPECIFIED` are the shapes that have no mapping at all, and they
+    // are the ones that used to be left completely alone. All five must move the
+    // timestamp, and none may move the state.
+    for (const state of ['INACTIVE', 'EXPIRED', 'COMPLETED', 'PENDING', 'STATE_UNSPECIFIED'] as const) {
+      store = readyStore();
+      client = fakeClient(fakeObject({ state }));
+      const before = store.passes[TENANT]!.state;
+
+      await at(new Date('2026-09-28T06:00:00.000Z'));
+
+      expect(store.passes[TENANT]!.state).toBe(before);
+      expect(store.observations).toHaveLength(1);
+    }
+  });
+
+  it('reports observationRecorded false when the row could not be stamped', async () => {
+    // The row vanished between the read and the write. Rare, and permanent: the
+    // pass is still in the due set next run, so a caller counting liveness has
+    // to be able to see it rather than assume the write landed.
+    store = readyStore();
+    client = fakeClient(fakeObject({ state: 'PENDING' }));
+    store.recordPassObservation = async () => 0;
+
+    const outcome = await at(new Date());
+
+    expect(outcome).toEqual({
+      kind: 'object_not_active',
+      state: 'PENDING',
+      observationRecorded: false,
+    });
+  });
+
+  it('stamps a terminal row, which the rank guard used to discard entirely', async () => {
+    // A row this worker itself moved to `expired`, whose object is ACTIVE and
+    // whose balance already matches the ledger's. The rank guard matched no rows
+    // at all, so the definitive answer was thrown away and the pass never left
+    // the due set — the same starvation, reached by a different route.
+    store = readyStore();
+    store.passes[TENANT]!.state = 'expired';
+    store.passes[TENANT]!.lastSyncedAt = new Date('2026-08-01T00:00:00.000Z');
+    client = fakeClient(objectWithBalance('96942'));
+    const observedAt = new Date('2026-09-28T06:00:00.000Z');
+
+    const outcome = await at(observedAt);
+
+    expect(outcome.kind).toBe('in_sync');
+    // The claim was refused — `expired` is terminal — but the observation moved.
+    expect(store.passes[TENANT]!.state).toBe('expired');
+    expect(store.passes[TENANT]!.lastSyncedAt).toEqual(observedAt);
   });
 
   it('brings the balance forward once the pass is ACTIVE again', async () => {
