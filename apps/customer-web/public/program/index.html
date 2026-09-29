@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vyloop — Google Wallet loyalty passes for neighbourhood businesses</title>
+    <meta
+      name="description"
+      content="Vyloop issues a Google Wallet loyalty pass so customers carry their points balance and membership tier on the phone they already have, and shop staff identify them by scanning a code."
+    />
+    <style>
+      /* Self-contained on purpose: no fonts, no scripts from a CDN, no images that
+         can 404. This page is evidence in an approval review, so it has to render
+         identically on a cold cache, on a phone, and in six months. */
+      :root {
+        --ink: #17150f;
+        --muted: #5c574b;
+        --line: #e2ddd1;
+        --paper: #faf7f0;
+        --card: #ffffff;
+        --accent: #1f6f5c;
+        --bronze: #b0763f;
+        --gold: #c9a227;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--ink);
+        background: var(--paper);
+        line-height: 1.6;
+      }
+      .wrap { max-width: 940px; margin: 0 auto; padding: 0 20px; }
+      header { border-bottom: 1px solid var(--line); background: var(--card); }
+      header .wrap { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; }
+      .wordmark { font-weight: 700; letter-spacing: -0.02em; font-size: 1.15rem; }
+      .lang { display: flex; gap: 6px; }
+      .lang button {
+        font: inherit; font-size: 0.8rem; padding: 5px 11px; border-radius: 999px;
+        border: 1px solid var(--line); background: transparent; color: var(--muted);
+        cursor: pointer;
+      }
+      .lang button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+      main { padding: 56px 0 72px; }
+      h1 { font-size: clamp(1.9rem, 4.6vw, 2.9rem); line-height: 1.15; letter-spacing: -0.03em; margin: 0 0 18px; }
+      h2 { font-size: 1.3rem; letter-spacing: -0.02em; margin: 52px 0 14px; }
+      .lede { font-size: 1.08rem; color: var(--muted); max-width: 62ch; margin: 0 0 8px; }
+      .cols { display: grid; gap: 28px; grid-template-columns: 1fr; }
+      @media (min-width: 760px) { .cols.two { grid-template-columns: 1fr 1fr; } }
+
+      .pass {
+        background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+        padding: 20px; max-width: 360px; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+      }
+      .pass-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+      .pass-shop { font-weight: 650; letter-spacing: -0.01em; }
+      .pass-shop small { display: block; font-weight: 400; color: var(--muted); font-size: 0.78rem; }
+      .pass-tier {
+        font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+        color: var(--gold); border: 1px solid currentColor; border-radius: 999px; padding: 2px 9px;
+      }
+      .pass-balance { font-size: 2.6rem; font-weight: 700; letter-spacing: -0.04em; margin: 18px 0 2px; }
+      .pass-balance span { font-size: 0.85rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+      .pass-label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.09em; }
+      .pass-foot { display: flex; gap: 16px; align-items: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+      .qr { width: 78px; height: 78px; flex: none; }
+      .pass-code-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.09em; }
+      .pass-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.15rem; letter-spacing: 0.16em; }
+      .mock {
+        font-size: 0.74rem; color: var(--muted); border-top: 1px dashed var(--line);
+        margin-top: 18px; padding-top: 10px;
+      }
+
+      ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
+      ol.steps li { counter-increment: s; position: relative; padding-left: 40px; margin-bottom: 18px; }
+      ol.steps li::before {
+        content: counter(s); position: absolute; left: 0; top: 1px; width: 26px; height: 26px;
+        border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.82rem; font-weight: 700;
+        display: grid; place-items: center;
+      }
+      ul.plain { padding-left: 20px; margin: 0; }
+      ul.plain li { margin-bottom: 7px; }
+      .note {
+        border-left: 3px solid var(--accent); background: var(--card);
+        padding: 16px 18px; border-radius: 0 10px 10px 0; margin: 20px 0;
+      }
+      .note.warn { border-left-color: var(--bronze); }
+      table { width: 100%; border-collapse: collapse; font-size: 0.94rem; }
+      th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+      footer { border-top: 1px solid var(--line); background: var(--card); padding: 22px 0; color: var(--muted); font-size: 0.9rem; }
+      [data-lang] { display: none; }
+      html[data-lang="en"] [data-lang="en"], html[data-lang="es"] [data-lang="es"] { display: block; }
+      html[data-lang="en"] li[data-lang="en"], html[data-lang="es"] li[data-lang="es"] { display: list-item; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <div class="wordmark">Vyloop</div>
+        <div class="lang" role="group" aria-label="Language">
+          <button type="button" data-set-lang="en" aria-pressed="true">English</button>
+          <button type="button" data-set-lang="es" aria-pressed="false">Español</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div data-lang="en">
+        <h1>A loyalty pass in the wallet they already carry.</h1>
+        <p class="lede">
+          Vyloop gives independent coffee shops and small neighbourhood businesses in Chile a loyalty
+          programme their customers do not have to manage. The shop issues one Google Wallet pass
+          class; each customer saves one pass against it and carries their balance and tier on their
+          phone, with no second app to install.
+        </p>
+      </div>
+
+      <div data-lang="es">
+        <h1>Una tarjeta de fidelidad en la billetera que ya llevan.</h1>
+        <p class="lede">
+          Vyloop permite que cafeterías independientes y pequeños comercios de barrio en Chile tengan
+          un programa de lealtad que sus clientes no tengan que administrar. El comercio emite una
+          clase de pase de Google Wallet; cada cliente guarda un pase contra esa clase y lleva su
+          saldo y su nivel en el teléfono, sin instalar una segunda aplicación.
+        </p>
+      </div>
+
+      <div class="cols two" style="margin-top: 36px">
+        <div>
+          <h2 data-lang="en">What the pass shows</h2>
+          <h2 data-lang="es">Lo que muestra el pase</h2>
+          <p data-lang="en" class="lede">
+            A design mockup, shown at representative values. The tier names used by a shop are its
+            own to choose.
+          </p>
+          <p data-lang="es" class="lede">
+            Maqueta de diseño, con valores representativos. Los nombres de los niveles los elige cada
+            comercio.
+          </p>
+
+          <div class="pass" role="img" aria-label="Mockup of a Vyloop loyalty pass">
+            <div class="pass-top">
+              <div class="pass-shop">
+                Café Example
+                <small>Google Wallet loyalty pass</small>
+              </div>
+              <div class="pass-tier">Oro</div>
+            </div>
+            <div class="pass-balance">1 240 <span>puntos</span></div>
+            <div class="pass-label">Puntos disponibles</div>
+            <div class="pass-foot">
+              <!-- A placeholder pattern, not a real barcode. The issued pass carries a
+                   QR encoding a stable internal customer identifier. -->
+              <svg class="qr" viewBox="0 0 21 21" role="presentation" aria-hidden="true">
+                <rect width="21" height="21" fill="#fff" />
+                <g fill="var(--ink)">
+                  <path d="M1 1h7v7H1zM2 2v5h5V2zM13 1h7v7h-7zM14 2v5h5V2zM1 13h7v7H1zM2 14v5h5v-5z" />
+                  <path d="M9 1h2v2H9zM9 5h2v2H9zM9 9h2v2H9zM11 1h1v4h-1zM10 5h1v4h-1zM13 9h2v2h-2zM17 9h3v2h-3zM9 13h2v2H9zM9 17h2v3H9zM12 12h2v2h-2zM12 16h2v2h-2zM15 12h5v2h-5zM15 15h2v2h-2zM18 15h3v2h-3zM15 18h5v2h-5z" />
+                </g>
+              </svg>
+              <div>
+                <div class="pass-code-label">Código</div>
+                <div class="pass-code">K7M2QP</div>
+              </div>
+            </div>
+            <div class="mock">Design mockup. Not a real issued pass.</div>
+          </div>
+        </div>
+
+        <div>
+          <h2 data-lang="en">How it works</h2>
+          <h2 data-lang="es">Cómo funciona</h2>
+          <ol class="steps">
+            <li data-lang="en">
+              <strong>The shop enrols.</strong> Vyloop creates a pass class carrying that shop's own
+              name, logo and programme. Classes are created programmatically, so a new shop is
+              onboarded without an engineering task.
+            </li>
+            <li data-lang="es">
+              <strong>El comercio se inscribe.</strong> Vyloop crea una clase de pase con el nombre,
+              el logo y el programa del propio comercio. Las clases se crean por código, así que un
+              comercio nuevo no requiere trabajo de ingeniería.
+            </li>
+            <li data-lang="en">
+              <strong>The customer signs in.</strong> They use their phone number, in a web app. They
+              see their balance and their tier before they save anything.
+            </li>
+            <li data-lang="es">
+              <strong>El cliente inicia sesión.</strong> Usa su número de teléfono, en una aplicación
+              web. Ve su saldo y su nivel antes de guardar nada.
+            </li>
+            <li data-lang="en">
+              <strong>They save the pass.</strong> The pass is added to Google Wallet on the phone
+              they already have. No second app.
+            </li>
+            <li data-lang="es">
+              <strong>Guarda el pase.</strong> El pase se agrega a Google Wallet en el teléfono que ya
+              tienen. Sin una segunda aplicación.
+            </li>
+            <li data-lang="en">
+              <strong>The cashier scans.</strong> The pass carries a QR code holding a stable internal
+              customer identifier. The shop's staff scan it to identify the customer at the till,
+              exactly as they would with a paper card.
+            </li>
+            <li data-lang="es">
+              <strong>El cajero escanea.</strong> El pase lleva un código QR con un identificador
+              interno estable del cliente. El personal del comercio lo escanea para identificarlo en la
+              caja, igual que con una tarjeta de papel.
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <h2 data-lang="en">What this is, and what it is not</h2>
+      <h2 data-lang="es">Qué es esto y qué no es</h2>
+      <table>
+        <tbody>
+          <tr>
+            <th data-lang="en">Points balance</th>
+            <th data-lang="es">Saldo de puntos</th>
+            <td data-lang="en">
+              A display of the shop's loyalty ledger. The ledger is the system of record; the pass is
+              the customer's copy of it, updated from the ledger.
+            </td>
+            <td data-lang="es">
+              Una representación del libro de lealtad del comercio. El libro es la fuente de verdad; el
+              pase es la copia del cliente, actualizada desde el libro.
+            </td>
+          </tr>
+          <tr>
+            <th data-lang="en">Tier</th>
+            <th data-lang="es">Nivel</th>
+            <td data-lang="en">A name for a band of the programme, chosen by the shop.</td>
+            <td data-lang="es">El nombre de una franja del programa, elegido por el comercio.</td>
+          </tr>
+          <tr>
+            <th data-lang="en">Member code and QR</th>
+            <th data-lang="es">Código de socio y QR</th>
+            <td data-lang="en">An identifier for the shop's own staff to recognise the customer.</td>
+            <td data-lang="es">Un identificador para que el personal del comercio reconozca al cliente.</td>
+          </tr>
+          <tr>
+            <th data-lang="en">Not in this pass</th>
+            <th data-lang="es">No está en este pase</th>
+            <td data-lang="en">
+              No payment instrument. No stored value. No financial account. No purchase, no checkout
+              and no transaction of any kind. It is a loyalty card: points, a tier name, an
+              identifier.
+            </td>
+            <td data-lang="es">
+              Ningún instrumento de pago. Ningún valor almacenado. Ninguna cuenta financiera. Ninguna
+              compra, ningún pago y ninguna transacción de ningún tipo. Es una tarjeta de lealtad:
+              puntos, un nombre de nivel, un identificador.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <strong data-lang="en">Data stays with the shop that issued the pass.</strong>
+        <strong data-lang="es">Los datos quedan en el comercio que emitió el pase.</strong>
+        <span data-lang="en">
+          The pass is not shared with any other party. Points are earned and spent through the shop's
+          own point-of-sale system, and Vyloop's ledger remains authoritative over that balance.
+        </span>
+        <span data-lang="es">
+          El pase no se comparte con ninguna otra parte. Los puntos se ganan y se gastan a través del
+          propio sistema de punto de venta del comercio, y el libro de Vyloop es la fuente de verdad
+          sobre ese saldo.
+        </span>
+      </div>
+
+      <h2 data-lang="en">Current status</h2>
+      <h2 data-lang="es">Estado actual</h2>
+      <div class="note warn">
+        <p data-lang="en">
+          The pass class is provisioned under Google issuer account
+          <code>3388000000023206930</code> and is currently in draft, pending this
+          publishing approval. Google Wallet only permits passes against an approved class, so no
+          pass can be issued to the general public yet. Until approval is granted, passes issued from
+          our environment reach only our own issuer test accounts. The customer web app itself is in
+          production; the wallet step is not yet available to the public.
+        </p>
+        <p data-lang="es">
+          La clase de pase está creada en la cuenta de emisor de Google
+          <code>3388000000023206930</code> y está en estado borrador, a la espera de esta
+          aprobación de publicación. Google Wallet solo permite pases contra una clase aprobada, así
+          que aún no se puede emitir un pase al público general. Hasta que se conceda la aprobación,
+          los pases emitidos desde nuestro entorno llegan solo a las cuentas de prueba del propio
+          emisor. La aplicación web para clientes sí está en producción; el paso de la billetera
+          todavía no está disponible al público.
+        </p>
+      </div>
+
+      <h2 data-lang="en">Technical</h2>
+      <h2 data-lang="es">Técnico</h2>
+      <ul class="plain">
+        <li data-lang="en">
+          Customer app: Next.js, served on Cloudflare Pages, responsive and keyboard accessible.
+        </li>
+        <li data-lang="es">
+          Aplicación para clientes: Next.js, servida en Cloudflare Pages, responsive y accesible por
+          teclado.
+        </li>
+        <li data-lang="en">API: Cloudflare Workers, with a Postgres ledger.</li>
+        <li data-lang="es">API: Cloudflare Workers, con un libro de lealtad en Postgres.</li>
+        <li data-lang="en">
+          Pass classes are issued programmatically, one per shop, and each customer receives one pass
+          object referencing their shop's class.
+        </li>
+        <li data-lang="es">
+          Las clases de pase se emiten por código, una por comercio, y cada cliente recibe un objeto de
+          pase que referencia la clase de su comercio.
+        </li>
+      </ul>
+    </main>
+
+    <footer>
+      <div class="wrap" data-lang="en">
+        Vyloop — loyalty passes for neighbourhood businesses in Chile.
+        <br />Google Wallet issuer account 3388000000023206930.
+      </div>
+      <div class="wrap" data-lang="es">
+        Vyloop — pases de lealtad para comercios de barrio en Chile.
+        <br />Cuenta de emisor de Google Wallet 3388000000023206930.
+      </div>
+    </footer>
+
+    <script>
+      // Only a language switch. Everything else is static so the page renders with
+      // scripting unavailable, which is the state a reviewer may well load it in.
+      (function () {
+        var root = document.documentElement;
+        root.setAttribute('data-lang', 'en');
+        var buttons = document.querySelectorAll('[data-set-lang]');
+        Array.prototype.forEach.call(buttons, function (button) {
+          button.addEventListener('click', function () {
+            var lang = button.getAttribute('data-set-lang');
+            root.setAttribute('data-lang', lang);
+            root.setAttribute('lang', lang);
+            Array.prototype.forEach.call(buttons, function (other) {
+              other.setAttribute('aria-pressed', String(other === button));
+            });
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>
