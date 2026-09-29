@@ -17,7 +17,7 @@ const config = readFileSync(configPath, 'utf8');
  */
 describe('next.config.mjs gateway guard', () => {
   it('refuses a production build with no gateway URL', () => {
-    expect(config).toContain('NEXT_PUBLIC_GATEWAY_URL is required for a production build');
+    expect(config).toContain('NEXT_PUBLIC_API_URL is required for a production build');
   });
 
   it('refuses a production build whose gateway URL is localhost', () => {

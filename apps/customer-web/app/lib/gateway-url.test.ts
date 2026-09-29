@@ -18,9 +18,9 @@ describe('resolveGatewayUrl', () => {
     // The deployed bundle inlined `http://localhost:8787` and the login page
     // failed in the browser with `ERR_CONNECTION_REFUSED`. A fallback is the
     // thing that shipped that bug, so production must have no fallback at all.
-    expect(() => resolveGatewayUrl(undefined, true)).toThrow(/NEXT_PUBLIC_GATEWAY_URL/);
-    expect(() => resolveGatewayUrl('', true)).toThrow(/NEXT_PUBLIC_GATEWAY_URL/);
-    expect(() => resolveGatewayUrl('   ', true)).toThrow(/NEXT_PUBLIC_GATEWAY_URL/);
+    expect(() => resolveGatewayUrl(undefined, true)).toThrow(/NEXT_PUBLIC_API_URL/);
+    expect(() => resolveGatewayUrl('', true)).toThrow(/NEXT_PUBLIC_API_URL/);
+    expect(() => resolveGatewayUrl('   ', true)).toThrow(/NEXT_PUBLIC_API_URL/);
   });
 
   it('does not fall back to localhost even in production', () => {
