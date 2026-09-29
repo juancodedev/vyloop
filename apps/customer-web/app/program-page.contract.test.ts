@@ -130,7 +130,31 @@ describe('public programme page', () => {
     // assertion rather than a comment: if both the attribute and the hiding rule
     // are present, the page's visibility is decided by the markup alone.
     expect(visible.length).toBeGreaterThan(0);
-    expect(/\[data-lang\]\s*\{\s*display:\s*none/.test(page)).toBe(true);
+    expect(/\[data-lang\]:not\(html\)\s*\{\s*display:\s*none/.test(page)).toBe(true);
+  });
+
+  it('does not hide the document root with its own hiding rule', () => {
+    // The root carries `data-lang` so the reveal selector can key on it, and the
+    // reveal rule is `html[data-lang] [data-lang]` — a descendant combinator, which
+    // by definition cannot match `html` itself. So a bare `[data-lang] { display:
+    // none }` matches the root, nothing ever reveals it, and the entire document
+    // collapses to zero height while every descendant still reports its own
+    // `display`. That is the bug this page shipped with, twice.
+    const hideRules = [...page.matchAll(/\[data-lang\][^{]*\{[^}]*display:\s*none/g)].map(
+      (match) => match[0],
+    );
+    expect(hideRules.length).toBeGreaterThan(0);
+    for (const rule of hideRules) {
+      expect(rule).toContain(':not(html)');
+    }
+  });
+
+  it('reveals the root only through a descendant selector, never directly', () => {
+    // If a rule ever targets the root itself it has to also carry the root's
+    // display; the safe arrangement is the one above, where the root is never
+    // hidden in the first place.
+    expect(page).toMatch(/html\[data-lang="en"\]\s+\[data-lang="en"\]/);
+    expect(page).not.toMatch(/^\s*\[data-lang="en"\]\s*\{[^}]*display/m);
   });
 
   it('does not rely on the script to decide the initial language', () => {

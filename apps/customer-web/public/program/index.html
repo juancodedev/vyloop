@@ -90,7 +90,14 @@
       th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
       footer { border-top: 1px solid var(--line); background: var(--card); padding: 22px 0; color: var(--muted); font-size: 0.9rem; }
-      [data-lang] { display: none; }
+      /* The root carries the active language, and the reveal rule below is a
+         descendant combinator — it cannot match `<html>` itself. So the hiding rule
+         has to exclude the root explicitly. Without `:not(html)` the document
+         hides itself: `[data-lang]` matches the root, nothing reveals it, and the
+         whole page collapses to zero height. Every descendant still reports its own
+         `display` in that state, so the failure looks like a styling problem rather
+         than a page that is not rendered at all. */
+      [data-lang]:not(html) { display: none; }
       html[data-lang="en"] [data-lang="en"], html[data-lang="es"] [data-lang="es"] { display: block; }
       html[data-lang="en"] li[data-lang="en"], html[data-lang="es"] li[data-lang="es"] { display: list-item; }
     </style>
