@@ -86,6 +86,61 @@ export interface PassTrackingUpdate {
 }
 
 // ---------------------------------------------------------------------------
+// Reconciliation
+// ---------------------------------------------------------------------------
+
+/** The slice of `customer_wallet_passes` the reconciliation path needs. */
+export interface WalletPassRow {
+  /** `customer_wallet_passes.customer_id`, which is the primary key. */
+  customerId: string;
+  tenantId: string;
+  /** The full `<issuerId>.member-<globalId>`. */
+  objectId: string;
+  /**
+   * vyloop's tracking state.
+   *
+   * A plain `string` for the same reason `WalletProgramRow.reviewStatus` is:
+   * the column is `text` with no `check` constraint, so the database is the
+   * authority on what can be in it and a value this code has never heard of must
+   * be read rather than rejected at the type level.
+   */
+  state: string;
+  /**
+   * The last moment we got a definitive answer from Google about this object.
+   *
+   * Null means we have never asked, which is what a freshly issued link leaves
+   * behind.
+   */
+  lastSyncedAt: Date | null;
+}
+
+/**
+ * The only two states reconciliation is allowed to write.
+ *
+ * A narrow union on purpose. `PassTrackingState` also carries `inactive`,
+ * `expired` and `completed`, and widening this parameter to it would let a
+ * caller record Google's lifecycle transitions — which this system cannot
+ * currently observe honestly, because it never asked Google for the object's
+ * state before deciding what the pass is doing. The type is the place that
+ * says no, so the compiler says it rather than a reviewer.
+ */
+export type ReconciliationState = 'not_saved' | 'issued';
+
+export interface PassReconciliationUpdate {
+  customerId: string;
+  tenantId: string;
+  /** The state we observed. Narrow: see `ReconciliationState`. */
+  state: ReconciliationState;
+  /**
+   * The moment Google answered. Always a `Date` rather than `Date | null`:
+   * this method is only called once we have a definitive answer, and a nullable
+   * "or clear it" reading would make a lost observation indistinguishable from
+   * a deliberate one.
+   */
+  observedAt: Date;
+}
+
+// ---------------------------------------------------------------------------
 // The interface
 // ---------------------------------------------------------------------------
 
@@ -171,6 +226,29 @@ export interface WalletStore {
    * `issuance.ts`.
    */
   recordPass(update: PassTrackingUpdate): Promise<void>;
+
+  /**
+   * Read this customer's pass row for this tenant.
+   *
+   * Reconciliation patches the `object_id` stored here rather than one derived
+   * again from `customers.global_id`. The two agree today — `ids.ts`
+   * guarantees it — but the row is the record of what was actually issued, and
+   * reconciling a *derived* id would quietly reconcile a pass this system never
+   * handed out if the two ever diverged.
+   */
+  findPass(customerId: string, tenantId: string): Promise<WalletPassRow | null>;
+
+  /**
+   * Record a definitive observation from Google about this customer's object.
+   *
+   * The implementation is guarded so `state` only ever moves from `not_issued`
+   * or `not_saved`. That is a monotonicity guarantee, not a formatting
+   * preference: a `404` observed after a confirmed `200` is far more likely a
+   * propagation or permission artifact than a customer deleting their pass, and
+   * a `state` that flaps between `issued` and `not_saved` is worse for support
+   * than one that is a day late. See `reconcile.ts`.
+   */
+  recordPassReconciliation(update: PassReconciliationUpdate): Promise<void>;
 
   /** Write a freshly observed review status and sync timestamp. */
   updateProgramReviewStatus(tenantId: string, reviewStatus: string, syncedAt: Date): Promise<void>;
