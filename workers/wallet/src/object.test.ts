@@ -202,6 +202,28 @@ describe('objectStateFor', () => {
     expect(objectStateFor('issued', CUSTOMER_ID)).not.toBe('PENDING');
   });
 
+  it('refuses to map `not_saved` too, rather than reaching for PENDING', () => {
+    // `not_saved` means we asked Google and it has no object. `PENDING` means
+    // Google *holds* an object the user has not activated — a positive claim
+    // about something that exists. Mapping across that gap would tell a
+    // customer they have a pass when they have none.
+    expect(() => objectStateFor('not_saved', CUSTOMER_ID)).toThrow(PassNotIssuedError);
+    expect(objectStateFor('issued', CUSTOMER_ID)).not.toBe('PENDING');
+  });
+
+  it('names the state that has no counterpart, so the row can be found', () => {
+    // The merged code's message hardcoded `not_issued`. A reconciliation
+    // failure would then point an operator at a state that is not in the row.
+    expect(() => objectStateFor('not_saved', CUSTOMER_ID)).toThrow(/"not_saved"/);
+    expect(() => objectStateFor('not_issued', CUSTOMER_ID)).toThrow(/"not_issued"/);
+  });
+
+  it('refuses to build a pass for a `not_saved` customer', () => {
+    expect(() => buildLoyaltyObject({ ...baseInput, passState: 'not_saved' })).toThrow(
+      PassNotIssuedError,
+    );
+  });
+
   it('names the customer in the error, so the row can be found', () => {
     expect(() => objectStateFor('not_issued', CUSTOMER_ID)).toThrow(
       new RegExp(CUSTOMER_ID),

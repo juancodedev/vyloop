@@ -1,9 +1,16 @@
 import { Hono } from 'hono';
 
+import { BalanceNotDisplayableError, balanceDisplayFailure } from './balance';
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
-import { createGoogleWalletRestClient , googleReviewStatusFor, storedReviewStatusFor } from './google-client';
+import { googleReviewStatusFor, storedReviewStatusFor } from './google-client';
 import type { AuthHeaders, WalletBindings } from './helpers';
-import { extractAuthHeaders, parseAllowedOrigins, requireOperatorRole } from './helpers';
+import {
+  extractAuthHeaders,
+  googleWalletClientFor,
+  parseAllowedOrigins,
+  parseDemoMode,
+  requireOperatorRole,
+} from './helpers';
 import {
   LoyaltyProgramNotConfiguredError,
   MemberCodeUnavailableError,
@@ -11,6 +18,7 @@ import {
   issuePass,
   reasonCodeFor,
  TIER_HEADER_UNAVAILABLE } from './issuance';
+import { reconcilePass } from './reconcile';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -38,6 +46,30 @@ const WALLET_NOT_CONFIGURED = 'WALLET_NOT_CONFIGURED';
 
 /** Google could not be reached, or refused, during an operator sync. */
 const WALLET_SYNC_FAILED = 'WALLET_SYNC_FAILED';
+
+/**
+ * This deployment has no Google publishing access, so a pass would only reach
+ * the issuer's own test accounts.
+ *
+ * A product condition, not a fault, and not a class-review condition either: it
+ * stays true *after* the class is approved, which is precisely why it needs its
+ * own code rather than being folded into `WALLET_CLASS_NOT_APPROVED`. A client
+ * that showed the latter for this one would tell a customer to wait for a review
+ * that has already finished.
+ */
+const WALLET_DEMO_MODE = 'WALLET_DEMO_MODE';
+
+/**
+ * The customer's balance is above what `loyaltyPoints.balance` can display.
+ *
+ * A product condition. `balance.ts` refuses to truncate rather than show a
+ * member `9999999` when they hold 12345678, so this is what that refusal looks
+ * like from outside. It used to arrive as a 500, which told the client — and any
+ * operator reading the logs — that this deployment is broken. It is not: it is a
+ * balance, and the fix is a layout decision for the business (a second balance
+ * row, a text module, or a custom layout).
+ */
+const WALLET_BALANCE_NOT_DISPLAYABLE = 'WALLET_BALANCE_NOT_DISPLAYABLE';
 
 // ---------------------------------------------------------------------------
 // GET /v1/wallet/status
@@ -89,15 +121,38 @@ router.get('/v1/wallet/status', async (c) => {
 
   const program = await store.findProgram(tenantId);
   const readiness = classReadinessFor(program, tenantId);
+  const demoMode = parseDemoMode(c.env.WALLET_DEMO_MODE);
+
+  // Two reasons to say no that are not about the class at all. Both are asked
+  // here rather than discovered by the client failing, because that is the whole
+  // purpose of this endpoint: a control must never be rendered over a pass that
+  // cannot be obtained.
+  //
+  // Demo Mode is checked first and on its own. It is a property of the
+  // deployment, it survives a class being approved, and every one of its
+  // consequences follows from it — so reporting `class_not_approved` alongside it
+  // would describe a wait that is not the one the customer is in.
+  const balancePoints = readiness.ok
+    ? await store.latestBalance(customer.id, tenantId)
+    : 0;
+  const balanceBlocked = balanceDisplayFailure(balancePoints) !== null;
+
+  const reason = demoMode
+    ? 'demo_mode'
+    : !readiness.ok
+      ? readiness.reason
+      : balanceBlocked
+        ? 'balance_not_displayable'
+        : 'available';
 
   return c.json({
     data: {
-      available: readiness.ok,
-      reason: readiness.ok ? 'available' : readiness.reason,
+      available: reason === 'available',
+      reason,
       // Repeated as data, not only as a 4xx code, so a 200 status response
       // carries the same stable identifier a client would otherwise have to
       // learn by failing first.
-      reason_code: reasonCodeFor(readiness.ok ? 'available' : readiness.reason),
+      reason_code: reasonCodeForReason(reason),
       // Google's own vocabulary alongside vyloop's storage form. A client that
       // wants to say "under review" must not have to invent the translation.
       review_status: program?.reviewStatus ?? null,
@@ -113,9 +168,35 @@ router.get('/v1/wallet/status', async (c) => {
       // header, and inventing one would put hardcoded chrome on a real pass.
       // See TIER_HEADER_UNAVAILABLE.
       tier_row_available: TIER_HEADER_UNAVAILABLE !== null,
+      // Whether this deployment still lacks publishing access. Always present,
+      // because it is the fact most likely to be missed and most expensive to
+      // miss: a pass minted in Demo Mode only reaches the issuer's own test
+      // accounts, and a customer told "it is in your wallet" would be told a
+      // lie by their own phone. `available` above already accounts for it; this
+      // says so explicitly so a client never has to infer it.
+      demo_mode: demoMode,
+      // The pass row's tracking state, once we have actually asked Google.
+      // `not_issued` means we have never checked; `not_saved` means we checked
+      // and Google has no object, which is a very different thing to tell a
+      // customer. Null when the customer has never been issued a link.
+      pass_state: (await store.findPass(customer.id, tenantId))?.state ?? null,
     },
   });
 });
+
+/** The stable code for each reason this route can report. */
+function reasonCodeForReason(reason: string): string {
+  switch (reason) {
+    case 'available':
+      return 'OK';
+    case 'demo_mode':
+      return WALLET_DEMO_MODE;
+    case 'balance_not_displayable':
+      return WALLET_BALANCE_NOT_DISPLAYABLE;
+    default:
+      return reasonCodeFor(reason as Parameters<typeof reasonCodeFor>[0]);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // GET /v1/wallet/pass
@@ -134,12 +215,26 @@ router.get('/v1/wallet/status', async (c) => {
  *
  * Status codes:
  * - 200 — a link. The pass is built, the member code is stored, the tracking
- *   row is recorded.
+ *   row is recorded, and the pass is reconciled against Google.
  * - 401 — no auth headers (`UNAUTHORIZED`, from the app-level middleware).
  * - 403 — the token has no customer row in this business.
- * - 409 — the tenant's class is unusable, or the tenant has no loyalty program
- *   to name a currency. The code says which.
+ * - 409 — the tenant's class is unusable, the tenant has no loyalty program to
+ *   name a currency, the deployment is in Demo Mode, or the balance is above
+ *   what a pass can display. The code says which.
  * - 500 — this deployment is missing a value it cannot invent.
+ *
+ * ## Why a Google call on this route does not threaten the 200
+ *
+ * Reconciliation is a **side effect** and it cannot fail the request. The
+ * pass is built and its link signed before Google is asked anything, and every
+ * failure from the reconciliation — an unreachable API, a 403 from a service
+ * account that was never invited, a patch Google silently did not apply — is
+ * logged and swallowed. The contract that a tap on a button never fails because
+ * Google's API is having a bad minute outranks knowing whether the customer
+ * saved their pass, and a customer whose pass link failed once will not tap
+ * again. `reconcilePass` still throws on a patch that provably did not apply;
+ * that is a programming error in the projection, not a runtime condition, and it
+ * is logged like the rest.
  */
 router.get('/v1/wallet/pass', async (c) => {
   const auth = extractAuthHeaders(c);
@@ -166,6 +261,31 @@ router.get('/v1/wallet/pass', async (c) => {
         },
       },
       500,
+    );
+  }
+
+  // Also before any database work, and for the same reason: a deployment fact
+  // that decides whether a pass would mean anything, checked before we spend a
+  // query or mint a member code for a pass the customer's own phone would
+  // reject. See `parseDemoMode` for why the default is to refuse.
+  if (parseDemoMode(c.env.WALLET_DEMO_MODE)) {
+    console.error(
+      "[wallet] WALLET_DEMO_MODE is on. This deployment has no Google publishing access, so a " +
+        "pass would only reach the issuer's own test accounts. Refusing rather than handing a " +
+        "customer a pass that does not work for them.",
+    );
+    return c.json(
+      {
+        error: {
+          code: WALLET_DEMO_MODE,
+          message:
+            "This business cannot add loyalty passes to Google Wallet yet. The pass would only " +
+            "work on the accounts of the business that set it up, not on yours, so it has not " +
+            "been issued to you. It becomes available once the business completes Google's " +
+            'publishing approval.',
+        },
+      },
+      409,
     );
   }
 
@@ -218,6 +338,51 @@ router.get('/v1/wallet/pass', async (c) => {
       },
     );
 
+    // The pass exists on our side now: a link was signed, a member code was
+    // stored and a tracking row was written. Reconciliation asks Google whether
+    // the object exists yet and, if it does, projects the ledger's balance onto
+    // it. This is the only moment in the request where we depend on Google, and
+    // it is deliberately the last thing that happens.
+    //
+    // `issued.loyaltyObject.id` is asserted against the derived id inside
+    // `issuePass`, and this reuses the same object, so there is no third
+    // derivation anywhere in the request.
+    const client = googleWalletClientFor(c.env);
+
+    try {
+      const outcome = await reconcilePass(
+        { store, client },
+        { tenantId, customerId: customer.id },
+      );
+
+      if (outcome.kind === 'patched') {
+        console.log(
+          `[wallet] Reconciled pass ${outcome.objectId} to balance ${outcome.balancePoints} for ` +
+            `customer ${customer.id} in tenant ${tenantId}.`,
+        );
+      } else if (outcome.kind === 'not_saved') {
+        // The ordinary answer on a first visit: a link was issued, Google has no
+        // object, so the customer has not saved it yet. Worth logging because it
+        // is the state that was previously indistinguishable from "we never
+        // checked", and a merchant asking why a pass is not in a customer's phone
+        // is answered by this line.
+        console.log(
+          `[wallet] Checked Google for pass ${outcome.objectId} and found no object: customer ` +
+            `${customer.id} has not saved it yet.`,
+        );
+      }
+    } catch (err: unknown) {
+      // Swallowed on purpose, and the reason is in the route's own doc comment:
+      // a 200 with a link is a contract that holds. A customer who taps a button
+      // and gets an error because Google's API is having a bad minute will not
+      // tap it again, and a pass that is one app visit stale is much better than
+      // no pass at all. The next reconciliation converges it.
+      console.error(
+        '[wallet] Pass reconciliation failed; the pass link was still returned:',
+        err,
+      );
+    }
+
     return c.json({
       data: {
         save_url: issued.saveUrl,
@@ -241,6 +406,32 @@ router.get('/v1/wallet/pass', async (c) => {
             message:
               'This business has a Google Wallet pass class but no loyalty program configured, so ' +
               'a pass has no points currency to show. A loyalty program has to be configured first.',
+          },
+        },
+        409,
+      );
+    }
+
+    if (err instanceof BalanceNotDisplayableError) {
+      // 409, and deliberately not 500. This used to fall through to the global
+      // error handler, which reported a server fault for what is a product
+      // condition about one customer's balance: it is above
+      // `loyaltyPoints.balance`'s character budget, `balance.ts` refuses to
+      // truncate, and the remedy is a layout decision the business has to make.
+      // A 500 would send an operator looking for a broken deployment and a
+      // customer to support, and neither can fix it.
+      console.error(
+        `[wallet] Balance of ${err.points} cannot be displayed on a pass, so none was issued:`,
+        err.message,
+      );
+      return c.json(
+        {
+          error: {
+            code: WALLET_BALANCE_NOT_DISPLAYABLE,
+            message:
+              'Your points balance is higher than this loyalty pass can show, so a pass has not ' +
+              'been issued for you. The business needs to choose a different way to display large ' +
+              'balances. Your balance itself is not affected.',
           },
         },
         409,
@@ -322,10 +513,7 @@ router.post('/v1/wallet/program/sync', async (c) => {
     );
   }
 
-  const client = createGoogleWalletRestClient({
-    serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
-    privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
-  });
+  const client = googleWalletClientFor(c.env);
 
   let remote;
   try {

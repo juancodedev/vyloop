@@ -4,6 +4,7 @@ import {
   OPERATOR_ROLE_REQUIRED,
   isCustomerRole,
   parseAllowedOrigins,
+  parseDemoMode,
   requireOperatorRole,
 } from './helpers';
 import type { AuthHeaders } from './helpers';
@@ -88,5 +89,35 @@ describe('requireOperatorRole', () => {
     // The counterpart to `isCustomerRole`, not a second source of truth about
     // the role.
     expect(requireOperatorRole(CUSTOMER)).toEqual(requireOperatorRole({ ...CUSTOMER }));
+  });
+});
+
+describe('parseDemoMode', () => {
+  it('treats an absent var as demo mode', () => {
+    // The failure this guards is asymmetric. A deployment that is in demo mode
+    // and answers "no" hands a real customer a pass that only works on the
+    // issuer's own test accounts, which is a support incident. The reverse is a
+    // delay. Preferring the delay, on an absent value, is the whole default.
+    expect(parseDemoMode(undefined)).toBe(true);
+    expect(parseDemoMode(null)).toBe(true);
+    expect(parseDemoMode('')).toBe(true);
+    expect(parseDemoMode('   ')).toBe(true);
+  });
+
+  it('reads the two ways a deployment declares publishing access', () => {
+    for (const raw of ['false', 'FALSE', ' false ', '0', 'no', 'No']) {
+      expect(parseDemoMode(raw)).toBe(false);
+    }
+    for (const raw of ['true', 'TRUE', ' true ', '1', 'yes']) {
+      expect(parseDemoMode(raw)).toBe(true);
+    }
+  });
+
+  it('fails closed on a value it does not recognise', () => {
+    // A typo in a deployment must not turn a demo deployment into a published
+    // one. Guessing "not demo" on `flase` is exactly the failure mode above.
+    for (const raw of ['flase', 'maybe', 'off?', '2']) {
+      expect(parseDemoMode(raw)).toBe(true);
+    }
   });
 });

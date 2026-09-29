@@ -119,6 +119,7 @@ export * from './issuance';
 export * from './jwt';
 export * from './member-code';
 export * from './object';
+export * from './reconcile';
 export * from './store';
 
 export default { fetch: app.fetch.bind(app) };

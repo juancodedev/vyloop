@@ -42,9 +42,21 @@ export type GoogleObjectState =
  *
  * `not_issued` is the important one: it means no Google object exists yet, so
  * the object builder must not be called at all.
+ *
+ * `not_saved` is the second one, and it exists because `not_issued` was carrying
+ * two different claims. Before reconciliation, `not_issued` meant both "we have
+ * never handed this customer a link" and "we handed them one and never found
+ * out whether they took it". Collapsing those makes the row useless for support:
+ * the first is a state the customer is in, the second is a gap in our
+ * knowledge, and a merchant reading the second as the first is told a customer
+ * has no pass when we simply never checked.
+ *
+ * `not_saved` is the honest form of the second: a save link was issued, Google
+ * was asked, and Google has no object. `reconcile.ts` is the only writer.
  */
 export type PassTrackingState =
   | 'not_issued'
+  | 'not_saved'
   | 'issued'
   | 'inactive'
   | 'expired'
@@ -99,11 +111,11 @@ export const REWARDS_TIER_MODULE_ID = 'REWARDS_TIER';
 
 /** Thrown when a pass has no Google object, so none may be built. */
 export class PassNotIssuedError extends Error {
-  constructor(customerId: string) {
+  constructor(customerId: string, passState: 'not_issued' | 'not_saved' = 'not_issued') {
     super(
-      `Pass for customer ${customerId} is in state "not_issued": no Google object exists ` +
+      `Pass for customer ${customerId} is in state "${passState}": no Google object exists ` +
         'for it yet. Build and insert the object first, then transition the pass to "issued". ' +
-        'Mapping "not_issued" onto a Google state would assert a pass the customer does not have.',
+        'Mapping that state onto a Google state would assert a pass the customer does not have.',
     );
     this.name = 'PassNotIssuedError';
   }
@@ -112,8 +124,11 @@ export class PassNotIssuedError extends Error {
 /**
  * Map vyloop's tracking state onto Google's `State`.
  *
- * @throws {PassNotIssuedError} for `not_issued`, which has no Google
- * counterpart by design.
+ * @throws {PassNotIssuedError} for `not_issued` and `not_saved`, which have no
+ * Google counterpart by design. `not_saved` is grouped with `not_issued` rather
+ * than mapped to `PENDING`: `PENDING` means *the platform holds an object the
+ * user has not activated*, which is a positive claim about an existing object,
+ * and neither state is a claim about an object at all.
  */
 export function objectStateFor(
   passState: PassTrackingState,
@@ -129,7 +144,8 @@ export function objectStateFor(
     case 'completed':
       return 'COMPLETED';
     case 'not_issued':
-      throw new PassNotIssuedError(customerId);
+    case 'not_saved':
+      throw new PassNotIssuedError(customerId, passState);
   }
 }
 
