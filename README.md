@@ -13,7 +13,7 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | Hito | Estado |
 |------|--------|
 | Monorepo structure + tooling | ✅ Completado |
-| DB schema (15 tablas, Drizzle ORM) | ✅ Completado |
+| DB schema (21 tablas, Drizzle ORM) | ✅ Completado |
 | IAM (JWT, API Keys, RLS) | ✅ Completado |
 | API Gateway (auth inject, rate-limit, routing) | ✅ Completado |
 | Event Bus + Schema Registry | ✅ Completado |
@@ -24,6 +24,7 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | Dashboard PMV (login, sidebar, clientes, loyalty) | ✅ Completado |
 | **POS Emulator — menú, carrito, QR scanner, cobro+puntos** | **✅ Completado** |
 | Customer detail card SDK | ✅ Completado |
+| Google Wallet — modelo de pase, schema y 3 rutas `/v1/wallet/*` | ✅ Backend listo, CTA bloqueado por Google |
 | CI/CD automático (GitHub Actions → Cloudflare) | ✅ 11/11 jobs verdes |
 | **Deployado y demo-list** | **✅ VIVO** |
 
@@ -149,6 +150,7 @@ Esto arranca en paralelo:
 | Automation Worker | 8792 | Automatizaciones (placeholder) |
 | Communication Worker | 8793 | Comunicación omnicanal (placeholder) |
 | Compliance Worker | 8794 | Compliance y auditoría (placeholder) |
+| Wallet Worker | 8795 | Pases de lealtad de Google Wallet |
 | Dashboard (dev) | 3000 | Frontend Next.js — admin sell flow |
 | Customer Web (dev) | 3001 | Frontend Next.js — perfil del cliente |
 | PostgreSQL | 5432 | Base de datos local (Docker) |
@@ -198,7 +200,8 @@ vyloop/
 │   ├── analytics/          # Placeholder — analíticas y reportes
 │   ├── automation/         # Placeholder — automatizaciones
 │   ├── communication/      # Placeholder — comunicación omnicanal
-│   └── compliance/         # Placeholder — compliance y auditoría
+│   ├── compliance/         # Placeholder — compliance y auditoría
+│   └── wallet/             # Google Wallet: pases de lealtad del cliente
 ├── packages/
 │   ├── types/              # Domain types & branded IDs
 │   ├── schemas/            # Zod validation schemas
@@ -249,6 +252,10 @@ Ver [docs/](./docs) para:
 | communication | `communication.cl-jmunoz.workers.dev` | 🔲 Placeholder |
 | compliance | `compliance.cl-jmunoz.workers.dev` | 🔲 Placeholder |
 | gateway | `gateway.cl-jmunoz.workers.dev` | ✅ API Gateway |
+
+> El worker `wallet` existe y corre en dev (puerto 8795), pero **no está en la matriz de
+> `.github/workflows/deploy.yml`**, así que todavía no tiene URL en producción. Sus rutas
+> `/v1/wallet/*` ya están enrutadas por el gateway.
 
 ## PRs Completados (25+ mergeados)
 

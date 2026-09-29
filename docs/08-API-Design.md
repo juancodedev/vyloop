@@ -135,6 +135,114 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 | POST | `/v1/events/purchase` | Compra completada desde POS o sistema externo |
 | POST | `/v1/events/custom` | Evento personalizado definido por el negocio |
 
+### Wallet (Google Wallet)
+
+Worker `@vyloop/wallet`. Las tres rutas existen en `workers/wallet/src/routes.ts` y están enrutadas por el gateway bajo el prefijo `/v1/wallet`.
+
+| Método | Endpoint | Descripción |
+|---|---|---|
+| GET | `/v1/wallet/status` | Si el cliente autenticado puede obtener un pase ahora, y por qué no cuando no puede |
+| GET | `/v1/wallet/pass` | Link de guardado del pase de lealtad del cliente autenticado |
+| POST | `/v1/wallet/program/sync` | Refresca `review_status` de la clase desde Google — acción de operador |
+
+#### Autenticación
+
+Las tres rutas son autenticadas por headers inyectados por el gateway después de validar el JWT: `X-User-Id`, `X-Business-Id` y `X-User-Role`. No hay `customer_id` en el path ni en el query string: el cliente es el sujeto del token, así que nombrar a otro no es expresable.
+
+El tenant es siempre el negocio autenticado (`X-Business-Id`). No existe parámetro de path, de query ni campo de body que permita nombrar otro.
+
+El rol distingue las superficies: `GET /v1/wallet/status` y `GET /v1/wallet/pass` son para el token de rol `customer`; `POST /v1/wallet/program/sync` rechaza ese mismo token con `OPERATOR_ROLE_REQUIRED`.
+
+#### Respuesta exitosa
+
+`GET /v1/wallet/status` — siempre 200 para un cliente autenticado de un negocio existente, incluso cuando el pase no está disponible. `available: false` con un `reason` es la respuesta, no un error.
+
+```json
+{
+  "data": {
+    "available": false,
+    "reason": "class_not_approved",
+    "reason_code": "WALLET_CLASS_NOT_APPROVED",
+    "review_status": "under_review",
+    "google_review_status": "UNDER_REVIEW",
+    "class_id": "3388000000023206930.tenant-0b1f...",
+    "last_synced_at": null,
+    "has_member_code": false,
+    "tier_row_available": false,
+    "demo_mode": false,
+    "pass_state": null
+  }
+}
+```
+
+Cuando el tenant no tiene fila de programa, `review_status`, `google_review_status` y `class_id` vienen en `null`; los tres derivan de la misma fila. `tier_row_available` es siempre `false` y `demo_mode` siempre está presente, porque son los dos hechos que más caro es no mirar.
+
+`GET /v1/wallet/pass`:
+
+```json
+{
+  "data": {
+    "save_url": "...",
+    "object_id": "...",
+    "class_id": "...",
+    "member_code": "...",
+    "balance_points": 0,
+    "points_currency": "puntos"
+  }
+}
+```
+
+`POST /v1/wallet/program/sync`:
+
+```json
+{
+  "data": {
+    "class_id": "...",
+    "review_status": "approved",
+    "changed": true,
+    "previous_review_status": "under_review",
+    "last_synced_at": "2026-09-29T00:00:00.000Z"
+  }
+}
+```
+
+#### Códigos de falla
+
+`GET /v1/wallet/status`:
+
+| Código | Status | Significado |
+|---|---|---|
+| `UNAUTHORIZED` | 403 | Faltan headers de autenticación (middleware global del worker) |
+| `CUSTOMER_SELF_NOT_FOUND` | 403 | El token no tiene fila de cliente en este negocio |
+
+`GET /v1/wallet/pass`:
+
+| Código | Status | Significado |
+|---|---|---|
+| `UNAUTHORIZED` | 403 | Faltan headers de autenticación |
+| `WALLET_DEMO_MODE` | 409 | El despliegue no tiene acceso de publicación de Google; el pase solo llegaría a las cuentas de prueba del emisor |
+| `CUSTOMER_SELF_NOT_FOUND` | 403 | El token no tiene fila de cliente en este negocio |
+| `WALLET_CLASS_NOT_PROVISIONED` | 409 | El tenant no tiene fila de clase |
+| `WALLET_CLASS_NOT_APPROVED` | 409 | La clase del tenant no está aprobada |
+| `WALLET_CLASS_ID_MISMATCH` | 409 | El `class_id` almacenado no corresponde al `issuer_id` del tenant |
+| `LOYALTY_PROGRAM_NOT_CONFIGURED` | 409 | Hay clase de Google pero no hay programa de lealtad, así que el pase no tiene moneda de puntos |
+| `WALLET_BALANCE_NOT_DISPLAYABLE` | 409 | El saldo supera los 9,999,999 puntos que un pase puede mostrar; es una condición de producto, no una falla del despliegue |
+| `WALLET_NOT_CONFIGURED` | 500 | `WALLET_ALLOWED_ORIGINS` vacío, o no se pudo obtener un member code |
+
+`POST /v1/wallet/program/sync`:
+
+| Código | Status | Significado |
+|---|---|---|
+| `UNAUTHORIZED` | 403 | Faltan headers de autenticación |
+| `OPERATOR_ROLE_REQUIRED` | 403 | El token es de rol `customer`; esta ruta es de operador |
+| `WALLET_CLASS_NOT_PROVISIONED` | 404 | El tenant no tiene fila de clase, así que no hay nada que sincronizar. Esta ruta nunca crea una clase |
+| `WALLET_CLASS_NOT_FOUND` | 404 | Google no tiene esa clase. La fila almacenada queda intacta |
+| `WALLET_SYNC_FAILED` | 502 | Google no pudo ser leído, o reportó un `review_status` que el sistema no reconoce |
+
+Además, el worker responde `NOT_FOUND` 404 para rutas bajo `/v1/wallet` que no existen, y `ERROR` o `INTERNAL_ERROR` 500 desde el manejador global de errores.
+
+**Nota sobre la reconciliación:** en `GET /v1/wallet/pass`, la reconciliación con Google ocurre después de firmar el link y es un efecto secundario que no puede fallar la petición. Toda falla de Google se registra y se ignora, y la respuesta 200 con link se entrega igual. Un cliente que toca un botón y recibe un error porque la API de Google está teniendo un mal momento no vuelve a tocarlo.
+
 ---
 
 ## 5. Webhooks — suscripción a eventos del sistema
