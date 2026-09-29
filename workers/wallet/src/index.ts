@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { AuthHeaders, WalletBindings } from './helpers';
 import { extractAuthHeaders } from './helpers';
 import router from './routes';
+import { runScheduledSweep } from './sweep';
 
 /**
  * `@vyloop/wallet` — Google Wallet loyalty passes.
@@ -21,6 +22,12 @@ import router from './routes';
  * Those rules live in `issuance.ts` as plain functions over a `WalletStore`, so
  * they can be broken one at a time without a database.
  *
+ * The **sweep** is the third half: a daily scheduled job that reconciles every
+ * pass in every tenant, so a customer who saves their pass and never opens the
+ * app still sees a current balance at the till. It shares `reconcilePass` with
+ * the request path, so the on-demand and batch balance projections cannot drift
+ * apart. See `sweep.ts`.
+ *
  * ## T9 is still not here, and that is deliberate
  *
  * There is no "Add to Google Wallet" button anywhere in this repository, and
@@ -32,7 +39,8 @@ import router from './routes';
  * nothing in this worker relaxes it.
  *
  * Every account starts in Demo Mode, so even a working button would only reach
- * the issuer's own test accounts until Google's publishing approval lands.
+ * the issuer's own test accounts until Google's publishing approval lands. The
+ * sweep honours the same var and does nothing at all while it is on.
  */
 
 // ---------------------------------------------------------------------------
@@ -121,5 +129,32 @@ export * from './member-code';
 export * from './object';
 export * from './reconcile';
 export * from './store';
+export * from './sweep';
 
-export default { fetch: app.fetch.bind(app) };
+// ---------------------------------------------------------------------------
+// Scheduled trigger
+// ---------------------------------------------------------------------------
+
+/**
+ * The daily reconciliation sweep.
+ *
+ * Exported both by name and on the default object, which is the convention
+ * `workers/automation` sets and the one a reader comparing the two workers will
+ * expect to find. Cloudflare's runtime reads whichever it finds; exporting one
+ * and not the other is how a cron silently never fires.
+ *
+ * The `controller` argument carries `scheduledTime` and `cron`, and is ignored:
+ * the sweep's own clock comes from `Date` inside `sweepPasses`, and a schedule
+ * that could be overridden per-invocation would make the due filter's cutoff
+ * ambiguous. The frequency is in `wrangler.jsonc` and documented, with its
+ * justification, in `SWEEP_CRON`.
+ *
+ * Never throws. `sweepPasses` captures every failure into its report, because a
+ * scheduled handler that throws has the entire invocation retried from the first
+ * tenant — and a sweep stuck retrying a broken tenant never reaches tenant two.
+ */
+export async function scheduled(_controller: unknown, env: WalletBindings): Promise<void> {
+  await runScheduledSweep(env);
+}
+
+export default { fetch: app.fetch.bind(app), scheduled };

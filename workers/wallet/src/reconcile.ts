@@ -128,11 +128,19 @@ export type ReconcileOutcome =
   | { kind: 'skipped_reason'; reason: 'program_not_configured' }
   /**
    * The object exists but Google reports it as something other than `ACTIVE`.
-   * Nothing was written at all — not even the timestamp — because a pass nobody
-   * is looking at is not "in sync" with anything, and this system has no honest
-   * tracking state for a non-`ACTIVE` object.
+   *
+   * No balance is pushed — a pass nobody is looking at is not "in sync" with
+   * anything, and this system has no honest tracking state for a non-`ACTIVE`
+   * object, so `state` is deliberately left alone.
+   *
+   * `observationRecorded` is whether the timestamp write actually changed a row.
+   * It is `false` only when the row vanished between the read above and the
+   * write, which is rare and permanent: a pass whose observation cannot be
+   * recorded is still in the due set on the next run, so a caller that is
+   * tracking liveness needs to see the difference between "verified, and nothing
+   * to claim" and "believed verified".
    */
-  | { kind: 'object_not_active'; state: string }
+  | { kind: 'object_not_active'; state: string; observationRecorded: boolean }
   /** Google has no object for this customer yet. Recorded as `not_saved`. */
   | { kind: 'not_saved'; objectId: string }
   /** The object exists, is active, and already showed the ledger's balance. */
@@ -241,7 +249,14 @@ export async function reconcilePass(
   }
 
   if (remote.state !== 'ACTIVE') {
-    return { kind: 'object_not_active', state: String(remote.state) };
+    // The object exists and Google says it is not `ACTIVE`. That is a
+    // definitive answer, so it is recorded — as an observation only, with no
+    // state, because there is no tracking state that honestly means "not
+    // active". See `recordPassObservation` for why leaving the timestamp alone
+    // was a liveness bug and not restraint: the pass then never left the sweep's
+    // due set, and a tenant holding enough of them starved outright.
+    const rowsChanged = await recordObservation(deps, input, observedAt);
+    return { kind: 'object_not_active', state: String(remote.state), observationRecorded: rowsChanged > 0 };
   }
 
   // Checked before touching Google, because a balance we cannot render is a
@@ -310,6 +325,27 @@ async function recordReconciliation(
     customerId: input.customerId,
     tenantId: input.tenantId,
     state,
+    observedAt,
+  });
+}
+
+/**
+ * Record a definitive answer that carries no state claim.
+ *
+ * Separate from `recordReconciliation` rather than a flag on it, so the two
+ * cannot be confused at a call site: a `ReconciliationState` is a claim about
+ * existence, and this is not one. It is the only path that leaves a pass in the
+ * sweep's due set without writing something, so it is the one that has to be
+ * visible in a return type.
+ */
+async function recordObservation(
+  deps: ReconcileDeps,
+  input: ReconcileInput,
+  observedAt: Date,
+): Promise<number> {
+  return deps.store.recordPassObservation({
+    customerId: input.customerId,
+    tenantId: input.tenantId,
     observedAt,
   });
 }
