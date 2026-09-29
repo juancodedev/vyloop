@@ -1,12 +1,17 @@
 /**
  * Where the API gateway lives, resolved once.
  *
- * It used to be `process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8787'`
- * written out at each call site. The fallback is fine in development and actively
- * harmful in production: the deployed bundle inlined `http://localhost:8787`, so
- * every visitor's browser tried to reach *their own* machine and the login page
- * failed with `ERR_CONNECTION_REFUSED` — a network error that looks like the
- * server is down, when the server was fine the whole time.
+ * The name matters more than it looks. This used to read
+ * `process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'`, but Cloudflare
+ * Pages had the gateway URL configured as `NEXT_PUBLIC_API_URL` — the same name
+ * `apps/dashboard` reads. So the variable existed, held the right value, and was
+ * simply never consulted. The fallback took over, the deployed bundle inlined
+ * `http://localhost:8787`, and every visitor's browser tried to reach their own
+ * machine: `ERR_CONNECTION_REFUSED` on a perfectly healthy API.
+ *
+ * It reads `NEXT_PUBLIC_API_URL` to match the dashboard and the deployed
+ * configuration. Adding a second name for one value would leave the next reader
+ * guessing which one is real, which is how this happened.
  *
  * `NEXT_PUBLIC_*` is substituted at build time, so a missing value is `undefined`
  * in the shipped bundle. That makes a silent fallback possible, which is why the
@@ -33,7 +38,7 @@ function isSet(value: string | undefined): value is string {
  *         immediate, and it names the variable to set.
  */
 export function resolveGatewayUrl(
-  env: string | undefined = process.env.NEXT_PUBLIC_GATEWAY_URL,
+  env: string | undefined = process.env.NEXT_PUBLIC_API_URL,
   production: boolean = process.env.NODE_ENV === 'production',
 ): string {
   if (isSet(env)) {
@@ -42,10 +47,10 @@ export function resolveGatewayUrl(
 
   if (production) {
     throw new Error(
-      'NEXT_PUBLIC_GATEWAY_URL is not set. The gateway URL has no production ' +
+      'NEXT_PUBLIC_API_URL is not set. The gateway URL has no production ' +
         'default, because a development address cannot work in a deployed ' +
         "browser: the request would go to the visitor's own machine. Set " +
-        'NEXT_PUBLIC_GATEWAY_URL in the build environment to the public ' +
+        'NEXT_PUBLIC_API_URL in the build environment to the public ' +
         'gateway URL.',
     );
   }
