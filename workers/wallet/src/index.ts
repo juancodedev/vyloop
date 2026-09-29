@@ -1,61 +1,82 @@
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+
+import type { AuthHeaders, WalletBindings } from './helpers';
+import { extractAuthHeaders } from './helpers';
+import router from './routes';
 
 /**
- * `@vyloop/wallet` — Google Wallet loyalty passes (T1–T8).
+ * `@vyloop/wallet` — Google Wallet loyalty passes.
  *
- * This unit is the **pass model**: id derivation, the member code, the
+ * ## Two halves
+ *
+ * The **pass model** (T1–T8) is pure: id derivation, the member code, the
  * `LoyaltyClass` and `LoyaltyObject` payloads, balance formatting, the
- * save-to-wallet signer and the client boundary. It is deliberately not an
- * HTTP surface. The gateway registers this worker as a service binding, but no
- * route is exposed and no customer-facing control ships yet.
+ * save-to-wallet signer and the Google REST client boundary. It has no database
+ * and makes no network call, and none of that changed when the HTTP surface
+ * landed.
  *
- * T9 — the "Add to Google Wallet" button — is out of scope on purpose. Every
- * issuer starts in Demo Mode, so passes only reach the issuer's own
- * test accounts until publishing access is granted, and a `LoyaltyObject` needs
- * an approved class to exist at all. A button that fails is worse than no
- * button.
+ * The **issuance surface** is this unit's HTTP half: three routes, a persistence
+ * boundary, and the rules that decide whether a customer can obtain a pass.
+ * Those rules live in `issuance.ts` as plain functions over a `WalletStore`, so
+ * they can be broken one at a time without a database.
+ *
+ * ## T9 is still not here, and that is deliberate
+ *
+ * There is no "Add to Google Wallet" button anywhere in this repository, and
+ * adding one is a separate change gated on publishing access. The API below is
+ * what such a button would call, and `GET /v1/wallet/status` is the endpoint
+ * that button would have to ask before rendering itself — so the control can
+ * never appear over a pass that will fail. Stage 7's delivery gate in
+ * `apps/customer-web` forbids the CTA until publishing access is granted, and
+ * nothing in this worker relaxes it.
+ *
+ * Every account starts in Demo Mode, so even a working button would only reach
+ * the issuer's own test accounts until Google's publishing approval lands.
  */
 
 // ---------------------------------------------------------------------------
 // Bindings
 // ---------------------------------------------------------------------------
 
-/**
- * Worker bindings. Every secret here arrives through `wrangler secret put` and
- * is absent from `wrangler.jsonc`, `.dev.vars` and the repository.
- */
-export interface WalletBindings {
-  /**
-   * The Google-issued issuer id. Not a secret, but not invented either: it is
-   * a real value from the Google Pay & Wallet console, so it belongs in a
-   * secret or var configured per environment rather than in a default.
-   */
-  GOOGLE_WALLET_ISSUER_ID: string;
-  /** `client_email` from the service account JSON key. */
-  GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: string;
-  /**
-   * `private_key` from the service account JSON key, PEM-encoded. Signs the
-   * save-to-wallet JWT with RS256. Never in the repository, never in a test
-   * fixture; tests generate their own key pair with `node:crypto` and discard
-   * it.
-   */
-  GOOGLE_WALLET_PRIVATE_KEY: string;
-  /**
-   * Server-side secret for member-code derivation. Load-bearing: without it a
-   * member code is recomputable by anyone who has scanned one pass. See
-   * `member-code.ts`.
-   */
-  MEMBER_CODE_PEPPER: string;
-}
+export type { AuthHeaders, WalletBindings } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Hono app
-//
-// No routes in this unit. The 404 and error envelope match the other workers so
-// the gateway sees one consistent shape across services.
 // ---------------------------------------------------------------------------
 
-const app = new Hono<{ Bindings: WalletBindings }>();
+const app = new Hono<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders } }>();
+
+// ---------------------------------------------------------------------------
+// Global middleware: auth header extraction
+// ---------------------------------------------------------------------------
+
+app.use('*', async (c, next) => {
+  try {
+    // Extract and validate auth headers (injected by gateway).
+    extractAuthHeaders(c);
+
+    await next();
+  } catch (err) {
+    if (err instanceof HTTPException) {
+      return c.json(
+        { error: { code: 'UNAUTHORIZED', message: err.message } },
+        err.status,
+      );
+    }
+    throw err;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+app.route('/', router);
+
+// ---------------------------------------------------------------------------
+// 404 handler
+// ---------------------------------------------------------------------------
 
 app.notFound((c) => {
   return c.json(
@@ -64,8 +85,20 @@ app.notFound((c) => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// Global error handler
+// ---------------------------------------------------------------------------
+
 app.onError((err, c) => {
   console.error('[wallet] Unhandled error:', err);
+
+  if (err instanceof HTTPException) {
+    return c.json(
+      { error: { code: 'ERROR', message: err.message } },
+      err.status,
+    );
+  }
+
   return c.json(
     { error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
     500,
@@ -78,10 +111,14 @@ app.onError((err, c) => {
 
 export * from './balance';
 export * from './class';
+export * from './drizzle-store';
 export * from './google-client';
+export * from './helpers';
 export * from './ids';
+export * from './issuance';
 export * from './jwt';
 export * from './member-code';
 export * from './object';
+export * from './store';
 
 export default { fetch: app.fetch.bind(app) };

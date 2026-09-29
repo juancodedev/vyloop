@@ -1,0 +1,399 @@
+import { Hono } from 'hono';
+
+import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import { createGoogleWalletRestClient , googleReviewStatusFor, storedReviewStatusFor } from './google-client';
+import type { AuthHeaders, WalletBindings } from './helpers';
+import { extractAuthHeaders, parseAllowedOrigins, requireOperatorRole } from './helpers';
+import {
+  LoyaltyProgramNotConfiguredError,
+  MemberCodeUnavailableError,
+  classReadinessFor,
+  issuePass,
+  reasonCodeFor,
+ TIER_HEADER_UNAVAILABLE } from './issuance';
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+const router = new Hono<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders } }>();
+
+// ---------------------------------------------------------------------------
+// Stable error codes
+// ---------------------------------------------------------------------------
+
+/** The token's own customer row does not exist in this business. */
+const CUSTOMER_SELF_NOT_FOUND = 'CUSTOMER_SELF_NOT_FOUND';
+
+/**
+ * The worker is missing a value it cannot invent.
+ *
+ * Distinct from every program-state code on purpose. `WALLET_CLASS_NOT_APPROVED`
+ * means "wait for Google, your pass will work"; this means "this deployment is
+ * broken and no pass will ever work", and a client that showed the former for
+ * the latter would tell a customer to keep waiting for something that will
+ * never arrive.
+ */
+const WALLET_NOT_CONFIGURED = 'WALLET_NOT_CONFIGURED';
+
+/** Google could not be reached, or refused, during an operator sync. */
+const WALLET_SYNC_FAILED = 'WALLET_SYNC_FAILED';
+
+// ---------------------------------------------------------------------------
+// GET /v1/wallet/status
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /v1/wallet/status
+ *
+ * Whether the authenticated customer can obtain a pass right now, and why not
+ * when they cannot.
+ *
+ * This exists so a client never has to *find out* by trying. The whole design
+ * constraint on this surface is that a customer must never be shown an Add to
+ * Wallet control that fails, and a client cannot avoid rendering one it does not
+ * know to avoid. So the answer to "should I show the button" is its own
+ * endpoint, and it is cheap: no signing, no writes, no Google call.
+ *
+ * Always 200 for an authenticated customer of an existing business, including
+ * when a pass is unavailable. A status endpoint that 409s is a status endpoint
+ * the client has to special-case, and the whole point is that the client does
+ * nothing special. `available: false` with a `reason` is the answer.
+ *
+ * Only 401-class failures return an error envelope: no auth headers, or no
+ * customer row in this business.
+ */
+router.get('/v1/wallet/status', async (c) => {
+  const auth = extractAuthHeaders(c);
+  // The tenant is the authenticated business, always. There is no path
+  // parameter, no query parameter and no body field that can name a different
+  // one, so there is nothing for a caller to tamper with.
+  const tenantId = auth.businessId;
+
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const store = createDrizzleWalletStore(db);
+
+  const customer = await store.findCustomer(auth.userId, tenantId);
+  if (!customer) {
+    return c.json(
+      {
+        error: {
+          code: CUSTOMER_SELF_NOT_FOUND,
+          message:
+            'This account has no customer record in this business, so it has no loyalty pass here.',
+        },
+      },
+      403,
+    );
+  }
+
+  const program = await store.findProgram(tenantId);
+  const readiness = classReadinessFor(program, tenantId);
+
+  return c.json({
+    data: {
+      available: readiness.ok,
+      reason: readiness.ok ? 'available' : readiness.reason,
+      // Repeated as data, not only as a 4xx code, so a 200 status response
+      // carries the same stable identifier a client would otherwise have to
+      // learn by failing first.
+      reason_code: reasonCodeFor(readiness.ok ? 'available' : readiness.reason),
+      // Google's own vocabulary alongside vyloop's storage form. A client that
+      // wants to say "under review" must not have to invent the translation.
+      review_status: program?.reviewStatus ?? null,
+      google_review_status: program === null ? null : googleReviewStatusFor(program.reviewStatus),
+      class_id: program?.classId ?? null,
+      // When our copy of the review state was last confirmed against Google.
+      // A client showing an Add to Wallet control on a months-old `approved` is
+      // relying on a cached answer, and this is what makes that visible.
+      last_synced_at: program?.lastSyncedAt ?? null,
+      has_member_code: customer.memberCode !== null && customer.memberCode !== '',
+      // Whether the pass can carry a tier row today. Always false, and asserted
+      // by a test: there is no column anywhere to store the row's display
+      // header, and inventing one would put hardcoded chrome on a real pass.
+      // See TIER_HEADER_UNAVAILABLE.
+      tier_row_available: TIER_HEADER_UNAVAILABLE !== null,
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/wallet/pass
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /v1/wallet/pass
+ *
+ * A save-to-wallet link for the authenticated customer, carrying a `LoyaltyObject`
+ * that projects the ledger.
+ *
+ * There is no customer id in the path or the query string. The customer is the
+ * token subject, so naming somebody else is not expressible — which is a
+ * stronger guarantee than checking a supplied id, because there is no supplied
+ * id to check wrongly.
+ *
+ * Status codes:
+ * - 200 — a link. The pass is built, the member code is stored, the tracking
+ *   row is recorded.
+ * - 401 — no auth headers (`UNAUTHORIZED`, from the app-level middleware).
+ * - 403 — the token has no customer row in this business.
+ * - 409 — the tenant's class is unusable, or the tenant has no loyalty program
+ *   to name a currency. The code says which.
+ * - 500 — this deployment is missing a value it cannot invent.
+ */
+router.get('/v1/wallet/pass', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const tenantId = auth.businessId;
+
+  // Checked before any database work: a blank pepper would derive a member code
+  // that anyone holding one pass could recompute for every other customer, and
+  // an empty `origins` produces an Add to Wallet button that silently does
+  // nothing. Both are deployment faults and neither is the customer's problem,
+  // so they are reported as such rather than as a program state.
+  const origins = parseAllowedOrigins(c.env.WALLET_ALLOWED_ORIGINS);
+  if (origins.length === 0) {
+    console.error(
+      '[wallet] WALLET_ALLOWED_ORIGINS is empty. Google does not render the Add to Wallet button ' +
+        'without the origins claim, so no pass can be issued for this deployment.',
+    );
+    return c.json(
+      {
+        error: {
+          code: WALLET_NOT_CONFIGURED,
+          message:
+            'Google Wallet passes are not configured for this deployment: no allowed origins are ' +
+            'set, and Google requires them to issue a save link.',
+        },
+      },
+      500,
+    );
+  }
+
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const store = createDrizzleWalletStore(db);
+
+  const customer = await store.findCustomer(auth.userId, tenantId);
+  if (!customer) {
+    return c.json(
+      {
+        error: {
+          code: CUSTOMER_SELF_NOT_FOUND,
+          message:
+            'This account has no customer record in this business, so it has no loyalty pass here.',
+        },
+      },
+      403,
+    );
+  }
+
+  // Before the member code is touched and before anything is written. A pass is
+  // never built against a class that cannot back it, so this is checked before
+  // the first mutation rather than after.
+  const readiness = classReadinessFor(await store.findProgram(tenantId), tenantId);
+  if (!readiness.ok) {
+    // 409, not 404 and not 500. The prerequisite exists and is known; it is
+    // not ready. 404 would tell a client the business has no wallet at all, and
+    // 500 would tell it we are broken, and both would be wrong in a way that
+    // sends the customer or the operator to the wrong person.
+    return c.json({ error: { code: reasonCodeFor(readiness.reason), message: readiness.message } }, 409);
+  }
+
+  try {
+    const issued = await issuePass(
+      {
+        store,
+        pepper: c.env.MEMBER_CODE_PEPPER,
+        serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
+        privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
+        origins,
+      },
+      {
+        tenantId,
+        customerId: customer.id,
+        customerGlobalId: customer.globalId,
+        customerFullName: customer.fullName,
+        storedMemberCode: customer.memberCode,
+        issuerId: readiness.issuerId,
+        classId: readiness.classId,
+      },
+    );
+
+    return c.json({
+      data: {
+        save_url: issued.saveUrl,
+        object_id: issued.objectId,
+        class_id: issued.classId,
+        member_code: issued.memberCode,
+        balance_points: issued.balancePoints,
+        points_currency: issued.pointsCurrency,
+      },
+    });
+  } catch (err: unknown) {
+    if (err instanceof LoyaltyProgramNotConfiguredError) {
+      // A real state, and a real prerequisite: the business has a Google class
+      // but no loyalty program, so there is no currency to label a balance
+      // with. Same 409 family as the class states, and the client already knows
+      // to render "not available yet" for this.
+      return c.json(
+        {
+          error: {
+            code: 'LOYALTY_PROGRAM_NOT_CONFIGURED',
+            message:
+              'This business has a Google Wallet pass class but no loyalty program configured, so ' +
+              'a pass has no points currency to show. A loyalty program has to be configured first.',
+          },
+        },
+        409,
+      );
+    }
+
+    if (err instanceof MemberCodeUnavailableError) {
+      // Genuinely exceptional: 30 bits of space, a retry loop, and a
+      // compare-and-set. Reaching here means something is wrong with the
+      // pepper or the row, not that the customer is unready. 500, and the pass
+      // was not built.
+      console.error('[wallet] Could not obtain a member code:', err);
+      return c.json(
+        {
+          error: {
+            code: WALLET_NOT_CONFIGURED,
+            message: 'A loyalty pass could not be issued for this account. Please try again.',
+          },
+        },
+        500,
+      );
+    }
+
+    throw err;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/wallet/program/sync
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/wallet/program/sync
+ *
+ * Refresh `tenant_wallet_programs.review_status` from Google.
+ *
+ * ## Why the customer route needs this to exist
+ *
+ * `GET /v1/wallet/pass` decides on the **stored** review status, deliberately:
+ * the customer request path makes no Google call, so a bad minute at Google can
+ * never turn into a broken button. The cost of that choice is that our copy of
+ * the review state can be stale, and a class Google has since moved out of
+ * `APPROVED` would still read as available. This route is the answer to that:
+ * it is the only thing permitted to write the review status, it asks Google
+ * directly, and an operator has to ask for it.
+ *
+ * It does **not** create a class. A tenant with no row gets a 404 and stays
+ * without one, because the class belongs in tenant onboarding — see
+ * `classReadinessFor` for why creating one here would be wrong.
+ */
+router.post('/v1/wallet/program/sync', async (c) => {
+  const auth = extractAuthHeaders(c);
+  // Before the program is read, so a 403 here cannot be told apart from the 404
+  // an unprovisioned tenant would have produced.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  const tenantId = auth.businessId;
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const store = createDrizzleWalletStore(db);
+
+  const program = await store.findProgram(tenantId);
+  if (!program) {
+    // 404, and it names the prerequisite rather than reporting a failure. The
+    // sync route cannot help a tenant that has no class row, and inventing one
+    // here is exactly what the feature document forbids.
+    return c.json(
+      {
+        error: {
+          code: 'WALLET_CLASS_NOT_PROVISIONED',
+          message:
+            'This business has no Google Wallet pass class row, so there is nothing to sync. One ' +
+            'class per business is created during business onboarding; this endpoint never creates one.',
+        },
+      },
+      404,
+    );
+  }
+
+  const client = createGoogleWalletRestClient({
+    serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
+    privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
+  });
+
+  let remote;
+  try {
+    remote = await client.getClass(program.classId);
+  } catch (err: unknown) {
+    console.error('[wallet] Google class read failed:', err);
+    return c.json(
+      {
+        error: {
+          code: WALLET_SYNC_FAILED,
+          message:
+            'The Google Wallet class could not be read, so the review status was not updated. ' +
+            'Google may be unavailable, or the service account may not have been invited to the ' +
+            'issuer account.',
+        },
+      },
+      502,
+    );
+  }
+
+  // A class that is not there at Google. Reported, not written over: this route
+  // refreshes an existing row's review state, and deleting or recreating the
+  // row is not something a status refresh should decide.
+  if (remote === null) {
+    return c.json(
+      {
+        error: {
+          code: 'WALLET_CLASS_NOT_FOUND',
+          message: `Google has no class ${program.classId}. The stored row was left untouched.`,
+        },
+      },
+      404,
+    );
+  }
+
+  const stored = storedReviewStatusFor(remote.reviewStatus);
+  if (stored === null) {
+    // An unrecognised Google value. Refusing to write keeps the stored status
+    // at its last confirmed value rather than replacing a known state with an
+    // unknown one that `classReadinessFor` would then treat as blocking.
+    return c.json(
+      {
+        error: {
+          code: WALLET_SYNC_FAILED,
+          message: `Google reported a review status this system does not recognise (${JSON.stringify(
+            remote.reviewStatus ?? null,
+          )}). The stored status was left untouched.`,
+        },
+      },
+      502,
+    );
+  }
+
+  const syncedAt = new Date();
+  await store.updateProgramReviewStatus(tenantId, stored, syncedAt);
+
+  return c.json({
+    data: {
+      class_id: program.classId,
+      review_status: stored,
+      // A change is worth surfacing: a class moving out of `approved` is the
+      // single event that makes every customer of this business lose their
+      // pass, and the operator who ran the sync is the one who should see it.
+      changed: stored !== program.reviewStatus,
+      previous_review_status: program.reviewStatus,
+      last_synced_at: syncedAt.toISOString(),
+    },
+  });
+});
+
+export default router;

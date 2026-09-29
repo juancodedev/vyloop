@@ -1,0 +1,95 @@
+-- ============================================================================
+-- Backfill customers.member_code for rows that predate the column
+--
+-- STATUS: NOT APPLIED. This file is delivered as SQL only, per the task
+-- constraint. Nothing in this change runs it.
+--
+-- ## Why a backfill at all, given issuance mints codes lazily
+--
+-- The issuance path claims a code itself, on the first request that needs one
+-- (`ensureMemberCode` in `workers/wallet/src/issuance.ts`). So the backfill is
+-- not required for correctness — no customer can obtain a pass with a null
+-- `member_code` whether or not this runs.
+--
+-- It exists for two operational reasons:
+--
+-- 1. A code is tenant-salted, so the same person gets a different code at a
+--    different merchant. Backfilling in one pass means a member who shows the
+--    same pass at two merchants never has one code appear before the other,
+--    which a lazy mint would otherwise make dependent on visit order.
+-- 2. The backfill is idempotent and safe to re-run, so it can be executed in
+--    batches during a quiet period and resumed.
+--
+-- ## Why this cannot be done in SQL alone
+--
+-- The derivation is `HMAC-SHA256(MEMBER_CODE_PEPPER, length-prefixed message)`,
+-- truncated to 6 Crockford Base32 characters. The pepper lives in a worker
+-- secret and is never in the repository, this file, or any environment, so the
+-- only place the value can be computed is a process that holds the pepper.
+--
+-- That process is the wallet worker, and it does it in batches rather than in
+-- one statement. The SQL below is the shape those batches run, and it is what a
+-- future operational script will issue. It is included so the operational
+-- procedure is reviewable alongside the code that depends on it, not because it
+-- is meant to be pasted into a console.
+--
+-- ## The pepper must be supplied as a bind parameter, never interpolated
+-- ============================================================================
+
+-- Batch shape. Two things are load-bearing:
+--
+--   * `member_code IS NULL` makes the statement idempotent and skips every
+--     customer who already holds a code, so re-running cannot change a code a
+--     member has already memorised.
+--   * `FOR UPDATE SKIP LOCKED` lets several worker invocations run
+--     concurrently over disjoint batches without either blocking the other or
+--     claiming the same row twice. Without SKIP LOCKED, a second invocation
+--     waits on rows the first already locked and then re-evaluates them, which
+--     wastes the whole batch window.
+--
+-- The worker loops over this until it selects no rows.
+--
+-- SELECT id, global_id, business_id
+--   FROM customers
+--  WHERE member_code IS NULL
+--    AND deleted_at IS NULL
+--  ORDER BY id
+--  FOR UPDATE SKIP LOCKED
+--  LIMIT $1;
+
+-- The claim itself. `WHERE member_code IS NULL` is the compare-and-set from
+-- `WalletStore.claimMemberCode`, unchanged: two invocations racing on the same
+-- row produce one update and one zero-row result, and the caller uses whatever
+-- the `RETURNING` clause reports rather than the code it derived.
+--
+-- UPDATE customers
+--    SET member_code = $1,
+--        updated_at  = now()
+--  WHERE id = $2::uuid
+--    AND business_id = $3::uuid
+--    AND member_code IS NULL
+-- RETURNING member_code;
+
+-- Verification, after the batches finish. Both must return zero rows.
+--
+-- 1. No active customer is left without a code:
+--
+-- SELECT count(*)
+--   FROM customers
+--  WHERE member_code IS NULL
+--    AND deleted_at IS NULL;
+--
+-- 2. No code was ever written to a row that already had one. The join is what
+--    makes this checkable after the fact rather than a claim: it only counts
+--    customers whose code does not match what the derivation produces for them
+--    under the pepper used during the backfill. A non-zero result here means the
+--    pepper changed mid-run, and the affected rows must be reported to the
+--    merchant before anyone relies on a code at the counter.
+--
+--    Requires the derivation to be reproduced outside the worker, so run it as
+--    a check from the worker rather than as raw SQL.
+--
+-- SELECT c.id, c.business_id
+--   FROM customers c
+--  WHERE c.member_code IS NOT NULL
+--    AND c.member_code <> <derived from the backfill pepper>;
