@@ -1,13 +1,13 @@
 # Vyloop — Estado de Tareas
 
-> Actualizado: 6 Julio 2026
+> Actualizado: 28 Septiembre 2026
 
 ---
 
 ## ✅ COMPLETADO
 
 ### Infraestructura y Tooling
-- [x] **Dev scripts para workers** — Todos los workers tienen `dev` con puertos únicos (8788-8794) y service binding discovery
+- [x] **Dev scripts para workers** — Todos los workers tienen `dev` con puertos únicos (8788-8795) y service binding discovery
 - [x] **Gateway dev port fijo** — `wrangler dev --port 8787` para que el dashboard lo encuentre siempre
 - [x] **.dev.vars** — customer y growth workers con DATABASE_URL para dev local
 - [x] **Credenciales seed corregidas** — `demo@cafecentral.com` / `demo123`
@@ -16,6 +16,8 @@
 - [x] CI workflow: lint + typecheck + test en cada push
 - [x] Deploy workflow (GitHub Actions → Cloudflare)
   - [x] 8 Workers deployados (identity, customer, growth, analytics, automation, communication, compliance, gateway)
+  - [ ] **Worker `wallet` no está en la matriz de deploy** — existe y tiene `wrangler.jsonc`, pero
+        `.github/workflows/deploy.yml` no lo incluye, así que todavía no está en producción
   - [x] Dashboard Pages deployado en vyloop.juancode.dev
   - [x] Customer-web Pages deployado en vyloop-customer-web.pages.dev
 - [x] CI/CD probado y funcionando — 11/11 jobs verdes ✅
@@ -24,10 +26,32 @@
 - [x] Cloudflare API token con permisos correctos: Workers Scripts:Edit + Memberships:Read
 
 ### Base de Datos (PostgreSQL + Neon + Drizzle ORM)
-- [x] Schema: 15 tablas (tenants, users, customers, loyalty_programs, tiers, points, rewards, etc.)
-- [x] RLS policies para multi-tenancy
+- [x] Schema: 21 tablas (tenants, users, customers, loyalty_programs, tiers, points, rewards, message_log, whatsapp_templates, tenant_wallet_programs, customer_wallet_passes, etc.)
+- [x] Mecanismo de RLS para multi-tenancy (`packages/db/src/rls.ts`) — **las policies existen en código
+      pero RLS no está desplegado**: `createRlsPolicies()` no se llama en producción y
+      `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` no se ha corrido. El aislamiento de hoy descansa en
+      filtros explícitos de `business_id` en las rutas. Ver `docs/14-Backlog.md`
 - [x] Seed script: Café Central demo (tiers, 10 customers, 50+ transacciones)
 - [x] Migraciones Drizzle
+- [x] **Deuda de índices y tablas cerrada** — los 14 `CREATE (UNIQUE) INDEX` declarados nunca habían
+      llegado a la base de datos, y `message_log` y `whatsapp_templates` estaban en el schema sin
+      migración. Cerrado en la migración `0004` (PR #122). Los índices se declaran ahora en el callback
+      de extra-config de cada tabla en `schema.ts`, porque un builder exportado a nivel de módulo nunca
+      lo reclama una tabla y drizzle-kit lo descarta en silencio
+
+### Google Wallet (loyalty pass del cliente)
+- [x] Modelo de pase: derivación de ids, member code Crockford Base32, `LoyaltyClass`, `LoyaltyObject`, formato de saldo, firmante JWT, cliente REST de Google (PR #121)
+- [x] Migración de schema: `tenant_wallet_programs`, `customer_wallet_passes`, `customers.member_code` (PR #122)
+- [x] Superficie HTTP de 3 rutas — `/v1/wallet/status`, `/v1/wallet/pass`, `/v1/wallet/program/sync` — enrutadas por el gateway (PR #123)
+- [x] Reconciliación del pase guardado y push del saldo actual (PR #124)
+- [ ] **Botón "Add to Google Wallet"** — bloqueado por la aprobación de acceso de publicación de Google.
+      El worker lo declara con `WALLET_DEMO_MODE` (default `true` a propósito) y las rutas de cliente
+      responden en negativo en vez de ofrecer un control que falle
+- [ ] **Barrido programado de reconciliación** — hoy la reconciliación corre dentro de
+      `GET /v1/wallet/pass`; no hay cron ni handler `scheduled`, así que el saldo no se actualiza en
+      tiempo real
+- [ ] **Fila de tier en el pase** — omitida: no hay columna que guarde su header de display
+- [ ] **Deploy del worker a Cloudflare** — ausente de la matriz de `deploy.yml`
 
 ### Identity / Auth
 - [x] JWT issuance + validation (Web Crypto API, PBKDF2)
