@@ -61,8 +61,8 @@ jobs:
             dir: workers/communication
           - service: compliance
             dir: workers/compliance
-          - service: gateway
-            dir: apps/gateway
+          - service: wallet
+            dir: workers/wallet
 
     steps:
       - uses: actions/checkout@v4
@@ -84,16 +84,47 @@ jobs:
             ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
             ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
           fi
-          if [ "${{ matrix.service }}" = "gateway" ]; then
-            ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
-          fi
           if [ "${{ matrix.service }}" = "communication" ]; then
             ARGS="$ARGS --var WHATSAPP_PHONE_ID:${{ secrets.WHATSAPP_PHONE_ID }}"
             ARGS="$ARGS --var WHATSAPP_TOKEN:${{ secrets.WHATSAPP_TOKEN }}"
             ARGS="$ARGS --var WHATSAPP_VERIFY_TOKEN:${{ secrets.WHATSAPP_VERIFY_TOKEN }}"
           fi
+          if [ "${{ matrix.service }}" = "wallet" ]; then
+            ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+          fi
           npx --yes wrangler deploy $ARGS
         working-directory: ${{ matrix.dir }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  # The gateway binds to identity, customer, growth, analytics, automation,
+  # communication, compliance and wallet as service bindings, and Cloudflare
+  # refuses to publish a Worker whose binding names a Worker that does not exist
+  # yet. In the parallel matrix above the gateway could reach its publish step
+  # before wallet finished, which is exactly the failure this job exists to stop:
+  # a matrix cannot express "deploy last". So gateway deploys on its own, after
+  # every binding it names is guaranteed to exist.
+  deploy-gateway:
+    needs: [quality, deploy-workers]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Deploy gateway worker
+        run: npx --yes wrangler deploy --var JWT_SECRET:${{ secrets.JWT_SECRET }}
+        working-directory: apps/gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
