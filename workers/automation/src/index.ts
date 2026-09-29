@@ -87,12 +87,45 @@ async function queue(batch: MessageBatch<EventEnvelope>, env: Bindings): Promise
 /**
  * Scheduled trigger handler.
  *
- * Runs daily at 6:00 AM (configured in wrangler.jsonc crons).
- * Executes birthday and inactivity cron checks.
+ * Runs daily at 6:00 AM (configured in wrangler.jsonc crons). Executes birthday
+ * and inactivity cron checks, then hands off to the wallet's reconciliation
+ * sweep.
+ *
+ * ## Why the sweep runs from here
+ *
+ * The account allows five cron triggers and is already using all five, so the
+ * wallet cannot hold its own. Both workers wanted the same minute anyway, so one
+ * trigger drives both.
+ *
+ * A cron invocation that throws is retried in full by the platform. Letting a
+ * wallet failure escape would therefore re-run the birthday and inactivity jobs
+ * from the start, which can re-send customer notifications. Those two have
+ * already done their work by that point, so the failure is caught and logged:
+ * the cost of a missed sweep day is one day, and the cost of a retried daily
+ * notification is a customer receiving it twice.
  */
 async function scheduled(_controller: unknown, env: Bindings): Promise<void> {
   await handleBirthdayCron(env);
   await handleInactivityCron(env);
+  await dispatchWalletSweep(env);
+}
+
+/**
+ * Calls the wallet's `scheduled` export over the service binding.
+ *
+ * Never throws. The wallet's own handler captures per-tenant failures into its
+ * report, so reaching the catch below means something structural — a broken
+ * binding, a failed deploy — and not a sweep that had a bad day.
+ */
+async function dispatchWalletSweep(env: Bindings): Promise<void> {
+  try {
+    await env.WALLET.scheduled(undefined);
+  } catch (error) {
+    console.error(
+      '[automation] Wallet reconciliation sweep did not run:',
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
