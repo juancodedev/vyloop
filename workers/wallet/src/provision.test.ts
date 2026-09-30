@@ -41,9 +41,15 @@ const TENANT = '90d5ad58-bc5c-46a3-b82a-9cebb47e00b1';
 const OTHER_TENANT = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const CLASS_ID = classIdFor(ISSUER, TENANT);
 
-/** The one public door to `/brand/*`. See `apps/gateway/src/brand.ts`. */
-const PUBLIC_BASE_URL = 'https://media.juancode.dev';
-const BRAND_URL = `${PUBLIC_BASE_URL}/brand/${TENANT}.jpg`;
+/**
+ * Two hosts, and they are not interchangeable. `media` is the gateway's brand
+ * route — the only public door to the private R2 bucket. `web` is the customer
+ * web, which is where the program page actually lives. See `apps/gateway/src/brand.ts`.
+ */
+const MEDIA_BASE_URL = 'https://media.juancode.dev';
+const WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+const BRAND_URL = `${MEDIA_BASE_URL}/brand/${TENANT}.jpg`;
+const PROGRAM_URL = `${WEB_BASE_URL}/program`;
 
 let env: Record<string, unknown>;
 
@@ -57,7 +63,8 @@ beforeEach(() => {
     MEMBER_CODE_PEPPER: crypto.randomUUID(),
     WALLET_ALLOWED_ORIGINS: 'https://app.vyloop.app',
     WALLET_DEMO_MODE: 'true',
-    WALLET_PUBLIC_BASE_URL: PUBLIC_BASE_URL,
+    WALLET_MEDIA_BASE_URL: MEDIA_BASE_URL,
+    WALLET_WEB_BASE_URL: WEB_BASE_URL,
   };
 });
 
@@ -211,9 +218,19 @@ function fakeClient(
   } as unknown as FakeClient;
 }
 
-/** Wire the fakes into the two seams and run the entry point. */
+/**
+ * Wire the fakes into the two seams and run the entry point.
+ *
+ * An override of `undefined` *removes* the var rather than setting it to
+ * undefined, so a test can exercise the documented default. `Object.assign`
+ * alone would leave the previous value in place and quietly test the wrong
+ * thing.
+ */
 function install(store: FakeStore, client: FakeClient, overrides: Record<string, unknown> = {}) {
-  Object.assign(env, overrides);
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   vi.mocked(createDrizzleWalletStore).mockReturnValue(store.store);
   vi.mocked(openTenantSession).mockResolvedValue({} as never);
   vi.mocked(googleWalletClientFor).mockReturnValue(client);
@@ -255,7 +272,7 @@ describe('provisionClass: a tenant with no Google class', () => {
       reviewStatus: 'DRAFT',
       countryCode: 'CL',
       programLogo: { sourceUri: { uri: BRAND_URL } },
-      homepageUri: { uri: `${PUBLIC_BASE_URL}/program`, description: 'Programa de lealtad' },
+      homepageUri: { uri: PROGRAM_URL, description: 'Programa de lealtad' },
     });
   });
 
@@ -325,19 +342,115 @@ describe('provisionClass: a tenant with no Google class', () => {
     });
   });
 
-  it('honours a configured public base URL over the default', async () => {
+  it('honours a configured media base URL for the logo, without touching the homepage', async () => {
     const store = fakeStore();
     const client = fakeClient();
 
-    await install(store, client, { WALLET_PUBLIC_BASE_URL: 'https://media.staging.juancode.dev/' });
+    await install(store, client, { WALLET_MEDIA_BASE_URL: 'https://media.staging.juancode.dev/' });
 
     const payload = client.insertClass.mock.calls[0]![0] as {
       programLogo: { sourceUri: { uri: string } };
       homepageUri: { uri: string };
     };
     // The trailing slash of the var is not allowed to double up in the path.
-    expect(payload.programLogo.sourceUri.uri).toBe(`https://media.staging.juancode.dev/brand/${TENANT}.jpg`);
-    expect(payload.homepageUri.uri).toBe('https://media.staging.juancode.dev/program');
+    expect(payload.programLogo.sourceUri.uri).toBe(
+      `https://media.staging.juancode.dev/brand/${TENANT}.jpg`,
+    );
+    // And a staging media host must not become the customer's homepage.
+    expect(payload.homepageUri.uri).toBe(PROGRAM_URL);
+  });
+
+  it('honours a configured web base URL for the homepage, without touching the logo', async () => {
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client, { WALLET_WEB_BASE_URL: 'https://staging-customer.pages.dev/' });
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      programLogo: { sourceUri: { uri: string } };
+      homepageUri: { uri: string };
+    };
+    expect(payload.homepageUri.uri).toBe('https://staging-customer.pages.dev/program');
+    expect(payload.programLogo.sourceUri.uri).toBe(BRAND_URL);
+  });
+});
+
+// ============================================================================
+// Two hosts, not one
+//
+// The bug these exist for: a single var treated two different hosts as
+// interchangeable, so `homepageUri` was built from the media host and pointed
+// at a 404. Google opens `homepageUri` during review and rejects the class when
+// it does not resolve (docs/11: the most common rejection reason), so the
+// previous shape produced classes Google would refuse.
+// ============================================================================
+
+describe('provisionClass: the logo host and the homepage host cannot cross', () => {
+  it('does not send the media host as the homepage, or the web host as the logo', async () => {
+    // Distinct hosts on purpose: with one var feeding both fields, or with the
+    // two fields' parsers transposed, either assertion below fails. A test using
+    // one host for both would pass against the exact bug it is meant to catch.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client, {
+      WALLET_MEDIA_BASE_URL: 'https://media.invalid-host.test',
+      WALLET_WEB_BASE_URL: 'https://web.invalid-host.test',
+    });
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      programLogo: { sourceUri: { uri: string } };
+      homepageUri: { uri: string };
+    };
+
+    expect(payload.programLogo.sourceUri.uri).toBe(
+      `https://media.invalid-host.test/brand/${TENANT}.jpg`,
+    );
+    expect(payload.homepageUri.uri).toBe('https://web.invalid-host.test/program');
+  });
+
+  it('sends two different origins, which is the whole claim being defended', async () => {
+    // Stated separately so the failure message names the invariant rather than
+    // repeating two concrete URLs: a class whose logo and homepage share a host
+    // is exactly what one var was wrongly assumed to mean.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      programLogo: { sourceUri: { uri: string } };
+      homepageUri: { uri: string };
+    };
+    const logoOrigin = new URL(payload.programLogo.sourceUri.uri).origin;
+    const homepageOrigin = new URL(payload.homepageUri.uri).origin;
+
+    expect(logoOrigin).toBe(MEDIA_BASE_URL);
+    expect(homepageOrigin).toBe(WEB_BASE_URL);
+    expect(homepageOrigin).not.toBe(logoOrigin);
+  });
+
+  it('defaults the homepage to the customer web, not the media host', async () => {
+    // The regression, pinned. The previous default built `homepageUri` from
+    // `media.juancode.dev`, which answers 404 on `/program` — a class Google
+    // rejects at review rather than one a customer notices.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client, {
+      WALLET_MEDIA_BASE_URL: undefined,
+      WALLET_WEB_BASE_URL: undefined,
+    });
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      programLogo: { sourceUri: { uri: string } };
+      homepageUri: { uri: string };
+    };
+
+    expect(payload.homepageUri.uri).toBe('https://vyloop-customer-web.pages.dev/program');
+    expect(payload.homepageUri.uri).not.toContain('media.juancode.dev');
+    // The logo's default is unchanged and still the gateway's brand route.
+    expect(payload.programLogo.sourceUri.uri).toBe(BRAND_URL);
   });
 });
 

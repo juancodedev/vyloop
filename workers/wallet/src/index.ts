@@ -7,7 +7,8 @@ import {
   extractAuthHeaders,
   googleWalletClientFor,
   parseDemoMode,
-  parsePublicBaseUrl,
+  parseMediaBaseUrl,
+  parseWebBaseUrl,
 } from './helpers';
 import { provisionTenantClass } from './provision';
 import type { ProvisionOutcome } from './provision';
@@ -330,7 +331,9 @@ export async function provisionClass(
       store: createDrizzleWalletStore(db),
       client: googleWalletClientFor(env),
       issuerId: env.GOOGLE_WALLET_ISSUER_ID,
-      publicBaseUrl: parsePublicBaseUrl(env.WALLET_PUBLIC_BASE_URL),
+      // Two hosts, two parsers, on purpose. See `WalletBindings.WALLET_WEB_BASE_URL`.
+      mediaBaseUrl: parseMediaBaseUrl(env.WALLET_MEDIA_BASE_URL),
+      webBaseUrl: parseWebBaseUrl(env.WALLET_WEB_BASE_URL),
     },
     { tenantId: input.tenantId },
   );

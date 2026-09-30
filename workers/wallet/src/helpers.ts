@@ -74,7 +74,7 @@ export interface WalletBindings {
    */
   WALLET_DEMO_MODE?: string | undefined;
   /**
-   * The public origin a class's `programLogo` and `homepageUri` are built from.
+   * The gateway origin a class's `programLogo` is built from.
    *
    * Google downloads the logo from a public HTTPS URL, so this is not a vanity
    * setting: it decides whether a class can be reviewed at all. The brand route
@@ -83,33 +83,86 @@ export interface WalletBindings {
    * tenant that has uploaded nothing — which is every tenant that arrives
    * through signup.
    *
+   * This is **not** the origin for `homepageUri`. That is `WALLET_WEB_BASE_URL`,
+   * and the two are separate vars on purpose — see its entry for why one var
+   * serving both was a defect that produced classes Google rejects.
+   *
    * Optional with a documented default rather than required, unlike
    * `WALLET_ALLOWED_ORIGINS`: there is one correct host for this platform, and a
    * blank var is a default to apply rather than a misconfiguration to report.
-   * See `parsePublicBaseUrl`.
+   * See `parseMediaBaseUrl`.
    */
-  WALLET_PUBLIC_BASE_URL?: string | undefined;
+  WALLET_MEDIA_BASE_URL?: string | undefined;
+  /**
+   * The customer-web origin a class's `homepageUri` is built from.
+   *
+   * ## Why this is not the same var as `WALLET_MEDIA_BASE_URL`
+   *
+   * They are different hosts serving different things, and they are not
+   * interchangeable:
+   *
+   * - `WALLET_MEDIA_BASE_URL` is the gateway, and its brand route is the only
+   *   public door to the private R2 bucket. It serves `/brand/<tenantId>.jpg`
+   *   and nothing else — `media.juancode.dev/program` answers 404.
+   * - `WALLET_WEB_BASE_URL` is the customer web, where the program page a
+   *   customer taps actually lives (`vyloop-customer-web.pages.dev/program`).
+   *
+   * `docs/11-crear-tarjeta-lealtad.md` records `homepageUri` as the most common
+   * rejection reason in Google's review: Google opens the URL, and a 404 is a
+   * rejected class. One shared var built `homepageUri` from the media host, so
+   * every class this worker provisioned pointed Google's reviewer at a 404.
+   * Keeping them apart is the fix; collapsing them back is the regression.
+   *
+   * `parseWebBaseUrl` is used for this and `parseMediaBaseUrl` for the logo.
+   * Crossing them is what `provision.test.ts` refuses.
+   */
+  WALLET_WEB_BASE_URL?: string | undefined;
 }
 
 /**
- * The public origin used when `WALLET_PUBLIC_BASE_URL` says nothing.
+ * The gateway origin used when `WALLET_MEDIA_BASE_URL` says nothing.
  *
  * Our own domain, deliberately not the R2 preview URL: `r2.dev` is a subdomain
  * that can be disabled, and a class that references it cannot be recreated under
  * the same id when that happens — the repair is a manual patch per class.
  */
-export const DEFAULT_WALLET_PUBLIC_BASE_URL = 'https://media.juancode.dev';
+export const DEFAULT_WALLET_MEDIA_BASE_URL = 'https://media.juancode.dev';
 
 /**
- * Read the public base URL, with a documented default and no trailing slash.
+ * The customer-web origin used when `WALLET_WEB_BASE_URL` says nothing.
+ *
+ * The pages.dev deployment, not `vyloop.juancode.dev`: the program route does
+ * not exist on the custom domain either, so naming it here would put the same
+ * 404 back on the only field Google rejects a class over.
+ */
+export const DEFAULT_WALLET_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+
+/**
+ * Read the media base URL, with a documented default and no trailing slash.
  *
  * The trailing slash is removed rather than merely tolerated because the value
- * is concatenated with `/brand/<tenantId>.jpg` and `/program`, and `//brand/...`
- * is a different URL to the route and may be to Google.
+ * is concatenated with `/brand/<tenantId>.jpg`, and `//brand/...` is a different
+ * URL to the route and may be to Google.
  */
-export function parsePublicBaseUrl(raw: string | undefined | null): string {
+export function parseMediaBaseUrl(raw: string | undefined | null): string {
   const trimmed = (raw ?? '').trim();
-  if (trimmed === '') return DEFAULT_WALLET_PUBLIC_BASE_URL;
+  if (trimmed === '') return DEFAULT_WALLET_MEDIA_BASE_URL;
+
+  return trimmed.replace(/\/+$/, '');
+}
+
+/**
+ * Read the web base URL, with a documented default and no trailing slash.
+ *
+ * Identical trailing-slash treatment to `parseMediaBaseUrl` because it is
+ * concatenated with `/program` in exactly the same way. Deliberately a separate
+ * function rather than a parameter of the media one: the two defaults differ, so
+ * a shared implementation would need a "which host" argument that callers can
+ * get wrong — and getting it wrong is the bug these functions exist to prevent.
+ */
+export function parseWebBaseUrl(raw: string | undefined | null): string {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return DEFAULT_WALLET_WEB_BASE_URL;
 
   return trimmed.replace(/\/+$/, '');
 }
