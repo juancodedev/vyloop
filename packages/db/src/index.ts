@@ -82,6 +82,18 @@ export type {
   NewCustomerWalletPass,
 } from './schema';
 
+// Re-export password hashing and the admission policy
+export {
+  hashPassword,
+  verifyPassword,
+  checkPasswordPolicy,
+  PASSWORD_MIN_LENGTH,
+  type PasswordPolicyResult,
+} from './password';
+
+// Re-export slug derivation
+export { slugify } from './slug';
+
 // Re-export RLS helpers
 export {
   enableRls,

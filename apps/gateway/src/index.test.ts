@@ -181,6 +181,46 @@ describe('API Gateway', () => {
 
       expect(res.status).toBe(200);
     });
+
+    it('passes business signup without a token (POST /v1/auth/business/signup)', async () => {
+      // Pinned because the exemption is a path *prefix* match, and a public
+      // endpoint that accidentally falls outside it fails closed: the request
+      // comes back 401 with no error anyone can act on, and the feature looks
+      // broken in a place that is not the feature. If the signup route is ever
+      // moved off `/v1/auth/`, this is the test that says so — and the fix is
+      // to move it back, not to widen the exemption, which would hand the whole
+      // `/v1/*` surface the same bypass.
+      const identityMock = {
+        fetch: async (_req: Request) => {
+          return new Response(JSON.stringify({ data: { businessId: 'biz-1' } }), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        },
+      };
+      const res = await app.fetch(
+        new Request('http://localhost/v1/auth/business/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Café Central', email: 'a@b.cl', password: 'a-long-password' }),
+        }),
+        mockEnv({ identity: identityMock }),
+      );
+
+      expect(res.status).toBe(201);
+    });
+
+    it('still rejects an unauthenticated business read, so the exemption stayed narrow', async () => {
+      // The counterpart to the test above: the exemption must cover the signup
+      // path and not have been widened to `/v1/businesses/*`, which is where
+      // the business reads live.
+      const res = await app.fetch(
+        new Request('http://localhost/v1/businesses/biz-001'),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(401);
+    });
   });
 
   describe('X-Business-ID enforcement', () => {
