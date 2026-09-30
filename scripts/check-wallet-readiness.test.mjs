@@ -21,7 +21,8 @@ const HEALTHY = {
   canSeeDatabase: true,
   reviewStatus: 'approved',
   programCount: 1,
-  demoMode: 'false',
+  demoMode: false,
+  databaseLabel: 'neondb',
   gatewayReachable: true,
 };
 
@@ -71,13 +72,17 @@ describe('buildGates', () => {
     expect(unapproved.find((gate) => gate.id === 'class').next).toContain('cannot be skipped');
   });
 
-  it('blocks any demo mode value other than the exact "false"', () => {
-    // `parseDemoMode` treats anything unrecognised as demo mode, so the report
-    // must agree with it rather than reading "FALSE" or "0" as off.
-    for (const value of ['true', 'FALSE', '0', 'no', 'off', '']) {
-      expect(firstBlocker({ demoMode: value })).toBe('demo-mode');
-    }
-    expect(firstBlocker({ demoMode: 'false' })).toBeUndefined();
+  it('reads the demo-mode switch as a boolean, not a config string', () => {
+    // The gate reads the effective value, which is boolean: a row that is in demo
+    // mode is a state, not a failure, so it must not be reported as a blocker.
+    expect(buildGates(HEALTHY).find((g) => g.id === 'demo-mode').pass).toBe(true);
+    expect(buildGates({ ...HEALTHY, demoMode: true }).find((g) => g.id === 'demo-mode').pass).toBe(false);
+  });
+
+  it('names the database it read, because the deployed worker uses another one', () => {
+    // A report that reads dev-local and implies production is how a correctly
+    // configured deployment reads as broken.
+    expect(formatReport(buildGates(HEALTHY))).toContain('neondb');
   });
 });
 
@@ -100,7 +105,8 @@ describe('verdict', () => {
       buildGates({ ...HEALTHY, canSeeDatabase: false, reviewStatus: null, programCount: 0 }),
     );
     expect(ready).toBeNull();
-    expect(unknown.map((gate) => gate.id)).toEqual(['database', 'class']);
+    // The demo-mode switch is a column, so an unreadable database takes it with it.
+    expect(unknown.map((gate) => gate.id)).toEqual(['database', 'class', 'demo-mode']);
   });
 
   it('does not report the class as blocked just because the database was unreachable', () => {
@@ -123,7 +129,7 @@ describe('verdict', () => {
 
 describe('formatReport', () => {
   it('marks a passing gate PASS and a blocking one BLOCK', () => {
-    const report = formatReport(buildGates({ ...HEALTHY, reviewStatus: 'draft' }));
+    const report = formatReport(buildGates({ ...HEALTHY, reviewStatus: 'draft', demoMode: true }));
     expect(report).toContain('[PASS] Wallet tables exist');
     expect(report).toContain('[BLOCK] Google approved the pass class');
     expect(report).toContain('NOT READY');

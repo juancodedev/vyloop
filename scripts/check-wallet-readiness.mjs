@@ -52,13 +52,14 @@ export function buildGates(observed) {
   // block. `pass` is forced to null whenever `known` is false, so a missing
   // observation cannot read as either verdict — reporting "the migration is
   // missing" when the truth is "I could not look" is worse than saying nothing.
-  const gate = (id, title, known, passes, blocked, next) => ({
+  const gate = (id, title, known, passes, blocked, next, extra = {}) => ({
     id,
     title,
     pass: known ? passes : null,
     known,
     blocked,
     next,
+    ...extra,
   });
 
   // The order below is the order a request hits them.
@@ -70,6 +71,7 @@ export function buildGates(observed) {
       observed.migrationApplied,
       'The wallet tables are not in this database.',
       'Apply packages/db/drizzle/0004_chubby_crystal.sql to this database.',
+      { databaseLabel: observed.databaseLabel },
     ),
   );
 
@@ -106,11 +108,20 @@ export function buildGates(observed) {
   gates.push(
     gate(
       'demo-mode',
-      'Deployment declares it has publishing access',
-      typeof observed.demoMode === 'string',
-      observed.demoMode === 'false',
-      'WALLET_DEMO_MODE is not "false", so this deployment refuses to mint passes.',
-      'Set WALLET_DEMO_MODE to "false" in workers/wallet/wrangler.jsonc, only once Google has approved the class.',
+      'Tenant declares publishing access',
+      observed.canSeeDatabase,
+      observed.demoMode === false,
+      // Not a blocker. In demo mode a `draft` class is usable and a pass can be
+      // minted — Google limits delivery to the issuer's test accounts, which is
+      // the point. It only means the pass will not reach a real customer.
+      //
+      // This gate used to read the opposite way, because a `draft` class was an
+      // unconditional refusal. That changed, and a report still calling demo mode
+      // a blocker would be reporting a state as a failure.
+      observed.programCount === 0
+        ? 'There is no tenant row, so there is no switch to read.'
+        : `The tenant is in demo mode, so passes only reach the issuer's test accounts. This is correct until Google grants publishing access.`,
+      'Set demo_mode to false on the tenant row once Google has granted publishing access, and set WALLET_DEMO_MODE to "false" in wrangler.jsonc.',
     ),
   );
 
@@ -148,10 +159,26 @@ export function verdict(gates) {
 
 export function formatReport(gates) {
   const { ready, blocked, unknown } = verdict(gates);
+  // Read from the gates rather than a second argument: the label is observation
+  // data, and threading it separately would be one more thing a caller forgets.
+  const databaseGate = gates.find((gate) => gate.id === 'database');
+  const observed = databaseGate ? databaseGate : {};
   const lines = [];
 
   lines.push('');
   lines.push('  Vyloop wallet readiness');
+  // Which database this is about, stated before anything else. The report falls
+  // back to `apps/gateway/.dev.vars`, and the deployed worker uses a different
+  // `DATABASE_URL` entirely — a report that read one and implied the other is
+  // how a correctly configured production reads as broken.
+  lines.push(
+    `  database: ${observed.databaseLabel ?? 'unknown'}` +
+      (observed.databaseLabel && observed.deployedDatabaseLabel
+        ? observed.databaseLabel === observed.deployedDatabaseLabel
+          ? '  (matches the deployed worker)'
+          : '  *** DIFFERS FROM THE DEPLOYED WORKER ***'
+        : ''),
+  );
   lines.push('  ' + '-'.repeat(52));
 
   for (const gate of gates) {
@@ -240,11 +267,19 @@ async function databaseFacts() {
       );
       const migrationApplied = tables.rowCount === 2;
 
+      // Which database this is, read on its own. The program table can be empty —
+      // which is a finding, not a failure — so the identity cannot come from that
+      // read, and a report that silently described some other database as the
+      // deployed one would be worse than one that said nothing.
+      const identity = await pool
+        .query('SELECT current_database() AS db')
+        .catch(() => ({ rows: [] }));
+
       // Read the review status, and how many program rows there are. With no row
       // at all the business has no class provisioned, which is a different
       // problem from having one that Google has not approved yet.
       const programs = await pool
-        .query(`SELECT review_status FROM tenant_wallet_programs`)
+        .query(`SELECT review_status, demo_mode, current_database() AS db FROM tenant_wallet_programs`)
         .catch(() => ({ rows: [] }));
 
       const statuses = programs.rows.map((row) => row.review_status);
@@ -252,6 +287,10 @@ async function databaseFacts() {
         known: true,
         migrationApplied,
         reviewStatus: statuses.length === 1 ? statuses[0] : null,
+        // The per-tenant switch, which is the half an operator can change. Absent
+        // means demo mode, matching how the gate reads it.
+        demoMode: programs.rows.length === 1 ? programs.rows[0].demo_mode !== false : null,
+        databaseLabel: identity.rows[0]?.db ?? null,
         programCount: statuses.length,
       };
     } finally {
@@ -289,8 +328,16 @@ async function main() {
     migrationApplied: database.migrationApplied,
     canSeeDatabase: database.known,
     programCount: database.programCount,
+    databaseLabel: database.databaseLabel,
     reviewStatus: database.reviewStatus,
-    demoMode: readConfigVar('WALLET_DEMO_MODE', configPath),
+    // Effective demo mode is `env || row`, the same combination the gate uses.
+    // Reading only the config would report the deployment ceiling and hide the
+    // half an operator can change.
+    demoMode:
+      readConfigVar('WALLET_DEMO_MODE', configPath) === 'false' &&
+      database.known &&
+      database.programCount > 0 &&
+      database.demoMode === false,
     gatewayReachable: await gatewayReachable(gatewayUrl),
   });
 
