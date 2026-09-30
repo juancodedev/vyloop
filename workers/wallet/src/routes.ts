@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 
 import { BalanceNotDisplayableError, balanceDisplayFailure } from './balance';
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
-import { googleReviewStatusFor, storedReviewStatusFor } from './google-client';
+import { GoogleWalletApiError, googleReviewStatusFor, storedReviewStatusFor } from './google-client';
 import type { AuthHeaders, WalletBindings } from './helpers';
 import {
   extractAuthHeaders,
@@ -330,16 +330,62 @@ router.get('/v1/wallet/pass', async (c) => {
       },
     );
 
-    // The pass exists on our side now: a link was signed, a member code was
-    // stored and a tracking row was written. Reconciliation asks Google whether
-    // the object exists yet and, if it does, projects the ledger's balance onto
-    // it. This is the only moment in the request where we depend on Google, and
-    // it is deliberately the last thing that happens.
-    //
     // `issued.loyaltyObject.id` is asserted against the derived id inside
     // `issuePass`, and this reuses the same object, so there is no third
     // derivation anywhere in the request.
     const client = googleWalletClientFor(c.env);
+
+    // Create the object at Google. Nothing before this line had talked to
+    // Google about this pass.
+    //
+    // ## Why this failure is not swallowed, unlike the one below it
+    //
+    // A save link is a signed claim naming an object id. If no object exists
+    // under that id, the link is well-formed and useless: Google answers the
+    // customer's tap with "an error occurred, contact the issuer", and our own
+    // endpoints reported 200 the whole time. That is exactly what happened for
+    // as long as this call did not exist, and it is why the failure mode was
+    // invisible for so long.
+    //
+    // Reconciling a balance and creating a pass are not the same kind of
+    // failure, and the swallow below is right for the first and wrong for this
+    // one. A stale balance is a cosmetic problem a later sync fixes; a missing
+    // object is a promise we cannot keep.
+    try {
+      await client.insertObject(issued.loyaltyObject);
+      console.log(`[wallet] Created pass object ${issued.objectId} at Google.`);
+    } catch (err: unknown) {
+      if (err instanceof GoogleWalletApiError && err.status === 409) {
+        // The customer already holds this pass. Creating is not an option, and
+        // patching is both correct and what keeps a returning customer from
+        // being handed a link to a second copy of the same card.
+        await client.patchObject(issued.objectId, issued.loyaltyObject);
+        console.log(
+          `[wallet] Pass object ${issued.objectId} already existed at Google; patched it instead.`,
+        );
+      } else {
+        const reason =
+          err instanceof GoogleWalletApiError
+            ? err.message
+            : 'Google Wallet could not be reached.';
+        console.error(`[wallet] Could not create pass object ${issued.objectId}:`, err);
+        // 409, not 502 and not 200. Google refusing to create an object is a
+        // state we know and a customer cannot fix — a class still in `draft`
+        // cannot create any object — and a link handed back anyway would fail
+        // on their phone with no explanation.
+        return c.json(
+          {
+            error: {
+              code: 'WALLET_PASS_NOT_CREATABLE',
+              message:
+                'Google Wallet could not create this pass, so no working link can be produced. ' +
+                `A pass class must be approved before any object can be created for it. ${reason}`,
+            },
+          },
+          409,
+        );
+      }
+    }
 
     try {
       const outcome = await reconcilePass(
