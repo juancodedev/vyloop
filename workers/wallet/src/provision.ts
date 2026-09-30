@@ -64,11 +64,22 @@ export interface ProvisionDeps {
    */
   issuerId: string;
   /**
-   * Public origin for the class's logo and homepage. See `parsePublicBaseUrl`.
+   * Gateway origin for the class's `programLogo`. See `parseMediaBaseUrl`.
+   *
    * A value, not a policy: this module does not decide what a tenant's public
-   * URL is, it only refuses to invent one.
+   * URL is, it only refuses to invent one. Not interchangeable with
+   * `webBaseUrl` — the media host has no `/program`.
    */
-  publicBaseUrl: string;
+  mediaBaseUrl: string;
+  /**
+   * Customer-web origin for the class's `homepageUri`. See `parseWebBaseUrl`.
+   *
+   * Separate from `mediaBaseUrl` on purpose, and this is where the two hosts are
+   * kept apart: Google opens `homepageUri` during review and rejects the class
+   * when it 404s, so a media host here produces a class that cannot be
+   * approved. `provision.test.ts` asserts the two never cross.
+   */
+  webBaseUrl: string;
 }
 
 export interface ProvisionInput {
@@ -140,7 +151,7 @@ export async function provisionTenantClass(
   deps: ProvisionDeps,
   input: ProvisionInput,
 ): Promise<ProvisionOutcome> {
-  const { store, client, issuerId, publicBaseUrl } = deps;
+  const { store, client, issuerId, mediaBaseUrl, webBaseUrl } = deps;
   const { tenantId } = input;
 
   // The cheap exit, before the expensive dependency. Re-running provisioning
@@ -181,9 +192,14 @@ export async function provisionTenantClass(
       reviewStatus: 'DRAFT',
       // Keyed by tenant id, so a rebrand replaces the object and Google re-reads
       // it. A business that uploaded nothing resolves to the platform default,
-      // which is the case signup produces.
-      programLogo: { sourceUri: { uri: `${publicBaseUrl}/brand/${tenantId}.jpg` } },
-      homepageUri: { uri: `${publicBaseUrl}/program`, description: 'Programa de lealtad' },
+      // which is the case signup produces. The media host, because `/brand/*` is
+      // the gateway's route and only the gateway serves it.
+      programLogo: { sourceUri: { uri: `${mediaBaseUrl}/brand/${tenantId}.jpg` } },
+      // The customer web, because `/program` is the program page and the media
+      // host has no such route. Google opens this URL during class review and
+      // rejects the class on a 404 — docs/11 records it as the most common
+      // rejection reason — so the host is load-bearing, not cosmetic.
+      homepageUri: { uri: `${webBaseUrl}/program`, description: 'Programa de lealtad' },
     });
   } catch (err) {
     return failed(

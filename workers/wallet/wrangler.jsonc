@@ -21,16 +21,29 @@
     // environment with publishing access declares. See `parseDemoMode`, which
     // treats anything unrecognised as demo mode on purpose.
     "WALLET_DEMO_MODE": "true",
-    // Where a class's public assets live. Google downloads `programLogo` from
-    // this host and a customer taps `homepageUri`, so it is load-bearing rather
-    // than cosmetic: the brand route under it is the only public door to a
-    // private R2 bucket, and it answers with the platform default logo for a
-    // business that has uploaded none. Deliberately our own domain and not the
-    // r2.dev preview URL — a class cannot be recreated under the same id, so
-    // losing that subdomain would need a manual patch per class. No trailing
-    // slash; `parsePublicBaseUrl` would strip it, and a var that carries one was
-    // pasted rather than written.
-    "WALLET_PUBLIC_BASE_URL": "https://media.juancode.dev"
+    // TWO base URLs, not one. They are different hosts serving different routes,
+    // and merging them back reintroduces a class-rejection bug.
+    //
+    // Google fetches `programLogo` from MEDIA and a customer taps `homepageUri`
+    // from WEB. With one shared var, `homepageUri` was built from the media host,
+    // and `media.juancode.dev/program` answers 404. Google opens `homepageUri`
+    // during class review and rejects the class on a 404 — docs/11 records it as
+    // the most common rejection reason — so every class provisioned here was one
+    // Google would refuse. If you are tempted to collapse these into a single
+    // var: the program route does not exist on the media host, and the brand
+    // route does not exist on the web host. Each has exactly one consumer.
+    //
+    // MEDIA is the gateway, because the brand route under it is the only public
+    // door to a private R2 bucket, and it answers with the platform default logo
+    // for a business that has uploaded none. Our own domain and not the r2.dev
+    // preview URL — a class cannot be recreated under the same id, so losing that
+    // subdomain would need a manual patch per class.
+    //
+    // Both are vars, not secrets: neither is sensitive and both are read on every
+    // class creation. No trailing slash — the parsers strip one, and a var that
+    // carries one was pasted rather than written.
+    "WALLET_MEDIA_BASE_URL": "https://media.juancode.dev",
+    "WALLET_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev"
   },
   // No cron trigger here on purpose.
   //
