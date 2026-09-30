@@ -24,7 +24,7 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | Dashboard PMV (login, sidebar, clientes, loyalty) | ✅ Completado |
 | **POS Emulator — menú, carrito, QR scanner, cobro+puntos** | **✅ Completado** |
 | Customer detail card SDK | ✅ Completado |
-| Google Wallet — modelo de pase, schema y 3 rutas `/v1/wallet/*` | ✅ Backend listo, CTA bloqueado por Google |
+| Google Wallet — pase de lealtad de punta a punta | ✅ Funcionando: emitir, guardar en Google y proyectar el saldo |
 | CI/CD automático (GitHub Actions → Cloudflare) | ✅ 11/11 jobs verdes |
 | **Deployado y demo-list** | **✅ VIVO** |
 
@@ -253,9 +253,23 @@ Ver [docs/](./docs) para:
 | compliance | `compliance.cl-jmunoz.workers.dev` | 🔲 Placeholder |
 | gateway | `gateway.cl-jmunoz.workers.dev` | ✅ API Gateway |
 
-> El worker `wallet` existe y corre en dev (puerto 8795), pero **no está en la matriz de
-> `.github/workflows/deploy.yml`**, así que todavía no tiene URL en producción. Sus rutas
-> `/v1/wallet/*` ya están enrutadas por el gateway.
+> El worker `wallet` está en producción en `wallet.cl-jmunoz.workers.dev` y sus rutas
+> `/v1/wallet/*` están enrutadas por el gateway. Se despliega después que el gateway
+> porque el gateway lo tiene como service binding.
+>
+> ### Google Wallet — estado real
+>
+> El pase funciona de punta a punta y está verificado contra la API de Google, no solo
+> contra los tests: emitir guarda el objeto en Google, firma el link, y una venta en el
+> POS proyecta el saldo sin que el cliente abra la app.
+>
+> Lo que falta para clientes reales es el **acceso de publicación** del emisor, que se
+> pide en la consola de Google y revisa Google. Mientras no esté, los pases salen con
+> `[SOLO PARA PRUEBAS]` y solo funcionan en las cuentas de prueba del emisor.
+>
+> Para darle una tarjeta a un negocio nuevo: **[`docs/11-crear-tarjeta-lealtad.md`](docs/11-crear-tarjeta-lealtad.md)**.
+> Hoy es un procedimiento manual —el alta de un tenant no crea su clase automáticamente—
+> y el documento dice exactamente eso.
 
 ## PRs Completados (25+ mergeados)
 
