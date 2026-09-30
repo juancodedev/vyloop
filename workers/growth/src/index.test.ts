@@ -2276,4 +2276,364 @@ describe('Growth Worker', () => {
       expect(res.status).toBe(200);
     });
   });
+
+  // ==========================================================================
+  // The pass projection
+  //
+  // A pass balance used to move only when the holder opened the app or when the
+  // daily sweep ran — both *pull*, neither aware a sale happened. These tests
+  // pin the trigger that fixed it, and they pin it as a *trigger*: what matters
+  // is that the sale is unaffected by the projection, not that any particular
+  // promise was handed to `waitUntil` in any particular order.
+  //
+  // `reqAs` is untouched. It drives `app.fetch(request, env)` with no
+  // `ExecutionContext` and no `WALLET`, which is exactly the shape every
+  // pre-existing test in this file was written against — so the helper below
+  // adds the two things the projection needs rather than changing the one every
+  // other test shares.
+  // ==========================================================================
+
+  describe('the pass projection on a ledger change', () => {
+    interface Deferred {
+      promise: Promise<unknown>;
+      settle: (value?: unknown) => void;
+      fail: (err: unknown) => void;
+      settled: () => boolean;
+    }
+
+    /**
+     * A promise the test resolves by hand.
+     *
+     * A promise that is never resolved would prove the same thing and prove it
+     * worse: an `await` on it and the whole suite hangs until the timeout, which
+     * reports as a crashed run rather than as a failed assertion. Handing the
+     * test the switch is what lets it say "the response came back while the
+     * projection was still pending" as an assertion.
+     */
+    function deferred(): Deferred {
+      let resolve!: (value?: unknown) => void;
+      let reject!: (err: unknown) => void;
+      let done = false;
+
+      const promise = new Promise<unknown>((res, rej) => {
+        resolve = (value?: unknown) => {
+          done = true;
+          res(value);
+        };
+        reject = (err: unknown) => {
+          done = true;
+          rej(err);
+        };
+      });
+
+      return { promise, settle: resolve, fail: reject, settled: () => done };
+    }
+
+    /** The promises the handler handed to `waitUntil`, in order. */
+    function backgroundWork(): {
+      waited: Promise<unknown>[];
+      waitUntil: (promise: Promise<unknown>) => void;
+    } {
+      const waited: Promise<unknown>[] = [];
+      return { waited, waitUntil: (promise) => void waited.push(promise) };
+    }
+
+    function walletEnv(reconcileCustomer: MockFn): Record<string, unknown> {
+      return {
+        DATABASE_URL: 'postgres://mock',
+        DOMAIN_EVENTS_QUEUE: {} as Queue,
+        SCHEMA_REGISTRY: {} as KVNamespace,
+        WALLET: { reconcileCustomer },
+      };
+    }
+
+    function postWithWallet(
+      path: string,
+      body: unknown,
+      reconcileCustomer: MockFn,
+      waitUntil: (promise: Promise<unknown>) => void,
+    ) {
+      const r = new Request(`http://localhost${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': OPERATOR_AUTH.userId,
+          'X-Business-Id': OPERATOR_AUTH.businessId,
+          'X-User-Role': OPERATOR_AUTH.userRole,
+        },
+        body: JSON.stringify(body),
+      });
+
+      // The execution context is the third argument, which is where the Workers
+      // runtime puts it — Hono reads it from there and exposes it as
+      // `c.executionCtx`. Passing it is what makes the "not awaited" claim
+      // testable at all: with no context, the handler has nowhere to hand the
+      // projection to and the test would pass for the wrong reason.
+      return app.fetch(
+        r,
+        walletEnv(reconcileCustomer) as never,
+        { waitUntil, passThroughOnException: () => {} } as unknown as ExecutionContext,
+      );
+    }
+
+    /** The two `execute` calls the earn path makes: the RLS session, then the ledger insert. */
+    function stubEarnLedger(balanceAfter = 300) {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'prog-1', earnRate: '1.0' }]));
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({
+        rows: [{ id: 'tx-1', balance_after: balanceAfter, customer_id: 'cust-1' }],
+      });
+    }
+
+    /** The three `execute` calls the plain redeem path makes: RLS, balance, insert. */
+    function stubRedeemLedger(balance = 500, balanceAfter = 400) {
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ balance }] });
+      mockDb.execute.mockResolvedValueOnce({
+        rows: [{ id: 'tx-1', balance_after: balanceAfter, customer_id: 'cust-1' }],
+      });
+    }
+
+    it('asks the wallet to project the customer the ledger row was written for', async () => {
+      const { waited, waitUntil } = backgroundWork();
+      const reconcileCustomer = vi.fn(async () => ({ kind: 'patched' }));
+      stubEarnLedger();
+
+      const res = await postWithWallet(
+        '/v1/loyalty/points/assign',
+        { customer_id: 'cust-1', points: 50, reference_id: 'ref-proj' },
+        reconcileCustomer,
+        waitUntil,
+      );
+
+      expect(res.status).toBe(201);
+      // Both halves of the pair, and the tenant from the token rather than from
+      // anything the body supplied. A projection with the wrong tenant reads
+      // another merchant's pass, and with the wrong customer reads nobody's.
+      expect(reconcileCustomer).toHaveBeenCalledExactlyOnceWith({
+        tenantId: OPERATOR_AUTH.businessId,
+        customerId: 'cust-1',
+      });
+      expect(waited).toHaveLength(1);
+    });
+
+    it('answers 201 without waiting for a Google call that never returns', async () => {
+      // Not the status code on its own: a handler that awaited the projection
+      // would still eventually answer 201. The claim is that the response came
+      // back while the projection was still pending, and `settled()` is how that
+      // is observable — nothing else in this test can settle that promise.
+      const projection = deferred();
+      const { waitUntil } = backgroundWork();
+      stubEarnLedger();
+
+      const res = await postWithWallet(
+        '/v1/loyalty/points/assign',
+        { customer_id: 'cust-1', points: 50, reference_id: 'ref-slow' },
+        vi.fn(() => projection.promise),
+        waitUntil,
+      );
+
+      expect(res.status).toBe(201);
+      expect(projection.settled()).toBe(false);
+
+      // And the work is still ours to complete, which is the other half of
+      // "not awaited": the projection was handed off, not dropped.
+      projection.settle();
+      await expect(projection.promise).resolves.toBeUndefined();
+    });
+
+    it('answers 201 when the projection fails, and hands the failure over already handled', async () => {
+      // Two separate claims, and both are load-bearing. The sale must not fail —
+      // that is why the handler catches at all. And the promise `waitUntil`
+      // received must not be the rejected one: a rejected background task is
+      // attributed to the invocation that spawned it, and an unhandled rejection
+      // in a worker log is indistinguishable from a real fault in a report
+      // someone has to triage at 06:00.
+      const projection = deferred();
+      const { waited, waitUntil } = backgroundWork();
+      stubEarnLedger();
+
+      const res = await postWithWallet(
+        '/v1/loyalty/points/assign',
+        { customer_id: 'cust-1', points: 50, reference_id: 'ref-fail' },
+        vi.fn(() => projection.promise),
+        waitUntil,
+      );
+
+      expect(res.status).toBe(201);
+
+      projection.fail(new Error('google is unreachable'));
+      await expect(waited[0]).resolves.toBeUndefined();
+    });
+
+    it('answers 201 when the wallet binding throws on dispatch', async () => {
+      // Not the same failure as a rejected promise, and the reason it is tested
+      // separately is the `try` the call sits in: this one is synchronous, so it
+      // would be caught by the handler's own error handling — where a 23505 is
+      // being translated into a 409 — and reported as a 500 for a request whose
+      // ledger row was already written.
+      const { waitUntil } = backgroundWork();
+      stubEarnLedger();
+
+      const res = await postWithWallet(
+        '/v1/loyalty/points/assign',
+        { customer_id: 'cust-1', points: 50, reference_id: 'ref-throw' },
+        vi.fn(() => {
+          throw new Error('the binding is not a worker');
+        }),
+        waitUntil,
+      );
+
+      expect(res.status).toBe(201);
+    });
+
+    it('projects nothing when the ledger row was not written', async () => {
+      // The projection is fired after the insert, so every refusal before it
+      // leaves the pass alone. A duplicate reference is the interesting one: the
+      // balance did not move, and the row that exists is the one the first
+      // request wrote — projecting again would be a second, identical write to
+      // Google for a sale that never happened.
+      const { waitUntil } = backgroundWork();
+      const reconcileCustomer = vi.fn(async () => ({ kind: 'patched' }));
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'prog-1', earnRate: '1.0' }]));
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockRejectedValueOnce({
+        message: 'duplicate key value violates unique constraint "uq_points_tx_reference"',
+        code: '23505',
+      });
+
+      const res = await postWithWallet(
+        '/v1/loyalty/points/assign',
+        { customer_id: 'cust-1', points: 50, reference_id: 'dup-ref' },
+        reconcileCustomer,
+        waitUntil,
+      );
+
+      expect(res.status).toBe(409);
+      expect(reconcileCustomer).not.toHaveBeenCalled();
+    });
+
+    it('still answers 201 when no wallet binding is bound at all', async () => {
+      // The shape every pre-existing test in this file drives `app.fetch` with.
+      // `Bindings` says `WALLET` is required and the runtime does not make it so,
+      // and a missing binding is one of the ways this projection is unavailable —
+      // all of which the contract answers the same way: the sale is correct, the
+      // pass converges on the next sweep.
+      stubEarnLedger();
+
+      const r = new Request('http://localhost/v1/loyalty/points/assign', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': OPERATOR_AUTH.userId,
+          'X-Business-Id': OPERATOR_AUTH.businessId,
+          'X-User-Role': OPERATOR_AUTH.userRole,
+        },
+        body: JSON.stringify({ customer_id: 'cust-1', points: 50, reference_id: 'ref-nobinding' }),
+      });
+
+      const res = await app.fetch(r, {
+        DATABASE_URL: 'postgres://mock',
+        DOMAIN_EVENTS_QUEUE: {} as Queue,
+        SCHEMA_REGISTRY: {} as KVNamespace,
+      } as Record<string, unknown>);
+
+      expect(res.status).toBe(201);
+    });
+
+    it('asks the wallet to project after a redemption, on the non-transactional path', async () => {
+      const { waited, waitUntil } = backgroundWork();
+      const reconcileCustomer = vi.fn(async () => ({ kind: 'patched' }));
+      stubRedeemLedger();
+
+      const res = await postWithWallet(
+        '/v1/loyalty/rewards/redeem',
+        { customer_id: 'cust-1', points: 100, reference_id: 'ref-redeem-proj' },
+        reconcileCustomer,
+        waitUntil,
+      );
+
+      expect(res.status).toBe(201);
+      expect(reconcileCustomer).toHaveBeenCalledExactlyOnceWith({
+        tenantId: OPERATOR_AUTH.businessId,
+        customerId: 'cust-1',
+      });
+      expect(waited).toHaveLength(1);
+    });
+
+    it('projects only after the redemption transaction commits', async () => {
+      // The one claim the earn path cannot make. With a `reward_id` the ledger
+      // write and the stock decrement share a transaction, and a projection
+      // dispatched from inside it would ask the wallet to read a balance the
+      // transaction can still roll back — leaving Google's pass holding a
+      // redemption the ledger never committed, in the direction that lets a
+      // customer spend points they do not have.
+      //
+      // The order array is the assertion: the handler's own `await
+      // performRedeem()` has to resolve before `reconcileCustomer` is called at
+      // all. A projection moved inside the transaction body puts 'reconcile'
+      // between 'ledger' and 'commit'.
+      const order: string[] = [];
+      const { waitUntil } = backgroundWork();
+      const reconcileCustomer = vi.fn(async () => {
+        order.push('reconcile');
+        return { kind: 'patched' };
+      });
+
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] });
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'rw-1', name: 'Coffee', pointsCost: 100, stock: 5, validFrom: null, validUntil: null },
+        ]),
+      );
+      mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
+        const tx = createBuilder() as MockDb & { execute: MockFn };
+        tx.execute = vi.fn(async (statement: never) => {
+          // Two statements share this transaction — the ledger row and the
+          // stock decrement — so the order array names both. A projection fired
+          // between them would be a redemption Google knows about and the
+          // catalog does not.
+          const sqlText = new PgDialect().sqlToQuery(statement).sql;
+          order.push(sqlText.includes('points_transactions') ? 'ledger' : 'stock');
+          return { rows: [{ id: 'tx-9', balance_after: 400, customer_id: 'cust-1' }] };
+        });
+        await cb(tx);
+        order.push('commit');
+        return { rows: [{ id: 'tx-9', balance_after: 400, customer_id: 'cust-1' }] };
+      });
+
+      const res = await postWithWallet(
+        '/v1/loyalty/rewards/redeem',
+        { customer_id: 'cust-1', points: 100, reward_id: 'rw-1', reference_id: 'ref-tx' },
+        reconcileCustomer,
+        waitUntil,
+      );
+
+      expect(res.status).toBe(201);
+      expect(order).toEqual(['ledger', 'stock', 'commit', 'reconcile']);
+    });
+
+    it('projects nothing when a redemption is refused', async () => {
+      // The balance this call would have projected is the pre-redemption one,
+      // because no redemption happened. Firing on the refusal would be a no-op
+      // write at best and, on a redemption that is refused for a reason the
+      // wallet cannot see, a projection of a number the customer never had.
+      const { waitUntil } = backgroundWork();
+      const reconcileCustomer = vi.fn(async () => ({ kind: 'patched' }));
+      stubRedeemLedger(50);
+
+      const res = await postWithWallet(
+        '/v1/loyalty/rewards/redeem',
+        { customer_id: 'cust-1', points: 100, reference_id: 'ref-short' },
+        reconcileCustomer,
+        waitUntil,
+      );
+
+      expect(res.status).toBe(409);
+      expect(reconcileCustomer).not.toHaveBeenCalled();
+    });
+  });
 });
