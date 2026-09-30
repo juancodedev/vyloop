@@ -335,7 +335,7 @@ export default function DashboardHome() {
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
               </Link>
-              <Link href="/dashboard/rewards" className="dash-link-item">
+                <Link href="/dashboard/loyalty/rewards" className="dash-link-item">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                 </svg>
