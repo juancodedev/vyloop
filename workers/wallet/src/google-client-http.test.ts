@@ -382,10 +382,11 @@ describe('object operations', () => {
     await client(transport).insertObject(loyaltyObject);
 
     const call = transport.apiCalls()[0]!;
-    // The collection path, with the id in the body. Not `/loyaltyobject?object.id=`:
-    // that route does not exist, Google answers it with a routing 404 and an HTML
-    // body, and the request never reaches the point where it could create a pass.
-    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyobject`);
+    // The collection path, with the id in the body. Capital `O`, and that is not a
+    // style choice: the collection path is case-sensitive, and the lowercase form
+    // answers a routing 404 with an HTML body. The per-resource paths for `get`
+    // and `patch` are not case-sensitive, which is what makes the two look alike.
+    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyObject`);
     expect(call.method).toBe('POST');
     expect(JSON.parse(call.body!)).toEqual(loyaltyObject);
   });
