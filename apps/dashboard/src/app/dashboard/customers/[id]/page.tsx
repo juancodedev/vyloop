@@ -86,8 +86,15 @@ export default function CustomerDetailPage() {
       await api.assignPoints(customer.id, amount, note || undefined);
       showToast('success', 'Venta registrada exitosamente');
       handleCloseModal();
-      // Refetch customer + tiers
-      setLoading(true);
+      // Refresh in place. This used to raise `loading` as well, which is what
+      // left the page stuck on "Cargando cliente…" forever after a sale: the
+      // `finally` below resets `submitting`, not `loading`, and nothing else ever
+      // cleared it. Counting the pairs balances — the effect's error branch turns
+      // `loading` off — so a mismatch in the counts would not have found it.
+      //
+      // A refresh after a save is not a page load, and the customer is already on
+      // screen. The numbers update where they are; `submitting` is the honest
+      // signal that work is in flight, and it is bound to the button.
       const [cust, tiers] = await Promise.all([
         api.getCustomer(id),
         api.getTiers().catch(() => []),
@@ -102,7 +109,16 @@ export default function CustomerDetailPage() {
         setTierMultiplier(1);
       }
     } catch (err) {
-      setModalError(err instanceof Error ? err.message : 'Error al registrar venta');
+      // Not `setModalError`: the modal was closed two lines above, so anything
+      // written there is invisible. The sale already succeeded, so this is a
+      // refresh that did not come back and the operator should be told that,
+      // separately from the failure it would otherwise be read as.
+      showToast(
+        'error',
+        err instanceof Error
+          ? `Venta registrada, pero no se pudo refrescar: ${err.message}`
+          : 'Venta registrada, pero no se pudo refrescar.',
+      );
     } finally {
       setSubmitting(false);
     }
