@@ -50,12 +50,21 @@ app.post('/v1/auth/token', async (c) => {
     // Create DB connection
     const db = createDb(dbUrl);
 
-    // Find user by email
-    const [user] = await db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.email, body.email))
-      .limit(1);
+      // Find user by email
+      //
+      // Lowercased, and the counterpart of two decisions that are not visible
+      // here. The signup route lowercases before it writes, and `uq_users_email`
+      // is a unique index on `lower(email)` rather than on the column, so
+      // uniqueness is case-insensitive. This read has to agree with both: without
+      // it, an account created as `Ana@example.com` exists and cannot be signed
+      // into with that same address, which is the one outcome a login form cannot
+      // explain to anyone.
+      const [user] = await db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.email, String(body.email).toLowerCase()))
+        .limit(1);
+
 
     if (!user) {
       return c.json(
@@ -356,8 +365,28 @@ app.post('/v1/auth/business/signup', async (c) => {
       adminFullName: fullName,
     });
 
-    if (!outcome.ok) {
-      // 409, not 400: the request was well formed and the caller can fix it,
+      if (!outcome.ok) {
+        if (outcome.code === 'EMAIL_TAKEN') {
+          // 409 on the same reasoning as the slug: the request was well formed,
+          // and the caller can act on it by using a different address. The
+          // message says the address is already registered rather than that a
+          // constraint failed, because the constraint is not something the person
+          // at the form knows or can do anything about.
+          return c.json(
+            {
+              error: {
+                code: 'ADMIN_EMAIL_TAKEN',
+                message:
+                  'That email address is already registered for another business. One address is ' +
+                  'one account, so use a different one to register this business.',
+              },
+            },
+            409,
+          );
+        }
+
+        // 409, not 400: the request was well formed and the caller can fix it,
+
       // but not by changing what they sent — they have to change the name, and
       // the slug is derived from the name, so the response has to name the slug
       // they are actually colliding on. Sending them back a message about

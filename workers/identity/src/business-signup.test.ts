@@ -66,6 +66,7 @@ interface RecordedTx {
   transactions: number;
   /** Tables the pre-check found occupied. */
   existingSlugs: string[];
+  existingEmails: string[];
 }
 
 interface MockOptions {
@@ -75,6 +76,8 @@ interface MockOptions {
   throwFromTransaction?: unknown;
   /** Slugs the pre-check SELECT reports as taken. */
   existingSlugs?: string[];
+  existingEmails?: string[];
+  uniqueViolationOn?: string;
   /** Make this table's `RETURNING` come back empty. */
   emptyResultFor?: string;
 }
@@ -86,6 +89,7 @@ function createMockDb(options: MockOptions = {}): { db: SignupDb; log: RecordedT
     outside: [],
     transactions: 0,
     existingSlugs: options.existingSlugs ?? [],
+    existingEmails: options.existingEmails ?? [],
   };
 
   const rowsFor = (table: string): { id: string }[] => {
@@ -113,6 +117,14 @@ function createMockDb(options: MockOptions = {}): { db: SignupDb; log: RecordedT
     if (options.throwFromTransaction && bucket.length === 2) {
       throw options.throwFromTransaction;
     }
+    // A violation that names its constraint, which is how Postgres reports one and
+    // how the function tells a slug clash from an address clash.
+    if (options.uniqueViolationOn && bucket.length === 2) {
+      throw Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+        constraint: options.uniqueViolationOn,
+      });
+    }
     if (table && options.emptyResultFor === table) {
       return { rows: [] };
     }
@@ -128,6 +140,10 @@ function createMockDb(options: MockOptions = {}): { db: SignupDb; log: RecordedT
       const slugMatch = statement.match(/WHERE slug = (\S+)/);
       if (slugMatch && log.existingSlugs.includes(slugMatch[1])) {
         return { rows: [{ id: 'some-other-tenant' }] };
+      }
+      const emailMatch = statement.match(/WHERE email = (\S+)/);
+      if (emailMatch && log.existingEmails.includes(emailMatch[1])) {
+        return { rows: [{ id: 'some-other-user' }] };
       }
       return { rows: [] };
     },
@@ -300,6 +316,68 @@ describe('signupBusiness', () => {
 // ---------------------------------------------------------------------------
 // RLS ordering
 // ---------------------------------------------------------------------------
+
+describe('signupBusiness and the one-address rule', () => {
+  it('refuses an administrator email that already exists anywhere', async () => {
+    // The constraint is on `lower(email)`, so this is one account in the whole
+    // platform rather than one per business. Before this, a second merchant could
+    // register an address that already existed, be told the signup succeeded, and
+    // then fail to sign in — because the login resolves an operator by email with
+    // no tenant filter and took whichever row came back first.
+    const { db, log } = createMockDb({ existingEmails: ['owner@cafecentral.cl'] });
+
+    const outcome = await signup(db, { adminEmail: 'owner@cafecentral.cl' });
+
+    expect(outcome).toEqual({ ok: false, code: 'EMAIL_TAKEN' });
+    expect(log.transactions).toBe(0);
+  });
+
+  it('matches the email check case-insensitively, because the index does', async () => {
+    // `uq_users_email` is on `lower(email)`. A pre-check that compared the raw
+    // value would pass this signup and the index would reject it at insert time,
+    // so the common case would be a decoded driver error instead of a message.
+    const { db } = createMockDb({ existingEmails: ['owner@cafecentral.cl'] });
+
+    const outcome = await signup(db, { adminEmail: 'Owner@CafeCentral.CL' });
+
+    expect(outcome).toEqual({ ok: false, code: 'EMAIL_TAKEN' });
+  });
+
+  it('lowercases the address it stores, so the login can find it', async () => {
+    // The login reads `lower(email)` on its side too. A row written in any other
+    // case is reachable by neither the login nor the pre-check above, and the
+    // account exists and cannot be signed into.
+    const { db, log } = createMockDb();
+
+    await signup(db, { adminEmail: 'Owner@CafeCentral.CL' });
+
+    const userInsert = log.committed.find((q) => q.includes('INSERT INTO users'));
+    expect(userInsert).toContain('owner@cafecentral.cl');
+    expect(userInsert).not.toContain('Owner@CafeCentral.CL');
+  });
+
+  it('names the email index when the pre-check loses the race', async () => {
+    // Two concurrent signups for the same address both read an empty table and the
+    // second loses at the index. It has to surface as the same legible answer the
+    // pre-check gives, or the caller sees a 500 for something it can act on.
+    const { db } = createMockDb({ uniqueViolationOn: 'uq_users_email' });
+
+    const outcome = await signup(db, { adminEmail: 'owner@cafecentral.cl' });
+
+    expect(outcome).toEqual({ ok: false, code: 'EMAIL_TAKEN' });
+  });
+
+  it('still names the slug when the slug index is the one that rejects', async () => {
+    // Two collision sources now, and matching on the bare error code would send
+    // both to the same answer — telling a merchant their email is taken when it is
+    // their name that collides.
+    const { db } = createMockDb({ uniqueViolationOn: 'tenants_slug_unique' });
+
+    const outcome = await signup(db);
+
+    expect(outcome).toEqual({ ok: false, code: 'SLUG_TAKEN', slug: 'cafe-central' });
+  });
+});
 
 describe('signupBusiness RLS session', () => {
   // `app.current_business_id` does not exist until the tenant insert returns the

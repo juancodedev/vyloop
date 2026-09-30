@@ -284,6 +284,57 @@ describe('API Gateway', () => {
       requestCount = 0;
     });
 
+    it('throttles the public signup route, which has no identity to key on', async () => {
+      // `/v1/auth/*` used to skip the limiter wholesale. Signup is the first route
+      // under that prefix that creates a tenant and runs a 100k-iteration key
+      // derivation, and it is public, so the skip was the shape a script farm looks
+      // for. `requestCount` stands in for the stored counter.
+      requestCount = 5;
+
+      const res = await app.fetch(
+        new Request('https://api.test/v1/auth/business/signup', { method: 'POST' }),
+        mockEnv({ RATE_LIMITER: rateLimitMock() }),
+      );
+
+      expect(res.status).toBe(429);
+      expect(res.headers.get('Retry-After')).toBeTruthy();
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('throttles signup even though the request carries no Authorization header', async () => {
+      // The counter is keyed per business_id and an unauthenticated request has
+      // none. The old code took that as a reason to skip, so a limit written that
+      // way would only ever have applied to a request that was already
+      // authenticated — which signup, being public, never is.
+      requestCount = 5;
+
+      const res = await app.fetch(
+        new Request('https://api.test/v1/auth/business/signup', { method: 'POST' }),
+        mockEnv({ RATE_LIMITER: rateLimitMock() }),
+      );
+
+      expect(res.status).toBe(429);
+    });
+
+    it('leaves the login route unlimited, because locking someone out is worse', async () => {
+      // A login is a credential check whose cost is one PBKDF2. Limiting it hands
+      // a legitimate user a 429 because someone else guessed at their password,
+      // and they cannot tell that from being locked out.
+      requestCount = 9999;
+
+      const res = await app.fetch(
+        new Request('https://api.test/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: 'a@b.com', password: 'x' }),
+        }),
+        mockEnv({ RATE_LIMITER: rateLimitMock() }),
+      );
+
+      expect(res.status).not.toBe(429);
+    });
+
     it('returns 429 after exceeding rate limit', async () => {
       // Set the counter to exceed the limit (free tier = 60)
       requestCount = 60;

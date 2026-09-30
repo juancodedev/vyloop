@@ -61,7 +61,8 @@ export interface BusinessSignupResult {
 
 export type SignupOutcome =
   | { ok: true; value: BusinessSignupResult }
-  | { ok: false; code: 'SLUG_TAKEN'; slug: string };
+  | { ok: false; code: 'SLUG_TAKEN'; slug: string }
+  | { ok: false; code: 'EMAIL_TAKEN' };
 
 /**
  * The first tier every new business starts on.
@@ -83,15 +84,31 @@ const FIRST_TIER = {
 } as const;
 
 /**
- * Postgres `unique_violation`. Every unique rejection in this flow is the slug,
- * because the other three writes are either unconstrained (`membership_tiers`
- * has no unique index at all) or constrained on values this function just
- * minted, so a violation there is a bug rather than user input.
+ * Postgres `unique_violation`.
+ *
+ * Two of the four writes can now be rejected by it and both are user input:
+ * the derived slug, and the administrator's email. The other two are either
+ * unconstrained (`membership_tiers` has no unique index at all) or constrained
+ * on values this function just minted, so a violation there is a bug rather
+ * than something the caller typed.
  */
 const UNIQUE_VIOLATION = '23505';
 
-function isUniqueViolation(err: unknown): boolean {
-  return (err as { code?: string } | null)?.code === UNIQUE_VIOLATION;
+/**
+ * Does this violation name the given constraint?
+ *
+ * Postgres puts the constraint name in `constraint` and only the index or
+ * table name in `detail`, so matching on the text of the error message would
+ * work right up until the driver changed how it formats one. When the driver
+ * does not supply a constraint, this returns true for any unique violation on
+ * the assumption that the caller only uses it where every violation is a
+ * collision it already has a code for.
+ */
+function isUniqueViolationOn(err: unknown, constraint: string): boolean {
+  if ((err as { code?: string } | null)?.code !== UNIQUE_VIOLATION) return false;
+
+  const named = (err as { constraint?: string } | null)?.constraint;
+  return named === undefined || named === constraint;
 }
 
 function firstRow<T>(result: { rows?: T[] } | null | undefined): T | undefined {
@@ -136,6 +153,23 @@ export async function signupBusiness(
     return { ok: false, code: 'SLUG_TAKEN', slug };
   }
 
+  // Lowercased here rather than trusting the route to have done it. The unique
+  // index is on `lower(email)`, so a value written in any other case is
+  // comparable but not storable-as-expected: the row would be found by the
+  // login's lowercased lookup and missed by this function's pre-check, and the
+  // two would disagree about the same address. Normalising where the write
+  // happens is what keeps one rule instead of two.
+  const email = input.adminEmail.toLowerCase();
+
+  // The email pre-check, for the same reason and with the same caveat: `users.email`
+  // is globally unique, so a second business cannot be administered by an address
+  // that already exists, and telling the caller that here is what they would
+  // otherwise learn at the end of a password hash.
+  const emailInUse = await db.execute(sql`SELECT id FROM users WHERE email = ${email} LIMIT 1`);
+  if ((emailInUse.rows?.length ?? 0) > 0) {
+    return { ok: false, code: 'EMAIL_TAKEN' };
+  }
+
   try {
     const created = await db.transaction(async (tx) => {
       // 1. Tenant. No RLS session yet, and none needed.
@@ -154,7 +188,7 @@ export async function signupBusiness(
       const admin = firstRow(
         await tx.execute(
           sql`INSERT INTO users (business_id, email, full_name, role, password_hash, is_active)
-              VALUES (${businessId}::uuid, ${input.adminEmail},
+              VALUES (${businessId}::uuid, ${email},
                       ${input.adminFullName ?? null}, 'admin', ${input.adminPasswordHash}, true)
               RETURNING id`,
         ),
@@ -205,10 +239,15 @@ export async function signupBusiness(
 
     return { ok: true, value: created };
   } catch (err) {
-    // The race the pre-check cannot see. Mapped here rather than left to the
-    // route so the caller never has to know which layer rejected the slug.
-    if (isUniqueViolation(err)) {
+    // The races the pre-checks cannot see. Mapped here rather than left to the
+    // route so the caller never has to know which layer rejected what, and so
+    // both collisions read as the caller-facing thing they are rather than as a
+    // 500 from a constraint nobody outside this file has heard of.
+    if (isUniqueViolationOn(err, 'tenants_slug_unique')) {
       return { ok: false, code: 'SLUG_TAKEN', slug };
+    }
+    if (isUniqueViolationOn(err, 'uq_users_email')) {
+      return { ok: false, code: 'EMAIL_TAKEN' };
     }
     throw err;
   }
