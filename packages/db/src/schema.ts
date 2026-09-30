@@ -99,7 +99,12 @@ export const users = pgTable('users', {
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [
-  unique('uq_users_business_email').on(table.businessId, table.email),
+  // Unique on `email` alone, not on `(business_id, email)`. The login route
+  // resolves an operator by email with no tenant filter, so a tenant-scoped
+  // constraint permitted the same address to administer two businesses and the
+  // login then resolved whichever row came back first. One address is one
+  // account, which is what a single `business_id` column already assumed.
+  unique('uq_users_email').on(table.email),
 ]);
 
 // ============================================================================

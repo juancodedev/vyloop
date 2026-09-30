@@ -6,7 +6,7 @@ import { authMiddleware } from './middleware/auth';
 import { authInjectMiddleware } from './middleware/auth-inject';
 import { businessIdMiddleware } from './middleware/business-id';
 import {
-  rateLimitMiddleware,
+  rateLimitMiddleware, SIGNUP_LIMIT_PER_WINDOW,
   DEFAULT_LIMITS,
   DEFAULT_WINDOW,
 } from './middleware/rate-limit';
@@ -108,19 +108,29 @@ app.use('/v1/*', async (c, next) => {
   return businessIdMiddleware(c, next) as unknown as ReturnType<typeof next>;
 });
 
-// Middleware 4: Rate limiting — skip /v1/auth/*
-app.use('/v1/*', async (c, next) => {
-  const path = new URL(c.req.url).pathname;
-  if (path.startsWith('/v1/auth/')) {
-    await next();
-    return;
-  }
+  // Middleware 4: Rate limiting
+  //
+  // `/v1/auth/*` used to be skipped wholesale, which was right while every route
+  // under it was a cheap credential check. It is no longer right: signup creates a
+  // tenant and runs a 100k-iteration key derivation, and it is public. The skip
+  // is replaced by a per-route anonymous limit, so the exemption is now a number
+  // someone chose rather than a prefix nobody has to justify.
+  app.use('/v1/*', async (c, next) => {
+    const env = c.env as GatewayEnv;
+    return rateLimitMiddleware({
+      kv: env.RATE_LIMITER,
+      limits: DEFAULT_LIMITS,
+      // The login route is left unlimited on purpose and the signup route is
+      // not: a login is a credential check whose cost is one PBKDF2, and locking
+      // a legitimate user out of their own account because someone else guessed
+      // at it is a worse failure than the traffic it lets through. A signup also
+      // runs that derivation, and additionally creates a tenant, so it gets a
+      // number a human waiting on a form will not notice and a script will.
+      anonymousLimits: {
+        '/v1/auth/business/signup': SIGNUP_LIMIT_PER_WINDOW,
+      },
+      windowSeconds: DEFAULT_WINDOW,
 
-  const env = c.env as GatewayEnv;
-  return rateLimitMiddleware({
-    kv: env.RATE_LIMITER,
-    limits: DEFAULT_LIMITS,
-    windowSeconds: DEFAULT_WINDOW,
   })(c, next);
 });
 
