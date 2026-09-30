@@ -62,6 +62,12 @@ function programRow(overrides: Partial<WalletProgramRow> = {}): WalletProgramRow
     issuerId: ISSUER,
     classId: classIdFor(ISSUER, TENANT),
     reviewStatus: 'approved',
+    // A row read after the migration always carries the column, so the default
+    // fixture says "not in demo mode" explicitly. Leaving it out would make
+    // `classReadinessFor` treat the row as unreadable and fall back to demo mode,
+    // which is the safe direction but would make every case below about the
+    // fallback rather than about what it is testing.
+    demoMode: false,
     lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
     ...overrides,
   };
@@ -228,6 +234,14 @@ class FakeStore implements WalletStore {
     const row = this.programs[tenantId];
     if (row) row.reviewStatus = reviewStatus;
   }
+
+  async setProgramDemoMode(tenantId: string, demoMode: boolean): Promise<number> {
+    this.record('setProgramDemoMode', tenantId);
+    const row = this.programs[tenantId];
+    if (!row) return 0;
+    row.demoMode = demoMode;
+    return 1;
+  }
 }
 
 function readyStore(overrides: Partial<WalletProgramRow> = {}): FakeStore {
@@ -265,7 +279,7 @@ function passInput(overrides: Partial<Parameters<typeof issuePass>[1]> = {}) {
 
 describe('classReadinessFor', () => {
   it('accepts an approved class whose stored id matches the derivation', () => {
-    const readiness = classReadinessFor(programRow(), TENANT);
+    const readiness = classReadinessFor(programRow(), TENANT, false);
 
     expect(readiness.ok).toBe(true);
     if (readiness.ok) {
@@ -280,7 +294,7 @@ describe('classReadinessFor', () => {
     // The design answer: no row is an honest, named prerequisite. Nothing is
     // created, because a class needs a Google review that cannot be skipped and
     // cannot return to draft.
-    const readiness = classReadinessFor(null, TENANT);
+    const readiness = classReadinessFor(null, TENANT, false);
 
     expect(readiness.ok).toBe(false);
     if (!readiness.ok) {
@@ -293,7 +307,7 @@ describe('classReadinessFor', () => {
   it.each(['none', 'draft', 'under_review', 'rejected'])(
     'blocks issuance while the class is %s',
     (status) => {
-      const readiness = classReadinessFor(programRow({ reviewStatus: status }), TENANT);
+      const readiness = classReadinessFor(programRow({ reviewStatus: status }), TENANT, false);
 
       expect(readiness.ok).toBe(false);
       if (!readiness.ok) {
@@ -307,7 +321,7 @@ describe('classReadinessFor', () => {
     // The column is `text` with no check constraint, so a future migration or a
     // hand-written row can carry anything. An allow-list of unusable states
     // would start issuing passes against a state nobody reasoned about.
-    const readiness = classReadinessFor(programRow({ reviewStatus: 'APPROVED' }), TENANT);
+    const readiness = classReadinessFor(programRow({ reviewStatus: 'APPROVED' }), TENANT, false);
 
     expect(readiness.ok).toBe(false);
     if (!readiness.ok) expect(readiness.reason).toBe('class_not_approved');
@@ -317,10 +331,11 @@ describe('classReadinessFor', () => {
     // Sending Google an id that is not `<issuerId>.tenant-<tenantId>` is a 400
     // at the customer's tap. Catching it here names an operational data error
     // instead of a customer-facing failure.
-    const readiness = classReadinessFor(
-      programRow({ classId: '3388000000023206930.tenant-something-else' }),
-      TENANT,
-    );
+      const readiness = classReadinessFor(
+        programRow({ classId: '3388000000023206930.tenant-something-else' }),
+        TENANT,
+        false,
+      );
 
     expect(readiness.ok).toBe(false);
     if (!readiness.ok) {
@@ -339,7 +354,7 @@ describe('classReadinessFor', () => {
       classId: classIdFor(ISSUER, OTHER_TENANT),
     });
 
-    const readiness = classReadinessFor(foreignRow, TENANT);
+    const readiness = classReadinessFor(foreignRow, TENANT, false);
 
     expect(readiness.ok).toBe(false);
     if (!readiness.ok) expect(readiness.reason).toBe('class_id_mismatch');
@@ -356,7 +371,7 @@ describe('classReadinessFor', () => {
 
     // Readiness succeeds on the id, so the guard that catches this has to be the
     // store's tenant filter. Asserted explicitly so that guard is not assumed.
-    expect(classReadinessFor(foreignRow, TENANT).ok).toBe(true);
+    expect(classReadinessFor(foreignRow, TENANT, false).ok).toBe(true);
     // Which is precisely why `FakeStore.findProgram` is tenant-indexed, and why
     // the store test below proves the SQL does the same.
   });
@@ -365,10 +380,11 @@ describe('classReadinessFor', () => {
     // Both are wrong. The review is what a person waits on; reporting the id
     // would send an operator to fix a string while the class is still unusable
     // for the reason Google has not finished looking at it.
-    const readiness = classReadinessFor(
-      programRow({ reviewStatus: 'draft', classId: 'wrong' }),
-      TENANT,
-    );
+      const readiness = classReadinessFor(
+        programRow({ reviewStatus: 'draft', classId: 'wrong' }),
+        TENANT,
+        false,
+      );
 
     expect(readiness.ok).toBe(false);
     if (!readiness.ok) expect(readiness.reason).toBe('class_not_approved');

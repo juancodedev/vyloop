@@ -353,6 +353,14 @@ export interface SweepDeps {
    * run skip the first run's work.
    */
   now?: Date | undefined;
+  /**
+   * The deployment-wide demo mode, from `WALLET_DEMO_MODE`.
+   *
+   * Required, for the same reason it is required on `ReconcileDeps`: it decides
+   * whether a `draft` class may be touched, and a defaulted value that happened
+   * to be the wrong one would widen what this worker writes to Google.
+   */
+  demoMode: boolean;
 }
 
 export interface SweepInput {
@@ -408,7 +416,7 @@ export async function sweepPasses(deps: SweepDeps, input: SweepInput): Promise<S
     // approved cannot have live objects, and a sweep that patched anyway would
     // be the one code path in this worker that writes to Google without the
     // class being ready — the exact thing the pass route refuses to do.
-    const readiness = classReadinessFor(program, program.tenantId);
+    const readiness = classReadinessFor(program, program.tenantId, input.demoMode);
     if (!readiness.ok) {
       report.tenantsSkipped += 1;
       continue;
@@ -589,7 +597,7 @@ async function sweepOnePass(
 
   try {
     const outcome = await reconcilePass(
-      { store: deps.store, client: deps.client, now: observedAt },
+      { store: deps.store, client: deps.client, now: observedAt, demoMode: deps.demoMode },
       { tenantId: row.tenantId, customerId: row.customerId },
     );
     report.outcomes[outcome.kind] += 1;
@@ -662,7 +670,11 @@ export async function runScheduledSweep(env: WalletBindings): Promise<SweepRepor
 
   const db = createDb(env.DATABASE_URL);
   const report = await sweepPasses(
-    { store: createDrizzleWalletStore(db), client: googleWalletClientFor(env) },
+    {
+      store: createDrizzleWalletStore(db),
+      client: googleWalletClientFor(env),
+      demoMode,
+    },
     { demoMode },
   );
 

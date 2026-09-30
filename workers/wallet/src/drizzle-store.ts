@@ -114,6 +114,11 @@ const PROGRAM_COLUMNS = {
   issuerId: tenantWalletPrograms.issuerId,
   classId: tenantWalletPrograms.classId,
   reviewStatus: tenantWalletPrograms.reviewStatus,
+  // The per-tenant demo-mode switch. Selected here so the readiness gate and the
+  // pass route see the same value the operator set; a projection that omitted it
+  // would read as `undefined` and be treated as demo mode, which would look like
+  // the switch silently not working.
+  demoMode: tenantWalletPrograms.demoMode,
   lastSyncedAt: tenantWalletPrograms.lastSyncedAt,
 };
 
@@ -550,6 +555,22 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
         .update(tenantWalletPrograms)
         .set({ reviewStatus, lastSyncedAt: syncedAt, updatedAt: syncedAt })
         .where(eq(tenantWalletPrograms.tenantId, tenantId));
+    },
+
+    async setProgramDemoMode(tenantId: string, demoMode: boolean): Promise<number> {
+      // The tenant filter is the whole point of this statement: it is a write
+      // reachable from an operator request, and without it a bad id would edit a
+      // row belonging to someone else. `RETURNING` reports whether a row actually
+      // matched, so a caller can distinguish "set" from "no such tenant".
+      const result = await db.execute(sql`
+        UPDATE tenant_wallet_programs
+           SET demo_mode = ${demoMode},
+               updated_at = now()
+         WHERE tenant_id = ${tenantId}::uuid
+        RETURNING tenant_id
+      `);
+
+      return countRows(result);
     },
   };
 }

@@ -48,3 +48,13 @@ next-env.d.ts
 
 # local dev secrets (Cloudflare Workers)
 .dev.vars
+
+# Google Cloud service account keys. A downloaded key JSON carries a live
+# private key. Scoped to the repository root, which is where the download lands,
+# and paired with explicit name patterns: a broad `*.json` would silently ignore
+# legitimate config and turn `git add` into a mystery. The real guarantee is
+# `secret-material.contract.test.ts`, which fails if a private key is ever
+# tracked — a pattern cannot inspect file contents, a test can.
+/*-*.json
+/*service*account*.json
+*service*account*.json

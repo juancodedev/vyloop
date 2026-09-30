@@ -447,8 +447,22 @@ export const tenantWalletPrograms = pgTable('tenant_wallet_programs', {
   // `none` | `draft` | `under_review` | `approved` | `rejected`. Google's enum
   // is `DRAFT` | `UNDER_REVIEW` | `APPROVED` | `REJECTED`; the snake_case here
   // is vyloop's own storage form and is translated in the payload builder.
-  reviewStatus: text('review_status').notNull().default('none'),
-  lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    reviewStatus: text('review_status').notNull().default('none'),
+    // Whether this tenant is still inside Google's demo mode, declared per
+    // business rather than per deployment. `true` is the default and the safe
+    // direction: while it holds, a `draft` class can be used to mint a pass
+    // because Google itself limits delivery to the issuer's test accounts, and
+    // the system says nothing about the pass working for the public.
+    //
+    // Flipping it to `false` is the operator declaring that Google granted
+    // publishing access. It is the only thing that makes a `draft` class an
+    // error instead of a test.
+    //
+    // `WALLET_DEMO_MODE` stays the deployment-wide ceiling, and the effective
+    // value is `env || db`, so a deployment can refuse every mint regardless of
+    // what any row says.
+    demoMode: boolean('demo_mode').notNull().default(true),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),
 });

@@ -1,0 +1,19 @@
+-- Per-tenant Google Wallet demo-mode switch.
+--
+-- The class gate used to require `review_status = 'approved'` with no
+-- exception. Google reports a new issuer account's class as `draft` until it
+-- grants publishing access, and in demo mode Google still allows pass creation,
+-- limiting delivery to the issuer's test accounts. The stricter gate meant the
+-- signing path could not be exercised at all before the grant arrived, and the
+-- grant is on Google's timeline.
+--
+-- This column is the per-tenant half of the answer. Default `true` is
+-- deliberate: an absent or unreadable value must mean "demo mode", because the
+-- costs are asymmetric. A deployment in demo mode that claims otherwise hands a
+-- real customer a pass that only works on test accounts, and that is a support
+-- incident rather than a warning.
+--
+-- The environment variable `WALLET_DEMO_MODE` remains the deployment-wide
+-- ceiling, and the effective value is `env || db`, so an incident can stop
+-- every mint without editing a row.
+ALTER TABLE "tenant_wallet_programs" ADD COLUMN IF NOT EXISTS "demo_mode" boolean DEFAULT true NOT NULL;--> statement-breakpoint
