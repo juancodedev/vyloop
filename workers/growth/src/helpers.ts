@@ -21,10 +21,42 @@ export interface AuthHeaders {
   userRole: string;
 }
 
+/**
+ * The wallet worker's RPC surface, as this worker calls it.
+ *
+ * A plain `Fetcher` models only `fetch` and `connect`, so the target's exported
+ * `reconcileCustomer` — the entire point of this binding — needs its own shape.
+ * This is the same declaration `workers/automation` makes for the wallet's
+ * `scheduled`, for the same reason: rename or re-sign that export over there and
+ * this stops typechecking, so the contract is pinned from both sides instead of
+ * from whichever one was written last.
+ *
+ * The outcome is `unknown` on purpose. This worker does not read it: the
+ * projection is fire-and-forget, because a sale must not wait on Google, and the
+ * daily sweep is the backstop for whatever the outcome turns out to have been.
+ * Copying `reconcilePass`'s eight-way outcome union across a worker boundary it
+ * is not allowed to branch on would be a second definition of a decision it does
+ * not make, drifting for ever from the one that does.
+ */
+export interface WalletWorker {
+  reconcileCustomer(input: { tenantId: string; customerId: string }): Promise<unknown>;
+}
+
 export interface Bindings {
   DATABASE_URL: string;
   DOMAIN_EVENTS_QUEUE: Queue;
   SCHEMA_REGISTRY: KVNamespace;
+  /**
+   * The wallet worker, so a ledger write can ask for the balance projection
+   * instead of waiting for the customer to reopen the app.
+   *
+   * A service binding rather than a `fetch`, for the reason
+   * `workers/automation` gives for the same binding: the wallet's exported
+   * method runs with the *wallet's* bindings and its Google credentials. A fetch
+   * would have to forward them by hand and would put the issuer's signing key
+   * on a path that takes customer input.
+   */
+  WALLET: WalletWorker;
 }
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: AuthHeaders } };
@@ -323,6 +355,128 @@ export function buildRewardAutoGrantedEvent(
     { business_id: businessId, timestamp: new Date().toISOString() },
     payload,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Pass projection
+// ---------------------------------------------------------------------------
+
+/**
+ * Ask the wallet to project one customer's balance, and do not wait for it.
+ *
+ * ## The problem this answers
+ *
+ * A Google Wallet pass is a surface at a till, and the balance on it moved only
+ * when the holder opened the app or when the daily sweep ran. Both are *pull*:
+ * neither knows a sale happened, and the sweep bounds the staleness at 24 hours,
+ * which is longer than a shift. This is the push, fired from the two handlers
+ * that move a balance, after the ledger row is written.
+ *
+ * ## Why `waitUntil` and not an `await`
+ *
+ * The work is a Google round trip. Awaiting it would make a till's availability
+ * depend on Google's, so one slow minute from Google becomes a sales outage —
+ * a worse failure than a balance that is briefly stale and converges within a
+ * day. `waitUntil` is what makes the projection outlive the response without
+ * being on the response's critical path.
+ *
+ * ## Why this function cannot throw
+ *
+ * It is called from inside the handlers' `try` blocks, where a unique-violation
+ * is being translated into a 409 and anything else becomes a 500. A throw here
+ * would therefore turn a balance projection into a failed sale, which is exactly
+ * the coupling above argued against. So the dispatch is guarded, the promise is
+ * handled, and the absence of a binding is a log line rather than an exception.
+ * The ledger is already correct by the time this runs; the pass converges later
+ * or the daily sweep converges it.
+ *
+ * ## Why fire-and-forget is safe here rather than merely convenient
+ *
+ * The wallet's `reconcileCustomer` is `reconcilePass`, which compares before it
+ * writes: a second call for an unchanged balance issues no Google write at all.
+ * A dropped `waitUntil`, a Google failure and a duplicated fire are all the same
+ * no-op, and the daily sweep is the backstop for all of them. What this buys is
+ * latency — the balance is right by the time the customer is back at the counter
+ * — and that is worth having; it is not the correctness fix, the sweep already
+ * was.
+ *
+ * Only the wallet-side outcome knows whether anything was written, and this
+ * worker deliberately does not read it. Branching on it here would be a second
+ * opinion about the pass, held by a worker with no way to check it.
+ */
+export function schedulePassReconcile(
+  // `Context<{ Bindings: Bindings }>` rather than `Context<AppEnv>`: the router
+  // declares bindings and no variables, so `AppEnv`'s `Variables` would make this
+  // uncallable from the two handlers that need it. The tenant is passed in
+  // explicitly for the same reason — the app-level middleware validates the auth
+  // headers but never stores them on the context, so `c.get('auth')` is not
+  // something a route can rely on.
+  c: Context<{ Bindings: Bindings }>,
+  customer: { tenantId: string; customerId: string },
+): void {
+  const wallet = c.env?.WALLET;
+
+  // `Bindings` declares this as required, and the runtime does not make it so:
+  // a `wrangler.jsonc` that predates the binding — and every test that drives
+  // this app through `app.fetch(request, env)` — reaches here without one. That
+  // is one of the ways the projection can be unavailable, and the contract above
+  // says what to do with all of them: do not fail the sale.
+  if (!wallet) {
+    console.error(
+      `[growth] No WALLET service binding, so the pass for customer ${customer.customerId} in ` +
+        `tenant ${customer.tenantId} was not projected. The daily sweep will pick it up.`,
+    );
+    return;
+  }
+
+  // The dispatch itself is guarded separately from its promise. An RPC call that
+  // throws synchronously — a binding that is present but is not a worker — would
+  // otherwise be caught by the handler's `try` and reported as a 500 for a
+  // request that had already been written to the database.
+  let projection: Promise<unknown>;
+  try {
+    projection = wallet.reconcileCustomer(customer);
+  } catch (err: unknown) {
+    console.error(
+      `[growth] Could not reach the wallet to project the pass for customer ` +
+        `${customer.customerId} in tenant ${customer.tenantId}:`,
+      err,
+    );
+    return;
+  }
+
+  // Handled before it is handed over, so the promise `waitUntil` receives cannot
+  // reject. A rejected background task is attributed to the invocation that
+  // spawned it, and an unhandled rejection is indistinguishable from a real
+  // fault in a log someone has to triage at 06:00.
+  const handled = projection.catch((err: unknown) => {
+    console.error(
+      `[growth] Pass projection failed for customer ${customer.customerId} in tenant ` +
+        `${customer.tenantId}; the ledger is correct and the daily sweep will converge the pass:`,
+      err,
+    );
+  });
+
+  // `c.executionCtx` throws when the context carries no `ExecutionContext`, and
+  // the only such callers are the ones driving this app directly rather than
+  // the Workers runtime. Catching that is not defensive noise: the alternative
+  // is a pass projection failing a sale for the sake of an environment that is
+  // not a sale.
+  let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+  try {
+    waitUntil = c.executionCtx.waitUntil.bind(c.executionCtx);
+  } catch {
+    waitUntil = undefined;
+  }
+
+  if (waitUntil === undefined) {
+    console.error(
+      '[growth] No ExecutionContext to hand the pass projection to, so it runs unattached.',
+    );
+    return;
+  }
+
+  waitUntil(handled);
 }
 
 // ---------------------------------------------------------------------------

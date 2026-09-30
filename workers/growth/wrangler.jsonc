@@ -25,5 +25,20 @@
         "queue": "vyloop-domain-events"
       }
     ]
-  }
+  },
+  // The wallet, so a ledger write can ask for the balance projection at the
+  // moment the balance moves. Growth publishes `PointsAssigned` and
+  // `RewardRedeemed` already, and a queue consumer on the wallet was the
+  // obvious way to consume them — but the wallet's config contract test forbids
+  // a `queues` block there and the account's consumer limit is not verifiable
+  // from this repository, so this binding is a direct RPC call under `waitUntil`
+  // instead. See `schedulePassReconcile` for why the projection must not sit on
+  // the response's critical path, and the feature's own notes for why a consumer
+  // is still the better long-term shape if the account allows one.
+  "services": [
+    {
+      "binding": "WALLET",
+      "service": "wallet"
+    }
+  ]
 }

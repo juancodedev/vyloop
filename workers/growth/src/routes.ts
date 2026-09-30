@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole, requireOperatorRole } from './helpers';
+import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole, requireOperatorRole, schedulePassReconcile } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -594,6 +594,13 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     );
 
     await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+
+    // The balance moved, so the pass has to learn that it moved. Handed off here
+    // rather than awaited, and placed after the event publish so the only thing
+    // between the customer and the 201 is the work being *given away* — never a
+    // Google round trip. Before the INSERT it would project a number the ledger
+    // does not hold yet, and that number is the one a cashier reads aloud.
+    schedulePassReconcile(c, { tenantId: businessId, customerId: body.customer_id });
 
     return c.json({ data: tx }, 201);
   } catch (err: unknown) {
@@ -1233,6 +1240,25 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
     );
 
     await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+
+    // Same shape as the earn path, and placed for the same reasons — with one
+    // extra constraint this route has and the earn route does not: the ledger
+    // write above may have run inside `db.transaction`, and it is this line's
+    // job to sit strictly *after* it. A projection fired from inside that
+    // transaction would ask the wallet to read a balance the transaction can
+    // still roll back, so a redemption that fails to commit would leave Google's
+    // pass holding a number the ledger never agreed to — and unlike a stale
+    // balance, that one is wrong in the direction that lets a customer spend
+    // points they no longer have. `await performRedeem()` above has already
+    // resolved, so this is after the commit on both branches: the transactional
+    // one and the plain one.
+    //
+    // Redemption is also where an over-limit balance must stop being pushed, and
+    // the reason is the earn path's reason inverted: spending is the only
+    // operation that can drive a balance to a number no pass can render, and
+    // that refusal belongs to the wallet's `reconcilePass`, which is why this
+    // hands it a customer id and nothing else.
+    schedulePassReconcile(c, { tenantId: businessId, customerId });
 
     return c.json(
       {
