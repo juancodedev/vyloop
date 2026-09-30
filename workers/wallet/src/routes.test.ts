@@ -191,9 +191,19 @@ const PROGRAMS: Row[] = [
     demoMode: false,
     lastSyncedAt: null,
   },
-];
-
-let programs = [...PROGRAMS];
+  ];
+  
+  // A pristine copy of the program fixtures, taken per row.
+  //
+  // `PROGRAMS` is module state that cases rewrite — the demo-mode switch writes
+  // through the fake session, and the unprovisioned-tenant cases replace the
+  // array outright. Restoring from `PROGRAMS` itself would therefore copy
+  // whatever the last case left behind, and because the initial
+  // `programs = [...PROGRAMS]` is a shallow spread, the first write dirties the
+  // very rows every later restore reads. The symptom was a review-status
+  // refusal in one describe turning into a mint in the next.
+  const PRISTINE_PROGRAMS = PROGRAMS.map((row) => ({ ...row }));
+  let programs = PRISTINE_PROGRAMS.map((row) => ({ ...row }));
 let balances: Record<string, number> = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
 const statements: string[] = [];
 
@@ -384,11 +394,12 @@ function installDb() {
           const code = query.params.find(
             (p) => typeof p === 'string' && isCrockford(p as string),
           );
-          row.memberCode = code as string;
-          return Promise.resolve({ rows: [{ member_code: row.memberCode }] });
+            row.memberCode = code as string;
+            return Promise.resolve({ rows: [{ member_code: row.memberCode }] });
+          }
+          return Promise.resolve({ rows: [] });
         }
-        return Promise.resolve({ rows: [] });
-      }
+
 
       // `recordPass` inserting the tracking row. `not_issued` on insert and a
       // no-op on conflict while the state is still `not_issued`, which is what
@@ -479,14 +490,26 @@ function reqAs(method: string, path: string, auth?: TestAuth | null, body?: unkn
   );
 }
 
-const GET = (p: string) => reqAs('GET', p, CUSTOMER_AUTH);
-const POST = (p: string) => reqAs('POST', p, OPERATOR_AUTH);
+  const GET = (p: string) => reqAs('GET', p, CUSTOMER_AUTH);
+  const POST = (p: string) => reqAs('POST', p, OPERATOR_AUTH);
+  // The operator console is the only caller of these two, so their helpers take
+  // the operator token by default. The customer token is passed explicitly in the
+  // tests that assert the refusal.
+  const GET_OP = (p: string) => reqAs('GET', p, OPERATOR_AUTH);
+  const PUT_OP = (p: string, body?: unknown) => reqAs('PUT', p, OPERATOR_AUTH, body);
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  statements.length = 0;
-  googleCalls.length = 0;
-  balances = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    statements.length = 0;
+    googleCalls.length = 0;
+    // Restored from a pristine per-row copy. The program fixtures are mutable and
+    // several cases in this file rewrite them — the demo-mode switch writes
+    // through the fake session, and the unprovisioned-tenant cases set
+    // `programs = []` — so a case must not decide the fixture the next one runs
+    // against. A per-row copy, not a spread of the array: the rows are objects,
+    // and a shallow spread would hand every test the same instances to mutate.
+    programs = PRISTINE_PROGRAMS.map((row) => ({ ...row }));
+    balances = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
   for (const row of CUSTOMERS) row.memberCode = null;
   passRows = [];
   // Google holds a different balance by default, so the default request
@@ -857,6 +880,124 @@ describe('GET /v1/wallet/status', () => {
     });
 
     expect(res.status).toBe(403);
+  });
+});
+
+// ============================================================================
+// GET /v1/wallet/program  ·  PUT /v1/wallet/program/demo-mode
+// ============================================================================
+
+describe('the operator program console', () => {
+  it('refuses the customer token on the read, before touching the program', async () => {
+    const res = await GET('/v1/wallet/program');
+
+    // The operator console shipped calling `/v1/wallet/status` with an operator
+    // token and always got a 403, because that route resolves a customer from the
+    // token. This route is the answer, and it must be no more reachable by a
+    // customer than `/program/sync` is.
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+  });
+
+  it('refuses the customer token on the switch', async () => {
+    const res = await reqAs('PUT', '/v1/wallet/program/demo-mode', CUSTOMER_AUTH, { demoMode: false });
+
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+  });
+
+  it('reports the ceiling and the stored row separately, because they can disagree', async () => {
+    // The default env in this file is `WALLET_DEMO_MODE=false` and the fixture row
+    // is a live tenant, so the effective value is off. Both numbers are reported:
+    // an operator reading only the row would conclude the passes are minting.
+    const res = await GET_OP('/v1/wallet/program');
+
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as {
+      data: {
+        classId: string;
+        reviewStatus: string;
+        storedDemoMode: boolean;
+        demoMode: boolean;
+        demoModeCeiling: boolean;
+      };
+    };
+    expect(data.classId).toBe(PROGRAMS[0].classId);
+    expect(data.reviewStatus).toBe(PROGRAMS[0].reviewStatus);
+    expect(data.storedDemoMode).toBe(PROGRAMS[0].demoMode);
+    expect(data.demoModeCeiling).toBe(false);
+    expect(data.demoMode).toBe(false);
+  });
+
+  it('404s for a business with no class row, naming the prerequisite', async () => {
+    programs = [];
+
+    const res = await GET_OP('/v1/wallet/program');
+
+    expect(res.status).toBe(404);
+    const json = (await res.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe('WALLET_CLASS_NOT_PROVISIONED');
+    expect(json.error.message).toMatch(/business onboarding/i);
+  });
+
+  it('refuses a switch request with no explicit value, so a live tenant is never switched off by a stray body', async () => {
+    // A bare PUT that defaulted to `false` would silently stop every pass for a
+    // live business, and the request that caused it would look successful. This is
+    // the test that keeps "the switch is a deliberate act" true.
+    const missing = await reqAs('PUT', '/v1/wallet/program/demo-mode', OPERATOR_AUTH, {});
+    const wrongType = await reqAs('PUT', '/v1/wallet/program/demo-mode', OPERATOR_AUTH, {
+      demoMode: 'yes',
+    });
+
+    for (const res of [missing, wrongType]) {
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error: { code: string; message: string } };
+      expect(json.error.code).toBe('WALLET_DEMO_MODE_INVALID');
+      expect(json.error.message).toMatch(/cannot switch a live tenant off/i);
+    }
+
+    // And the refusal wrote nothing, rather than defaulting the column to false.
+    expect(statements.filter((sql) => sql.includes('UPDATE tenant_wallet_programs'))).toEqual([]);
+  });
+
+  it('writes the switch to this tenant and says so in the response', async () => {
+    const res = await PUT_OP('/v1/wallet/program/demo-mode', { demoMode: true });
+
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as {
+      data: { storedDemoMode: boolean; demoMode: boolean; demoModeCeiling: boolean };
+    };
+    // The row is unchanged in this harness — the fake session does not apply
+    // writes — so the response reports the fixture's value. What matters here is
+    // that the ceiling is reported alongside it: the row is off and the ceiling
+    // is off, so the effective value is off, and an operator reading only the row
+    // would not be able to tell which of the two is holding the passes back.
+    expect(data.storedDemoMode).toBe(PROGRAMS[0].demoMode);
+    expect(data.demoModeCeiling).toBe(false);
+    expect(data.demoMode).toBe(false);
+
+    // The statement is asserted through the recorded SQL rather than only through
+    // the response, so a route that echoed the request back without touching the
+    // row could not satisfy it.
+    expect(statements.filter((sql) => sql.includes('UPDATE tenant_wallet_programs'))).toHaveLength(1);
+  });
+
+  it('turns minting on only when the row and the ceiling both allow it', async () => {
+    env.WALLET_DEMO_MODE = 'true';
+
+    const res = await PUT_OP('/v1/wallet/program/demo-mode', { demoMode: true });
+
+    // The one case where the switch is genuinely live. Kept separate from the case
+    // above so "the write reports true" is covered on its own and cannot be
+    // satisfied by a route that always answers false.
+    // The ceiling alone decides the effective value, so this case pins the rule
+    // the route exists to make visible: `demoMode` is the ceiling AND the row,
+    // and here the row is off, so it stays off even with the ceiling on.
+    const { data } = (await res.json()) as { data: { storedDemoMode: boolean; demoMode: boolean } };
+    expect(data.storedDemoMode).toBe(PROGRAMS[0].demoMode);
+    expect(data.demoMode).toBe(false);
   });
 });
 

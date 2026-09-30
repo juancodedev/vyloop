@@ -452,6 +452,174 @@ router.get('/v1/wallet/pass', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /v1/wallet/program  ·  PUT /v1/wallet/program/demo-mode
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /v1/wallet/program
+ *
+ * Read this tenant's wallet program as an **operator**.
+ *
+ * ## Why this exists next to the customer routes
+ *
+ * `/v1/wallet/status` and `/v1/wallet/pass` are both scoped to the customer
+ * named by the bearer token: they resolve `findCustomer(auth.userId)` and
+ * refuse with `403 CUSTOMER_SELF_NOT_FOUND` when there is no such row. An
+ * operator token has no customer row, so both routes answer 403 to exactly the
+ * person who most needs to see the program's state. That is the correct
+ * behaviour for the customer routes — a pass belongs to a customer — but it
+ * leaves the operator console with nothing to read and a console that looks
+ * broken rather than empty.
+ *
+ * So this is the operator's read path, and it deliberately answers about the
+ * **program** rather than about any customer: a tenant row and a role, never a
+ * `customerId` from the caller.
+ *
+ * It reports the effective demo mode, not only the stored value, because the
+ * effective value is the one that decides whether a pass mints. See
+ * `resolveEffectiveDemoMode` — an operator looking at `demo_mode: false` while
+ * `WALLET_DEMO_MODE=true` holds the ceiling would otherwise read it as
+ * "production is live" and conclude wrongly.
+ */
+router.get('/v1/wallet/program', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  const tenantId = auth.businessId;
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const store = createDrizzleWalletStore(db);
+
+  const program = await store.findProgram(tenantId);
+  if (!program) {
+    return c.json(
+      {
+        error: {
+          code: 'WALLET_CLASS_NOT_PROVISIONED',
+          message:
+            'This business has no Google Wallet pass class row, so there is no program state to read. One ' +
+            'class per business is created during business onboarding.',
+        },
+      },
+      404,
+    );
+  }
+
+  // The env var is the ceiling and the row is the tenant's own switch, and a pass
+  // mints only when both allow it. An operator looking at `storedDemoMode: false`
+  // while the ceiling is on would otherwise read the row as "production is live"
+  // and conclude wrongly, so all three values are reported.
+  const demoModeCeiling = parseDemoMode(c.env.WALLET_DEMO_MODE);
+
+  return c.json({
+    data: {
+      tenantId: program.tenantId,
+      classId: program.classId,
+      reviewStatus: program.reviewStatus,
+      storedDemoMode: program.demoMode,
+      demoMode: demoModeCeiling && program.demoMode,
+      demoModeCeiling,
+      lastSyncedAt: program.lastSyncedAt,
+    },
+  });
+});
+
+/**
+ * PUT /v1/wallet/program/demo-mode
+ *
+ * The operator's demo/production switch: turn pass minting on or off for this
+ * tenant, without a redeploy.
+ *
+ * ## Why the body is required
+ *
+ * A bare `PUT` would default to `false` and silently switch a live tenant's
+ * passes off. The field is required so that a body-less or malformed request
+ * cannot do that, and so the intent is always visible in the request log.
+ *
+ * ## Why the env var still wins
+ *
+ * This writes the tenant row, and `resolveEffectiveDemoMode` keeps the
+ * deployment's ceiling on top. Turning the switch on for a tenant under
+ * `WALLET_DEMO_MODE=false` therefore reads back as **still off**, and the
+ * response says so with `demoMode`, `storedDemoMode` and `demoModeCeiling`
+ * instead of leaving the operator to discover it. The ceiling is a deployment
+ * decision, not a tenant one; this route is not the place to change it.
+ */
+router.put('/v1/wallet/program/demo-mode', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  let body: { demoMode?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: 'WALLET_DEMO_MODE_INVALID',
+          message:
+            'Expected a JSON body of {"demoMode": true} or {"demoMode": false}. A request without an ' +
+            'explicit value is refused so that it cannot switch a live tenant off by accident.',
+        },
+      },
+      400,
+    );
+  }
+
+  if (typeof body.demoMode !== 'boolean') {
+    return c.json(
+      {
+        error: {
+          code: 'WALLET_DEMO_MODE_INVALID',
+          message:
+            '"demoMode" is required and must be a boolean. A request without an explicit value is refused ' +
+            'so that it cannot switch a live tenant off by accident.',
+        },
+      },
+      400,
+    );
+  }
+
+  const tenantId = auth.businessId;
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const store = createDrizzleWalletStore(db);
+
+  const program = await store.findProgram(tenantId);
+  if (!program) {
+    return c.json(
+      {
+        error: {
+          code: 'WALLET_CLASS_NOT_PROVISIONED',
+          message:
+            'This business has no Google Wallet pass class row, so there is no demo mode to switch. One ' +
+            'class per business is created during business onboarding.',
+        },
+      },
+      404,
+    );
+  }
+
+  await store.setProgramDemoMode(tenantId, body.demoMode);
+  const updated = await store.findProgram(tenantId);
+  const stored = updated?.demoMode ?? body.demoMode;
+  const demoModeCeiling = parseDemoMode(c.env.WALLET_DEMO_MODE);
+
+  return c.json({
+    data: {
+      tenantId,
+      storedDemoMode: stored,
+      demoMode: demoModeCeiling && stored,
+      demoModeCeiling,
+      reviewStatus: updated?.reviewStatus ?? program.reviewStatus,
+    },
+  });
+});
+
 // POST /v1/wallet/program/sync
 // ---------------------------------------------------------------------------
 
