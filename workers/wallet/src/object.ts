@@ -29,13 +29,77 @@ import { isValidMemberCode } from './member-code';
  *
  * @see https://developers.google.com/wallet/reference/rest/v1/State
  */
+/**
+ * `LoyaltyObject.state` — the object's state.
+ *
+ * ## Both spellings are in here on purpose
+ *
+ * Google sends the upper-case form in its documentation and in the body we
+ * submit, and answers the **lower-case** form on a read. The two coexist in
+ * this codebase because the same field is written and read, so the type says so
+ * rather than picking one and making a cast necessary at the boundary.
+ *
+ * Anything read from Google should go through `normaliseGoogleObjectState`
+ * before being compared, and that is the only supported way to narrow it.
+ */
 export type GoogleObjectState =
   | 'STATE_UNSPECIFIED'
   | 'PENDING'
   | 'ACTIVE'
   | 'INACTIVE'
   | 'EXPIRED'
-  | 'COMPLETED';
+  | 'COMPLETED'
+  | 'state_unspecified'
+  | 'pending'
+  | 'active'
+  | 'inactive'
+  | 'expired'
+  | 'completed';
+
+/**
+ * Normalise the `state` Google sends on a wallet object into this module's
+ * enum.
+ *
+ * ## Why this exists
+ *
+ * Google answers `"active"`, in lower case, on a `loyaltyObject.get` and on the
+ * body of an `insert`. The enum in this file is spelled in the upper case that
+ * Google's *documentation* uses, so a direct `=== 'ACTIVE'` never matches a
+ * real response.
+ *
+ * That failure is silent in the worst way. `reconcile.ts` read it as
+ * `object_not_active`, recorded an observation, and skipped the patch — so a
+ * customer's balance never moved and every signal said the system was working.
+ * `lifecycleStateFor` returned `null`, which reads as "nothing to do", so a
+ * retired pass stayed active forever. Neither produced an error.
+ *
+ * Both were invisible to the tests because every fake in this repository
+ * returned the upper-case form, agreeing with the code that was wrong.
+ *
+ * ## Why an unknown value is not `ACTIVE`
+ *
+ * This returns the upper-case enum member, or `null` for anything
+ * unrecognised. `null` is not `ACTIVE`, so a state this build has never heard
+ * of is treated as "not active" and is recorded rather than acted on. Defaulting
+ * an unknown state to active would push balances onto a pass whose status nobody
+ * has read.
+ */
+export function normaliseGoogleObjectState(raw: unknown): GoogleObjectState | null {
+  if (typeof raw !== 'string') return null;
+
+  const upper = raw.trim().toUpperCase();
+  switch (upper) {
+    case 'STATE_UNSPECIFIED':
+    case 'PENDING':
+    case 'ACTIVE':
+    case 'INACTIVE':
+    case 'EXPIRED':
+    case 'COMPLETED':
+      return upper;
+    default:
+      return null;
+  }
+}
 
 /**
  * `customer_wallet_passes.state` — vyloop's own tracking state.

@@ -321,7 +321,9 @@ getObject: fakeClientHandle.getObject,
   } as never);
 }
 
-function objectAtGoogle(balance: string, state = 'ACTIVE'): Record<string, unknown> {
+// What Google answers, which is lower case. The default used to be `ACTIVE`,
+// agreeing with the case-sensitive comparison it was meant to cover.
+function objectAtGoogle(balance: string, state = 'active'): Record<string, unknown> {
   return {
     id: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
     classId: classIdFor(ISSUER, TENANT),
@@ -1256,7 +1258,7 @@ describe('GET /v1/wallet/pass: reconciling the saved pass', () => {
   });
 
   it('does not patch a pass Google reports as not active', async () => {
-    remoteObject = objectAtGoogle('0', 'INACTIVE');
+    remoteObject = objectAtGoogle('0', 'inactive');
 
     await GET('/v1/wallet/pass');
 

@@ -44,7 +44,7 @@ function tierColor(tierName: string): string {
 export default function CustomerDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const id = params.id as string;
+  const id = (typeof params.id === 'string' ? params.id : Array.isArray(params.id) ? params.id[0] : undefined) ?? '';
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [tierName, setTierName] = useState('—');
@@ -109,14 +109,26 @@ export default function CustomerDetailPage() {
   }
 
   useEffect(() => {
-    if (!id) return;
+    // No silent early return. `loading` starts true, so returning here without
+    // settling it leaves the page on "Cargando cliente…" for good — no error, no
+    // timeout, and nothing in the network panel to point at. `params.id` is
+    // `string | string[] | undefined` in the App Router and the `as string`
+    // above hides that from the compiler, so this guard is reachable, not
+    // theoretical.
+    const customerId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : undefined;
+
+    if (customerId === undefined || customerId === '') {
+      setError('No se pudo leer el identificador del cliente desde la URL.');
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
     // Fetch customer + tiers in parallel
     Promise.all([
-      api.getCustomer(id),
+      api.getCustomer(customerId),
       api.getTiers().catch(() => []),
       api.getLoyaltyConfig().catch(() => ({ earnRate: 1 })),
     ])
