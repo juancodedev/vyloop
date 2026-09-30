@@ -91,6 +91,9 @@ function program(tenant: string, overrides: Partial<WalletProgramRow> = {}): Wal
     issuerId: ISSUER,
     classId: classIdFor(ISSUER, tenant),
     reviewStatus: 'approved',
+    // Explicit, because an absent column is read as demo mode and every case
+    // below is about the review status rather than about that fallback.
+    demoMode: false,
     lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
     ...overrides,
   };
@@ -337,6 +340,14 @@ class SweepStore implements WalletStore {
     return objectIds.map((id) => rows.get(id)).filter((row): row is WalletPassRow => row !== undefined);
   }
 
+  async setProgramDemoMode(tenant: string, demoMode: boolean): Promise<number> {
+    this.record('setProgramDemoMode', tenant);
+    const row = this.programs[tenant];
+    if (!row) return 0;
+    row.demoMode = demoMode;
+    return 1;
+  }
+
   async updateProgramReviewStatus(tenant: string, reviewStatus: string): Promise<void> {
     this.record('updateProgramReviewStatus', tenant);
     const row = this.programs[tenant];
@@ -443,7 +454,7 @@ describe('the sweep in Demo Mode', () => {
     const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: true });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: true });
 
     expect(report.demoMode).toBe(true);
     // The whole point: a background writer that forgot this check would be
@@ -518,7 +529,7 @@ describe('the sweep never writes for a tenant whose class is not usable', () => 
       const store = new SweepStore({ [tenant]: program(tenant, { reviewStatus }) });
       const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-      const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+      const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
       expect(report.tenantsSkipped).toBe(1);
       expect(report.tenantsSwept).toBe(0);
@@ -541,7 +552,7 @@ describe('the sweep never writes for a tenant whose class is not usable', () => 
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.tenantsSkipped).toBe(1);
     expect(client.listObjects).not.toHaveBeenCalled();
@@ -556,7 +567,7 @@ describe('the sweep never writes for a tenant whose class is not usable', () => 
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.tenantsSkipped).toBe(1);
     expect(report.tenantsSwept).toBe(1);
@@ -575,7 +586,7 @@ describe('the sweep never crosses a tenant', () => {
     const store = new SweepStore({ [a]: program(a), [b]: program(b) });
     const client = fakeGoogle({ pages: onePage([]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     // The class filter *is* the tenant boundary on the Google side: one class
     // per tenant. Listing by issuer would put every merchant's passes in this
@@ -607,7 +618,7 @@ describe('the sweep never crosses a tenant', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.passesActedOn).toBe(0);
     expect(report.objectsWithoutPassRow).toBe(1);
@@ -635,7 +646,7 @@ describe('the sweep never crosses a tenant', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(store.lifecycles).toHaveLength(1);
     expect(store.lifecycles[0].tenantId).toBe(tenant);
@@ -652,7 +663,7 @@ describe('tenant enumeration', () => {
     const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
     const client = fakeGoogle({ pages: onePage([]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(store.tenantPageRequests).toEqual([
       { limit: MAX_TENANTS_PER_RUN, afterTenantId: null },
@@ -669,7 +680,7 @@ describe('tenant enumeration', () => {
     const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
     const client = fakeGoogle({ pages: onePage([]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(store.tenantPageRequests).toEqual([{ limit: 25, afterTenantId: null }]);
   });
@@ -682,7 +693,7 @@ describe('tenant enumeration', () => {
     const store = new SweepStore(programs);
     const client = fakeGoogle({ pages: onePage([]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.tenantsSwept).toBe(MAX_TENANTS_PER_RUN);
     expect(client.listObjects).toHaveBeenCalledTimes(MAX_TENANTS_PER_RUN);
@@ -693,7 +704,7 @@ describe('tenant enumeration', () => {
     store.failListTenants = new Error('connection reset');
     const client = fakeGoogle({ pages: onePage([]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     // A scheduled handler that threw here would have the whole invocation
     // retried, forever, against a database that is down.
@@ -720,7 +731,7 @@ describe('paging through Google\'s list', () => {
       ],
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.listCalls).toBe(3);
     expect(client.listObjects.mock.calls.map((c) => (c[0] as { token?: string }).token)).toEqual([
@@ -742,7 +753,7 @@ describe('paging through Google\'s list', () => {
       ],
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(OBJECT_PAGE_SIZE).toBe(100);
     expect(client.listObjects.mock.calls[0][0]).toMatchObject({ maxResults: OBJECT_PAGE_SIZE });
@@ -768,7 +779,7 @@ describe('paging through Google\'s list', () => {
       },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.listCalls).toBe(MAX_PAGES_PER_TENANT);
     expect(report.tenantsDeferred).toBe(1);
@@ -783,7 +794,7 @@ describe('paging through Google\'s list', () => {
       failListFor: new Set([classIdFor(ISSUER, tenant)]),
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.tenantsFailed).toBe(1);
     expect(report.failures[0].stage).toBe('list_objects');
@@ -810,7 +821,7 @@ describe('paging through Google\'s list', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     // Named as its own stage, so an operator reading the report knows this was
     // a database problem rather than something about this merchant's Google
@@ -841,11 +852,11 @@ describe('idempotency and resumability', () => {
     // Google holds 120, the ledger holds 500. A first run must fix that.
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 120)]) });
 
-    const first = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
     expect(first.outcomes.patched).toBe(1);
     expect(client.patchObject).toHaveBeenCalledTimes(1);
 
-    const second = await sweepPasses({ store, client, now: RUN_TWO }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false }, { demoMode: false });
 
     // The second run re-reads and re-compares, finds 500 already there, and
     // writes nothing. This is the guarantee: the patch is an absolute
@@ -862,7 +873,7 @@ describe('idempotency and resumability', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500 });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 120)]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     const patch = client.patchObject.mock.calls[0][1] as Record<string, unknown>;
     expect(Object.keys(patch)).toEqual(['loyaltyPoints']);
@@ -891,7 +902,7 @@ describe('idempotency and resumability', () => {
           : null;
     });
 
-    const first = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(first.failures).toHaveLength(1);
     expect(first.failures[0].reason).toContain('cust-a');
@@ -902,7 +913,7 @@ describe('idempotency and resumability', () => {
     // than the new cutoff, so they are due again and are re-verified — but the
     // ledger has not moved, so nothing is pushed. The one that failed is still
     // due and is attempted again.
-    const second = await sweepPasses({ store, client, now: RUN_TWO }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false }, { demoMode: false });
 
     expect(second.failures).toHaveLength(1);
     expect(second.failures[0].reason).toContain('cust-a');
@@ -918,7 +929,7 @@ describe('idempotency and resumability', () => {
 
     const client = fakeGoogle({ pages: onePage([remoteObject(a, 0)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     // Stamped at exactly the run's own cutoff, so the same invocation does not
     // pay for it twice. A run that did this work would double its own cost and,
@@ -941,7 +952,7 @@ describe('idempotency and resumability', () => {
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(a, 10)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.passesActedOn).toBe(1);
     expect(report.outcomes.in_sync).toBe(1);
@@ -967,12 +978,12 @@ describe('idempotency and resumability', () => {
       },
     });
 
-    const first = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
     expect(first.tenantsSwept).toBe(1);
     expect(first.objectsSeen).toBe(12);
     expect(first.outcomes.in_sync).toBe(12);
 
-    const second = await sweepPasses({ store, client, now: RUN_TWO }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false }, { demoMode: false });
     // All twelve were verified on the first run, so the second run re-lists
     // them and spends no writes. What it must not do is patch.
     expect(second.outcomes.patched).toBe(0);
@@ -997,7 +1008,7 @@ describe('idempotency and resumability', () => {
       },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.passesActedOn).toBe(MAX_RECONCILES_PER_TENANT);
     expect(report.tenantsDeferred).toBe(1);
@@ -1012,7 +1023,7 @@ describe('idempotency and resumability', () => {
       failListFor: new Set([classIdFor(ISSUER, broken)]),
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.tenantsFailed).toBe(1);
     expect(report.failures[0].tenantId).toBe(broken);
@@ -1035,7 +1046,7 @@ describe('idempotency and resumability', () => {
       return remoteObject(b, 20);
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.failures).toHaveLength(1);
     expect(report.failures[0].reason).toContain('cust-a');
@@ -1054,7 +1065,7 @@ describe('idempotency and resumability', () => {
     const stranger = objectIdFor(ISSUER, globalIdFor(9));
     const client = fakeGoogle({ pages: onePage([remoteObject(stranger, 0)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.objectsWithoutPassRow).toBe(1);
     expect(report.passesActedOn).toBe(0);
@@ -1091,7 +1102,7 @@ describe('lifecycle tracking', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'EXPIRED')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.lifecycleWrites.expired).toBe(1);
     expect(store.lifecycles[0]).toMatchObject({ customerId: 'cust-1', state: 'expired', tenantId: tenant });
@@ -1119,7 +1130,7 @@ describe('lifecycle tracking', () => {
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 0, 'INACTIVE')]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(store.passes.get(tenant)?.get(OBJECT_ID)?.state).not.toBe('inactive');
   });
@@ -1142,7 +1153,7 @@ describe('lifecycle tracking', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     const rows = store.passes.get(tenant);
     // Nothing overwrote a terminal state.
@@ -1173,7 +1184,7 @@ describe('lifecycle tracking', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.failures.some((f) => f.reason.includes('lifecycle expired'))).toBe(true);
     expect(report.outcomes.patched).toBe(1);
@@ -1199,7 +1210,7 @@ describe('lifecycle tracking', () => {
       return remoteObject(OBJECT_ID, 500, 'EXPIRED');
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     // No patch happens here anyway, because `reconcilePass` independently
     // re-reads the object and refuses. The ordering matters for the case where
@@ -1224,7 +1235,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'PENDING')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     const row = store.passes.get(tenant)?.get(OBJECT_ID);
     // The observation moved...
@@ -1247,10 +1258,10 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'PENDING')]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
     expect(client.getObject).toHaveBeenCalledTimes(1);
 
-    const second = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(client.getObject).toHaveBeenCalledTimes(1);
     expect(second.passesSkippedNotDue).toBe(1);
@@ -1284,13 +1295,13 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
 
     // Run one: the budget is exactly consumed by the unmappable objects, so the
     // live pass is not reached. This is the deferral the report is describing.
-    const first = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
     expect(first.passesActedOn).toBe(MAX_RECONCILES_PER_TENANT);
     expect(first.tenantsDeferred).toBe(1);
 
     // Run two, same window: the stamped objects are no longer due, so the sweep
     // spends its whole budget on what it had never reached.
-    const second = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(second.passesSkippedNotDue).toBe(MAX_RECONCILES_PER_TENANT);
     expect(second.tenantsDeferred).toBe(0);
@@ -1309,7 +1320,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'not_saved' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'INACTIVE')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.lifecycleWrites.inactive).toBe(0);
     expect(report.lifecycleWritesSkipped).toBe(1);
@@ -1332,7 +1343,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'INACTIVE')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     const row = store.passes.get(tenant)?.get(OBJECT_ID);
     expect(row?.state).toBe('inactive');
@@ -1353,7 +1364,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.recordPassObservation = async () => 0;
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'PENDING')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
 
     expect(report.outcomes.object_not_active).toBe(1);
     expect(report.observationsNotRecorded).toBe(1);
