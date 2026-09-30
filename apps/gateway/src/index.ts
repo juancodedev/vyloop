@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
+import { brandRoute } from './brand';
 import { ingestor } from './ingestor';
 import { authMiddleware } from './middleware/auth';
 import { authInjectMiddleware } from './middleware/auth-inject';
@@ -138,6 +139,15 @@ app.use('/v1/*', async (c, next) => {
 app.use('/v1/*', routerMiddleware);
 
 // ---------------------------------------------------------------------------
+// Brand assets
+// ---------------------------------------------------------------------------
+
+// Public, and unauthenticated on purpose: Google Wallet fetches a class's
+// images server-side with no credentials, so anything that protects a logo also
+// prevents the pass from rendering. What protects it is that the bucket is
+// private and this is the only route to it.
+app.get('/brand/*', brandRoute());
+
 // 404 handler
 // ---------------------------------------------------------------------------
 
