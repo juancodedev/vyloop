@@ -83,6 +83,7 @@ import { getTableName } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { GoogleWalletApiError } from './google-client';
 import { googleWalletClientFor } from './helpers';
 import { classIdFor, objectIdFor } from './ids';
 import { SAVE_TO_WALLET_URL_PREFIX } from './jwt';
@@ -242,14 +243,24 @@ const googleCalls: Array<{ method: string; args: unknown[] }> = [];
  * has not saved this pass" is expressed. No socket exists in this file.
  */
 let fakeClientHandle: {
-  getClass: ReturnType<typeof vi.fn>;
-  getObject: ReturnType<typeof vi.fn>;
-  patchObject: ReturnType<typeof vi.fn>;
-};
+    getClass: ReturnType<typeof vi.fn>;
+    getObject: ReturnType<typeof vi.fn>;
+    insertObject: ReturnType<typeof vi.fn>;
+    patchObject: ReturnType<typeof vi.fn>;
+  };
+  
+  // What `insertObject` does next, so a test can make Google refuse the create.
+  let insertFails: { status: number; code: string } | null = null;
 
-function installFakeClient() {
-  fakeClientHandle = {
-    getClass: vi.fn(async () => {
+  // Whether Google holds the object yet. Tracked separately from `remoteObject`
+  // so `insertObject` can answer 409 for a customer who already holds the pass,
+  // which is what Google does and what the route's fallback exists for. Without
+  // it the fake accepted a second create and no idempotency claim meant anything.
+  let objectExistsAtGoogle = false;
+
+  function installFakeClient() {
+    fakeClientHandle = {
+      getClass: vi.fn(async () => {
       googleCalls.push({ method: 'getClass', args: [] });
       if (getClassFails) throw new Error('Google is having a bad minute');
       return null;
@@ -261,7 +272,27 @@ function installFakeClient() {
     getObject: vi.fn(async (id: string) => {
       googleCalls.push({ method: 'getObject', args: [id] });
       if (getObjectFails) throw new Error('Google is having a bad minute');
+      // Null only while nothing has been created, so "Google has no object" stops
+      // meaning "the customer has not saved it" now that issuing creates it.
+      if (!objectExistsAtGoogle) return null;
       return remoteObject as never;
+    }),
+    insertObject: vi.fn(async (object: Record<string, unknown>) => {
+      googleCalls.push({ method: 'insertObject', args: [object] });
+      if (objectExistsAtGoogle) {
+        throw new GoogleWalletApiError(409, 'alreadyExists', [
+          { message: 'the object already exists', reason: 'alreadyExists', location: 'body' },
+        ]);
+      }
+      if (insertFails) {
+        throw new GoogleWalletApiError(insertFails.status, insertFails.code, [
+          { message: 'the class is not approved', reason: insertFails.code, location: 'body' },
+        ]);
+      }
+      // The object now exists at Google, which is what a second visit must see.
+      objectExistsAtGoogle = true;
+      remoteObject = { ...remoteObject, ...object } as never;
+      return object as never;
     }),
     patchObject: vi.fn(async (id: string, patch: Record<string, unknown>) => {
       googleCalls.push({ method: 'patchObject', args: [id, patch] });
@@ -278,10 +309,11 @@ function installFakeClient() {
     patchClass: vi.fn(async () => {
       throw new Error('not used');
     }),
-    getObject: fakeClientHandle.getObject,
-    insertObject: vi.fn(async () => {
-      throw new Error('not used');
-    }),
+getObject: fakeClientHandle.getObject,
+      // Real, and observable. This threw "not used" for as long as the route
+      // never called it, which was the bug: a save link can name an object id
+      // that Google has never been told about, and nothing here would fail.
+      insertObject: fakeClientHandle.insertObject,
     patchObject: fakeClientHandle.patchObject,
     saveUriForJwt: vi.fn(async () => {
       throw new Error('not used');
@@ -516,8 +548,10 @@ function reqAs(method: string, path: string, auth?: TestAuth | null, body?: unkn
   // reconciles by patching. Tests that want the other branch set `remoteObject`
   // themselves.
   remoteObject = objectAtGoogle('0');
-  getObjectFails = false;
-  getClassFails = false;
+getObjectFails = false;
+    getClassFails = false;
+    insertFails = null;
+    objectExistsAtGoogle = false;
   // Restored every test, because the demo-mode block deliberately removes it and
   // a test that ran after that one would otherwise inherit demo mode.
   env.WALLET_DEMO_MODE = 'false';
@@ -1059,6 +1093,65 @@ describe('POST /v1/wallet/program/sync', () => {
 // cannot take the pass link down with it.
 // ============================================================================
 
+// ============================================================================
+// GET /v1/wallet/pass: creating the object at Google
+// ============================================================================
+
+describe('GET /v1/wallet/pass: creating the object at Google', () => {
+  it('creates the object before handing back a link that names it', async () => {
+    const res = await GET('/v1/wallet/pass');
+
+    // The whole point. A save link is a signed claim naming an object id; a link
+    // whose object Google has never been told about is well-formed and useless,
+    // and it fails on the customer's phone with no error anywhere on our side.
+    expect(res.status).toBe(200);
+    const insert = googleCalls.find((call) => call.method === 'insertObject');
+    expect(insert).toBeDefined();
+
+    const body = (await res.json()) as { data: { object_id: string; save_url: string } };
+    const created = insert!.args[0] as { id: string };
+    // Same id the link names, so the claim resolves to the object just made.
+    expect(created.id).toBe(body.data.object_id);
+    expect(body.data.save_url.startsWith(SAVE_TO_WALLET_URL_PREFIX)).toBe(true);
+  });
+
+  it('patches instead of creating when the customer already holds the pass', async () => {
+    insertFails = { status: 409, code: 'alreadyExists' };
+
+    const res = await GET('/v1/wallet/pass');
+
+    // A returning customer must not be handed a link to a second copy of the
+    // same card, so a 409 is the signal to fall back to patching.
+    expect(res.status).toBe(200);
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(1);
+    expect(googleCalls.some((call) => call.method === 'patchObject')).toBe(true);
+  });
+
+  it('refuses to return a link when Google will not create the object', async () => {
+    // What Google actually answers for a class still in `draft`.
+    insertFails = { status: 404, code: 'loyaltyClass.notApproved' };
+
+    const res = await GET('/v1/wallet/pass');
+
+    // Not 200 with a broken link. Reconciling a balance is allowed to fail
+    // quietly; creating the pass is not, because there is nothing to show the
+    // customer and no later sync that would fix it.
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe('WALLET_PASS_NOT_CREATABLE');
+    expect(json.error.message).toMatch(/approved before any object can be created/i);
+  });
+
+  it('does not swallow a network failure into a working-looking link', async () => {
+    insertFails = { status: 503, code: 'backendError' };
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toHaveLength(0);
+  });
+});
+
 describe('GET /v1/wallet/pass: reconciling the saved pass', () => {
   it('asks Google about the object it just issued a link for', async () => {
     await GET('/v1/wallet/pass');
@@ -1072,14 +1165,26 @@ describe('GET /v1/wallet/pass: reconciling the saved pass', () => {
     // The defect this change exists for: the number on a saved pass was correct
     // at issue time and stale forever. Google's copy holds 0 and the ledger
     // holds 96942, so the pass must be brought forward to the ledger's number.
+    //
+    // Set up directly rather than produced by issuing: a fresh issue now creates
+    // the object with the right number, so a stale copy can only come from time
+    // passing since an earlier visit.
     remoteObject = objectAtGoogle('0');
+    objectExistsAtGoogle = true;
 
     await GET('/v1/wallet/pass');
 
+    // Creation is refused because the customer already holds the pass, which is
+    // what routes this visit to a patch.
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(1);
     const patch = googleCalls.find((call) => call.method === 'patchObject');
     expect(patch).toBeDefined();
-    expect(patch!.args[1]).toEqual({
-      loyaltyPoints: { label: 'puntos', balance: { string: '96942' } },
+    // The 409 fallback patches the whole object rather than only the balance,
+    // because a pass Google already holds may also have gone stale in other
+    // fields. The number is what this assertion is about.
+    expect((patch!.args[1] as { loyaltyPoints: { balance: { string: string } } }).loyaltyPoints).toEqual({
+      label: 'puntos',
+      balance: { string: '96942' },
     });
   });
 
@@ -1091,26 +1196,36 @@ describe('GET /v1/wallet/pass: reconciling the saved pass', () => {
     expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
   });
 
-  it('patches once across two visits with an unchanged balance', async () => {
+  it('writes Google once across two visits, because the create carries the balance', async () => {
     // Idempotency as the customer experiences it: open the app twice without
-    // earning or spending anything, and Google is written to at most once.
+    // earning or spending anything, and Google is written to once.
+    //
+    // This used to assert one reconciliation patch. The first visit now *creates*
+    // the object carrying the ledger's own balance, so there is nothing left for a
+    // reconciliation patch to correct — the create is the write. The second visit
+    // is refused a duplicate and falls back to a patch, so Google is still touched
+    // exactly once, and no second copy of the card is created.
     await GET('/v1/wallet/pass');
-    expect(googleCalls.filter((call) => call.method === 'patchObject')).toHaveLength(1);
+    expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
 
     await GET('/v1/wallet/pass');
 
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(2);
     expect(googleCalls.filter((call) => call.method === 'patchObject')).toHaveLength(1);
   });
 
-  it('records `not_saved` when Google has no object, so the row stops claiming otherwise', async () => {
-    remoteObject = null;
-
+  it('no longer reports `not_saved` from a missing object, because issuing creates one', async () => {
+    // This asserted that an issue with no object at Google produced `not_saved`.
+    // Issuing now creates the object, so "Google has no object" stopped meaning
+    // "the customer has not saved it yet" — the two were conflated, and the
+    // conflation was invisible only because nothing was ever created.
+    //
+    // The row has to say `issued`. The state that genuinely means "not saved"
+    // is still covered in reconcile.test.ts, against an absent object.
     await GET('/v1/wallet/pass');
 
-    // The distinction the brief asks for. `not_issued` means we never checked;
-    // `not_saved` means we checked and the customer has not saved it yet.
-    expect(passRows[0]!.state).toBe('not_saved');
-    expect(passRows[0]!.state).not.toBe('not_issued');
+    expect(passRows[0]!.state).toBe('issued');
+    expect(passRows[0]!.state).not.toBe('not_saved');
   });
 
   it('records `issued` once Google does have the object', async () => {
