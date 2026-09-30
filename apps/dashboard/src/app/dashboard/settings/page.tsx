@@ -22,58 +22,73 @@ import { apiFetch } from '@/lib/api';
  * customer's app — which is the distinction the gate is actually protecting.
  */
 
-interface WalletStatus {
-  available: boolean;
-  reason: string;
-  demo_mode: boolean;
-  has_member_code: boolean;
-  tier_row_available: boolean | null;
+/**
+ * The operator's view of the wallet program.
+ *
+ * Field names mirror the worker's response. `storedDemoMode` is this tenant's own
+ * switch and `demoModeCeiling` is the deployment's; `demoMode` is the effective
+ * value that decides whether a pass mints, and it is the AND of the two. They are
+ * separate fields rather than one because an operator who sees only the row cannot
+ * tell which of the two is holding the passes back, and that is exactly the
+ * question this console exists to answer.
+ */
+interface WalletProgram {
+  classId: string;
+  reviewStatus: string;
+  storedDemoMode: boolean;
+  demoMode: boolean;
+  demoModeCeiling: boolean;
 }
 
-interface PassResult {
-  save_url: string;
-  object_id: string;
-  class_id: string;
-  member_code: string;
-  balance_points: number;
-}
-
-const REASONS_ES: Record<string, string> = {
-  available: 'Listo. La clase está aprobada y este tenant tiene acceso de publicación.',
-  demo_mode:
-    'Modo demo: Google solo entrega el pase a las cuentas de prueba del emisor. Es el estado correcto hasta que se conceda el acceso de publicación.',
-  class_not_approved:
-    'La clase de Google sigue en borrador. Google no ha aprobado el acceso de publicación.',
-  class_not_provisioned: 'Este negocio no tiene una clase de pase registrada.',
-  balance_not_displayable: 'El saldo del cliente no se puede representar en el pase.',
-  customer_self_not_found: 'El usuario del token no es un cliente de este negocio.',
+const REVIEW_ES: Record<string, string> = {
+  approved: 'Aprobada por Google — el pase llega a cualquier cliente.',
+  draft: 'Borrador — Google no ha concedido acceso de publicación todavía.',
+  under_review: 'En revisión por Google.',
+  rejected: 'Rechazada por Google.',
+  none: 'Sin estado de revisión registrado.',
 };
 
 export default function SettingsPage() {
-  const [status, setStatus] = useState<WalletStatus | null>(null);
-  const [pass, setPass] = useState<PassResult | null>(null);
+  const [program, setProgram] = useState<WalletProgram | null>(null);
   const [loading, setLoading] = useState(true);
-  const [minting, setMinting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The operator's own read path, not `/v1/wallet/status`.
+   *
+   * That route is scoped to the customer named by the token — it resolves
+   * `findCustomer(auth.userId)` and answers 403 when there is no such row — and
+   * this page is called with an operator token, so it used to receive a 403 from
+   * the one screen built to show the wallet state. `/v1/wallet/program` is the
+   * operator-scoped read and answers about the tenant rather than a customer.
+   */
   useEffect(() => {
-    apiFetch('/v1/wallet/status')
-      .then((raw) => setStatus((raw as { data: WalletStatus }).data))
-      .catch(() => setError('No se pudo leer el estado de la billetera.'))
+    apiFetch('/v1/wallet/program')
+      .then((raw) => setProgram((raw as { data: WalletProgram }).data))
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'No se pudo leer el estado del programa.'),
+      )
       .finally(() => setLoading(false));
   }, []);
 
-  async function mintTestPass() {
-    setMinting(true);
+  async function setDemoMode(next: boolean) {
+    setSaving(true);
     setError(null);
-    setPass(null);
     try {
-      const raw = await apiFetch('/v1/wallet/pass');
-      setPass((raw as { data: PassResult }).data);
+      const raw = await apiFetch('/v1/wallet/program/demo-mode', {
+        method: 'PUT',
+        body: JSON.stringify({ demoMode: next }),
+      });
+      // The response carries the effective value, so the switch reflects what a
+      // pass would actually do rather than what was asked for. Under a `false`
+      // ceiling the row can be on while minting stays off, and showing the
+      // optimistic value would be a lie the operator would have to debug.
+      setProgram((raw as { data: WalletProgram }).data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo generar el pase.');
+      setError(err instanceof Error ? err.message : 'No se pudo cambiar el modo.');
     } finally {
-      setMinting(false);
+      setSaving(false);
     }
   }
 
@@ -97,88 +112,95 @@ export default function SettingsPage() {
         <div className="card-body">
           {loading ? (
             <p className="text-muted">Consultando estado…</p>
-          ) : status === null ? (
-            <p className="text-muted">No se pudo leer el estado de la billetera.</p>
+          ) : program === null ? (
+            <p className="text-muted">No se pudo leer el estado del programa.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
                 <div className="text-xs text-muted" style={{ marginBottom: '0.25rem' }}>
-                  ESTADO
+                  ESTADO DE LA CLASE
                 </div>
                 <div style={{ fontSize: '1rem', fontWeight: 500 }}>
-                  {REASONS_ES[status.reason] ?? status.reason}
+                  {REVIEW_ES[program.reviewStatus] ?? program.reviewStatus}
                 </div>
-              </div>
-
-              <div>
-                <div className="text-xs text-muted" style={{ marginBottom: '0.25rem' }}>
-                  MODO DEMO
-                </div>
-                <div style={{ fontSize: '1rem', fontWeight: 500 }}>
-                  {status.demo_mode ? 'Activado' : 'Desactivado'}
+                <div
+                  className="text-xs text-muted"
+                  style={{ marginTop: '0.25rem', fontFamily: 'monospace', wordBreak: 'break-all' }}
+                >
+                  {program.classId}
                 </div>
               </div>
 
               {/*
-                The button is shown whenever the API can produce a link, including
-                in demo mode. It is deliberately not gated on `available`: in demo
-                mode the pass is exactly what the operator is here to test, and
-                Google decides who sees it. Hiding the button in the one state
-                where testing is the point would be backwards.
+                The switch, and the reason it is not a single checkbox.
+
+                `storedDemoMode` is this tenant's row and `demoModeCeiling` is the
+                deployment's. A pass mints only when both allow it, so a checkbox
+                showing one of them would let an operator turn demo mode "on", see
+                no passes appear, and conclude the integration was broken. The
+                effective value is shown as its own line for that reason.
               */}
               <div>
-                <button
-                  className="btn btn-primary"
-                  onClick={mintTestPass}
-                  disabled={minting}
-                >
-                  {minting ? 'Generando…' : 'Generar pase de prueba'}
-                </button>
-                <p className="text-muted" style={{ marginTop: '0.5rem', marginBottom: 0 }}>
-                  Abre el pase en la cuenta de Google con la que iniciaste sesión. Con
-                  modo demo activo, Google solo lo muestra si esa cuenta está en la lista
-                  de pruebas del emisor.
-                </p>
+                <div className="text-xs text-muted" style={{ marginBottom: '0.5rem' }}>
+                  MODO DE EMISIÓN
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => setDemoMode(true)}
+                    disabled={saving || program.storedDemoMode}
+                    aria-pressed={program.storedDemoMode}
+                  >
+                    Test / demo
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => setDemoMode(false)}
+                    disabled={saving || !program.storedDemoMode}
+                    aria-pressed={!program.storedDemoMode}
+                  >
+                    Producción
+                  </button>
+                </div>
+                <div style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
+                  Este negocio: <strong>{program.storedDemoMode ? 'demo' : 'producción'}</strong>
+                  {' · '}
+                  Techo del despliegue: <strong>{program.demoModeCeiling ? 'demo' : 'producción'}</strong>
+                </div>
+                <div style={{ fontSize: '0.9rem', marginTop: '0.25rem', fontWeight: 500 }}>
+                  {program.demoMode
+                    ? 'Efectivo: los pases se emiten.'
+                    : 'Efectivo: los pases NO se emiten. ' +
+                      (program.demoModeCeiling
+                        ? 'El modo de este negocio está en producción.'
+                        : 'El techo del despliegue está en producción y no permite emitir.')}
+                </div>
               </div>
 
-              {pass && (
-                <div
-                  style={{
-                    border: '1px solid var(--border, #e5e7eb)',
-                    borderRadius: '8px',
-                    padding: '1rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.5rem',
-                  }}
-                >
-                  <div>
-                    <div className="text-xs text-muted">CÓDIGO DE SOCIO</div>
-                    <div style={{ fontFamily: 'monospace', fontSize: '1.1rem' }}>
-                      {pass.member_code}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted">SALDO EN EL PASE</div>
-                    <div style={{ fontSize: '1rem' }}>{pass.balance_points} puntos</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted">ID DEL OBJETO</div>
-                    <div style={{ fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all' }}>
-                      {pass.object_id}
-                    </div>
-                  </div>
-                  <a
-                    className="btn btn-primary"
-                    href={pass.save_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ textAlign: 'center' }}
-                  >
-                    Agregar a Google Wallet
-                  </a>
+              {/*
+                No "generate a test pass" button, and that is a decision rather
+                than an omission.
+
+                A pass belongs to a customer: `/v1/wallet/pass` is scoped to the
+                customer named by the token and answers 403 for anyone else, which
+                is the correct rule. An operator token is not a customer, so a
+                button here could only ever render a 403 — and the version that did
+                render one shipped in #138. Minting a pass for a chosen customer is
+                a separate operator capability with its own authorisation decision
+                about *whose* customer may be minted; it is not something to
+                re-add here on the way to a different problem.
+              */}
+              <div>
+                <div className="text-xs text-muted" style={{ marginBottom: '0.25rem' }}>
+                  EMITIR UN PASE
                 </div>
-              )}
+                <p className="text-muted" style={{ margin: 0 }}>
+                  El pase pertenece a un cliente, así que se emite desde la cuenta del
+                  cliente en la app, no desde aquí. Un pase de prueba real ya se generó
+                  de punta a punta y se puede agregar a Google Wallet con la cuenta de
+                  prueba del emisor.
+                </p>
+              </div>
 
               {error && (
                 <p style={{ color: 'var(--danger, #b91c1c)', margin: 0 }}>{error}</p>
