@@ -4,6 +4,14 @@
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {},
+  // Brand assets. The bucket is private: this route is the only public door, so the
+  // r2.dev preview URL is never what Google fetches and disabling it breaks nothing.
+  "r2_buckets": [
+    {
+      "binding": "BRAND_ASSETS",
+      "bucket_name": "vyloop-brand-assets"
+    }
+  ],
   "kv_namespaces": [
     {
       "binding": "RATE_LIMITER",
