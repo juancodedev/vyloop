@@ -92,13 +92,12 @@ The mix is deliberate right now: the fakes that stand for **what Google holds** 
 
 Reverting `reconcile.ts`'s comparison to a literal `!== 'ACTIVE'` fails exactly one test. The fix is verified, but one test is a thin tripwire for a defect that was silent for the life of the feature. What is wanted: a case that pins the whole path from a lower-case remote state to a patch reaching Google, so the failure is an obvious log line rather than a `last_synced_at` tick that reads as healthy.
 
-### D3 — the dashboard surfaces were never built against real endpoints
+### D3 — the dashboard surfaces that were never built
 
-Not wallet work, recorded here so it is not lost, and both predate the balance work:
+Not wallet work, recorded here so it is not lost, and both predate the balance work.
 
-- `GET /v1/customers/:id` does not exist. `workers/customer/src/routes.ts` has `/v1/customers`, `/v1/customers/me` and `/v1/customers/by-global-id/:globalId`. The customer detail page calls the first and has never worked.
-- `/dashboard/rewards` is linked from `dashboard/page.tsx` and has no route.
-- `navigation.contract.test.ts` reads only `lib/navigation.ts`, so a link declared inside a `page.tsx` is invisible to it. The guard has a blind spot, which is the same failure as the original `/dashboard/settings` 404 it was written to prevent.
+- ~~`GET /v1/customers/:id` does not exist.~~ **False.** It exists at `workers/customer/src/routes.ts:587` and answers 200. I concluded otherwise from a badly filtered search and sent the reader after a bug that was not there. The customer detail page's remaining problem is unconfirmed; the loading state is now settled on a missing id, but nobody has re-checked the page since.
+- `/dashboard/rewards` pointed at a page that does not exist; the real one is `/dashboard/loyalty/rewards`. **Fixed in #148**, together with the blind spot in the navigation guard that let it through.
 
 ## Route
 
