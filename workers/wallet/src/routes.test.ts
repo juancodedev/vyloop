@@ -1139,7 +1139,9 @@ describe('GET /v1/wallet/pass: creating the object at Google', () => {
     expect(res.status).toBe(409);
     const json = (await res.json()) as { error: { code: string; message: string } };
     expect(json.error.code).toBe('WALLET_PASS_NOT_CREATABLE');
-    expect(json.error.message).toMatch(/approved before any object can be created/i);
+    // No asserted cause: the same branch is where a failed token exchange lands.
+    expect(json.error.message).toMatch(/Google reported:/);
+    expect(json.error.message).toMatch(/not approved/i);
   });
 
   it('does not swallow a network failure into a working-looking link', async () => {

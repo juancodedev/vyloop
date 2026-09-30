@@ -2,7 +2,12 @@ import { Hono } from 'hono';
 
 import { BalanceNotDisplayableError, balanceDisplayFailure } from './balance';
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
-import { GoogleWalletApiError, googleReviewStatusFor, storedReviewStatusFor } from './google-client';
+import {
+  GoogleWalletApiError,
+  GoogleWalletAuthError,
+  googleReviewStatusFor,
+  storedReviewStatusFor,
+} from './google-client';
 import type { AuthHeaders, WalletBindings } from './helpers';
 import {
   extractAuthHeaders,
@@ -364,22 +369,28 @@ router.get('/v1/wallet/pass', async (c) => {
           `[wallet] Pass object ${issued.objectId} already existed at Google; patched it instead.`,
         );
       } else {
+        // No cause is asserted here. The previous version of this message told
+        // the caller that the class must be approved before an object can be
+        // created, which was a guess dressed as a diagnosis: the same branch is
+        // also where a failed token exchange lands, because
+        // `mintAccessToken` raises `GoogleWalletAuthError` and not
+        // `GoogleWalletApiError`. A message that names a cause it has not
+        // checked sends the reader to fix the wrong thing.
         const reason =
-          err instanceof GoogleWalletApiError
+          err instanceof GoogleWalletApiError || err instanceof GoogleWalletAuthError
             ? err.message
-            : 'Google Wallet could not be reached.';
+            : 'the Google Wallet client failed for a reason this worker does not classify';
         console.error(`[wallet] Could not create pass object ${issued.objectId}:`, err);
-        // 409, not 502 and not 200. Google refusing to create an object is a
-        // state we know and a customer cannot fix — a class still in `draft`
-        // cannot create any object — and a link handed back anyway would fail
-        // on their phone with no explanation.
+        // 409, not 502 and not 200. The object is not there, so there is no
+        // working link to produce, and handing one back anyway is what made this
+        // failure invisible for so long.
         return c.json(
           {
             error: {
               code: 'WALLET_PASS_NOT_CREATABLE',
               message:
                 'Google Wallet could not create this pass, so no working link can be produced. ' +
-                `A pass class must be approved before any object can be created for it. ${reason}`,
+                `Google reported: ${reason}`,
             },
           },
           409,
