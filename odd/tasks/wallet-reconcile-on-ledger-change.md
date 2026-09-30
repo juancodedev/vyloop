@@ -78,6 +78,28 @@ Also unverified, and the writer was right to flag it: no browser check. Confirmi
 - `pnpm -r test`
 - Browser: register points on a customer who already holds a pass, then re-read the pass object from the Google API and confirm the balance moved.
 
+## Deferred — recorded, not done
+
+Kept here rather than in a backlog because this is the document for the wallet balance path, and every item below is a defect in the suite that guards it. **A note is only debt if someone reads it**, and this is where anyone working on this path will look.
+
+### D1 — the wallet fakes still return an upper-case state
+
+`workers/wallet/src/{routes,reconcile,jwt,object,reconcile-customer}.test.ts` construct objects with `state: 'ACTIVE'`. Google answers `"active"`. Production no longer depends on the casing, so nothing fails today — but these fakes no longer describe the API they stand in for, and a fake that lies is not testing anything.
+
+The mix is deliberate right now: the fakes that stand for **what Google holds** should be lower case, and the ones that describe **what we send** should stay upper case, because that is what we send. Sorting that out per fake is the work. Deferred by request, 2026-09-30.
+
+### D2 — the balance projection has one test guarding the state comparison
+
+Reverting `reconcile.ts`'s comparison to a literal `!== 'ACTIVE'` fails exactly one test. The fix is verified, but one test is a thin tripwire for a defect that was silent for the life of the feature. What is wanted: a case that pins the whole path from a lower-case remote state to a patch reaching Google, so the failure is an obvious log line rather than a `last_synced_at` tick that reads as healthy.
+
+### D3 — the dashboard surfaces were never built against real endpoints
+
+Not wallet work, recorded here so it is not lost, and both predate the balance work:
+
+- `GET /v1/customers/:id` does not exist. `workers/customer/src/routes.ts` has `/v1/customers`, `/v1/customers/me` and `/v1/customers/by-global-id/:globalId`. The customer detail page calls the first and has never worked.
+- `/dashboard/rewards` is linked from `dashboard/page.tsx` and has no route.
+- `navigation.contract.test.ts` reads only `lib/navigation.ts`, so a link declared inside a `page.tsx` is invisible to it. The guard has a blind spot, which is the same failure as the original `/dashboard/settings` 404 it was written to prevent.
+
 ## Route
 
 Delegated writer: the change spans the growth worker, the wallet worker and both test suites. One writer, one pass, then these gates in the parent.
