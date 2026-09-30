@@ -847,7 +847,7 @@ describe('reconcilePass: a pass nobody is looking at', () => {
     client = fakeClient(objectWithBalance('0', { state: 'INACTIVE' }));
     expect((await reconcile(store, client)).kind).toBe('object_not_active');
 
-    const active = fakeClient(objectWithBalance('0', { state: 'ACTIVE' }));
+    const active = fakeClient(objectWithBalance('0', { state: 'active' }));
     const outcome = await reconcile(store, active);
 
     expect(outcome.kind).toBe('patched');

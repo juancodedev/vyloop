@@ -68,7 +68,7 @@ import { balanceDisplayFailure, formatBalance } from './balance';
 import type { GoogleWalletClient } from './google-client';
 import { classReadinessFor, reasonCodeFor } from './issuance';
 import type { WalletUnavailableReason } from './issuance';
-import type { LoyaltyObject } from './object';
+import { normaliseGoogleObjectState, type LoyaltyObject } from './object';
 import type { ReconciliationState, WalletStore } from './store';
 
 // ---------------------------------------------------------------------------
@@ -262,7 +262,13 @@ export async function reconcilePass(
     return { kind: 'not_saved', objectId: pass.objectId };
   }
 
-  if (remote.state !== 'ACTIVE') {
+  // Google's own word for the state, never a case-sensitive comparison against
+  // the enum's spelling. A literal `!== 'ACTIVE'` reads every real response as
+  // inactive, because Google answers `"active"`, and the result is a pass that
+  // records an observation and never takes the patch.
+  const remoteState = normaliseGoogleObjectState(remote.state);
+
+  if (remoteState !== 'ACTIVE') {
     // The object exists and Google says it is not `ACTIVE`. That is a
     // definitive answer, so it is recorded — as an observation only, with no
     // state, because there is no tracking state that honestly means "not
