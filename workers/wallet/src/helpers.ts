@@ -73,6 +73,45 @@ export interface WalletBindings {
    * approval. See `parseDemoMode`.
    */
   WALLET_DEMO_MODE?: string | undefined;
+  /**
+   * The public origin a class's `programLogo` and `homepageUri` are built from.
+   *
+   * Google downloads the logo from a public HTTPS URL, so this is not a vanity
+   * setting: it decides whether a class can be reviewed at all. The brand route
+   * under it (`apps/gateway/src/brand.ts`) is the only public door to the
+   * private R2 bucket, and it answers with the platform's default logo for a
+   * tenant that has uploaded nothing — which is every tenant that arrives
+   * through signup.
+   *
+   * Optional with a documented default rather than required, unlike
+   * `WALLET_ALLOWED_ORIGINS`: there is one correct host for this platform, and a
+   * blank var is a default to apply rather than a misconfiguration to report.
+   * See `parsePublicBaseUrl`.
+   */
+  WALLET_PUBLIC_BASE_URL?: string | undefined;
+}
+
+/**
+ * The public origin used when `WALLET_PUBLIC_BASE_URL` says nothing.
+ *
+ * Our own domain, deliberately not the R2 preview URL: `r2.dev` is a subdomain
+ * that can be disabled, and a class that references it cannot be recreated under
+ * the same id when that happens — the repair is a manual patch per class.
+ */
+export const DEFAULT_WALLET_PUBLIC_BASE_URL = 'https://media.juancode.dev';
+
+/**
+ * Read the public base URL, with a documented default and no trailing slash.
+ *
+ * The trailing slash is removed rather than merely tolerated because the value
+ * is concatenated with `/brand/<tenantId>.jpg` and `/program`, and `//brand/...`
+ * is a different URL to the route and may be to Google.
+ */
+export function parsePublicBaseUrl(raw: string | undefined | null): string {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return DEFAULT_WALLET_PUBLIC_BASE_URL;
+
+  return trimmed.replace(/\/+$/, '');
 }
 
 /**

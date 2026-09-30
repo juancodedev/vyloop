@@ -43,6 +43,7 @@ import {
   setCurrentBusinessId,
   setCurrentTenantId,
   tenantWalletPrograms,
+  tenants,
 } from '@vyloop/db';
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
@@ -51,10 +52,12 @@ import type {
   PassObservationUpdate,
   PassReconciliationUpdate,
   PassTrackingUpdate,
+  ProgramInsert,
   WalletCustomerRow,
   WalletPassRow,
   WalletProgramRow,
   WalletStore,
+  WalletTenantBrandingRow,
   WalletTierRow,
 } from './store';
 
@@ -175,6 +178,73 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
         .limit(1);
 
       return (row as WalletProgramRow | undefined) ?? null;
+    },
+
+    /**
+     * Give a tenant its program row, and do nothing if it already has one.
+     *
+     * Raw SQL with explicit columns rather than a Drizzle `insert`, because two
+     * of the six values are decisions this table makes badly by default:
+     * `review_status` defaults to `'none'`, which means "no class yet" and fails
+     * the readiness gate closed for a tenant that has one, and `demo_mode`
+     * defaults to whatever the column was declared with. Both are written by the
+     * caller as values, so a provisioning path that forgot one produces a failed
+     * call rather than a plausible wrong row.
+     *
+     * `ON CONFLICT (tenant_id) DO NOTHING` rather than `DO UPDATE`: the class id
+     * in the row is the record of what exists at Google, and a second
+     * provisioning run overwriting it would replace the only evidence of what the
+     * first run created.
+     */
+    async insertProgram(program: ProgramInsert): Promise<void> {
+      await db.execute(sql`
+        INSERT INTO tenant_wallet_programs (tenant_id, issuer_id, class_id, review_status, demo_mode)
+        VALUES (
+          ${program.tenantId}::uuid,
+          ${program.issuerId},
+          ${program.classId},
+          ${program.reviewStatus},
+          ${program.demoMode}
+        )
+        ON CONFLICT (tenant_id) DO NOTHING
+      `);
+    },
+
+    /**
+     * The tenant's own name and country.
+     *
+     * Scoped by `tenants.id`, which is the tenant — this is the one read here
+     * whose predicate is the key itself, and the reason a branding row can never
+     * belong to a merchant other than the one the caller asked for.
+     */
+    async findTenantBranding(tenantId: string): Promise<WalletTenantBrandingRow | null> {
+      const [row] = await db
+        .select({ name: tenants.name, country: tenants.country })
+        .from(tenants)
+        .where(eq(tenants.id, tenantId))
+        .limit(1);
+
+      return (row as WalletTenantBrandingRow | undefined) ?? null;
+    },
+
+    /**
+     * The tenant's program name.
+     *
+     * A blank name reads as absent, for the same reason a blank points currency
+     * does: Google requires `programName`, and an empty one is a class whose card
+     * shows no programme at all, which looks like our bug rather than like a
+     * merchant who has not configured anything.
+     */
+    async findProgramName(tenantId: string): Promise<string | null> {
+      const [row] = await db
+        .select({ name: loyaltyPrograms.name })
+        .from(loyaltyPrograms)
+        .where(eq(loyaltyPrograms.businessId, tenantId))
+        .limit(1);
+
+      const name = (row as { name?: string } | undefined)?.name;
+      if (name === undefined || name.trim() === '') return null;
+      return name;
     },
 
     async findPointsCurrency(tenantId: string): Promise<string | null> {

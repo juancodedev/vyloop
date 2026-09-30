@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_WALLET_PUBLIC_BASE_URL,
   OPERATOR_ROLE_REQUIRED,
   isCustomerRole,
   parseAllowedOrigins,
   parseDemoMode,
+  parsePublicBaseUrl,
   requireOperatorRole,
 } from './helpers';
 import type { AuthHeaders } from './helpers';
@@ -119,5 +121,35 @@ describe('parseDemoMode', () => {
     for (const raw of ['flase', 'maybe', 'off?', '2']) {
       expect(parseDemoMode(raw)).toBe(true);
     }
+  });
+});
+
+describe('parsePublicBaseUrl', () => {
+  it('answers the documented default when the var says nothing', () => {
+    // Unlike `WALLET_ALLOWED_ORIGINS`, where an absent var must fail loudly,
+    // this one has a correct value for every environment we have: it is our own
+    // domain, and the brand route under it exists precisely so a tenant with no
+    // logo of its own still resolves. A blank var is therefore not a
+    // misconfiguration to report but a default to apply.
+    for (const raw of [undefined, null, '', '   ']) {
+      expect(parsePublicBaseUrl(raw)).toBe(DEFAULT_WALLET_PUBLIC_BASE_URL);
+    }
+    expect(DEFAULT_WALLET_PUBLIC_BASE_URL).toBe('https://media.juancode.dev');
+  });
+
+  it('drops a trailing slash, which would double up in every path built from it', () => {
+    // The base is concatenated with `/brand/<tenantId>.jpg` and `/program`. A
+    // trailing slash would produce `//brand/...`, which is a URL Google may
+    // answer and our own route may not.
+    expect(parsePublicBaseUrl('https://media.staging.juancode.dev/')).toBe(
+      'https://media.staging.juancode.dev',
+    );
+    expect(parsePublicBaseUrl('  https://media.staging.juancode.dev  ')).toBe(
+      'https://media.staging.juancode.dev',
+    );
+  });
+
+  it('keeps a path prefix, because a tenant-scoped deployment is a real shape', () => {
+    expect(parsePublicBaseUrl('https://example.dev/wallet')).toBe('https://example.dev/wallet');
   });
 });

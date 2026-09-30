@@ -20,7 +20,17 @@
     // issuer's own test accounts. Flipping this to "false" is what an
     // environment with publishing access declares. See `parseDemoMode`, which
     // treats anything unrecognised as demo mode on purpose.
-    "WALLET_DEMO_MODE": "true"
+    "WALLET_DEMO_MODE": "true",
+    // Where a class's public assets live. Google downloads `programLogo` from
+    // this host and a customer taps `homepageUri`, so it is load-bearing rather
+    // than cosmetic: the brand route under it is the only public door to a
+    // private R2 bucket, and it answers with the platform default logo for a
+    // business that has uploaded none. Deliberately our own domain and not the
+    // r2.dev preview URL — a class cannot be recreated under the same id, so
+    // losing that subdomain would need a manual patch per class. No trailing
+    // slash; `parsePublicBaseUrl` would strip it, and a var that carries one was
+    // pasted rather than written.
+    "WALLET_PUBLIC_BASE_URL": "https://media.juancode.dev"
   },
   // No cron trigger here on purpose.
   //

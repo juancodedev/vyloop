@@ -21,13 +21,30 @@ describe('wrangler.jsonc', () => {
   });
 
   it('declares exactly the intended vars', () => {
+    // An exact list, on purpose: this file is the only place that notices a var
+    // added for a one-off debug, or a `vars` entry whose value is a secret. A
+    // subset assertion would let both through and the test would keep passing,
+    // which is the reason this asserts with `toEqual` rather than
+    // `toContain`.
     const vars = /"vars"\s*:\s*\{([^}]*)\}/.exec(config)?.[1] ?? '';
     const names = [...vars.matchAll(/"([^"]+)"\s*:/g)].map((match) => match[1]);
     expect(names.sort()).toEqual([
       'GOOGLE_WALLET_ISSUER_ID',
       'WALLET_ALLOWED_ORIGINS',
       'WALLET_DEMO_MODE',
+      'WALLET_PUBLIC_BASE_URL',
     ]);
+  });
+
+  it('declares the public base URL a class logo and homepage are built from', () => {
+    // Google fetches `programLogo` from a public HTTPS URL and a customer taps
+    // `homepageUri`, so a wrong host is not a config nit: it is a class that
+    // cannot be reviewed and a link that 404s. The value must be an origin, with
+    // no trailing slash — `parsePublicBaseUrl` strips one, but a var that carries
+    // it is a sign it was pasted rather than written.
+    const base = /"WALLET_PUBLIC_BASE_URL"\s*:\s*"([^"]*)"/.exec(config)?.[1];
+    expect(base).toBeDefined();
+    expect(base).toMatch(/^https:\/\/[^/\s]+\/?$/);
   });
 
   it('declares the origins Google requires before it will issue a save link', () => {
