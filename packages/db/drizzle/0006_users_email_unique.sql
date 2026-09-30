@@ -1,0 +1,34 @@
+-- One person, one account.
+--
+-- `users` carried a unique constraint on `(business_id, email)`, which is
+-- tenant-scoped, while the login route resolves an operator by `email` alone
+-- (`workers/identity/src/index.ts`, `.where(eq(schema.users.email, body.email))`).
+-- Those two disagree: the database allowed the same address to administer two
+-- businesses, and the login then resolved whichever row the database returned
+-- first. With self-service signup that is not a hypothetical — a second merchant
+-- registering an address that already exists was told the signup succeeded and
+-- could not then sign in, with nothing in the product to explain why.
+--
+-- The constraint moves to the scope the code actually queries in. `users` is a
+-- row-per-business membership table, so one address is one account in one
+-- business, which is what the schema already assumed everywhere else:
+-- `users.business_id` is a single column rather than a join table.
+--
+-- The trade-off is deliberate: a person who administers two businesses needs two
+-- addresses. That is the same constraint the model implies, and enforcing it at
+-- signup is legible, where resolving an ambiguous login silently is not.
+--
+-- The pre-flight check for existing duplicates is not included. There is one
+-- tenant and one operator in every deployed environment, so there is nothing to
+-- dedupe; the constraint would fail loudly on an environment that does have one,
+-- which is the correct outcome and not something to paper over with a silent
+-- merge of two accounts.
+--
+-- `lower(email)`, not `email`. A plain unique index on a `text` column is
+-- case-sensitive, so `Ana@example.com` and `ana@example.com` would be two
+-- accounts and "one address, one account" would not be true. The signup route
+-- lowercases before it writes and the login route now lowercases before it
+-- reads, so both sides of the comparison agree with this index. An index
+-- created in either other form would leave one of them unable to find an
+-- account that exists.
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_users_email" ON "users" (lower("email"));--> statement-breakpoint
