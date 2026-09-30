@@ -382,7 +382,11 @@ describe('object operations', () => {
     await client(transport).insertObject(loyaltyObject);
 
     const call = transport.apiCalls()[0]!;
-    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyobject?object.id=${OBJECT_ID}`);
+    // The collection path, with the id in the body. Not `/loyaltyobject?object.id=`:
+    // that route does not exist, Google answers it with a routing 404 and an HTML
+    // body, and the request never reaches the point where it could create a pass.
+    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyobject`);
+    expect(call.method).toBe('POST');
     expect(JSON.parse(call.body!)).toEqual(loyaltyObject);
   });
 
