@@ -1,10 +1,11 @@
 import type { MessageBatch } from '@cloudflare/workers-types';
-import { createDb, schema } from '@vyloop/db';
+import { checkPasswordPolicy, createDb, hashPassword, schema, verifyPassword } from '@vyloop/db';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import { issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
+import { signupBusiness, SlugNotDerivableError } from './business-signup';
 import { handleTestEvent } from './event-handler';
 
 // ---------------------------------------------------------------------------
@@ -19,42 +20,6 @@ export interface Env {
 type Variables = {
   jwt: JwtClaims;
 };
-
-// ---------------------------------------------------------------------------
-// Password verification (PBKDF2 via Web Crypto API)
-// ---------------------------------------------------------------------------
-
-async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [saltHex, hashHex] = stored.split(':');
-  if (!saltHex || !hashHex) return false;
-
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveBits'],
-  );
-
-  const derived = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: encoder.encode(saltHex), iterations: 100_000, hash: 'SHA-256' },
-    key,
-    512,
-  );
-
-  const computedHex = Array.from(new Uint8Array(derived))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-
-  // Constant-time comparison
-  if (computedHex.length !== hashHex.length) return false;
-  let diff = 0;
-  for (let i = 0; i < computedHex.length; i++) {
-    diff |= computedHex.charCodeAt(i) ^ hashHex.charCodeAt(i);
-  }
-  return diff === 0;
-}
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -294,6 +259,126 @@ app.post('/v1/auth/customer/token', async (c) => {
       { error: { code: 'AUTH_TOKEN_INVALID', message: 'Error al verificar el número' } },
       401,
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/auth/business/signup
+//
+// Public. The path has to live under `/v1/auth/` for one reason: that prefix is
+// the exemption the gateway already grants in `apps/gateway/src/index.ts`
+// (auth middleware, business-id resolution and rate limiting all skip it), and
+// widening that exemption to reach a new path would hand the whole `/v1/*`
+// surface the same bypass. Reusing the prefix costs nothing and touches no
+// gateway line.
+//
+// The same prefix is why this endpoint is unthrottled, and that is worth naming
+// rather than discovering: `/v1/auth/*` skips the rate limiter, and the limiter
+// is itself keyed on `jwt.business_id`, so it would have no counter to increment
+// for a request that carries no JWT. An unauthenticated endpoint that creates
+// tenants and runs a 100k-iteration KDF is the shape a script farm looks for.
+// The password minimum in `@vyloop/db` is the only control behind it. Moving the
+// exemption to a per-route allowlist is the fix; it is not this slice, and it is
+// not this file, because the middleware lives in the gateway.
+//
+// No token is issued. The administrator can log in immediately afterwards, and
+// returning one here would quietly route around the known defect in that login
+// path — it resolves `users.email` globally while the unique constraint is per
+// tenant — by making signup the only way in. That defect is tracked as its own
+// change; a signup endpoint that returns a working session is the worst possible
+// way to discover it later.
+// ---------------------------------------------------------------------------
+
+/**
+ * Deliberately permissive. The addresses this endpoint sees are typed by humans
+ * into a browser form, and a regex stricter than "looks like an address" rejects
+ * real ones far more often than it rejects typos. The database treats
+ * `users.email` as opaque text.
+ *
+ * Case folding is not so much about this endpoint as about the one it feeds.
+ * `POST /v1/auth/token` looks the user up with `eq(users.email, body.email)`, a
+ * plain equality on stored text — so an address stored as `Owner@x.com` and
+ * typed as `owner@x.com` at the login form would not match, and the merchant
+ * would be told their credentials are wrong. Storing the folded form here means
+ * signup cannot mint an account the login path is unable to find.
+ */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isEmail(value: unknown): value is string {
+  return typeof value === 'string' && EMAIL_SHAPE.test(value);
+}
+
+app.post('/v1/auth/business/signup', async (c) => {
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  let body: { name?: unknown; email?: unknown; password?: unknown; full_name?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Body must be JSON' } }, 400);
+  }
+
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'name is required' } },
+      400,
+    );
+  }
+
+  if (!isEmail(body.email)) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'email must be a valid address' } },
+      400,
+    );
+  }
+  const email = body.email.toLowerCase();
+
+  // Checked before the transaction opens, so a rejected password costs no
+  // connection and no write. The policy lives in `@vyloop/db` so the length is
+  // defined once for every future writer, not restated per route.
+  const policy = checkPasswordPolicy(typeof body.password === 'string' ? body.password : '');
+  if (!policy.ok) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: policy.message } }, 400);
+  }
+
+  const fullName = typeof body.full_name === 'string' ? body.full_name.trim() : undefined;
+
+  try {
+    const db = createDb(dbUrl);
+    const outcome = await signupBusiness(db, {
+      name,
+      adminEmail: email,
+      adminPasswordHash: await hashPassword(body.password as string),
+      adminFullName: fullName,
+    });
+
+    if (!outcome.ok) {
+      // 409, not 400: the request was well formed and the caller can fix it,
+      // but not by changing what they sent — they have to change the name, and
+      // the slug is derived from the name, so the response has to name the slug
+      // they are actually colliding on. Sending them back a message about
+      // "Café Central" when they typed "Café Central!" is the whole point.
+      return c.json(
+        {
+          error: {
+            code: 'BUSINESS_SLUG_TAKEN',
+            message: `A business with the slug "${outcome.slug}" already exists. Choose a different business name.`,
+          },
+        },
+        409,
+      );
+    }
+
+    return c.json({ data: outcome.value }, 201);
+  } catch (err) {
+    if (err instanceof SlugNotDerivableError) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: err.message } }, 400);
+    }
+    throw err;
   }
 });
 

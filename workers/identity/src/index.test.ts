@@ -16,7 +16,15 @@ const TEST_PASSWORD_HASH = '7465737473616c743132333435363738:29e173ede6837224f94
 // Mock database
 // ---------------------------------------------------------------------------
 
-vi.mock('@vyloop/db', () => {
+// `hashPassword`, `verifyPassword` and the slug/policy helpers are spread in
+// from the real module rather than stubbed. They are pure functions with no
+// database dependency, and `POST /v1/auth/token` has to run the *real*
+// `verifyPassword` — stubbing it would leave the login route untested exactly
+// where the extraction is most likely to have broken something. Only the two
+// things that touch a database are replaced.
+vi.mock('@vyloop/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@vyloop/db')>();
+
   const mockUser = {
     id: TEST_SUB,
     email: 'test@example.com',
@@ -40,6 +48,7 @@ vi.mock('@vyloop/db', () => {
   };
 
   return {
+    ...actual,
     createDb: () => mockDb,
     schema: {
       users: {

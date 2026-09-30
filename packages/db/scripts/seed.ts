@@ -4,36 +4,12 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
+import { hashPassword } from '../src/password';
 import * as schema from '../src/schema';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, '0')).join('');
-
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveBits'],
-  );
-
-  const derived = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: encoder.encode(saltHex), iterations: 100_000, hash: 'SHA-256' },
-    key,
-    512,
-  );
-
-  const hashHex = Array.from(new Uint8Array(derived))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return `${saltHex}:${hashHex}`;
-}
 
 function daysAgo(days: number): Date {
   const d = new Date();
