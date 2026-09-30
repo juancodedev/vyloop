@@ -107,10 +107,31 @@ export function reasonCodeFor(reason: WalletUnavailableReason): string {
  * — is therefore treated as blocking. The alternative, an allow-list of
  * unusable states, silently starts issuing passes against a state nobody
  * reasoned about.
+ *
+ * ## Why demo mode is an exception, and only to that rule
+ *
+ * A `draft` class used to be an unconditional refusal. That is stricter than
+ * Google: a new issuer account is in demo mode, its class reports `draft`, and
+ * Google still allows pass creation, limiting **delivery** to the issuer's test
+ * accounts. So the stricter gate bought nothing and cost the ability to exercise
+ * signing, the save link and the sweep before a grant that arrives on Google's
+ * timeline.
+ *
+ * The exception is scoped to demo mode, and it does not make the pass good for
+ * the public — it makes the pass testable. Google enforces the test-account
+ * limit regardless of what this function returns; what demo mode controls is
+ * whether *we* claim a pass works for a real customer. That claim is the one
+ * that produces a support incident, so it is gated on the operator having
+ * declared publishing access rather than on the class having been approved.
+ *
+ * Everything else about the gate is unchanged: an unrecognised status still
+ * blocks, the derivation mismatch is still checked, and demo mode never makes a
+ * missing row acceptable.
  */
 export function classReadinessFor(
   program: WalletProgramRow | null,
   tenantId: string,
+  envDemoMode: boolean,
 ): ClassReadiness {
   if (program === null) {
     return {
@@ -123,7 +144,18 @@ export function classReadinessFor(
     };
   }
 
-  if (program.reviewStatus !== 'approved') {
+  // The combination lives here rather than at the call sites so there is one
+  // place that knows the rule. `env || row` and not `row && env`: the deployment
+  // variable is a ceiling, so a deployment that says it has no publishing access
+  // refuses every mint no matter what any row claims, while a row can still hold
+  // a tenant in demo mode on a deployment that has been granted access.
+  //
+  // A row that cannot say is treated as demo mode. The alternative — treating an
+  // unreadable value as "has access" — is the failure this whole feature exists
+  // to make impossible.
+  const demoMode = envDemoMode || program.demoMode !== false;
+
+  if (program.reviewStatus !== 'approved' && !demoMode) {
     return {
       ok: false,
       reason: 'class_not_approved',

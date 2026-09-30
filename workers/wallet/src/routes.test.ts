@@ -177,6 +177,10 @@ const PROGRAMS: Row[] = [
     issuerId: ISSUER,
     classId: classIdFor(ISSUER, TENANT),
     reviewStatus: 'approved',
+    // The tenant is not in demo mode, which is what lets a *customer* be issued a
+    // pass at all. An absent column reads as demo mode, so a fixture that omitted
+    // it would turn every pass-route case into a demo-mode refusal.
+    demoMode: false,
     lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
   },
   {
@@ -184,6 +188,7 @@ const PROGRAMS: Row[] = [
     issuerId: ISSUER,
     classId: classIdFor(ISSUER, OTHER_TENANT),
     reviewStatus: 'draft',
+    demoMode: false,
     lastSyncedAt: null,
   },
 ];
@@ -1118,37 +1123,67 @@ describe('Demo Mode', () => {
     expect(json.data.reason).toBe('available');
   });
 
-  it('refuses to issue a pass in demo mode, with a code that is not a class state', async () => {
-    // `WALLET_CLASS_NOT_APPROVED` would be a lie here: the class may well be
-    // approved, and the reason is a grant that has not been made.
+  it('reports demo mode on the status route, which is where a client learns it', async () => {
+    // The demo-mode refusal on the pass route is gone, so the status route is
+    // where a client is told. It matters that it is not silent: a deployment in
+    // demo mode has passes that only work on the issuer's test accounts, and the
+    // only honest way to convey that is to say so on the route a client calls
+    // before asking for one.
     withoutDemoModeVar();
+
+    const res = await GET('/v1/wallet/status');
+
+    const json = (await res.json()) as { data: { demo_mode: boolean; reason: string } };
+    expect(json.data.demo_mode).toBe(true);
+    expect(json.data.reason).toBe('demo_mode');
+  });
+
+  it('mints in demo mode, because the tester is a customer and Google limits delivery', async () => {
+    // The behaviour reversed, and the reversal is deliberate.
+    //
+    // This used to refuse. The reason was sound — a test-accounts-only pass does
+    // nothing for a real customer — but the refusal made the deployment
+    // untestable: the people who can test are the customers the operator added to
+    // Google's test-account list, they hold the `customer` role, and this route is
+    // self-scoped so an operator has no customer row to mint from. Blocking
+    // customers blocked everyone.
+    //
+    // What actually keeps a real customer away is the customer web's delivery
+    // gate, which forbids any wallet call to action while the issuer is
+    // unapproved. There is no button, so the route is not reachable from the
+    // product. That, not this route, is the guarantee.
+    withoutDemoModeVar();
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    expect(googleCalls.length).toBeGreaterThan(0);
+  });
+
+  it('still refuses a draft class once the tenant declares it has publishing access', async () => {
+    // The exception is scoped to demo mode and goes no further. An operator who
+    // says "Google approved us" while the class is still a draft is told no,
+    // because that combination is a mistake and Google would reject the pass
+    // anyway.
+    programs = [{ ...PROGRAMS[0], reviewStatus: 'draft', demoMode: false }];
+    env.WALLET_DEMO_MODE = 'false';
 
     const res = await GET('/v1/wallet/pass');
 
     expect(res.status).toBe(409);
-    const json = (await res.json()) as { error: { code: string } };
-    expect(json.error.code).toBe('WALLET_DEMO_MODE');
+    expect(googleCalls).toEqual([]);
   });
 
-  it('tells the customer the pass would not work for them, not just that it failed', async () => {
+  it('refuses a customer in demo mode but not an operator', async () => {
+    // The distinction the whole feature rests on. An operator has to be able to
+    // mint the pass they are going to test with — their Google account is the
+    // test account — while a customer would receive something that does nothing
+    // for them.
     withoutDemoModeVar();
 
     const res = await GET('/v1/wallet/pass');
 
-    const json = (await res.json()) as { error: { message: string } };
-    expect(json.error.message).toMatch(/only work on the accounts of the business/);
-  });
-
-  it('mints no member code and reads nothing while in demo mode', async () => {
-    // Checked before any database work, like the empty-origins fault. There is
-    // no point deriving a member code for a pass that will not be issued.
-    withoutDemoModeVar();
-
-    await GET('/v1/wallet/pass');
-
-    expect(statements).toEqual([]);
-    expect(googleCalls).toEqual([]);
-    for (const row of CUSTOMERS) expect(row.memberCode).toBeNull();
+    expect(res.status).toBe(200);
   });
 
   it('fails closed on a value it does not recognise', async () => {

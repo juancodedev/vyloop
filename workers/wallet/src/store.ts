@@ -59,6 +59,16 @@ export interface WalletProgramRow {
    * that is not exactly `approved`.
    */
   reviewStatus: string;
+  /**
+   * `tenant_wallet_programs.demo_mode`. Whether this tenant is still inside
+   * Google's demo mode, declared per business by an operator.
+   *
+   * Optional on the type because a row written before the column existed, or by
+   * a query that has not been updated, must not read as "not in demo mode".
+   * `classReadinessFor` treats `undefined` as demo mode, which is the safe
+   * direction: absent means "do not claim this pass works for the public".
+   */
+  demoMode?: boolean;
   /** `tenant_wallet_programs.last_synced_at`. Nullable. */
   lastSyncedAt: Date | null;
 }
@@ -494,4 +504,18 @@ export interface WalletStore {
 
   /** Write a freshly observed review status and sync timestamp. */
   updateProgramReviewStatus(tenantId: string, reviewStatus: string, syncedAt: Date): Promise<void>;
+
+  /**
+   * Set the tenant's demo-mode switch.
+   *
+   * Separate from `updateProgramReviewStatus` on purpose. The review status is
+   * Google's to report and this code only records it; the demo-mode flag is an
+   * operator's declaration about publishing access, and a sync from Google must
+   * never be able to flip it — a status read that happened to arrive while an
+   * operator was testing would otherwise end the test.
+   *
+   * Returns the number of rows changed, so a caller can tell a tenant with no
+   * program row from one whose switch was set.
+   */
+  setProgramDemoMode(tenantId: string, demoMode: boolean): Promise<number>;
 }

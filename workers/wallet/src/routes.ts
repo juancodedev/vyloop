@@ -120,8 +120,8 @@ router.get('/v1/wallet/status', async (c) => {
   }
 
   const program = await store.findProgram(tenantId);
-  const readiness = classReadinessFor(program, tenantId);
   const demoMode = parseDemoMode(c.env.WALLET_DEMO_MODE);
+  const readiness = classReadinessFor(program, tenantId, demoMode);
 
   // Two reasons to say no that are not about the class at all. Both are asked
   // here rather than discovered by the client failing, because that is the whole
@@ -264,31 +264,6 @@ router.get('/v1/wallet/pass', async (c) => {
     );
   }
 
-  // Also before any database work, and for the same reason: a deployment fact
-  // that decides whether a pass would mean anything, checked before we spend a
-  // query or mint a member code for a pass the customer's own phone would
-  // reject. See `parseDemoMode` for why the default is to refuse.
-  if (parseDemoMode(c.env.WALLET_DEMO_MODE)) {
-    console.error(
-      "[wallet] WALLET_DEMO_MODE is on. This deployment has no Google publishing access, so a " +
-        "pass would only reach the issuer's own test accounts. Refusing rather than handing a " +
-        "customer a pass that does not work for them.",
-    );
-    return c.json(
-      {
-        error: {
-          code: WALLET_DEMO_MODE,
-          message:
-            "This business cannot add loyalty passes to Google Wallet yet. The pass would only " +
-            "work on the accounts of the business that set it up, not on yours, so it has not " +
-            "been issued to you. It becomes available once the business completes Google's " +
-            'publishing approval.',
-        },
-      },
-      409,
-    );
-  }
-
   const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
   const store = createDrizzleWalletStore(db);
 
@@ -309,7 +284,24 @@ router.get('/v1/wallet/pass', async (c) => {
   // Before the member code is touched and before anything is written. A pass is
   // never built against a class that cannot back it, so this is checked before
   // the first mutation rather than after.
-  const readiness = classReadinessFor(await store.findProgram(tenantId), tenantId);
+  const program = await store.findProgram(tenantId);
+  // Demo mode is no longer a refusal here.
+  //
+  // It used to be, and the reason was sound: a pass minted against a
+  // test-accounts-only deployment does nothing for a real customer, and handing
+  // them one is a support incident. But the refusal also made the deployment
+  // untestable, because the people who *can* test are the customers the operator
+  // added to Google's test-account list — and those hold the `customer` role, not
+  // an operator role. This route is self-scoped, so an operator does not even have
+  // a customer row to mint from; blocking customers blocked everyone.
+  //
+  // What keeps a real customer away is not this route but
+  // `delivery.contract.test.ts` in the customer web, which forbids any wallet call
+  // to action while the issuer is unapproved. The button does not exist, so the
+  // route is not reachable from the product. Relaxing the class gate therefore
+  // does not expose a customer to anything, because the customer has no way to ask.
+  const envDemoMode = parseDemoMode(c.env.WALLET_DEMO_MODE);
+  const readiness = classReadinessFor(program, tenantId, envDemoMode);
   if (!readiness.ok) {
     // 409, not 404 and not 500. The prerequisite exists and is known; it is
     // not ready. 404 would tell a client the business has no wallet at all, and
@@ -351,7 +343,7 @@ router.get('/v1/wallet/pass', async (c) => {
 
     try {
       const outcome = await reconcilePass(
-        { store, client },
+        { store, client, demoMode: envDemoMode },
         { tenantId, customerId: customer.id },
       );
 

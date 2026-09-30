@@ -37,6 +37,10 @@ function programRow(overrides: Partial<WalletProgramRow> = {}): WalletProgramRow
     issuerId: ISSUER,
     classId: classIdFor(ISSUER, TENANT),
     reviewStatus: 'approved',
+    // Explicit, because a row read after the migration always carries the column
+    // and an absent one is treated as demo mode. Leaving it out would make every
+    // case below about that fallback rather than about what it tests.
+    demoMode: false,
     lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
     ...overrides,
   };
@@ -227,6 +231,11 @@ class FakeStore implements WalletStore {
     return objectIds.includes(row.objectId) ? [row] : [];
   }
 
+  async setProgramDemoMode(): Promise<number> {
+    this.record('setProgramDemoMode', TENANT);
+    return 1;
+  }
+
   async updateProgramReviewStatus(): Promise<void> {
     this.record('updateProgramReviewStatus', TENANT);
   }
@@ -335,8 +344,16 @@ function readyStore(overrides: {
   );
 }
 
-function reconcile(store: WalletStore, client: GoogleWalletClient, tenantId = TENANT) {
-  return reconcilePass({ store, client, now: OBSERVED_AT }, { tenantId, customerId: CUSTOMER_ID });
+function reconcile(
+  store: WalletStore,
+  client: GoogleWalletClient,
+  tenantId = TENANT,
+  demoMode = false,
+) {
+  return reconcilePass(
+    { store, client, now: OBSERVED_AT, demoMode },
+    { tenantId, customerId: CUSTOMER_ID },
+  );
 }
 
 let store: FakeStore;
@@ -708,9 +725,12 @@ describe('reconcilePass: what the patch contains', () => {
 
 describe('reconcilePass: a pass nobody is looking at', () => {
   /** `reconcile` fixes the clock, so the observation tests need their own. */
-  function at(observedAt: Date) {
-    return reconcilePass({ store, client, now: observedAt }, { tenantId: TENANT, customerId: CUSTOMER_ID });
-  }
+    function at(observedAt: Date) {
+      return reconcilePass(
+        { store, client, now: observedAt, demoMode: false },
+        { tenantId: TENANT, customerId: CUSTOMER_ID },
+      );
+    }
 
   it('does not patch an object Google reports as not ACTIVE', async () => {
     // A non-ACTIVE pass is not being displayed, and Google may reject a patch
