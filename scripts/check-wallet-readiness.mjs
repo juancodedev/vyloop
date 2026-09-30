@@ -31,6 +31,19 @@ export const PASS_BLOCKED = 'blocked';
 export const PASS_OK = 'ok';
 export const PASS_UNKNOWN = 'unknown';
 
+/** The route a class's `homepageUri` points at, as `provision.ts` builds it. */
+export const PROGRAM_PAGE_PATH = '/program';
+
+/**
+ * How long the program page gets to answer.
+ *
+ * Short on purpose. This gate is read by someone waiting on a class in Google's
+ * review, and a health check that takes 30 seconds to fail is one that gets
+ * skipped. The gateway check can afford its 10s because nothing is waiting on
+ * that one; this one cannot.
+ */
+export const PROGRAM_PAGE_TIMEOUT_MS = 5_000;
+
 /**
  * Turns raw observations into gates.
  *
@@ -102,6 +115,28 @@ export function buildGates(observed) {
       observed.programCount === 0
         ? 'Create the tenant_wallet_programs row for this business (issuer id and derived class id).'
         : 'Google reviews the class. It cannot be skipped, and no code path here can override it.',
+    ),
+  );
+
+  // The other half of the same review. Google opens `homepageUri` while deciding
+  // the class, so a page that does not answer does not fail a deploy — it fails
+  // the review, silently, for every class created afterwards. docs/11 records it
+  // as the most common rejection reason, which is why it is a gate here at all.
+  gates.push(
+    gate(
+      'program-page',
+      'Public program page answers',
+      observed.canSeeProgramPage,
+      // Only a 2xx is a page a reviewer can open. A redirect, a 404 and a 500 are
+      // all a rejected class, so "it answered something" is not good enough here
+      // the way it is for the gateway — there, any answer proves the route exists.
+      typeof observed.programPageStatus === 'number' &&
+        observed.programPageStatus >= 200 &&
+        observed.programPageStatus < 300,
+      `The program page a class points at answers ${observed.programPageStatus}` +
+        `${observed.programPageUrl ? ` (${observed.programPageUrl})` : ''}, so Google's reviewer opens no page.`,
+      'Redeploy apps/customer-web, or point WALLET_WEB_BASE_URL at a host where /program resolves. Google opens this URL during class review and rejects the class on a non-2xx — docs/11 records it as the most common rejection reason.',
+      { programPageUrl: observed.programPageUrl ?? null },
     ),
   );
 
@@ -220,6 +255,110 @@ function readConfigVar(name, configPath) {
   return match ? match[1] : null;
 }
 
+/** The same read, but a file that is not there is `null` rather than a crash. */
+function tryReadConfigVar(name, configPath) {
+  try {
+    return readConfigVar(name, configPath);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `DEFAULT_WALLET_WEB_BASE_URL` read out of the worker's own source.
+ *
+ * Parsed from the file rather than restated here on purpose. This is the whole
+ * reason the check can be trusted: the day customer-web moves and the default
+ * changes, the check follows it, because there is no second copy to forget.
+ */
+function sourceDefaultWebBaseUrl(sourcePath) {
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    return /DEFAULT_WALLET_WEB_BASE_URL\s*=\s*'([^']+)'/.exec(source)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which origin the program page check has to hit.
+ *
+ * Precedence mirrors what the worker actually runs with: the operator's shell,
+ * then the var in the deployed wrangler config, then the source default. The
+ * wrangler var is consulted before the constant deliberately — that var is what
+ * production deploys, so preferring the constant would verify a URL nobody
+ * serves while the real one is broken.
+ *
+ * Blank counts as absent because `parseWebBaseUrl` treats `''` as "use the
+ * default"; a blank var must not pin the check to a relative URL.
+ *
+ * Returns null when nothing could be read, which the gate reports as unknown
+ * rather than falling back to a guess.
+ */
+export function resolveProgramPageOrigin({ override, configVar, sourceDefault }) {
+  const chosen = [override, configVar, sourceDefault].find(
+    (value) => typeof value === 'string' && value.trim() !== '',
+  );
+  if (chosen === undefined) return null;
+
+  // Same trailing-slash treatment as `parseWebBaseUrl`, because the value is
+  // concatenated with `/program` in exactly the same way and `//program` is a
+  // different URL to the route.
+  return chosen.trim().replace(/\/+$/, '');
+}
+
+/**
+ * Ask the program page for a status code.
+ *
+ * Two outcomes, one rule: a response is a fact and is reported as one; no
+ * response at all — DNS, TLS, timeout, or a CI runner with no egress — means
+ * nobody knows, and comes back `known: false` so the gate reads unknown. Turning
+ * a thrown fetch into a pass is how this check becomes decorative: green because
+ * nothing answered.
+ */
+export async function probeProgramPage(
+  url,
+  { fetchImpl = fetch, timeoutMs = PROGRAM_PAGE_TIMEOUT_MS } = {},
+) {
+  try {
+    const response = await fetchImpl(url, {
+      // Google follows redirects before deciding, so following them here measures
+      // the page a reviewer ends up on rather than the first hop.
+      redirect: 'follow',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return { known: true, status: response.status, url };
+  } catch {
+    return { known: false, status: null, url };
+  }
+}
+
+/**
+ * The public program page, as a fact.
+ *
+ * Read-only: one GET on a public route, nothing opened and nothing mutated. The
+ * `fetch` implementation is injected so the tests can drive 404, no-network and
+ * timeout without ever leaving the machine.
+ */
+export async function observeProgramPage({
+  override,
+  configPath,
+  sourcePath,
+  fetchImpl = fetch,
+  timeoutMs = PROGRAM_PAGE_TIMEOUT_MS,
+}) {
+  const origin = resolveProgramPageOrigin({
+    override,
+    configVar: tryReadConfigVar('WALLET_WEB_BASE_URL', configPath),
+    sourceDefault: sourceDefaultWebBaseUrl(sourcePath),
+  });
+
+  // No host is a fact about this check, not about the page: do not invent one.
+  if (origin === null) return { known: false, status: null, url: null };
+
+  return probeProgramPage(`${origin}${PROGRAM_PAGE_PATH}`, { fetchImpl, timeoutMs });
+}
+
 function deployedSecretNames() {
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (!token) return { known: false, names: [] };
@@ -318,9 +457,15 @@ async function main() {
   const gatewayUrl =
     process.env.NEXT_PUBLIC_API_URL ?? 'https://gateway.cl-jmunoz.workers.dev';
   const configPath = join(process.cwd(), 'workers/wallet/wrangler.jsonc');
+  const helpersPath = join(process.cwd(), 'workers/wallet/src/helpers.ts');
 
   const secrets = deployedSecretNames();
   const database = await databaseFacts();
+  const programPage = await observeProgramPage({
+    override: process.env.WALLET_WEB_BASE_URL,
+    configPath,
+    sourcePath: helpersPath,
+  });
 
   const gates = buildGates({
     deployedSecrets: secrets.names,
@@ -330,6 +475,9 @@ async function main() {
     programCount: database.programCount,
     databaseLabel: database.databaseLabel,
     reviewStatus: database.reviewStatus,
+    canSeeProgramPage: programPage.known,
+    programPageStatus: programPage.status,
+    programPageUrl: programPage.url,
     // Effective demo mode is `env || row`, the same combination the gate uses.
     // Reading only the config would report the deployment ceiling and hide the
     // half an operator can change.
@@ -352,6 +500,15 @@ async function main() {
   if (!database.known) {
     process.stdout.write(
       '  note: no DATABASE_URL in this shell, so the class and table checks could not run.\n',
+    );
+  }
+  if (!programPage.known) {
+    // The URL is named even when the check could not run, because "I could not
+    // check it" is only actionable if it says which host it was trying.
+    process.stdout.write(
+      `  note: the program page check could not run against ` +
+        `${programPage.url ?? 'an undetermined host'}, so it is reported as unknown.\n` +
+        '        A machine with no network reaches this too — that is not a working page.\n',
     );
   }
   process.stdout.write('\n');

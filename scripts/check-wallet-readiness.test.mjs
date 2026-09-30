@@ -4,13 +4,19 @@
 //
 // Development tool test: kept beside the script it covers, outside `src`, so it
 // is neither linted nor typechecked as product code.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   buildGates,
   formatReport,
   missingSecrets,
+  observeProgramPage,
+  PROGRAM_PAGE_PATH,
+  PROGRAM_PAGE_TIMEOUT_MS,
   REQUIRED_SECRETS,
+  resolveProgramPageOrigin,
   verdict,
 } from './check-wallet-readiness.mjs';
 
@@ -24,6 +30,37 @@ const HEALTHY = {
   demoMode: false,
   databaseLabel: 'neondb',
   gatewayReachable: true,
+  canSeeProgramPage: true,
+  programPageStatus: 200,
+  programPageUrl: 'https://customer-web.invalid/program',
+};
+
+/**
+ * A fetch that never touches the network. The status it reports is what the test
+ * decides, so the program page gate is exercised without internet.
+ */
+function stubFetch(status) {
+  const calls = [];
+  const impl = async (url, init) => {
+    calls.push({ url, init });
+    if (init?.signal?.aborted) throw new Error('aborted before dispatch');
+    return { status };
+  };
+  impl.calls = calls;
+  return impl;
+}
+
+/** A fetch that fails the way a machine with no egress does. */
+function brokenFetch(error = new Error('getaddrinfo ENOTFOUND')) {
+  return async () => {
+    throw error;
+  };
+}
+
+const REPO_ROOT = process.cwd();
+const REPO_SOURCES = {
+  configPath: join(REPO_ROOT, 'workers/wallet/wrangler.jsonc'),
+  sourcePath: join(REPO_ROOT, 'workers/wallet/src/helpers.ts'),
 };
 
 function firstBlocker(overrides) {
@@ -33,7 +70,9 @@ function firstBlocker(overrides) {
 describe('buildGates', () => {
   it('orders the gates the way a request hits them', () => {
     const ids = buildGates(HEALTHY).map((gate) => gate.id);
-    expect(ids).toEqual(['database', 'secrets', 'class', 'demo-mode', 'gateway']);
+    // `program-page` sits right after `class` because it is the other half of the
+    // same review: Google opens `homepageUri` while deciding the class.
+    expect(ids).toEqual(['database', 'secrets', 'class', 'program-page', 'demo-mode', 'gateway']);
   });
 
   it('passes every gate when the deployment is genuinely ready', () => {
@@ -171,5 +210,283 @@ describe('missingSecrets', () => {
   it('reports only what is absent', () => {
     expect(missingSecrets(REQUIRED_SECRETS)).toEqual([]);
     expect(missingSecrets([])).toEqual(REQUIRED_SECRETS);
+  });
+});
+
+describe('resolveProgramPageOrigin', () => {
+  it('follows the deployed var instead of the source default', () => {
+    // The case that matters: someone moved customer-web and updated the worker's
+    // var. A check still pointed at the old host would be reporting on a URL
+    // nothing deploys any more.
+    expect(
+      resolveProgramPageOrigin({
+        override: null,
+        configVar: 'https://new-customer.pages.dev',
+        sourceDefault: 'https://old-customer.pages.dev',
+      }),
+    ).toBe('https://new-customer.pages.dev');
+  });
+
+  it('prefers the operator shell over the config', () => {
+    // Same precedence the worker uses, so `WALLET_WEB_BASE_URL` in the shell is
+    // the host under test.
+    expect(
+      resolveProgramPageOrigin({
+        override: 'https://from-shell.pages.dev',
+        configVar: 'https://from-config.pages.dev',
+        sourceDefault: 'https://from-source.pages.dev',
+      }),
+    ).toBe('https://from-shell.pages.dev');
+  });
+
+  it('falls back to the source default when no var is set', () => {
+    expect(
+      resolveProgramPageOrigin({
+        override: null,
+        configVar: null,
+        sourceDefault: 'https://from-source.pages.dev',
+      }),
+    ).toBe('https://from-source.pages.dev');
+  });
+
+  it('treats a blank var as absent, like the worker parser does', () => {
+    // `parseWebBaseUrl` treats '' as "use the default", so a blank var that
+    // pinned the check to '' would make it probe a relative URL.
+    expect(
+      resolveProgramPageOrigin({
+        override: '   ',
+        configVar: '',
+        sourceDefault: 'https://from-source.pages.dev',
+      }),
+    ).toBe('https://from-source.pages.dev');
+  });
+
+  it('strips a trailing slash so the route is not //program', () => {
+    // `parseWebBaseUrl` strips it for the same reason: `//program` is a different
+    // URL to the route, and may be to Google.
+    const origin = resolveProgramPageOrigin({
+      override: null,
+      configVar: 'https://from-config.pages.dev///',
+      sourceDefault: null,
+    });
+    expect(`${origin}${PROGRAM_PAGE_PATH}`).toBe('https://from-config.pages.dev/program');
+  });
+
+  it('returns null when no source could be read, rather than guessing a host', () => {
+    expect(
+      resolveProgramPageOrigin({ override: null, configVar: null, sourceDefault: null }),
+    ).toBeNull();
+  });
+});
+
+describe('observeProgramPage', () => {
+  it('reads the host out of the repo instead of restating it', async () => {
+    // The live files, not fixtures: the check has to track
+    // `DEFAULT_WALLET_WEB_BASE_URL` in the worker's own source, so moving
+    // customer-web moves the check. Both sides of the assertion are read from
+    // the repo, which is what makes it a contract rather than a snapshot.
+    const fetchImpl = stubFetch(200);
+    const source = readFileSync(REPO_SOURCES.sourcePath, 'utf8');
+    const declared = /DEFAULT_WALLET_WEB_BASE_URL\s*=\s*'([^']+)'/.exec(source)?.[1];
+
+    expect(declared).toBeTruthy();
+    const result = await observeProgramPage({ ...REPO_SOURCES, override: null, fetchImpl });
+    expect(result.url).toBe(`${declared}${PROGRAM_PAGE_PATH}`);
+    expect(fetchImpl.calls).toHaveLength(1);
+  });
+
+  it('keeps no copy of the host in the script itself', async () => {
+    // The regression this whole file guards: a URL written into the check would
+    // keep verifying a host the platform stopped deploying, and go green.
+    const source = readFileSync(new URL('./check-wallet-readiness.mjs', import.meta.url), 'utf8');
+    const declared = /DEFAULT_WALLET_WEB_BASE_URL\s*=\s*'([^']+)'/.exec(
+      readFileSync(REPO_SOURCES.sourcePath, 'utf8'),
+    )?.[1];
+
+    expect(declared).toBeTruthy();
+    expect(source).not.toContain(new URL(declared).host);
+  });
+
+  it('probes the route the class actually points at', async () => {
+    const fetchImpl = stubFetch(200);
+    await observeProgramPage({
+      override: 'https://moved-customer.pages.dev',
+      configPath: '/nonexistent/wrangler.jsonc',
+      sourcePath: '/nonexistent/helpers.ts',
+      fetchImpl,
+    });
+
+    expect(fetchImpl.calls[0].url).toBe('https://moved-customer.pages.dev/program');
+  });
+
+  it('reports a 404 as a fact, because a fact is what blocks', async () => {
+    const result = await observeProgramPage({
+      override: 'https://gone.pages.dev',
+      configPath: '/nonexistent/wrangler.jsonc',
+      sourcePath: '/nonexistent/helpers.ts',
+      fetchImpl: stubFetch(404),
+    });
+
+    expect(result).toMatchObject({ known: true, status: 404 });
+  });
+
+  it('reports a fetch that threw as unknown, never as a healthy page', async () => {
+    // The load-bearing case. A CI box with no egress throws, and a check that
+    // turns that into a pass is decorative: green because nothing answered.
+    const result = await observeProgramPage({
+      override: 'https://customer.pages.dev',
+      configPath: '/nonexistent/wrangler.jsonc',
+      sourcePath: '/nonexistent/helpers.ts',
+      fetchImpl: brokenFetch(),
+    });
+
+    expect(result.known).toBe(false);
+    expect(result.status).toBeNull();
+  });
+
+  it('reports unknown when the host itself could not be determined', async () => {
+    // Nothing readable anywhere: the gate must not invent a host, because a check
+    // aimed at a URL it made up says nothing about the real one.
+    const fetchImpl = stubFetch(200);
+    const result = await observeProgramPage({
+      override: null,
+      configPath: '/nonexistent/wrangler.jsonc',
+      sourcePath: '/nonexistent/helpers.ts',
+      fetchImpl,
+    });
+
+    expect(result.known).toBe(false);
+    expect(result.url).toBeNull();
+    expect(fetchImpl.calls).toHaveLength(0);
+  });
+
+  it('aborts instead of hanging, and the timeout is short', async () => {
+    // A class waiting in review cannot sit behind a 30 second health check, so
+    // the deadline is both bounded and actually wired to the request.
+    expect(PROGRAM_PAGE_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(PROGRAM_PAGE_TIMEOUT_MS).toBeLessThanOrEqual(10_000);
+
+    let aborted = false;
+    const hanging = (_url, { signal }) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          reject(new Error('aborted'));
+        });
+      });
+
+    const result = await observeProgramPage({
+      override: 'https://slow.pages.dev',
+      configPath: '/nonexistent/wrangler.jsonc',
+      sourcePath: '/nonexistent/helpers.ts',
+      fetchImpl: hanging,
+      timeoutMs: 20,
+    });
+
+    expect(aborted).toBe(true);
+    expect(result.known).toBe(false);
+  });
+});
+
+describe('program-page gate', () => {
+  const gate = (observed) =>
+    buildGates({ ...HEALTHY, ...observed }).find((g) => g.id === 'program-page');
+
+  it('passes a 200, which is the only thing Google can review', () => {
+    expect(gate({ programPageStatus: 200 }).pass).toBe(true);
+  });
+
+  it('fails a 404 and names the URL and the fix', () => {
+    // The scenario: customer-web moved, the default points at nothing, and Google
+    // rejects every new class. An operator has to get the host out of this gate.
+    const page = gate({ programPageStatus: 404, programPageUrl: 'https://gone.pages.dev/program' });
+
+    expect(page.pass).toBe(false);
+    expect(page.blocked).toContain('404');
+    expect(page.blocked).toContain('https://gone.pages.dev/program');
+    expect(page.next).toContain('customer-web');
+    expect(page.next).toContain('WALLET_WEB_BASE_URL');
+  });
+
+  it('fails any non-2xx, not just a 404', () => {
+    // A 500 or a redirect is equally a page Google's reviewer cannot use, and
+    // treating "it answered something" as healthy would be the same bug in
+    // another status code.
+    for (const status of [301, 403, 404, 500, 503]) {
+      expect(gate({ programPageStatus: status }).pass).toBe(false);
+    }
+  });
+
+  it('is unknown, not ok, when the page could not be reached at all', () => {
+    // The exact failure the user cares about: no network must not read as a
+    // working program page.
+    const page = gate({ canSeeProgramPage: false, programPageStatus: null, programPageUrl: 'https://customer.pages.dev/program' });
+
+    expect(page.pass).toBeNull();
+    expect(page.pass).not.toBe(true);
+    expect(page.pass).not.toBe(false);
+  });
+
+  it('is unknown, not ok, when the host could not be read', () => {
+    // Not knowing which host to check is not the same as knowing the page works.
+    const page = gate({ canSeeProgramPage: false, programPageStatus: null, programPageUrl: null });
+    expect(page.pass).toBeNull();
+  });
+
+  it('does not make an unobservable page a readiness verdict', () => {
+    const { ready, unknown } = verdict(
+      buildGates({ ...HEALTHY, canSeeProgramPage: false, programPageStatus: null }),
+    );
+
+    expect(ready).toBeNull();
+    expect(unknown.map((g) => g.id)).toEqual(['program-page']);
+  });
+
+  it('says nothing factual about the page when the check could not run', () => {
+    // "The program page answers 404" from a box that never left the network sends
+    // someone to redeploy a site that is fine.
+    const report = formatReport(
+      buildGates({ ...HEALTHY, canSeeProgramPage: false, programPageStatus: null }),
+    );
+
+    expect(report).toContain('[????] Public program page answers');
+    expect(report).toContain('could not be checked from here');
+    expect(report).not.toContain('[PASS] Public program page answers');
+    expect(report).not.toContain('so Google');
+  });
+
+  it('shows a failing program page in the report with its URL', () => {
+    const report = formatReport(
+      buildGates({ ...HEALTHY, programPageStatus: 404, programPageUrl: 'https://gone.pages.dev/program' }),
+    );
+
+    expect(report).toContain('[BLOCK] Public program page answers');
+    expect(report).toContain('https://gone.pages.dev/program');
+    expect(report).toContain('NOT READY');
+  });
+
+  it('carries a thrown fetch all the way to the verdict as unknown', async () => {
+    // End to end on purpose. The gate tests above hand it `known: false` directly,
+    // so nothing there would notice `main` wiring `canSeeProgramPage: true`
+    // unconditionally — which is precisely how a no-egress CI runner ends up with
+    // a green light on a page nobody opened.
+    const observed = await observeProgramPage({
+      override: 'https://customer.pages.dev',
+      configPath: '/nonexistent/wrangler.jsonc',
+      sourcePath: '/nonexistent/helpers.ts',
+      fetchImpl: brokenFetch(),
+    });
+
+    const { ready, unknown } = verdict(
+      buildGates({
+        ...HEALTHY,
+        canSeeProgramPage: observed.known,
+        programPageStatus: observed.status,
+        programPageUrl: observed.url,
+      }),
+    );
+
+    expect(unknown.map((g) => g.id)).toEqual(['program-page']);
+    expect(ready).toBeNull();
   });
 });

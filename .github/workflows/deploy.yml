@@ -38,6 +38,21 @@ jobs:
       - name: Test
         run: pnpm -r test
 
+      # Deliberately non-blocking. The report answers a question about an external
+      # service: does the public program page a class's `homepageUri` points at
+      # still answer. A 404 there does not break the wallet — Google rejects the
+      # class it reviews, days later, and that is where it should be fixed.
+      # Failing this step would instead block every wallet deploy for something
+      # outside the wallet, and the fix would be to make the step go away.
+      #
+      # The report is in the log either way, and a `BLOCK` on the program page is
+      # the finding worth reading. `continue-on-error` is here rather than relied
+      # on by accident: the script sets no exit code today, and that should not
+      # be what decides whether this gate can ever block.
+      - name: Wallet readiness report
+        run: pnpm wallet:readiness
+        continue-on-error: true
+
   deploy-workers:
     needs: quality
     runs-on: ubuntu-latest
