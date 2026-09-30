@@ -52,24 +52,7 @@ Consecuencia concreta: el flujo B se puede construir entero y va a funcionar —
 
 No es un motivo para no construirlo. Es un motivo para saber qué se está prometriendo mientras tanto.
 
-## A1 — alta de negocio, sin Google
-
-### Lo que el mapa del código cambió
-
-Tres cosas que no eran previsibles:
-
-**El hash de contraseña está escrito dos veces.** `packages/db/scripts/seed.ts:13` tiene `hashPassword` y `workers/identity/src/index.ts:27` tiene `verifyPassword`: dos implementaciones separadas del mismo PBKDF2, ninguna exportada. Un alta sería la **tercera** copia. Se extrae a un módulo compartido y las dos se importan de ahí.
-
-**No existe normalizador de slug, y está documentado que no existe.** `workers/wallet/src/ids.ts:11-15` dice textualmente que `slug` es una columna `text` con índice único *"and no format validation anywhere in the repo"*. No hay helper que derive un slug de un nombre. Y hace falta: los nombres chilenos llevan acentos, y `Café Central` tiene que producir algo usable.
-
-**El login busca el email globalmente, no por tenant.** `workers/identity/src/index.ts:92` filtra solo por `users.email`, aunque el unique constraint es `(business_id, email)`. Con self-service, dos negocios pueden registrarse con el mismo email de administrador y **el login resuelve la fila que la base devuelva primero**. Es un defecto preexistente que el alta convierte en problema de producción: el segundo negocio se registra "ok" y después no puede entrar.
-
-### Decisiones
-
-1. **Hash compartido.** PBKDF2-HMAC-SHA-256, 100k iteraciones, formato `saltHex:hashHex`. Vive en `packages/db/src/password.ts` — no es el hogar natural de un hash, pero es donde ya está una de las dos copias y las dos importan de ahí. La alternativa es un paquete nuevo para una función.
-2. **Slug derivado, con plegado de acentos y resolución de colisiones.** Se normaliza a minúsculas, se_trackerza lo que no sea `[a-z0-9]` a guion, se colapsan guiones repetidos y se corta a un largo razonable. Dos nombres iguales producen el mismo slug y el unique constraint revienta, así que hace falta desambiguar y la respuesta tiene que ser un error legible, no un 500.
-3. **La política de contraseña se define acá.** No existe ninguna. El seed guarda `demo123`. Un alta pública no puede aceptar cualquier cosa.
-4. **Orden del `set_config` de RLS.** `tenants` no tiene política, así que su insert va sin sesión. Los tres inserts siguientes (`users`, `loyalty_programs`, `membership_tiers`) sí están en `BUSINESS_ID_TABLES` y necesitan `app.current_business_id` — que solo existe después de que el tenant devuelve su id. Se pone dentro de la transacción, después del primer insert.
+## Decisiones abiertas
 
 1. **Dónde vive el logo.** Google necesita una URL pública HTTPS para descargarlo. El repo no tiene R2 ni almacenamiento de objetos; hay KV en cuatro workers, que no sirve para binarios. Hace falta decidir dónde se suben, y eso crea o reaprovecha un bucket.
 2. **Si el logo es obligatorio.** Recomendado sí, por lo de la review. Si es opcional, el alta se frena en la review y el negocio pasa días sin tarjeta.
