@@ -2,6 +2,7 @@ import type { MessageBatch } from '@cloudflare/workers-types';
 import { checkPasswordPolicy, createDb, hashPassword, schema, verifyPassword } from '@vyloop/db';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
 import { and, eq } from 'drizzle-orm';
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 
 import { issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
@@ -15,13 +16,52 @@ import { handleTestEvent } from './event-handler';
 export interface Env {
   JWT_SECRET: string;
   DATABASE_URL: string;
+  /**
+   * The wallet worker, so a business that just signed up gets its Google class.
+   *
+   * Optional where `workers/growth` declares the same binding as required, and
+   * the reason is that worker: growth only ever reaches `schedulePassReconcile`
+   * from handlers that already require a wallet, so its tests carry one. Here,
+   * every test that drives this app posts a signup without the binding, and
+   * declaring it required would make a missing binding a type error at each of
+   * those call sites instead of the runtime condition it actually is. The
+   * behaviour is the same either way: absent means "no card yet", never a failed
+   * signup.
+   */
+  WALLET?: WalletWorker;
+}
+
+/**
+ * The wallet's provisioning surface, as this worker calls it.
+ *
+ * A plain `Fetcher` models only `fetch` and `connect`, so the target's exported
+ * `provisionClass` — the entire point of this binding — needs its own shape. The
+ * same declaration `workers/growth` makes for `reconcileCustomer`, for the same
+ * reason: the contract is pinned from both sides so renaming the export over
+ * there stops this typechecking.
+ *
+ * The outcome is `unknown` on purpose. This worker does not branch on it: it
+ * cannot check whether the class exists, and a second opinion about that would be
+ * a second definition of a decision the wallet owns. It logs.
+ */
+export interface WalletWorker {
+  provisionClass(input: { tenantId: string }): Promise<unknown>;
 }
 
 type Variables = {
   jwt: JwtClaims;
 };
 
-const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+/**
+ * The app's context shape, named so the signup route can hand its context to a
+ * helper without restating it. `workers/growth` passes a bare
+ * `Context<{ Bindings }>` because its router declares no variables and its
+ * helpers are called from handlers that would then be uncallable; here the
+ * context does carry `jwt`, and the helper is private to this file.
+ */
+type AppEnv = { Bindings: Env; Variables: Variables };
+
+const app = new Hono<AppEnv>();
 
 // ---------------------------------------------------------------------------
 // POST /v1/auth/token
@@ -317,6 +357,101 @@ function isEmail(value: unknown): value is string {
   return typeof value === 'string' && EMAIL_SHAPE.test(value);
 }
 
+/**
+ * Ask the wallet to create this tenant's Google class, and do not wait for it.
+ *
+ * ## Why the call is not on the signup response
+ *
+ * `provisionClass` reaches `walletobjects.googleapis.com` — a network round trip
+ * to the slowest and least reliable dependency this system has — and it is asked
+ * for exactly once per business, at the moment a merchant is watching a spinner.
+ * Two things go wrong if it blocks:
+ *
+ * 1. **Latency.** Every signup pays Google's latency, including the days it is
+ *    having a bad one.
+ * 2. **Availability.** A signup that fails because Google is down throws away a
+ *    business that was perfectly registerable, and re-running the form collides
+ *    with the slug the first attempt already committed. The business is the
+ *    thing the merchant came for; the card is something that can arrive later.
+ *
+ * So it goes under `waitUntil`, and this function cannot fail. That is the whole
+ * contract, and it is why the route calls it *after* `signupBusiness` returns
+ * rather than inside the transaction: a `fetch` to Google within
+ * `db.transaction` would hold a Neon connection open for the duration of the
+ * call, and a failure would have to roll back a tenant that is already good.
+ *
+ * ## What makes it safe to hand over
+ *
+ * Everything it does is idempotent: the wallet skips Google entirely when the
+ * tenant already has a program row, and treats a `409 alreadyExists` as "already
+ * there" and finishes the row. A dropped `waitUntil`, a duplicate delivery and a
+ * retry are the same no-op. What a dropped one leaves behind is a business with
+ * no card, which the operator's `POST /v1/wallet/program/sync` cannot fix
+ * because there is no class to sync — so the honest description of a loss is
+ * "this tenant needs provisioning re-run", not "the card will catch up".
+ *
+ * Mirrors `schedulePassReconcile` in `workers/growth`: guard the dispatch,
+ * handle the promise before handing it over, and tolerate a context that carries
+ * no `ExecutionContext`.
+ */
+function scheduleWalletProvisioning(c: Context<AppEnv>, tenantId: string): void {
+  const wallet = c.env?.WALLET;
+
+  if (!wallet) {
+    // Not an error the caller can act on, and not one signup should answer. It
+    // is the log line that turns "this business has no card" from a mystery into
+    // a thing someone can see and re-run.
+    console.error(
+      `[identity] No WALLET service binding, so tenant ${tenantId} was registered without a ` +
+        'Google class. Provisioning has to be re-run for it.',
+    );
+    return;
+  }
+
+  // Guarded separately from its promise: a binding that is present but is not a
+  // worker throws here, and this is called from inside the route's `try`, so an
+  // unguarded throw would be reported as a 500 for a request already committed.
+  let provisioning: Promise<unknown>;
+  try {
+    provisioning = wallet.provisionClass({ tenantId });
+  } catch (err: unknown) {
+    console.error(`[identity] Could not reach the wallet to provision tenant ${tenantId}:`, err);
+    return;
+  }
+
+  // Handled before it is handed over, so the promise `waitUntil` receives cannot
+  // reject. A rejected background task is attributed to the invocation that
+  // spawned it, and an unhandled rejection is indistinguishable from a real
+  // fault in a log somebody has to triage at 06:00.
+  const handled = provisioning.catch((err: unknown) => {
+    console.error(
+      `[identity] Google Wallet provisioning failed for tenant ${tenantId}; the business is ` +
+        'registered and the class has to be re-run:',
+      err,
+    );
+  });
+
+  // `c.executionCtx` throws when the context carries no `ExecutionContext`, and
+  // the callers that do this are the ones driving this app directly rather than
+  // the Workers runtime. A business must not depend on which of the two answered.
+  let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+  try {
+    waitUntil = c.executionCtx.waitUntil.bind(c.executionCtx);
+  } catch {
+    waitUntil = undefined;
+  }
+
+  if (waitUntil === undefined) {
+    console.error(
+      `[identity] No ExecutionContext to hand tenant ${tenantId}'s provisioning to, so it runs ` +
+        'unattached.',
+    );
+    return;
+  }
+
+  waitUntil(handled);
+}
+
 app.post('/v1/auth/business/signup', async (c) => {
   const dbUrl = c.env.DATABASE_URL;
   if (!dbUrl) {
@@ -401,6 +536,13 @@ app.post('/v1/auth/business/signup', async (c) => {
         409,
       );
     }
+
+    // Post-commit, and off the response path. The transaction above has already
+    // committed, which is the point: the Google class is an addition to a
+    // business that exists, not a fifth write that can fail alongside the other
+    // four. `scheduleWalletProvisioning` cannot throw and returns nothing, so
+    // nothing below this line can change what the merchant is told.
+    scheduleWalletProvisioning(c, outcome.value.businessId);
 
     return c.json({ data: outcome.value }, 201);
   } catch (err) {

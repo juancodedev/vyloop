@@ -79,6 +79,50 @@ export interface WalletTierRow {
   name: string;
 }
 
+/**
+ * The slice of `tenants` a Google class is branded with.
+ *
+ * Read by provisioning and by nothing else on the issuance path: a pass carries
+ * the merchant's name because Google copied it into the class at signup, not
+ * because any request re-reads the tenant row.
+ */
+export interface WalletTenantBrandingRow {
+  /** `tenants.name`. Google's display may ellipsise after 20 characters. */
+  name: string;
+  /** `tenants.country`. ISO 3166-1 alpha-2, free text in the column. */
+  country: string;
+}
+
+/**
+ * What a new tenant's `tenant_wallet_programs` row is.
+ *
+ * `classId` travels as a value rather than being derived by the store, because
+ * the same derivation has to produce the id sent to Google and the id stored, and
+ * two derivations are two answers. The caller holds both halves.
+ */
+export interface ProgramInsert {
+  tenantId: string;
+  /** `tenant_wallet_programs.issuer_id`. Google's issuer id. */
+  issuerId: string;
+  /** `<issuerId>.tenant-<tenantId>`. */
+  classId: string;
+  /**
+   * vyloop's storage form of the review status. Always passed explicitly.
+   *
+   * The column's default is `'none'`, which means "this tenant has no class" and
+   * fails the readiness gate closed — for a tenant that does have one. A caller
+   * that omitted this would write a row that looks provisioned and cannot issue
+   * a pass, with no error anywhere.
+   */
+  reviewStatus: string;
+  /**
+   * `demo_mode`. True for a new tenant, because this deployment has no Google's
+   * publishing approval and a pass without it only reaches the issuer's own test
+   * accounts.
+   */
+  demoMode: boolean;
+}
+
 /** What `POST /v1/wallet/program/sync` needs to write back. */
 export interface PassTrackingUpdate {
   /** `customer_wallet_passes.customer_id`, which is the primary key. */
@@ -222,6 +266,35 @@ export interface WalletStore {
 
   /** The tenant's Google program record, or `null` when it has no class row. */
   findProgram(tenantId: string): Promise<WalletProgramRow | null>;
+
+  /**
+   * Give a tenant its `tenant_wallet_programs` row.
+   *
+   * The second half of provisioning, and the half whose failure is
+   * recoverable: by the time it runs, the class exists at Google, so a failure
+   * leaves an orphan class rather than a lie about one. The next attempt finds
+   * the 409 and writes this row, which is why `ON CONFLICT` does nothing rather
+   * than overwriting.
+   */
+  insertProgram(program: ProgramInsert): Promise<void>;
+
+  /**
+   * The tenant's own name and country — what a Google class is branded with.
+   *
+   * `null` for a tenant that does not exist, which is not a state provisioning
+   * can paper over: there is nothing truthful to put in a class's header, and a
+   * placeholder name reaches a real customer's phone.
+   */
+  findTenantBranding(tenantId: string): Promise<WalletTenantBrandingRow | null>;
+
+  /**
+   * `loyalty_programs.name` for this tenant, or `null`.
+   *
+   * `null` is a real state — a tenant can have a business and no program yet —
+   * and also covers a blank name. Google requires `programName`, so this is the
+   * difference between "nothing to build" and "a class with an empty program".
+   */
+  findProgramName(tenantId: string): Promise<string | null>;
 
   /**
    * The tenant's points currency, `loyalty_programs.points_currency`.
