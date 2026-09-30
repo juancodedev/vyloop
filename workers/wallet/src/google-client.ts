@@ -575,14 +575,16 @@ export function createGoogleWalletRestClient(
 /**
        * `insertObject`, which is the only call that makes a pass real.
        *
-       * ## Why the id rides in the body and not the query string
+       * ## The path, and why the capital letter is load-bearing
        *
-       * This used to POST to `/loyaltyobject?object.id=<id>`. That route does
-       * not exist: Google answers a routing `404` with an HTML body, not a JSON
-       * error, and the collection path is `/loyaltyobject` with the id in the
-       * request body. The unit test asserted the URL it was written against, so
-       * it agreed with itself and nothing caught it — and because no caller
-       * existed, no real request was ever made.
+       * `POST /walletobjects/v1/loyaltyObject` — capital `O`. Verified against the
+       * live API: the collection path is case-sensitive and the lowercase form
+       * answers a routing `404` with an HTML body, never reaching the point
+       * where it could create anything.
+       *
+       * The per-resource paths (`/loyaltyobject/{resourceId}` for `get` and
+       * `patch`) are *not* case-sensitive, which is exactly what makes this
+       * easy to get wrong: the neighbouring methods look identical and work.
        *
        * ## Why this matters more than the other methods
        *
@@ -599,7 +601,7 @@ export function createGoogleWalletRestClient(
         requireId(loyaltyObject.id, 'insertObject');
         return callForResource<LoyaltyObject>(
           'POST',
-          `/loyaltyobject`,
+          `/loyaltyObject`,
           'loyaltyobject.insert',
           loyaltyObject,
         );
