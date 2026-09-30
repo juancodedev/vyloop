@@ -7,6 +7,13 @@
   // MEMBER_CODE_PEPPER arrives through `wrangler secret put`.
   "vars": {
     "GOOGLE_WALLET_ISSUER_ID": "3388000000023206930",
+    // Google refuses to issue a save link without an allow-list of origins, and
+    // names it in the error rather than in the docs, so the first mint in a fresh
+    // environment fails with `WALLET_NOT_CONFIGURED`. Both surfaces that can
+    // offer a pass are listed: the customer web, and the operator console on the
+    // dashboard. Comma-separated, no trailing slash, and the value is compared
+    // against the request's own `Origin`.
+    "WALLET_ALLOWED_ORIGINS": "https://vyloop-customer-web.pages.dev,https://vyloop.juancode.dev",
     // Not a secret, and not a fact we can read from Google. Google's publishing
     // approval is a single grant for the whole issuer account and this
     // deployment has not been granted it, so passes minted here only reach the
