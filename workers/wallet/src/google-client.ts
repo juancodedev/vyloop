@@ -540,14 +540,14 @@ export function createGoogleWalletRestClient(
   return {
     async getClass(classId) {
       const id = requireId(classId, 'getClass');
-      return call<LoyaltyClass>('GET', `/loyaltyclass/${encodeURIComponent(id)}`, 'loyaltyclass.get');
+      return call<LoyaltyClass>('GET', `/loyaltyClass/${encodeURIComponent(id)}`, 'loyaltyclass.get');
     },
 
     async insertClass(loyaltyClass) {
       const id = requireId(loyaltyClass.id, 'insertClass');
       return callForResource<LoyaltyClass>(
         'POST',
-        `/loyaltyclass?class.id=${encodeURIComponent(id)}`,
+        `/loyaltyClass?class.id=${encodeURIComponent(id)}`,
         'loyaltyclass.insert',
         loyaltyClass,
       );
@@ -557,7 +557,7 @@ export function createGoogleWalletRestClient(
       const id = requireId(classId, 'patchClass');
       return callForResource<LoyaltyClass>(
         'PATCH',
-        `/loyaltyclass/${encodeURIComponent(id)}`,
+        `/loyaltyClass/${encodeURIComponent(id)}`,
         'loyaltyclass.patch',
         patch,
       );
@@ -567,7 +567,7 @@ export function createGoogleWalletRestClient(
       const id = requireId(objectId, 'getObject');
       return call<LoyaltyObject>(
         'GET',
-        `/loyaltyobject/${encodeURIComponent(id)}`,
+        `/loyaltyObject/${encodeURIComponent(id)}`,
         'loyaltyobject.get',
       );
     },
@@ -582,7 +582,7 @@ export function createGoogleWalletRestClient(
        * answers a routing `404` with an HTML body, never reaching the point
        * where it could create anything.
        *
-       * The per-resource paths (`/loyaltyobject/{resourceId}` for `get` and
+       * The per-resource paths (`/loyaltyObject/{resourceId}` for `get` and
        * `patch`) are *not* case-sensitive, which is exactly what makes this
        * easy to get wrong: the neighbouring methods look identical and work.
        *
@@ -640,7 +640,7 @@ export function createGoogleWalletRestClient(
 
       const resource = await call<LoyaltyObjectListResponse>(
         'GET',
-        `/loyaltyobject?${query.join('&')}`,
+        `/loyaltyObject?${query.join('&')}`,
         'loyaltyobject.list',
       );
 
@@ -671,7 +671,7 @@ export function createGoogleWalletRestClient(
       const id = requireId(objectId, 'patchObject');
       return callForResource<LoyaltyObject>(
         'PATCH',
-        `/loyaltyobject/${encodeURIComponent(id)}`,
+        `/loyaltyObject/${encodeURIComponent(id)}`,
         'loyaltyobject.patch',
         patch,
       );
