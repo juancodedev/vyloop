@@ -23,7 +23,25 @@ describe('wrangler.jsonc', () => {
   it('declares exactly the intended vars', () => {
     const vars = /"vars"\s*:\s*\{([^}]*)\}/.exec(config)?.[1] ?? '';
     const names = [...vars.matchAll(/"([^"]+)"\s*:/g)].map((match) => match[1]);
-    expect(names.sort()).toEqual(['GOOGLE_WALLET_ISSUER_ID', 'WALLET_DEMO_MODE']);
+    expect(names.sort()).toEqual([
+      'GOOGLE_WALLET_ISSUER_ID',
+      'WALLET_ALLOWED_ORIGINS',
+      'WALLET_DEMO_MODE',
+    ]);
+  });
+
+  it('declares the origins Google requires before it will issue a save link', () => {
+    // Google refuses to mint without this and names it in the error, not the
+    // docs, so a fresh environment fails its first pass with
+    // `WALLET_NOT_CONFIGURED`. The value is compared against the request's own
+    // `Origin`, which is why a trailing slash would silently never match.
+    const origins = /"WALLET_ALLOWED_ORIGINS"\s*:\s*"([^"]*)"/.exec(config)?.[1];
+    expect(origins).toBeDefined();
+    expect(origins).not.toBe('');
+
+    for (const origin of origins!.split(',')) {
+      expect(origin).toMatch(/^https:\/\/[^/\s]+$/);
+    }
   });
 
   it('keeps demo mode on, because publishing access has not been granted', () => {
