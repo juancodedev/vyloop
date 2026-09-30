@@ -50,6 +50,8 @@ export function matchRoute(path: string): ServiceBinding | undefined {
 export type GatewayEnv = {
   JWT_SECRET: string;
   RATE_LIMITER: KVNamespace;
+  /** Private bucket of brand assets, served publicly through /brand/*. */
+  BRAND_ASSETS: R2Bucket;
   SCHEDULER: Queue;
   SCHEMA_REGISTRY: KVNamespace;
   EVENT_QUEUE: Queue;
