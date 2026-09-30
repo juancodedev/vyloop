@@ -1,8 +1,11 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
+import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
 import type { AuthHeaders, WalletBindings } from './helpers';
-import { extractAuthHeaders } from './helpers';
+import { extractAuthHeaders, googleWalletClientFor, parseDemoMode } from './helpers';
+import { reconcilePass } from './reconcile';
+import type { ReconcileOutcome } from './reconcile';
 import router from './routes';
 import { runScheduledSweep } from './sweep';
 
@@ -27,6 +30,14 @@ import { runScheduledSweep } from './sweep';
  * app still sees a current balance at the till. It shares `reconcilePass` with
  * the request path, so the on-demand and batch balance projections cannot drift
  * apart. See `sweep.ts`.
+ *
+ * The fourth half is **push**, and it is one exported method: `reconcileCustomer`
+ * below, called over a service binding by the growth worker at the moment the
+ * ledger moves. Both existing triggers are *pull* — the pass is correct only if
+ * the holder opens the app, and the sweep bounds the staleness at 24 hours,
+ * which is longer than a shift. None of them knows a sale happened. All three
+ * converge through the same `reconcilePass`, which is the property that makes a
+ * third trigger safe to add.
  *
  * ## T9 is still not here, and that is deliberate
  *
@@ -157,4 +168,105 @@ export async function scheduled(_controller: unknown, env: WalletBindings): Prom
   await runScheduledSweep(env);
 }
 
-export default { fetch: app.fetch.bind(app), scheduled };
+// ---------------------------------------------------------------------------
+// Push trigger
+// ---------------------------------------------------------------------------
+
+/** The two ids `reconcilePass` needs. The same pair the pass route builds. */
+export interface ReconcileCustomerInput {
+  /** `X-Business-Id` at the caller. The only tenant this call may touch. */
+  tenantId: string;
+  /** `customers.id`, not the token subject. */
+  customerId: string;
+}
+
+/**
+ * Project one customer's ledger balance onto their pass, now.
+ *
+ * ## Why this exists beside `scheduled`, and not as a route
+ *
+ * The two handlers that move a balance live in the growth worker, not here, so
+ * this cannot be a route: they have to reach it, and a service binding invokes an
+ * exported method directly. That is the same mechanism, and the same convention,
+ * `workers/automation` already uses to dispatch the sweep with this worker's own
+ * bindings and secrets.
+ *
+ * ## Why it delegates and does not decide anything
+ *
+ * Everything that decides is `reconcilePass`, called here exactly as the pass
+ * route calls it. The tempting "optimisation" is to skip straight to the
+ * tracking row because the caller only just wrote the ledger and already knows
+ * the class is fine, and it should not be taken: the pass route already ran
+ * `classReadinessFor`, and a second implementation of "is this class usable" is
+ * a second answer to a question that decides whether this worker is allowed to
+ * write to Google. Two answers, one reachable from a sale and one from a tap,
+ * and they drift the first time a rule changes. The extra read is one program
+ * lookup; a pass written for a class that cannot back it is a support incident.
+ *
+ * `demoMode` is passed rather than tested. It is a deployment fact, not a
+ * per-call decision, and `reconcilePass` already consults it where it consults
+ * every other readiness input.
+ *
+ * ## Why there is no Demo Mode early return, unlike `runScheduledSweep`
+ *
+ * The sweep refuses before it opens a database, because a job on a timer that
+ * has already decided not to do its job should not connect to production. This
+ * is not that: it is asked for by a specific customer, and the refusal that
+ * matters — a `draft` class cannot back a pass — is `reconcilePass`'s to make.
+ * Returning a `skipped` outcome from here would mean choosing a reason code,
+ * which is re-deciding class readiness with a different answer. The cost of not
+ * short-circuiting is a few reads per sale in an environment where every
+ * reconcile ends in `skipped`, and that is cheaper than two vocabularies for
+ * "not yet".
+ *
+ * ## Why the tenant session is opened here and the sweep opens none
+ *
+ * `openTenantSession` is what every route in this worker does, and it is
+ * correct for a call that already knows its tenant — including the cost of the
+ * pool it opens, which a sale now costs this worker the same way every other
+ * request already does. The sweep's omission of it is documented in `sweep.ts`
+ * and does not extend: it enumerates tenants, and setting one would hide every
+ * other tenant's rows from itself. Reading a single known tenant's pass and
+ * ledger without the session variable would quietly return nothing the day the
+ * RLS policies are enabled, which is a balance that stops converging with no
+ * error anywhere.
+ *
+ * ## Errors
+ *
+ * Throws whatever `reconcilePass` throws, including `PassPatchNotAppliedError`.
+ * Swallowing here would leave the caller with a projection that reported
+ * success and a pass showing the wrong number, which is the one outcome this
+ * whole worker treats as a trust problem at the till. The caller — growth's
+ * `schedulePassReconcile` — catches, because its contract is that a sale never
+ * waits on or fails for a pass.
+ */
+export async function reconcileCustomer(
+  input: ReconcileCustomerInput,
+  env: WalletBindings,
+): Promise<ReconcileOutcome> {
+  const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
+
+  const outcome = await reconcilePass(
+    {
+      store: createDrizzleWalletStore(db),
+      client: googleWalletClientFor(env),
+      demoMode: parseDemoMode(env.WALLET_DEMO_MODE),
+    },
+    { tenantId: input.tenantId, customerId: input.customerId },
+  );
+
+  // Only the branch that wrote to Google. `not_saved` is the ordinary answer
+  // for a customer who has never saved their pass, and on this path it is once
+  // per sale rather than once per issued link, so logging it would bury the one
+  // line a support question actually needs.
+  if (outcome.kind === 'patched') {
+    console.log(
+      `[wallet] Push reconciled pass ${outcome.objectId} to balance ${outcome.balancePoints} ` +
+        `for customer ${input.customerId} in tenant ${input.tenantId}.`,
+    );
+  }
+
+  return outcome;
+}
+
+export default { fetch: app.fetch.bind(app), scheduled, reconcileCustomer };
