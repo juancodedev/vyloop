@@ -313,7 +313,7 @@ describe('class operations', () => {
     expect(found?.id).toBe(CLASS_ID);
     expect(transport.apiCalls()[0]!.method).toBe('GET');
     expect(transport.apiCalls()[0]!.url).toBe(
-      `${WALLETOBJECTS_BASE_URL}/loyaltyclass/${CLASS_ID}`,
+      `${WALLETOBJECTS_BASE_URL}/loyaltyClass/${CLASS_ID}`,
     );
   });
 
@@ -343,7 +343,7 @@ describe('class operations', () => {
 
     const call = transport.apiCalls()[0]!;
     expect(call.method).toBe('POST');
-    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyclass?class.id=${CLASS_ID}`);
+    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyClass?class.id=${CLASS_ID}`);
     expect(JSON.parse(call.body!)).toEqual(loyaltyClass);
   });
 
@@ -354,7 +354,7 @@ describe('class operations', () => {
 
     const call = transport.apiCalls()[0]!;
     expect(call.method).toBe('PATCH');
-    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyclass/${CLASS_ID}`);
+    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyClass/${CLASS_ID}`);
     expect(JSON.parse(call.body!)).toEqual({ programName: 'Puntos Renombrados' });
   });
 });
@@ -391,6 +391,30 @@ describe('object operations', () => {
     expect(JSON.parse(call.body!)).toEqual(loyaltyObject);
   });
 
+  it('spells every path the way Google does, because the URLs are case-sensitive', async () => {
+    // The assertions above compare URL strings, and that is exactly why this
+    // survived so long: the test asserted whatever the code was written with, so
+    // a wrong path and a wrong test agreed. Google answers a wrongly-cased path
+    // with a routing 404 and an HTML body, while a missing resource is a JSON
+    // error from the API — and a fake transport cannot tell the two apart.
+    //
+    // So the spelling is pinned here instead, in one place, against the resource
+    // names Google's own discovery document uses.
+    const transport = fakeGoogle();
+    const google = client(transport);
+
+    await google.getClass(CLASS_ID);
+    await google.patchClass(CLASS_ID, { programName: 'x' });
+    await google.getObject(OBJECT_ID);
+    await google.patchObject(OBJECT_ID, { state: 'ACTIVE' });
+
+    for (const url of transport.apiCalls().map((c) => c.url)) {
+      expect(url).not.toMatch(/\/loyaltyclass([/?]|$)/);
+      expect(url).not.toMatch(/\/loyaltyobject([/?]|$)/);
+      expect(url).toMatch(/\/loyalty(Class|Object)([/?]|$)/);
+    }
+  });
+
   it('patches an object, which is how a balance is projected onto a saved pass', async () => {
     const transport = fakeGoogle();
 
@@ -400,7 +424,7 @@ describe('object operations', () => {
 
     const call = transport.apiCalls()[0]!;
     expect(call.method).toBe('PATCH');
-    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyobject/${OBJECT_ID}`);
+    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyObject/${OBJECT_ID}`);
   });
 
   it('sends a JSON content type only when there is a body', async () => {
