@@ -61,8 +61,24 @@ function holdsRealPrivateKey(contents: string): boolean {
   return base64Lines.length >= 2;
 }
 
+/**
+ * The repository root, asked of git rather than assumed from `process.cwd()`.
+ *
+ * Vitest runs this file with the working directory set to the *package*, not
+ * the repository. From there `git ls-files` lists 26 files rather than the
+ * tracked tree, so the sweep silently covered a fraction of the repository and
+ * reported it clean. Every git call below is therefore rooted explicitly.
+ */
+const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+  encoding: 'utf8',
+}).trim();
+
+/** Run a git command against the repository root, whatever the cwd is. */
 function git(args: string[]): string {
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return execFileSync('git', ['-C', repoRoot, ...args], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
 }
 
 /**
@@ -91,7 +107,14 @@ function trackedFilesMatching(pattern: RegExp): string[] {
 }
 
 const tracked = git(['ls-files']).split('\n').filter(Boolean);
-const worktree = process.cwd();
+
+/**
+ * The repository root, asked of git rather than assumed from `process.cwd()`.
+ *
+ * Vitest runs this file with the working directory set to the *package*, not
+ * the repository, so a test that trusted the cwd read a path that does not exist
+ * and reported a clean tree it never looked at.
+ */
 
 describe('secret material', () => {
   it('has a non-empty tracked file list', () => {
@@ -106,7 +129,7 @@ describe('secret material', () => {
     // still has a real body.
     const candidates = trackedFilesMatching(/-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/);
     const offenders = candidates.filter((file) => {
-      const contents = readFileSync(join(worktree, file), 'utf8');
+      const contents = readFileSync(join(repoRoot, file), 'utf8');
       return holdsRealPrivateKey(contents);
     });
     expect(offenders).toEqual([]);
@@ -156,9 +179,11 @@ describe('secret material', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('is not running from inside a directory it would scan as source', () => {
-    // Guards the paths below: this test only means something if it is reading
-    // the repository root.
-    expect(worktree.endsWith('/vyloop')).toBe(true);
+  it('reads the repository root rather than the package directory', () => {
+    // The sweep joins the root onto tracked paths. If this ever resolved to the
+    // package, every read would fail, the candidate list would come back empty,
+    // and the guard would report a clean tree it never opened.
+    expect(repoRoot.endsWith('vyloop')).toBe(true);
+    expect(repoRoot).not.toBe(process.cwd());
   });
 });

@@ -89,6 +89,16 @@ export interface ReconcileDeps {
    * `exactOptionalPropertyTypes` is on in this repository.
    */
   now?: Date | undefined;
+  /**
+   * The deployment-wide demo mode, from `WALLET_DEMO_MODE`.
+   *
+   * Required rather than defaulted. It decides whether a `draft` class is
+   * acceptable, and a default that happened to be the wrong one would silently
+   * change what this function permits. Injected alongside the client and the
+   * clock for the same reason: so the whole path is exercisable without a
+   * credential or an environment.
+   */
+  demoMode: boolean;
 }
 
 export interface ReconcileInput {
@@ -224,7 +234,11 @@ export async function reconcilePass(
   const { store, client } = deps;
   const observedAt = deps.now ?? new Date();
 
-  const readiness = classReadinessFor(await store.findProgram(input.tenantId), input.tenantId);
+  const readiness = classReadinessFor(
+    await store.findProgram(input.tenantId),
+    input.tenantId,
+    deps.demoMode,
+  );
   if (!readiness.ok) {
     return { kind: 'skipped', reason: readiness.reason, reasonCode: reasonCodeFor(readiness.reason) };
   }
