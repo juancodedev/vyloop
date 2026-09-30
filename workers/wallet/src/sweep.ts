@@ -78,7 +78,7 @@ import type { GoogleWalletClient } from './google-client';
 import type { WalletBindings } from './helpers';
 import { googleWalletClientFor, parseDemoMode } from './helpers';
 import { classReadinessFor } from './issuance';
-import type { GoogleObjectState, LoyaltyObject } from './object';
+import { normaliseGoogleObjectState, type GoogleObjectState, type LoyaltyObject } from './object';
 import { reconcilePass } from './reconcile';
 import type { ReconcileOutcome } from './reconcile';
 import type { PassLifecycleState, WalletPassRow, WalletStore } from './store';
@@ -327,7 +327,11 @@ function emptyReport(demoMode: boolean): SweepReport {
 export function lifecycleStateFor(
   googleState: GoogleObjectState | string | null | undefined,
 ): PassLifecycleState | null {
-  switch (googleState) {
+  // Normalised, because Google answers lower case. A switch over the raw
+  // value returned null for every real response, and null reads as "nothing to
+  // do" — so a pass Google had retired stayed active in our records for as long
+  // as the account existed.
+  switch (normaliseGoogleObjectState(googleState)) {
     case 'INACTIVE':
       return 'inactive';
     case 'EXPIRED':
