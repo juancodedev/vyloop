@@ -364,10 +364,34 @@ router.get('/v1/wallet/pass', async (c) => {
         // The customer already holds this pass. Creating is not an option, and
         // patching is both correct and what keeps a returning customer from
         // being handed a link to a second copy of the same card.
-        await client.patchObject(issued.objectId, issued.loyaltyObject);
-        console.log(
-          `[wallet] Pass object ${issued.objectId} already existed at Google; patched it instead.`,
-        );
+        try {
+          await client.patchObject(issued.objectId, issued.loyaltyObject);
+          console.log(
+            `[wallet] Pass object ${issued.objectId} already existed at Google; patched it instead.`,
+          );
+        } catch (patchErr: unknown) {
+          // Wrapped because this runs inside a `catch`: an exception thrown here
+          // would leave the inner handler and reach the route's outer one, which
+          // answers a bare 500. The customer would be told the server is broken
+          // when the truth is that Google refused the update, which is the same
+          // answer the branch above gives.
+          const detail =
+            patchErr instanceof GoogleWalletApiError || patchErr instanceof GoogleWalletAuthError
+              ? patchErr.message
+              : 'the update failed for a reason this worker does not classify';
+          console.error(`[wallet] Could not patch pass object ${issued.objectId}:`, patchErr);
+          return c.json(
+            {
+              error: {
+                code: 'WALLET_PASS_NOT_CREATABLE',
+                message:
+                  'This pass already exists at Google and could not be updated, so no link can be ' +
+                  `produced. Google reported: ${detail}`,
+              },
+            },
+            409,
+          );
+        }
       } else {
         // No cause is asserted here. The previous version of this message told
         // the caller that the class must be approved before an object can be
