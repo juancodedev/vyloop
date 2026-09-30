@@ -572,15 +572,38 @@ export function createGoogleWalletRestClient(
       );
     },
 
-    async insertObject(loyaltyObject) {
-      const id = requireId(loyaltyObject.id, 'insertObject');
-      return callForResource<LoyaltyObject>(
-        'POST',
-        `/loyaltyobject?object.id=${encodeURIComponent(id)}`,
-        'loyaltyobject.insert',
-        loyaltyObject,
-      );
-    },
+/**
+       * `insertObject`, which is the only call that makes a pass real.
+       *
+       * ## Why the id rides in the body and not the query string
+       *
+       * This used to POST to `/loyaltyobject?object.id=<id>`. That route does
+       * not exist: Google answers a routing `404` with an HTML body, not a JSON
+       * error, and the collection path is `/loyaltyobject` with the id in the
+       * request body. The unit test asserted the URL it was written against, so
+       * it agreed with itself and nothing caught it — and because no caller
+       * existed, no real request was ever made.
+       *
+       * ## Why this matters more than the other methods
+       *
+       * `getObject` and `patchObject` act on a pass that already exists at
+       * Google. This one creates it. A save link is a signed claim naming an
+       * object id; if nothing was inserted under that id, the link is
+       * well-formed and useless, and Google answers the customer's tap with a
+       * generic error while our own endpoints report success.
+       */
+      async insertObject(loyaltyObject) {
+        // Still validated even though the id now travels in the body: a call
+        // without one would create an object Google could never link, and the
+        // failure would surface as a broken save link rather than here.
+        requireId(loyaltyObject.id, 'insertObject');
+        return callForResource<LoyaltyObject>(
+          'POST',
+          `/loyaltyobject`,
+          'loyaltyobject.insert',
+          loyaltyObject,
+        );
+      },
 
     /**
      * `listObjects`, one page.
