@@ -156,6 +156,7 @@ function fakeStore(overrides: {
     isMemberCodeTaken: unused('isMemberCodeTaken'),
     claimMemberCode: unused('claimMemberCode'),
     listProgramTenants: unused('listProgramTenants'),
+    listTenantsWithoutProgram: unused('listTenantsWithoutProgram'),
     findPassesByObjectIds: unused('findPassesByObjectIds'),
   } as unknown as WalletStore;
 

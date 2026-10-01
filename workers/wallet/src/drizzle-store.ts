@@ -582,6 +582,46 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
     },
 
     /**
+     * One page of tenants that have no program row, ascending by primary key.
+     *
+     * An anti-join, because the set being asked for is defined by absence: `LEFT
+     * JOIN` the program table and keep the rows where its key is null. The
+     * alternative — reading `tenants` and asking `findProgram` per tenant — is the
+     * shape this method exists to avoid, because "has no row" is the one thing
+     * `listProgramTenants` cannot express and a per-tenant probe would bring back
+     * the N+1 this module's other enumerations were written without.
+     *
+     * Keyset, exactly as `listProgramTenants` is: `tenants.id` is a uuid primary
+     * key, so `>` is an exact cursor, no `OFFSET` is involved, and a tenant
+     * inserted between two pages shifts nothing. Clamped the same way too.
+     *
+     * The RLS note on `WalletStore.listTenantsWithoutProgram` applies to this
+     * statement: it returns nothing once the tenant policies are enabled, and it
+     * is meant to run on a bare session.
+     */
+    async listTenantsWithoutProgram(options: {
+      limit: number;
+      afterTenantId: string | null;
+    }): Promise<string[]> {
+      const limit = Math.min(200, Math.max(1, Math.trunc(options.limit)));
+
+      const cursor =
+        options.afterTenantId === null
+          ? isNull(tenantWalletPrograms.tenantId)
+          : and(isNull(tenantWalletPrograms.tenantId), gt(tenants.id, options.afterTenantId));
+
+      const rows = await db
+        .select({ tenantId: tenants.id })
+        .from(tenants)
+        .leftJoin(tenantWalletPrograms, eq(tenantWalletPrograms.tenantId, tenants.id))
+        .where(cursor)
+        .orderBy(asc(tenants.id))
+        .limit(limit);
+
+      return ((rows as Array<{ tenantId: string }>) ?? []).map((row) => row.tenantId);
+    },
+
+    /**
      * Resolve one page of Google object ids to our rows, within one tenant.
      *
      * `inArray` rather than N `eq` predicates so the statement stays one round
