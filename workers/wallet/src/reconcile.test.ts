@@ -238,6 +238,23 @@ class FakeStore implements WalletStore {
     return all.slice(start, start + options.limit);
   }
 
+  /**
+   * The provisioning enumeration throws here on purpose, the same way the
+   * provisioning methods above do.
+   *
+   * Reconciliation and provisioning are different work with different readiness
+   * semantics: `classReadinessFor` rejects anything that is not `approved`, and
+   * every tenant missing a program row is `class_not_provisioned`. Letting the
+   * reconciler reach for the unprovisioned set is how "keep the passes in sync"
+   * quietly turns into "create a class for everyone on the schedule".
+   *
+   * A silent no-op would be the worse outcome: the sweep would report healthy
+   * counters and the businesses that need a class would stay without one.
+   */
+  async listTenantsWithoutProgram(): Promise<string[]> {
+    throw new Error('listTenantsWithoutProgram is not part of the reconciliation path');
+  }
+
   async findPassesByObjectIds(objectIds: string[], tenantId: string): Promise<WalletPassRow[]> {
     this.record('findPassesByObjectIds', tenantId);
     const row = this.passes[tenantId];

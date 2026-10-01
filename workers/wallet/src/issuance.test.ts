@@ -241,6 +241,14 @@ class FakeStore implements WalletStore {
     return [];
   }
 
+  async listTenantsWithoutProgram(): Promise<string[]> {
+    // Recorded rather than throwing, like the other sweep methods above: the
+    // issuance path never asks, and a fake that threw would make a caller that
+    // did ask fail for the wrong reason.
+    this.record('listTenantsWithoutProgram', '');
+    return [];
+  }
+
   async findPassesByObjectIds(): Promise<WalletPassRow[]> {
     this.record('findPassesByObjectIds', TENANT);
     return [];
