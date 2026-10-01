@@ -20,6 +20,9 @@ vi.mock('./helpers', async (importOriginal) => {
   return { ...original, googleWalletClientFor: vi.fn() };
 });
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
@@ -52,6 +55,9 @@ const WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
 const BRAND_URL = `${MEDIA_BASE_URL}/brand/${TENANT}.jpg`;
 const PROGRAM_URL = `${WEB_BASE_URL}/program`;
 
+/** Next.js `app/` directory, for the "this route exists" assertion. */
+const CUSTOMER_WEB_APP = join(__dirname, '..', '..', '..', 'apps', 'customer-web', 'app');
+
 let env: Record<string, unknown>;
 
 beforeEach(() => {
@@ -83,6 +89,7 @@ interface FakeStore {
   findProgram: Mock;
   findTenantBranding: Mock;
   findProgramName: Mock;
+  findPromoCopy: Mock;
   insertProgram: Mock;
 }
 
@@ -107,6 +114,8 @@ function fakeStore(
     program?: WalletProgramRow | null;
     branding?: WalletTenantBrandingRow | null;
     programName?: string | null;
+    /** `loyalty_programs.promo_copy`. `null` is the default. */
+    promoCopy?: string | null;
     insertFails?: boolean;
   } = {},
 ): FakeStore {
@@ -130,6 +139,14 @@ function fakeStore(
     return tenantId === TENANT ? name : null;
   });
 
+  // Absent by default, which is the honest default: a merchant who has written
+  // no promo must get a class with no promo row rather than one carrying a
+  // sentence nobody wrote. Tests that care pass `promoCopy` explicitly.
+  const findPromoCopy = vi.fn(async (tenantId: string) => {
+    const promo = overrides.promoCopy ?? null;
+    return tenantId === TENANT ? promo : null;
+  });
+
   const insertProgram = vi.fn(async () => {
     if (overrides.insertFails === true) throw new Error('connection terminated unexpectedly');
   });
@@ -143,6 +160,7 @@ function fakeStore(
     findProgram,
     findTenantBranding,
     findProgramName,
+    findPromoCopy,
     insertProgram,
     findCustomer: unused('findCustomer'),
     findCustomerById: unused('findCustomerById'),
@@ -163,7 +181,14 @@ function fakeStore(
     setProgramDemoMode: unused('setProgramDemoMode'),
   } as unknown as WalletStore;
 
-  return { store, findProgram, findTenantBranding, findProgramName, insertProgram };
+  return {
+    store,
+    findProgram,
+    findTenantBranding,
+    findProgramName,
+    findPromoCopy,
+    insertProgram,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +300,13 @@ describe('provisionClass: a tenant with no Google class', () => {
       countryCode: 'CL',
       programLogo: { sourceUri: { uri: BRAND_URL } },
       homepageUri: { uri: PROGRAM_URL, description: 'Programa de lealtad' },
+      // The merchant wrote no promo in this fixture, so there is no promo row.
+      linksModuleData: {
+        uris: [
+          { uri: `${WEB_BASE_URL}/profile`, description: 'Ver mi perfil' },
+          { uri: `${WEB_BASE_URL}/profile/history`, description: 'Mi historial' },
+        ],
+      },
     });
   });
 
@@ -454,7 +486,170 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
     // The logo's default is unchanged and still the gateway's brand route.
     expect(payload.programLogo.sourceUri.uri).toBe(BRAND_URL);
   });
+
+  // ==========================================================================
+  // The minimum viable pass: what the comensal actually sees
+  // ==========================================================================
+
+  it('carries the merchant promo copy onto the class, from the program row', async () => {
+    // The copy is per-merchant, so it belongs on the class: Google's own
+    // documentation says class and object text modules are both displayed (10
+    // each), and a change of promotion is then one patch rather than one per
+    // customer.
+    const store = fakeStore({ promoCopy: '¡Cada 10 sellos, un burger gratis!' });
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      textModulesData: { id: string; header: string; body: string }[];
+    };
+    expect(payload.textModulesData).toEqual([
+      { id: 'PROMO_COPY', header: 'Info', body: '¡Cada 10 sellos, un burger gratis!' },
+    ]);
+  });
+
+  it('sends no promo row for a merchant who wrote none', async () => {
+    // Omitted, never substituted. A default sentence here would be a merchant's
+    // card reading words they never wrote, in front of a real comensal.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.textModulesData).toBeUndefined();
+    expect(store.findPromoCopy).toHaveBeenCalledWith(TENANT);
+  });
+
+  it('carries the pass links as linksModuleData, pointing at routes that exist', async () => {
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      linksModuleData: { uris: { uri: string; description?: string }[] };
+    };
+    const uris = payload.linksModuleData.uris.map((link) => link.uri);
+
+    expect(uris).toEqual([
+      `${WEB_BASE_URL}/profile`,
+      `${WEB_BASE_URL}/profile/history`,
+    ]);
+    // Every path is asserted against the filesystem, not against this list: a
+    // route that was renamed would otherwise produce a link that 404s in the
+    // comensal's hand, which is the `homepageUri` defect at a different URL.
+    for (const uri of uris) {
+      expect(customerWebRouteExists(new URL(uri).pathname)).toBe(true);
+    }
+  });
+
+  it('builds the links from the web host, never the media host', async () => {
+    // The media host serves `/brand/*` and nothing else, so a link built from it
+    // is a 404 in the customer's hand. The same split that cost a class review
+    // over `homepageUri`.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      linksModuleData: { uris: { uri: string }[] };
+    };
+    for (const link of payload.linksModuleData.uris) {
+      expect(new URL(link.uri).origin).toBe(WEB_BASE_URL);
+    }
+  });
+
+  it('offers no link that promises one thing and delivers another', async () => {
+    // `/confirm` exists and says "¡Gracias, {name}!" — a registration
+    // confirmation. Labelling it "Actualizar tarjeta" is the `homepageUri` bug
+    // at a different URL: the link exists, so nothing fails loudly.
+    //
+    // And there is no referral link, because `referrals` has no per-customer
+    // code and `customers.member_code` is a member code, not a referral one.
+    // Labelling it as a referral code would lie to the comensal on their own
+    // card.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      linksModuleData: { uris: { uri: string; description?: string }[] };
+    };
+    const described = payload.linksModuleData.uris.map((link) => `${link.uri} ${link.description}`);
+
+    expect(described.join('\n')).not.toMatch(/confirm/i);
+    expect(described.join('\n')).not.toMatch(/referid|referral|invita/i);
+    expect(described.join('\n')).not.toMatch(/actualizar/i);
+  });
+
+  it('emits no heroImage, because a placeholder filename renders as a broken asset', async () => {
+    // Google fetches `heroImage` itself, so a URL that does not resolve is a
+    // broken band across the top of the card. There is no image generation in
+    // this repository, so every available URL would fail today.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('heroImage');
+  });
+
+  it('emits no issuerLogo, which Google silently discards on a loyalty class', async () => {
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('issuerLogo');
+    // `programLogo` is the circular logo on the reference pass. It must still be
+    // there, on the media host: this is a removal, not a swap.
+    expect(payload.programLogo).toEqual({ sourceUri: { uri: BRAND_URL } });
+  });
+
+  it('takes the program name from loyalty_programs, not a generated one', async () => {
+    const store = fakeStore({ programName: 'Tarjeta de fidelidad' });
+    const client = fakeClient();
+
+    await install(store, client);
+
+    expect(client.insertClass).toHaveBeenCalledWith(
+      expect.objectContaining({ programName: 'Tarjeta de fidelidad' }),
+    );
+  });
+
+  it('refuses a promo copy Google would ellipsise, before calling Google', async () => {
+    // The failure has to land before `insertClass`. A limit Google only
+    // ellipsises produces a 200 and a comensal reading "Diez sellos, un burg…".
+    const store = fakeStore({ promoCopy: 'x'.repeat(501) });
+    const client = fakeClient();
+
+    const outcome = await install(store, client);
+
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'class_payload_invalid' });
+    expect(client.insertClass).not.toHaveBeenCalled();
+    expect(store.insertProgram).not.toHaveBeenCalled();
+  });
 });
+
+/**
+ * Does this customer-web route exist as a page?
+ *
+ * Reads the filesystem rather than trusting the list beside it. A route that
+ * was renamed or deleted makes the link a 404 in the comensal's hand, and
+ * nothing else in this repository would notice — the class inserts fine, the
+ * pass renders, and the link is simply dead.
+ */
+function customerWebRouteExists(pathname: string): boolean {
+  const segments = pathname.split('/').filter((segment) => segment !== '');
+  const directory = segments.reduce((from, segment) => join(from, segment), CUSTOMER_WEB_APP);
+  return existsSync(join(directory, 'page.tsx'));
+}
 
 // ============================================================================
 // The order. This is the part that is easy to "simplify" into a lie.

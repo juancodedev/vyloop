@@ -232,6 +232,10 @@ export async function provisionTenantClass(
     );
   }
 
+  // Read, never invented. `null` means the merchant wrote no promotion, and the
+  // class then carries no promo row at all rather than a sentence nobody wrote.
+  const promoCopy = await store.findPromoCopy(tenantId);
+
   let loyaltyClass;
   try {
     loyaltyClass = buildLoyaltyClass({
@@ -254,6 +258,33 @@ export async function provisionTenantClass(
       // rejects the class on a 404 — docs/11 records it as the most common
       // rejection reason — so the host is load-bearing, not cosmetic.
       homepageUri: { uri: `${webBaseUrl}/program`, description: 'Programa de lealtad' },
+      // The merchant's own sentence, on the class. Google combines class and
+      // object text modules, so this does not compete with the object's tier row
+      // for its ten slots, and changing a promotion is one class patch instead
+      // of one per customer.
+      // Conditional rather than `promoCopy ?? undefined`, because this
+      // repository has `exactOptionalPropertyTypes` on and the input's
+      // `promoCopy` is a plain optional `string`. Same shape `issuance.ts` uses
+      // for the same reason.
+      ...(promoCopy === null ? {} : { promoCopy }),
+      // Both routes are verified to exist by `provision.test.ts`, against the
+      // filesystem rather than against this list.
+      //
+      // Two links are deliberately absent, and their absence is the point:
+      //
+      // - No "update card" link to `/confirm`. That route exists and renders
+      //   "¡Gracias, {name}!", a registration confirmation. A link labelled with
+      //   one thing and delivering another is the `homepageUri` defect at a
+      //   different URL: nothing 404s, nothing errors, the link is simply a lie.
+      // - No referral link. `referrals` records a referrer/referred pair but has
+      //   no per-customer code, and `customers.member_code` is a *member* code —
+      //   short, tenant-scoped and non-correlational. Presenting it as a referral
+      //   code would tell a comensal they can share something that resolves to
+      //   nobody. Tracked as a gap, not implemented.
+      links: [
+        { uri: `${webBaseUrl}/profile`, description: 'Ver mi perfil' },
+        { uri: `${webBaseUrl}/profile/history`, description: 'Mi historial' },
+      ],
     });
   } catch (err) {
     return failed(

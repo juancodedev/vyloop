@@ -311,8 +311,9 @@ describe('WalletStore tenant scoping', () => {
     await store.isMemberCodeTaken(TENANT, 'K7M2QX');
     await store.findTenantBranding(TENANT);
     await store.findProgramName(TENANT);
+    await store.findPromoCopy(TENANT);
 
-    expect(fake.scoped).toHaveLength(9);
+    expect(fake.scoped).toHaveLength(10);
     for (const statement of fake.scoped) {
       // Either the tenant column is in the predicate, or the predicate *is* the
       // tenant column — the primary-key lookups, where `tenant_id` is the key,
@@ -1240,6 +1241,38 @@ describe('findProgramName', () => {
     const store = createDrizzleWalletStore(fake.db);
 
     expect(await store.findProgramName(TENANT)).toBeNull();
+  });
+});
+
+describe('findPromoCopy', () => {
+  it("reads this tenant's promo copy, scoped to it", async () => {
+    const fake = createFakeDb(
+      [{ businessId: TENANT, promoCopy: '¡Cada 10 sellos, un burger gratis!' }],
+      'businessId',
+    );
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findPromoCopy(TENANT)).toBe('¡Cada 10 sellos, un burger gratis!');
+    expect(fake.scoped[0]!.sql).toContain('business_id');
+  });
+
+  it('is null when the merchant wrote none, and the class carries no promo row', async () => {
+    // The state every merchant is in today. The column is nullable with no
+    // default precisely so this is expressible without a placeholder sentence
+    // nobody wrote ending up on a real customer's card.
+    const fake = createFakeDb([{ businessId: TENANT, promoCopy: null }], 'businessId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findPromoCopy(TENANT)).toBeNull();
+  });
+
+  it('treats a blank promo copy as absent rather than an empty row on the pass', async () => {
+    // An empty `TextModuleData.body` renders as a promo header with nothing
+    // under it, which is worse than no promo row at all.
+    const fake = createFakeDb([{ businessId: TENANT, promoCopy: '   ' }], 'businessId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findPromoCopy(TENANT)).toBeNull();
   });
 });
 

@@ -1,0 +1,1 @@
+ALTER TABLE "loyalty_programs" ADD COLUMN "promo_copy" text;

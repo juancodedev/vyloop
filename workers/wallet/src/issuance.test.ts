@@ -154,6 +154,15 @@ class FakeStore implements WalletStore {
     return tenantId === TENANT ? 'puntos' : null;
   }
 
+  /**
+   * Absent. The issuance path never reads it: the promo copy is per-merchant and
+   * reaches the pass through the class, which Google copies at insert time.
+   */
+  async findPromoCopy(): Promise<null> {
+    this.record('findPromoCopy', '');
+    return null;
+  }
+
   async findTierName(tierId: string, tenantId: string): Promise<WalletTierRow | null> {
     this.record('findTierName', tenantId);
     return { name: 'Oro' };
