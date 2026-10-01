@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { WALLET_PROVISION_BACKOFF_MS } from './wallet-provision';
+
 /**
  * Route-level behaviour for the public signup endpoint.
  *
@@ -598,5 +600,118 @@ describe('POST /v1/auth/business/signup provisioning', () => {
     // it simply ran unattached, which is what the log line names.
     expect(res.status).toBe(201);
     expect(text).toContain('No ExecutionContext');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retrying the provisioning call
+//
+// The wallet creates a tenant's Google class under `waitUntil`, and a Google
+// failure there leaves a business registered with no card and nothing to re-run
+// it. So the call is repeated a bounded number of times — and the two questions
+// worth asking are "does it stop when it succeeds" and "does it stop when it
+// cannot possibly succeed", because only one of those is a retry and the other
+// is a hammer.
+// ---------------------------------------------------------------------------
+
+describe('POST /v1/auth/business/signup provisioning retries', () => {
+  it('asks again after a transient failure, and stops once the class exists', async () => {
+    reset();
+    let attempts = 0;
+    const { probe, executionCtx, env } = installWalletProbe(async () => {
+      attempts += 1;
+      // Two outages and then the real answer. A run that stopped at the first
+      // failure would leave this business with no card for a day, and a run that
+      // kept going after the third would spend Google's budget on a tenant that
+      // already has a class.
+      if (attempts < 3) return Promise.reject(new Error('Google Wallet API responded 503'));
+      return { kind: 'created' };
+    });
+
+    const res = await post(VALID, { env, executionCtx });
+
+    expect(res.status).toBe(201);
+    // Awaited *before* counting, because the counting is the assertion and the
+    // promise is the work. A test that read the counter while the retries were
+    // still sleeping would pass against a loop that never retried.
+    await expect(probe.handovers[0]).resolves.toBeUndefined();
+    expect(probe.calls).toHaveLength(3);
+    // Every attempt is about the same tenant: a retry that re-read the id from
+    // somewhere else could provision the wrong business.
+    expect(probe.calls.map((c) => c.input)).toEqual([
+      { tenantId: IDS.tenant },
+      { tenantId: IDS.tenant },
+      { tenantId: IDS.tenant },
+    ]);
+  });
+
+  it('does not retry a failure that another attempt cannot change', async () => {
+    reset();
+    // `retryable: false` is the wallet saying this is a statement about the
+    // request. The signup path is not the place to re-derive that from a status
+    // code it never receives, and re-sending a payload Google called
+    // `invalidField` three times is three writes to learn one thing.
+    const { probe, executionCtx, env } = installWalletProbe(async () => ({
+      kind: 'failed',
+      code: 'google_rejected',
+      message: 'Google Wallet API responded 400 (invalidField)',
+      retryable: false,
+    }));
+
+    const res = await post(VALID, { env, executionCtx });
+
+    expect(res.status).toBe(201);
+    // Awaited *before* counting, and the order is load-bearing rather than
+    // stylistic: a counter read while the retries are still sleeping is 1 whether
+    // or not the implementation ever retries, so an implementation that retried
+    // everything would pass this test.
+    await expect(probe.handovers[0]).resolves.toBeUndefined();
+    expect(probe.calls).toHaveLength(1);
+  });
+
+  it('answers 201 after every attempt failed', async () => {
+    reset();
+    // The business is registered and usable long before Google has a class for
+    // it. Failing the signup here would leave a merchant who has already been
+    // told "your business exists" with a form that says it does not.
+    const { probe, executionCtx, env } = installWalletProbe(async () =>
+      Promise.reject(new Error('Google Wallet API responded 503 (UNAVAILABLE)')),
+    );
+
+    const res = await post(VALID, { env, executionCtx });
+
+    expect(res.status).toBe(201);
+    // Handled before it reaches `waitUntil`, so no rejected promise is ever
+    // attached to an invocation whose only visible symptom would be an unhandled
+    // rejection in somebody else's log. Awaited before counting, because that is
+    // what the retried work actually is.
+    await expect(probe.handovers[0]).resolves.toBeUndefined();
+    expect(probe.calls.length).toBeGreaterThan(1);
+  });
+
+  it('retries without an ExecutionContext to hand them to', async () => {
+    reset();
+    let attempts = 0;
+    const { probe, env } = installWalletProbe(async () => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error('Google Wallet API responded 503'))
+        : { kind: 'created' };
+    });
+    const logged = captureErrors();
+
+    const res = await post(VALID, { env });
+    const text = logged.stop();
+
+    // `c.executionCtx` throws rather than answering undefined outside the Workers
+    // runtime, and a business must not depend on which environment the request
+    // arrived through. The retry is inside the promise that runs unattached, so
+    // the absence of a context has to cost the second attempt nothing.
+    expect(res.status).toBe(201);
+    expect(text).toContain('No ExecutionContext');
+    // Nothing awaits an unattached promise, so the test has to: the second attempt
+    // happens after the backoff, and the assertion has to be made after it.
+    await new Promise((resolve) => setTimeout(resolve, WALLET_PROVISION_BACKOFF_MS[0]! + 250));
+    expect(probe.calls).toHaveLength(2);
   });
 });

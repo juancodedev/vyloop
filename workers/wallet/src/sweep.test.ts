@@ -2,12 +2,14 @@ import { createDb } from '@vyloop/db';
 import { describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
+import { GoogleWalletApiError } from './google-client';
 import { classIdFor, objectIdFor } from './ids';
 import type { LoyaltyObject } from './object';
 import type {
   PassLifecycleUpdate,
   PassObservationUpdate,
   PassReconciliationUpdate,
+  ProgramInsert,
   WalletPassRow,
   WalletProgramRow,
   WalletStore,
@@ -15,6 +17,7 @@ import type {
 } from './store';
 import {
   MAX_PAGES_PER_TENANT,
+  MAX_PROVISION_PER_RUN,
   MAX_RECONCILES_PER_TENANT,
   MAX_TENANTS_PER_RUN,
   OBJECT_PAGE_SIZE,
@@ -78,6 +81,18 @@ const OBJECT_ID = objectIdFor(ISSUER, GLOBAL_ID);
 const RUN_ONE = new Date('2026-09-28T06:00:00.000Z');
 const RUN_TWO = new Date('2026-09-29T06:00:00.000Z');
 
+/**
+ * The issuer and the two hosts provisioning builds a class from. Reconciliation
+ * reads none of them, which is why they are a separate part of the deps rather
+ * than three more fields: a change to what a class is made of must not be able
+ * to reach the balance path.
+ */
+const PROVISIONING = {
+  issuerId: ISSUER,
+  mediaBaseUrl: 'https://media.juancode.dev',
+  webBaseUrl: 'https://vyloop-customer-web.pages.dev',
+};
+
 function tenantId(n: number): string {
   return `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 }
@@ -132,6 +147,8 @@ class SweepStore implements WalletStore {
   readonly observations: PassObservationUpdate[] = [];
   readonly tenantPageRequests: Array<{ limit: number; afterTenantId: string | null }> = [];
   readonly resolveRequests: Array<{ objectIds: string[]; tenantId: string }> = [];
+  /** The page requests the unprovisioned enumeration was asked for. */
+  readonly unprovisionedPageRequests: Array<{ limit: number; afterTenantId: string | null }> = [];
 
   /** Tenant id -> pass rows, keyed by object id. */
   readonly passes = new Map<string, Map<string, WalletPassRow>>();
@@ -141,14 +158,32 @@ class SweepStore implements WalletStore {
 
   /** Tenant id -> throw on `listProgramTenants`. */
   failListTenants: Error | null = null;
+  /** Throw on `listTenantsWithoutProgram`, the provisioning enumeration. */
+  failListUnprovisioned: Error | null = null;
   /** Tenant id -> throw on `findPassesByObjectIds`. */
   failResolve = new Map<string, Error>();
   /** Tenant id -> throw on `recordPassLifecycle`. */
   failLifecycle = new Map<string, Error>();
+  /** Tenants with no `tenants` row, so there is no branding to build a class from. */
+  readonly missingBranding = new Set<string>();
+  /** Tenants with no `loyalty_programs` row, so there is no program name. */
+  readonly missingProgramName = new Set<string>();
+  /** Tenant id -> throw on `insertProgram`. */
+  readonly failInsertProgram = new Map<string, Error>();
 
+  /**
+   * Every tenant in the system, which is not the same set as the tenants that
+   * have a program row.
+   *
+   * The default is derived from `programs` so a test that only cares about
+   * reconciliation reports no unprovisioned tenants and cannot be perturbed by
+   * this feature. A test that wants a tenant missing a class passes the roster
+   * explicitly, and that tenant is absent from `programs`.
+   */
   constructor(
     public readonly programs: Record<string, WalletProgramRow | null>,
     public readonly currencies: Record<string, string | null> = {},
+    public readonly tenants: string[] = Object.keys(programs),
   ) {}
 
   method(tenantId: string): string[] {
@@ -201,19 +236,43 @@ class SweepStore implements WalletStore {
     return this.programs[tenant] ?? null;
   }
 
-  // Provisioning's three methods, which a sweep has no reason to reach: it
-  // enumerates tenants that already have a row, and one that did not is not its
-  // work. They throw so a sweep that grew a dependency would say so.
-  async insertProgram(): Promise<void> {
-    throw new Error('insertProgram is not part of the sweep path');
+  // Provisioning's three methods, which used to throw because a sweep had no
+  // reason to reach them. They are real now, and that is the signal that the
+  // design changed: the sweep provisions the tenants that never got a class, so
+  // it has to be able to read a merchant's name, read a program name and write
+  // the row. A fake that kept throwing would have turned "the sweep provisions"
+  // into a test that could not exist.
+  //
+  // Tenant scoping is honoured the way the real statements do it: the roster is
+  // the set of tenants this store knows about, so a request for anybody else is
+  // `null` rather than this tenant's data.
+  async insertProgram(program: ProgramInsert): Promise<void> {
+    this.record('insertProgram', program.tenantId);
+    const failure = this.failInsertProgram.get(program.tenantId);
+    if (failure) throw failure;
+
+    this.programs[program.tenantId] = {
+      tenantId: program.tenantId,
+      issuerId: program.issuerId,
+      classId: program.classId,
+      reviewStatus: program.reviewStatus,
+      demoMode: program.demoMode,
+      lastSyncedAt: null,
+    };
   }
 
-  async findTenantBranding(): Promise<WalletTenantBrandingRow | null> {
-    throw new Error('findTenantBranding is not part of the sweep path');
+  async findTenantBranding(tenant: string): Promise<WalletTenantBrandingRow | null> {
+    this.record('findTenantBranding', tenant);
+    if (!this.tenants.includes(tenant)) return null;
+    if (this.missingBranding.has(tenant)) return null;
+    return { name: `Café ${tenant.slice(-4)}`, country: 'CL' };
   }
 
-  async findProgramName(): Promise<string | null> {
-    throw new Error('findProgramName is not part of the sweep path');
+  async findProgramName(tenant: string): Promise<string | null> {
+    this.record('findProgramName', tenant);
+    if (!this.tenants.includes(tenant)) return null;
+    if (this.missingProgramName.has(tenant)) return null;
+    return 'Programa de Lealtad';
   }
 
   async findPointsCurrency(tenant: string): Promise<string | null> {
@@ -345,6 +404,36 @@ class SweepStore implements WalletStore {
     return all.slice(start, start + options.limit);
   }
 
+  /**
+   * The roster minus the tenants that have a row, ascending by id.
+   *
+   * Keyset-paged on `tenants.id`, exactly as `listProgramTenants` is on
+   * `tenant_wallet_programs.tenant_id`, because that is what the real statement
+   * does and a fake that sorted differently would hide an ordering bug.
+   */
+  async listTenantsWithoutProgram(options: {
+    limit: number;
+    afterTenantId: string | null;
+  }): Promise<string[]> {
+    this.record('listTenantsWithoutProgram', '');
+    this.unprovisionedPageRequests.push({
+      limit: options.limit,
+      afterTenantId: options.afterTenantId,
+    });
+    if (this.failListUnprovisioned) throw this.failListUnprovisioned;
+
+    const all = this.tenants
+      .filter((id) => this.programs[id] === undefined || this.programs[id] === null)
+      .sort();
+
+    const start =
+      options.afterTenantId === null
+        ? 0
+        : all.findIndex((id) => id === options.afterTenantId) + 1;
+
+    return all.slice(start, start + options.limit);
+  }
+
   async findPassesByObjectIds(objectIds: string[], tenant: string): Promise<WalletPassRow[]> {
     this.record('findPassesByObjectIds', tenant);
     this.resolveRequests.push({ objectIds, tenantId: tenant });
@@ -384,6 +473,8 @@ type FakeClient = {
   patchClass: Mock;
   insertObject: Mock;
   saveUriForJwt: Mock;
+  /** The class ids `insertClass` was asked to create, in call order. */
+  classesCreated: string[];
 };
 
 interface PageSpec {
@@ -404,12 +495,22 @@ interface PageSpec {
  * registered in `remote` as it goes. Without that, `getObject` would answer
  * `null` for every object and the whole suite would silently be testing the
  * `not_saved` path instead of the one it is named for.
+ *
+ * `insertClass` is stateful too, and answers `409 alreadyExists` for a class it
+ * has already been asked for — the behaviour the provisioning path relies on to
+ * finish a run that died between the two writes, and the reason a fake that
+ * created a class on every call would make the retry look idempotent for the
+ * wrong reason.
  */
 function fakeGoogle(opts: {
   pages: PageSpec[] | ((request: { classId: string; maxResults: number; token?: string }) => PageSpec);
   failListFor?: Set<string> | null;
+  /** Refuse to create this class, by class id. */
+  failInsertClassFor?: Set<string> | null;
 }): FakeClient {
   const remote = new Map<string, LoyaltyObject>();
+  const classesCreated: string[] = [];
+  const created = new Set<string>();
   const remember = (objects: LoyaltyObject[]): void => {
     for (const object of objects) remote.set(object.id, object);
   };
@@ -431,11 +532,25 @@ function fakeGoogle(opts: {
     return opts.pages[index] ?? { objects: [], nextPageToken: null };
   });
 
-  return {
+  const client = {
     listObjects,
     getClass: vi.fn(async () => null),
-    insertClass: vi.fn(async () => {
-      throw new Error('not used');
+    insertClass: vi.fn(async (loyaltyClass: { id: string }) => {
+      classesCreated.push(loyaltyClass.id);
+      if (opts.failInsertClassFor?.has(loyaltyClass.id)) {
+        throw new Error('Google Wallet API responded 503 (backendError)');
+      }
+      if (created.has(loyaltyClass.id)) {
+        // A real `GoogleWalletApiError`, because `isAlreadyExists` reads the status
+        // and the code rather than the message: a plain `Error` would be reported
+        // as `google_rejected` and the test would be asserting against a fake that
+        // cannot express the one conflict that is not a failure.
+        throw new GoogleWalletApiError(409, 'alreadyExists', [
+          { message: 'already exists', reason: 'alreadyExists', location: 'body' },
+        ]);
+      }
+      created.add(loyaltyClass.id);
+      return loyaltyClass as never;
     }),
     patchClass: vi.fn(async () => {
       throw new Error('not used');
@@ -454,7 +569,10 @@ function fakeGoogle(opts: {
       remote.set(id, next);
       return next;
     }),
-  } as unknown as FakeClient;
+    classesCreated,
+  };
+
+  return client as unknown as FakeClient;
 }
 
 function onePage(objects: LoyaltyObject[]): PageSpec[] {
@@ -470,7 +588,7 @@ describe('the sweep in Demo Mode', () => {
     const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: true });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: true });
 
     expect(report.demoMode).toBe(true);
     // The whole point: a background writer that forgot this check would be
@@ -545,7 +663,7 @@ describe('the sweep never writes for a tenant whose class is not usable', () => 
       const store = new SweepStore({ [tenant]: program(tenant, { reviewStatus }) });
       const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-      const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+      const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
       expect(report.tenantsSkipped).toBe(1);
       expect(report.tenantsSwept).toBe(0);
@@ -568,7 +686,7 @@ describe('the sweep never writes for a tenant whose class is not usable', () => 
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.tenantsSkipped).toBe(1);
     expect(client.listObjects).not.toHaveBeenCalled();
@@ -583,7 +701,7 @@ describe('the sweep never writes for a tenant whose class is not usable', () => 
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 50)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.tenantsSkipped).toBe(1);
     expect(report.tenantsSwept).toBe(1);
@@ -602,7 +720,7 @@ describe('the sweep never crosses a tenant', () => {
     const store = new SweepStore({ [a]: program(a), [b]: program(b) });
     const client = fakeGoogle({ pages: onePage([]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     // The class filter *is* the tenant boundary on the Google side: one class
     // per tenant. Listing by issuer would put every merchant's passes in this
@@ -634,7 +752,7 @@ describe('the sweep never crosses a tenant', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.passesActedOn).toBe(0);
     expect(report.objectsWithoutPassRow).toBe(1);
@@ -662,7 +780,7 @@ describe('the sweep never crosses a tenant', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(store.lifecycles).toHaveLength(1);
     expect(store.lifecycles[0].tenantId).toBe(tenant);
@@ -679,7 +797,7 @@ describe('tenant enumeration', () => {
     const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
     const client = fakeGoogle({ pages: onePage([]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(store.tenantPageRequests).toEqual([
       { limit: MAX_TENANTS_PER_RUN, afterTenantId: null },
@@ -696,7 +814,7 @@ describe('tenant enumeration', () => {
     const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
     const client = fakeGoogle({ pages: onePage([]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(store.tenantPageRequests).toEqual([{ limit: 25, afterTenantId: null }]);
   });
@@ -709,7 +827,7 @@ describe('tenant enumeration', () => {
     const store = new SweepStore(programs);
     const client = fakeGoogle({ pages: onePage([]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.tenantsSwept).toBe(MAX_TENANTS_PER_RUN);
     expect(client.listObjects).toHaveBeenCalledTimes(MAX_TENANTS_PER_RUN);
@@ -720,7 +838,7 @@ describe('tenant enumeration', () => {
     store.failListTenants = new Error('connection reset');
     const client = fakeGoogle({ pages: onePage([]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     // A scheduled handler that threw here would have the whole invocation
     // retried, forever, against a database that is down.
@@ -747,7 +865,7 @@ describe('paging through Google\'s list', () => {
       ],
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.listCalls).toBe(3);
     expect(client.listObjects.mock.calls.map((c) => (c[0] as { token?: string }).token)).toEqual([
@@ -769,7 +887,7 @@ describe('paging through Google\'s list', () => {
       ],
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(OBJECT_PAGE_SIZE).toBe(100);
     expect(client.listObjects.mock.calls[0][0]).toMatchObject({ maxResults: OBJECT_PAGE_SIZE });
@@ -795,7 +913,7 @@ describe('paging through Google\'s list', () => {
       },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.listCalls).toBe(MAX_PAGES_PER_TENANT);
     expect(report.tenantsDeferred).toBe(1);
@@ -810,7 +928,7 @@ describe('paging through Google\'s list', () => {
       failListFor: new Set([classIdFor(ISSUER, tenant)]),
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.tenantsFailed).toBe(1);
     expect(report.failures[0].stage).toBe('list_objects');
@@ -837,7 +955,7 @@ describe('paging through Google\'s list', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     // Named as its own stage, so an operator reading the report knows this was
     // a database problem rather than something about this merchant's Google
@@ -868,11 +986,11 @@ describe('idempotency and resumability', () => {
     // Google holds 120, the ledger holds 500. A first run must fix that.
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 120)]) });
 
-    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
     expect(first.outcomes.patched).toBe(1);
     expect(client.patchObject).toHaveBeenCalledTimes(1);
 
-    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     // The second run re-reads and re-compares, finds 500 already there, and
     // writes nothing. This is the guarantee: the patch is an absolute
@@ -889,7 +1007,7 @@ describe('idempotency and resumability', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500 });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 120)]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     const patch = client.patchObject.mock.calls[0][1] as Record<string, unknown>;
     expect(Object.keys(patch)).toEqual(['loyaltyPoints']);
@@ -918,7 +1036,7 @@ describe('idempotency and resumability', () => {
           : null;
     });
 
-    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(first.failures).toHaveLength(1);
     expect(first.failures[0].reason).toContain('cust-a');
@@ -929,7 +1047,7 @@ describe('idempotency and resumability', () => {
     // than the new cutoff, so they are due again and are re-verified — but the
     // ledger has not moved, so nothing is pushed. The one that failed is still
     // due and is attempted again.
-    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(second.failures).toHaveLength(1);
     expect(second.failures[0].reason).toContain('cust-a');
@@ -945,7 +1063,7 @@ describe('idempotency and resumability', () => {
 
     const client = fakeGoogle({ pages: onePage([remoteObject(a, 0)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     // Stamped at exactly the run's own cutoff, so the same invocation does not
     // pay for it twice. A run that did this work would double its own cost and,
@@ -968,7 +1086,7 @@ describe('idempotency and resumability', () => {
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(a, 10)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.passesActedOn).toBe(1);
     expect(report.outcomes.in_sync).toBe(1);
@@ -994,12 +1112,12 @@ describe('idempotency and resumability', () => {
       },
     });
 
-    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
     expect(first.tenantsSwept).toBe(1);
     expect(first.objectsSeen).toBe(12);
     expect(first.outcomes.in_sync).toBe(12);
 
-    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
     // All twelve were verified on the first run, so the second run re-lists
     // them and spends no writes. What it must not do is patch.
     expect(second.outcomes.patched).toBe(0);
@@ -1024,7 +1142,7 @@ describe('idempotency and resumability', () => {
       },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.passesActedOn).toBe(MAX_RECONCILES_PER_TENANT);
     expect(report.tenantsDeferred).toBe(1);
@@ -1039,7 +1157,7 @@ describe('idempotency and resumability', () => {
       failListFor: new Set([classIdFor(ISSUER, broken)]),
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.tenantsFailed).toBe(1);
     expect(report.failures[0].tenantId).toBe(broken);
@@ -1062,7 +1180,7 @@ describe('idempotency and resumability', () => {
       return remoteObject(b, 20);
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.failures).toHaveLength(1);
     expect(report.failures[0].reason).toContain('cust-a');
@@ -1081,7 +1199,7 @@ describe('idempotency and resumability', () => {
     const stranger = objectIdFor(ISSUER, globalIdFor(9));
     const client = fakeGoogle({ pages: onePage([remoteObject(stranger, 0)]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.objectsWithoutPassRow).toBe(1);
     expect(report.passesActedOn).toBe(0);
@@ -1118,7 +1236,7 @@ describe('lifecycle tracking', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'EXPIRED')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.lifecycleWrites.expired).toBe(1);
     expect(store.lifecycles[0]).toMatchObject({ customerId: 'cust-1', state: 'expired', tenantId: tenant });
@@ -1146,7 +1264,7 @@ describe('lifecycle tracking', () => {
     });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 0, 'INACTIVE')]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(store.passes.get(tenant)?.get(OBJECT_ID)?.state).not.toBe('inactive');
   });
@@ -1169,7 +1287,7 @@ describe('lifecycle tracking', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     const rows = store.passes.get(tenant);
     // Nothing overwrote a terminal state.
@@ -1200,7 +1318,7 @@ describe('lifecycle tracking', () => {
           : { objects: [], nextPageToken: null },
     });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.failures.some((f) => f.reason.includes('lifecycle expired'))).toBe(true);
     expect(report.outcomes.patched).toBe(1);
@@ -1226,7 +1344,7 @@ describe('lifecycle tracking', () => {
       return remoteObject(OBJECT_ID, 500, 'EXPIRED');
     });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     // No patch happens here anyway, because `reconcilePass` independently
     // re-reads the object and refuses. The ordering matters for the case where
@@ -1251,7 +1369,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'PENDING')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     const row = store.passes.get(tenant)?.get(OBJECT_ID);
     // The observation moved...
@@ -1274,10 +1392,10 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'PENDING')]) });
 
-    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
     expect(client.getObject).toHaveBeenCalledTimes(1);
 
-    const second = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(client.getObject).toHaveBeenCalledTimes(1);
     expect(second.passesSkippedNotDue).toBe(1);
@@ -1311,13 +1429,13 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
 
     // Run one: the budget is exactly consumed by the unmappable objects, so the
     // live pass is not reached. This is the deferral the report is describing.
-    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
     expect(first.passesActedOn).toBe(MAX_RECONCILES_PER_TENANT);
     expect(first.tenantsDeferred).toBe(1);
 
     // Run two, same window: the stamped objects are no longer due, so the sweep
     // spends its whole budget on what it had never reached.
-    const second = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(second.passesSkippedNotDue).toBe(MAX_RECONCILES_PER_TENANT);
     expect(second.tenantsDeferred).toBe(0);
@@ -1336,7 +1454,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'not_saved' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'INACTIVE')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.lifecycleWrites.inactive).toBe(0);
     expect(report.lifecycleWritesSkipped).toBe(1);
@@ -1359,7 +1477,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500, state: 'issued' });
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'INACTIVE')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     const row = store.passes.get(tenant)?.get(OBJECT_ID);
     expect(row?.state).toBe('inactive');
@@ -1380,7 +1498,7 @@ describe('the sweep: liveness of a pass it cannot act on', () => {
     store.recordPassObservation = async () => 0;
     const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 500, 'PENDING')]) });
 
-    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false }, { demoMode: false });
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
 
     expect(report.outcomes.object_not_active).toBe(1);
     expect(report.observationsNotRecorded).toBe(1);
@@ -1440,5 +1558,331 @@ describe('the schedule and the export shape', () => {
         },
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+// ============================================================================
+// Provisioning the tenants that never got a class
+//
+// Signup creates a tenant's class under `waitUntil`. When that call is lost the
+// business is registered with no card, and until now nothing in this worker
+// could see it: the sweep enumerates `tenant_wallet_programs`, so a tenant with
+// no row is not a tenant it ever looked at. These are the tests for closing that.
+// ============================================================================
+
+describe('the sweep provisions the tenants that have no class', () => {
+  it('provisions a tenant that has no row, and records it', async () => {
+    const orphan = tenantId(9);
+    const store = new SweepStore({}, {}, [orphan]);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(report.classesProvisioned).toBe(1);
+    expect(store.programs[orphan]).toMatchObject({
+      tenantId: orphan,
+      issuerId: ISSUER,
+      classId: classIdFor(ISSUER, orphan),
+    });
+    expect(client.classesCreated).toEqual([classIdFor(ISSUER, orphan)]);
+  });
+
+  it('never asks Google about a tenant that already has a row', async () => {
+    // The idempotency claim, measured rather than asserted in prose. A tenant with
+    // a row is absent from the enumeration, so it costs zero Google calls — and if
+    // it did not, every merchant on the platform would be re-inserted every day.
+    const provisioned = tenantId(1);
+    const orphan = tenantId(2);
+    const store = new SweepStore({ [provisioned]: program(provisioned) }, {}, [provisioned, orphan]);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(client.insertClass).toHaveBeenCalledTimes(1);
+    expect(client.classesCreated).toEqual([classIdFor(ISSUER, orphan)]);
+    // And nothing about it was even read: the readiness path reads the row, not
+    // the branding, so `findTenantBranding` is the method that says "this tenant
+    // was being provisioned".
+    expect(store.method(provisioned)).not.toContain('findTenantBranding');
+    expect(report.classesProvisioned).toBe(1);
+  });
+
+  it('reaches a tenant a second run would have found, because the row is now there', async () => {
+    // Why the enumeration is self-limiting: the only record of a successful run is
+    // the row it wrote, and the next run's predicate excludes it. Without that, a
+    // daily sweep would re-create the same classes for ever.
+    const orphan = tenantId(3);
+    const store = new SweepStore({}, {}, [orphan]);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(client.insertClass).toHaveBeenCalledTimes(1);
+    expect(second.classesProvisioned).toBe(0);
+    expect(second.tenantsWithoutProgram).toBe(0);
+  });
+
+  it('finishes a run that died after the class, when Google answers 409', async () => {
+    // The orphan class with no row. The enumeration still finds the tenant, and
+    // the 409 is handled as "already there" so the run writes the row — the state
+    // that is only reachable because a failed provisioning leaves nothing behind
+    // that would hide the tenant.
+    const orphan = tenantId(4);
+    const store = new SweepStore({}, {}, [orphan]);
+    const client = fakeGoogle({ pages: onePage([]) });
+    // The class is at Google before the sweep runs: the signup attempt got this
+    // far and died before the row.
+    await client.insertClass({ id: classIdFor(ISSUER, orphan) } as never);
+    vi.mocked(client.insertClass).mockClear();
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(report.classesProvisioned).toBe(1);
+    expect(store.programs[orphan]).toMatchObject({ classId: classIdFor(ISSUER, orphan) });
+  });
+
+  it('reports a failure with the code, rather than swallowing it', async () => {
+    const orphan = tenantId(5);
+    const store = new SweepStore({}, {}, [orphan]);
+    const client = fakeGoogle({
+      pages: onePage([]),
+      failInsertClassFor: new Set([classIdFor(ISSUER, orphan)]),
+    });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(report.classesProvisioned).toBe(0);
+    expect(report.tenantsProvisioningFailed).toBe(1);
+    expect(report.failures).toHaveLength(1);
+    // Named, because "the sweep failed" and "this business still has no card" are
+    // different problems with different fixes.
+    expect(report.failures[0].stage).toBe('provision');
+    expect(report.failures[0].tenantId).toBe(orphan);
+    expect(report.failures[0].reason).toContain('google_rejected');
+    // And nothing was written: a row is only ever written after Google has the class.
+    expect(store.programs[orphan]).toBeUndefined();
+  });
+
+  it('reports a tenant it cannot read, rather than inventing a class for it', async () => {
+    const orphan = tenantId(6);
+    const store = new SweepStore({}, {}, [orphan]);
+    store.missingBranding.add(orphan);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(report.tenantsProvisioningFailed).toBe(1);
+    expect(report.failures[0].reason).toContain('tenant_not_found');
+    expect(client.insertClass).not.toHaveBeenCalled();
+  });
+
+  it('keeps provisioning after one tenant fails, and after Google is down', async () => {
+    // Isolation, in the direction that matters: a business that cannot be
+    // provisioned must not stop the other businesses that can.
+    const broken = tenantId(1);
+    const healthy = tenantId(2);
+    const store = new SweepStore({}, {}, [broken, healthy]);
+    const client = fakeGoogle({
+      pages: onePage([]),
+      failInsertClassFor: new Set([classIdFor(ISSUER, broken)]),
+    });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(report.classesProvisioned).toBe(1);
+    expect(store.programs[healthy]).toMatchObject({ tenantId: healthy });
+    expect(report.failures.map((f) => f.tenantId)).toEqual([broken]);
+  });
+
+  it('keeps the reconcile working when every provisioning attempt fails', async () => {
+    // Google being unreachable for `insertClass` is the whole outage this sweep
+    // exists for, and it must not take the balance reconciliation down with it:
+    // the passes that exist are customers waiting on a number.
+    const reconciled = tenantId(1);
+    const orphanA = tenantId(2);
+    const orphanB = tenantId(3);
+    const store = new SweepStore({ [reconciled]: program(reconciled) }, {}, [reconciled, orphanA, orphanB]);
+    store.seedPass({ tenant: reconciled, customer: 'cust-1', objectId: OBJECT_ID, balance: 500 });
+    const client = fakeGoogle({
+      pages: onePage([remoteObject(OBJECT_ID, 120)]),
+      failInsertClassFor: new Set([classIdFor(ISSUER, orphanA), classIdFor(ISSUER, orphanB)]),
+    });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    // The reconciliation half did its whole job.
+    expect(report.tenantsSwept).toBe(1);
+    expect(report.outcomes.patched).toBe(1);
+    expect(client.patchObject).toHaveBeenCalledTimes(1);
+    // And the provisioning half reported both of its failures rather than
+    // aborting the run on the first one.
+    expect(report.classesProvisioned).toBe(0);
+    expect(report.tenantsProvisioningFailed).toBe(2);
+  });
+
+  it('does not take a single provisioning failure as a reason to end the run', async () => {
+    const good = tenantId(7);
+    const broken = tenantId(8);
+    const store = new SweepStore({}, {}, [broken, good]);
+    const client = fakeGoogle({
+      pages: onePage([]),
+      failInsertClassFor: new Set([classIdFor(ISSUER, broken)]),
+    });
+
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    // The failing tenant has the *lower* id, so an implementation that gave up on
+    // the first failure would provision nobody.
+    expect(store.programs[good]).toBeDefined();
+  });
+
+  it('reports a failed enumeration of unprovisioned tenants without touching Google', async () => {
+    const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
+    store.failListUnprovisioned = new Error('statement timeout');
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    // A database that cannot answer this query must not stop the reconciliation
+    // that already ran, and must not be reported as a Google failure.
+    expect(report.failures).toHaveLength(1);
+    expect(report.failures[0].stage).toBe('list_unprovisioned_tenants');
+    expect(report.tenantsProvisioningFailed).toBe(0);
+    expect(client.insertClass).not.toHaveBeenCalled();
+  });
+
+  it('walks the unprovisioned tenants in a deterministic order', async () => {
+    // The keyset order. A failure in the middle must not reorder the rest, because
+    // the order is what decides who is reached once the budget runs out — and an
+    // order that changed with a failure would make the budget pick a different set
+    // of tenants every day.
+    const a = tenantId(1);
+    const broken = tenantId(2);
+    const c = tenantId(3);
+    const store = new SweepStore({}, {}, [c, broken, a]);
+    const client = fakeGoogle({
+      pages: onePage([]),
+      failInsertClassFor: new Set([classIdFor(ISSUER, broken)]),
+    });
+
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(client.classesCreated).toEqual([
+      classIdFor(ISSUER, a),
+      classIdFor(ISSUER, broken),
+      classIdFor(ISSUER, c),
+    ]);
+  });
+});
+
+// ============================================================================
+// Two budgets, because they are two different jobs
+// ============================================================================
+
+describe('the provisioning budget is not the reconciliation budget', () => {
+  it('bounds provisioning on its own number, and asks the store for exactly that', async () => {
+    // The constant is asserted rather than referenced: the whole safety claim is
+    // that the value handed to the store is a bound, and a test that reads the
+    // constant proves nothing if the constant is the thing that broke.
+    expect(MAX_PROVISION_PER_RUN).toBe(10);
+
+    const roster = Array.from({ length: MAX_PROVISION_PER_RUN + 40 }, (_, i) => tenantId(i + 1));
+    const store = new SweepStore({}, {}, roster);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(store.unprovisionedPageRequests).toEqual([
+      { limit: MAX_PROVISION_PER_RUN, afterTenantId: null },
+    ]);
+  });
+
+  it('never spends more than its own budget on Google, however many tenants are missing', async () => {
+    const roster = Array.from({ length: MAX_PROVISION_PER_RUN + 40 }, (_, i) => tenantId(i + 1));
+    const store = new SweepStore({}, {}, roster);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    // One `insertClass` per attempt, and the attempts are the bound. This is the
+    // number that makes a tenant which fails for ever cost a fixed amount per day
+    // rather than growing with the size of the backlog.
+    expect(client.insertClass).toHaveBeenCalledTimes(MAX_PROVISION_PER_RUN);
+    expect(report.classesProvisioned).toBe(MAX_PROVISION_PER_RUN);
+    expect(report.tenantsWithoutProgram).toBe(MAX_PROVISION_PER_RUN);
+  });
+
+  it('leaves the reconciliation budget alone, so the passes that exist still get swept', async () => {
+    // The test that forbids the regression this feature could cause. Forty
+    // businesses with no class and ten with one: if the provisioning shared
+    // `MAX_TENANTS_PER_RUN`, or drew from the reconciliation budget, the ten
+    // merchants whose customers are waiting on a balance would lose their sweep
+    // to a backlog they are not part of.
+    const withRows = Array.from({ length: 10 }, (_, i) => tenantId(i + 1));
+    const without = Array.from({ length: 40 }, (_, i) => tenantId(100 + i));
+    const programs: Record<string, WalletProgramRow> = {};
+    for (const tenant of withRows) {
+      programs[tenant] = program(tenant);
+    }
+    const store = new SweepStore(programs, {}, [...withRows, ...without]);
+
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    // Every reconciled tenant was reconciled.
+    expect(report.tenantsSwept).toBe(withRows.length);
+    expect(client.listObjects).toHaveBeenCalledTimes(withRows.length);
+    // The tenant enumeration was not widened by the other half either.
+    expect(store.tenantPageRequests).toEqual([{ limit: MAX_TENANTS_PER_RUN, afterTenantId: null }]);
+    // And the provisioning half stayed inside its own budget.
+    expect(client.insertClass).toHaveBeenCalledTimes(MAX_PROVISION_PER_RUN);
+  });
+
+  it('reaches a tenant beyond the provisioning budget on a later run', async () => {
+    // The consequence of the bound, stated as a property: a tenant outside it is
+    // not reached at all this run — the same liveness limit `MAX_TENANTS_PER_RUN`
+    // documents — but the ones ahead of it leave the set as they are provisioned,
+    // so the backlog drains rather than standing still.
+    const roster = Array.from({ length: MAX_PROVISION_PER_RUN + 1 }, (_, i) => tenantId(i + 1));
+    const store = new SweepStore({}, {}, roster);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const first = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+    const second = await sweepPasses({ store, client, now: RUN_TWO, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(first.classesProvisioned).toBe(MAX_PROVISION_PER_RUN);
+    expect(second.classesProvisioned).toBe(1);
+    expect(client.insertClass).toHaveBeenCalledTimes(MAX_PROVISION_PER_RUN + 1);
+  });
+
+  it('asks for one bounded page per run, starting at the beginning', async () => {
+    const roster = Array.from({ length: 3 }, (_, i) => tenantId(i + 1));
+    const store = new SweepStore({}, {}, roster);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    // No cursor and no second page. Resuming from one would need somewhere to
+    // store it, which is the completion-marker shape `MAX_TENANTS_PER_RUN`'s own
+    // comment explains as what makes a sweep non-resumable — and here the thing
+    // that records progress is the row each success writes.
+    expect(store.unprovisionedPageRequests).toHaveLength(1);
+    expect(store.unprovisionedPageRequests[0]!.afterTenantId).toBeNull();
+  });
+
+  it('does nothing at all in Demo Mode, because that is where the sweep refuses', async () => {
+    // Named rather than assumed. The backstop for a lost provisioning call is
+    // downstream of this guard, so while `WALLET_DEMO_MODE` is on the only path
+    // to a class is the signup `waitUntil` — with its own retry.
+    const store = new SweepStore({}, {}, [tenantId(1)]);
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: true });
+
+    expect(report.demoMode).toBe(true);
+    expect(client.insertClass).not.toHaveBeenCalled();
+    expect(store.methodsCalled()).toEqual([]);
   });
 });

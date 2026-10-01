@@ -116,11 +116,58 @@ export type ProvisionOutcome =
    * derived value would report the expected answer instead of the stored one.
    */
   | { kind: 'already_provisioned'; classId: string }
-  /** Nothing was recorded. `message` is for a human; `code` is for the caller. */
-  | { kind: 'failed'; code: ProvisionFailureCode; message: string };
+  /**
+   * Nothing was recorded. `message` is for a human; `code` and `retryable` are for
+   * the caller.
+   *
+   * ## Why `retryable` is here and not in the caller
+   *
+   * The caller is the signup path in `workers/identity`, retrying this over a
+   * service binding under `waitUntil`. It receives this object and nothing else —
+   * not the status code, not the error body — so it cannot tell a Google outage
+   * from a payload Google rejected, and guessing would mean spending three
+   * `insertClass` calls to learn what one already said.
+   *
+   * The judgement is therefore made here, next to the error that carries the
+   * evidence, and reported. `false` means the answer is a fact about the request
+   * or about this business's data, and an identical retry would be rejected the
+   * same way.
+   */
+  | {
+      kind: 'failed';
+      code: ProvisionFailureCode;
+      message: string;
+      /** Whether another attempt could produce a different answer. See above. */
+      retryable: boolean;
+    };
 
-function failed(code: ProvisionFailureCode, message: string): ProvisionOutcome {
-  return { kind: 'failed', code, message };
+function failed(
+  code: ProvisionFailureCode,
+  message: string,
+  retryable: boolean,
+): ProvisionOutcome {
+  return { kind: 'failed', code, message, retryable };
+}
+
+/**
+ * Would a different attempt at the same `insertClass` get a different answer?
+ *
+ * ## The rule, which is about *who* the answer is about
+ *
+ * - **No status, no body** — the token exchange failed, the socket did, the DNS
+ *   did. Nothing has told us anything about the request, so nothing forbids
+ *   trying again. This is the failure the signup retry exists for.
+ * - **`429`** — the one 4xx that is a statement about *our rate*, not about the
+ *   request. Waiting is exactly the right response, so it is the one 4xx treated
+ *   as retryable.
+ * - **`5xx`** — a statement about Google. Retryable.
+ * - **Any other 4xx** — a statement about the request we sent. The retry is
+ *   byte-identical, so it earns nothing and costs a write.
+ */
+function googleFailureIsRetryable(err: unknown): boolean {
+  if (!(err instanceof GoogleWalletApiError)) return true;
+  if (err.status === 429) return true;
+  return err.status >= 500;
 }
 
 /**
@@ -167,6 +214,9 @@ export async function provisionTenantClass(
     return failed(
       'tenant_not_found',
       `No tenants row for ${tenantId}, so there is no merchant name to brand the class with.`,
+      // Not retryable: no amount of waiting creates a `tenants` row. This is a lost
+      // race or a wrong id, and both are settled by a caller rather than by time.
+      false,
     );
   }
 
@@ -175,6 +225,10 @@ export async function provisionTenantClass(
     return failed(
       'loyalty_program_not_found',
       `Tenant ${tenantId} has no loyalty_programs row with a name, and Google requires programName.`,
+      // A real state during onboarding, and a fact about the business rather than
+      // about this call: the row exists or it does not, and a retry reads it again
+      // with the same answer.
+      false,
     );
   }
 
@@ -207,6 +261,10 @@ export async function provisionTenantClass(
       `Refused to build the class for tenant ${tenantId}: ${
         err instanceof Error ? err.message : String(err)
       }`,
+      // Deterministic. `buildLoyaltyClass` refuses for a blank name or an invalid
+      // id, and both are properties of the data this run just read, so the next
+      // attempt builds the identical payload and refuses identically.
+      false,
     );
   }
 
@@ -225,6 +283,11 @@ export async function provisionTenantClass(
         `Google did not create the class ${loyaltyClass.id} for tenant ${tenantId}: ${
           err instanceof Error ? err.message : String(err)
         }`,
+        // The judgement is made from the error itself, not from the code: a
+        // `google_rejected` covers both "Google is unwell" and "Google read this
+        // request and refused it", and only one of those is worth asking about
+        // again. See `googleFailureIsRetryable`.
+        googleFailureIsRetryable(err),
       );
     }
 
@@ -253,6 +316,11 @@ export async function provisionTenantClass(
         `${tenantId} could not be written, so a retry will need to finish it: ${
           err instanceof Error ? err.message : String(err)
         }`,
+      // Retryable, and the clearest case in this module: the class is at Google and
+      // only the record is missing. The next attempt's `insertClass` is a 409 and
+      // the run finishes by writing the row — which is the whole reason the writes
+      // are ordered Google-then-row.
+      true,
     );
   }
 
