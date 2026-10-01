@@ -16,6 +16,7 @@ import type {
   WalletPassRow,
   WalletProgramRow,
   WalletStore,
+  WalletTenantBrandingRow,
 } from './store';
 
 // ---------------------------------------------------------------------------
@@ -106,6 +107,21 @@ class FakeStore implements WalletStore {
   async findProgram(tenantId: string): Promise<WalletProgramRow | null> {
     this.record('findProgram', tenantId);
     return this.programs[tenantId] ?? null;
+  }
+
+  // Provisioning's three methods. They throw rather than answering, so a
+  // reconciliation that reached for one would be reaching for a second answer
+  // to a question `findProgram` already owns.
+  async insertProgram(): Promise<void> {
+    throw new Error('insertProgram is not part of the reconciliation path');
+  }
+
+  async findTenantBranding(): Promise<WalletTenantBrandingRow | null> {
+    throw new Error('findTenantBranding is not part of the reconciliation path');
+  }
+
+  async findProgramName(): Promise<string | null> {
+    throw new Error('findProgramName is not part of the reconciliation path');
   }
 
   async findPointsCurrency(tenantId: string): Promise<string | null> {

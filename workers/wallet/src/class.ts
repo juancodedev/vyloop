@@ -41,11 +41,45 @@ export interface GoogleImage {
   sourceUri: { uri: string };
 }
 
+/**
+ * A link the pass offers, as Google models it.
+ *
+ * `description` is not decoration: Google's review reads the label next to the
+ * link, and a class whose homepage says nothing is one of the reasons a loyalty
+ * class is rejected. See `docs/11-crear-tarjeta-lealtad.md`.
+ */
+export interface GoogleUri {
+  uri: string;
+  description?: string;
+}
+
+/**
+ * The language tag a `localizedIssuerName` is written in.
+ *
+ * `es-CL` because that is the value Google's review accepted for the one class
+ * this system has created by hand, and because `tenants.language` defaults to
+ * it. A merchant outside Chile is the slice that would make this per-tenant:
+ * reading that column is a change to the provisioning step, not to this
+ * constant, and until it happens the tag names the language of the pass surface
+ * we actually ship rather than inventing one per country.
+ */
+export const ISSUER_NAME_LANGUAGE = 'es-CL';
+
 export interface LoyaltyClass {
   /** `<issuerId>.tenant-<tenantId>`. */
   id: string;
   /** `tenants.name`. Google's display may ellipsise after 20 characters. */
   issuerName: string;
+  /**
+   * The same name, localised. **This is the field Google's loyalty pass reads**
+   * at the top of the card — the platform is the registered issuer, but the
+   * card says which business it belongs to, and a class carrying only the flat
+   * `issuerName` does not say it.
+   *
+   * Not optional: it is derived from `issuerName`, which is required, so there
+   * is no input for a caller to get wrong or forget.
+   */
+  localizedIssuerName: { defaultValue: { language: string; value: string } };
   /** `loyalty_programs.name`. Google's display may ellipsise after 20 characters. */
   programName: string;
   reviewStatus: GoogleReviewStatus;
@@ -53,6 +87,15 @@ export interface LoyaltyClass {
   countryCode: string;
   programLogo?: GoogleImage;
   issuerLogo?: GoogleImage;
+  /**
+   * Where the pass's programme lives.
+   *
+   * Optional here and required by Google's review, which is the awkward part: a
+   * class built without it will be refused, and this builder has no way to know
+   * whether the caller has a public URL to offer. Inventing one would put a link
+   * that 404s in a real customer's hand, so the field is absent unless supplied.
+   */
+  homepageUri?: GoogleUri;
   hexBackgroundColor?: string;
   /** Row label above `LoyaltyObject.accountName`. Recommended max 15. */
   accountNameLabel?: string;
@@ -75,6 +118,8 @@ export interface BuildLoyaltyClassInput {
   reviewStatus: GoogleReviewStatus;
   programLogo?: GoogleImage;
   issuerLogo?: GoogleImage;
+  /** Supplied, never derived: see `LoyaltyClass.homepageUri`. */
+  homepageUri?: GoogleUri;
   hexBackgroundColor?: string;
   accountNameLabel?: string;
   accountIdLabel?: string;
@@ -107,6 +152,11 @@ export function reviewStatusBlocksObjects(status: GoogleReviewStatus): status is
  * 3166-1 alpha-2 is defined in uppercase and `tenants.country` is free text with
  * no format constraint, so `cl` and `CL` are the same country and must not
  * produce two classes.
+ *
+ * `localizedIssuerName` carries the merchant's name unchanged, in the language
+ * of the pass surface. It is not a second name: it is the field Google reads,
+ * and truncating or reformatting it while `issuerName` stayed whole would give a
+ * class whose two names disagree.
  */
 export function buildLoyaltyClass(input: BuildLoyaltyClassInput): LoyaltyClass {
   if (input.issuerName.trim().length === 0) {
@@ -124,6 +174,9 @@ export function buildLoyaltyClass(input: BuildLoyaltyClassInput): LoyaltyClass {
   const loyaltyClass: LoyaltyClass = {
     id: classIdFor(input.issuerId, input.tenantId),
     issuerName: input.issuerName,
+    localizedIssuerName: {
+      defaultValue: { language: ISSUER_NAME_LANGUAGE, value: input.issuerName },
+    },
     programName: input.programName,
     reviewStatus: input.reviewStatus,
     countryCode: input.countryCode.trim().toUpperCase(),
@@ -134,6 +187,7 @@ export function buildLoyaltyClass(input: BuildLoyaltyClassInput): LoyaltyClass {
   // merchant branding in front of a real customer.
   if (input.programLogo !== undefined) loyaltyClass.programLogo = input.programLogo;
   if (input.issuerLogo !== undefined) loyaltyClass.issuerLogo = input.issuerLogo;
+  if (input.homepageUri !== undefined) loyaltyClass.homepageUri = input.homepageUri;
   if (input.hexBackgroundColor !== undefined) {
     loyaltyClass.hexBackgroundColor = input.hexBackgroundColor;
   }

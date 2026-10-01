@@ -38,6 +38,14 @@ vi.mock('@vyloop/db', async () => {
       state: text('state').notNull(),
       lastSyncedAt: timestamp('last_synced_at'),
     }),
+    // The root table, keyed by its own id. It carries no RLS policy — the tenant
+    // row is what every policy descends from — and a provisioning read is scoped
+    // to the very id it was asked for.
+    tenants: pgTable('tenants', {
+      id: uuid('id').primaryKey(),
+      name: text('name').notNull(),
+      country: text('country').notNull(),
+    }),
     tenantWalletPrograms: pgTable('tenant_wallet_programs', {
       tenantId: uuid('tenant_id').primaryKey(),
       issuerId: text('issuer_id').notNull(),
@@ -48,6 +56,7 @@ vi.mock('@vyloop/db', async () => {
     loyaltyPrograms: pgTable('loyalty_programs', {
       id: uuid('id').primaryKey(),
       businessId: uuid('business_id').notNull(),
+      name: text('name').notNull(),
       pointsCurrency: text('points_currency').notNull(),
     }),
     membershipTiers: pgTable('membership_tiers', {
@@ -77,6 +86,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import type { ProgramInsert } from './store';
 
 const TENANT = '90d5ad58-bc5c-46a3-b82a-9cebb47e00b1';
 const OTHER_TENANT = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
@@ -96,6 +106,7 @@ const dialect = new PgDialect();
 // ---------------------------------------------------------------------------
 
 interface Row extends Record<string, unknown> {
+  id?: string;
   businessId?: string;
   tenantId?: string;
   customerId?: string;
@@ -136,7 +147,7 @@ interface FakeDb {
  */
 function createFakeDb(
   rows: Row[],
-  key: 'businessId' | 'tenantId',
+  key: 'businessId' | 'tenantId' | 'id',
   alsoKey?: 'customerId',
 ): FakeDb {
   const scoped: ScopedBuilder[] = [];
@@ -298,12 +309,15 @@ describe('WalletStore tenant scoping', () => {
     await store.findTierName('tier-1', TENANT);
     await store.latestBalance(CUSTOMER, TENANT);
     await store.isMemberCodeTaken(TENANT, 'K7M2QX');
+    await store.findTenantBranding(TENANT);
+    await store.findProgramName(TENANT);
 
-    expect(fake.scoped).toHaveLength(7);
+    expect(fake.scoped).toHaveLength(9);
     for (const statement of fake.scoped) {
       // Either the tenant column is in the predicate, or the predicate *is* the
-      // tenant column (the primary-key lookups, where `tenant_id` is the key).
-      expect(statement.sql).toMatch(/business_id|tenant_id/);
+      // tenant column — the primary-key lookups, where `tenant_id` is the key,
+      // and `tenants`, where the tenant's own id is the key.
+      expect(statement.sql).toMatch(/business_id|tenant_id|"id"/);
     }
   });
 
@@ -1150,5 +1164,155 @@ describe('findPassesByObjectIds', () => {
     // waste on a tenant with 50,000 passes.
     expect(await store.findPassesByObjectIds([], TENANT)).toEqual([]);
     expect(fake.db.select).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// Provisioning reads
+// ============================================================================
+
+describe('findTenantBranding', () => {
+  function branding(): Row[] {
+    return [
+      { id: TENANT, name: 'Café Central', country: 'CL' },
+      { id: OTHER_TENANT, name: 'Otra Tienda', country: 'AR' },
+    ];
+  }
+
+  it('returns this tenant\'s own name and country', async () => {
+    const fake = createFakeDb(branding(), 'id');
+    const store = createDrizzleWalletStore(fake.db);
+
+    // `toMatchObject` rather than `toEqual`: this fake hands back the whole row it
+    // was configured with rather than projecting it, and every other read here
+    // asserts on named fields for the same reason.
+    expect(await store.findTenantBranding(TENANT)).toMatchObject({
+      name: 'Café Central',
+      country: 'CL',
+    });
+  });
+
+  it('scopes the read to the tenant it was asked about, so no merchant is branded as another', async () => {
+    // A class carrying another business's name is the failure this guards: it
+    // reaches a real customer's phone, and nothing local goes wrong on the way.
+    const fake = createFakeDb(branding(), 'id');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const row = await store.findTenantBranding(OTHER_TENANT);
+
+    expect(row).toMatchObject({ name: 'Otra Tienda', country: 'AR' });
+    expect(fake.scoped[0]!.sql).toContain('"id"');
+  });
+
+  it('answers null for a tenant that does not exist', async () => {
+    // There is nothing truthful to put in a class's header, and a placeholder
+    // name is a merchant's logo on someone else's card.
+    const fake = createFakeDb(branding(), 'id');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findTenantBranding(CUSTOMER)).toBeNull();
+  });
+});
+
+describe('findProgramName', () => {
+  it('reads the name of this tenant\'s program', async () => {
+    const fake = createFakeDb([{ businessId: TENANT, name: 'Programa de Lealtad Café Central' }], 'businessId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findProgramName(TENANT)).toBe('Programa de Lealtad Café Central');
+    expect(fake.scoped[0]!.sql).toContain('business_id');
+  });
+
+  it('is null when the tenant has no program row, which is a real onboarding state', async () => {
+    // A loyalty program is configured separately from a Google class. There is
+    // no name to build a class from and Google requires one, so the caller has
+    // to be able to tell "no program" from "a program called nothing".
+    const fake = createFakeDb([], 'businessId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findProgramName(TENANT)).toBeNull();
+  });
+
+  it('treats a blank name as absent rather than building a class with no program', async () => {
+    // An empty `programName` is a card that shows no programme at all, which
+    // reads as our bug rather than as a merchant who has not configured one.
+    const fake = createFakeDb([{ businessId: TENANT, name: '   ' }], 'businessId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findProgramName(TENANT)).toBeNull();
+  });
+});
+
+// ============================================================================
+// The program row a new tenant is given
+// ============================================================================
+
+describe('insertProgram', () => {
+  function fakeWithExecute() {
+    const fake = createFakeDb([], 'tenantId');
+    fake.db.execute = vi.fn((chunk: unknown) => {
+      fake.executed.push(dialect.sqlToQuery(chunk as never));
+      return Promise.resolve({ rows: [] });
+    });
+    return fake;
+  }
+
+  const INSERT: ProgramInsert = {
+    tenantId: TENANT,
+    issuerId: '3388000000023206930',
+    classId: '3388000000023206930.tenant-90d5ad58-bc5c-46a3-b82a-9cebb47e00b1',
+    reviewStatus: 'draft',
+    demoMode: true,
+  };
+
+  it('writes every column the row needs', async () => {
+    const fake = fakeWithExecute();
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.insertProgram(INSERT);
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('INSERT INTO tenant_wallet_programs');
+    expect(statement.sql).toContain('tenant_id');
+    expect(statement.sql).toContain('issuer_id');
+    expect(statement.sql).toContain('class_id');
+    expect(statement.sql).toContain('review_status');
+    expect(statement.sql).toContain('demo_mode');
+    expect(statement.params).toEqual(
+      expect.arrayContaining([TENANT, INSERT.issuerId, INSERT.classId, 'draft']),
+    );
+  });
+
+  it('sends the review status as a value rather than leaving it to the column default', async () => {
+    // The column default is `'none'`, which means "this tenant has no class
+    // yet" and fails the readiness gate closed for a tenant that has one.
+    // Relying on the default produces exactly that row, with no error anywhere.
+    const fake = fakeWithExecute();
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.insertProgram(INSERT);
+
+    expect(fake.executed[0]!.params).toContain('draft');
+  });
+
+  it('writes demo mode as true, because publishing access has not been granted', async () => {
+    const fake = fakeWithExecute();
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.insertProgram(INSERT);
+
+    expect(fake.executed[0]!.params).toContain(true);
+  });
+
+  it('does nothing when the tenant already has a row', async () => {
+    // The retry after a Google 409 lands here, and two provisioning runs racing
+    // on one tenant both can. `DO NOTHING` keeps the first row's class id rather
+    // than letting a second run overwrite the record of what exists at Google.
+    const fake = fakeWithExecute();
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.insertProgram(INSERT);
+
+    expect(fake.executed[0]!.sql).toContain('ON CONFLICT (tenant_id) DO NOTHING');
   });
 });

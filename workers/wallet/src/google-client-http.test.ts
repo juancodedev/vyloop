@@ -334,6 +334,9 @@ describe('class operations', () => {
     const loyaltyClass: LoyaltyClass = {
       id: CLASS_ID,
       issuerName: 'Lawen Tech Solutions',
+      localizedIssuerName: {
+        defaultValue: { language: 'es-CL', value: 'Café Central' },
+      },
       programName: 'Puntos Café Central',
       reviewStatus: 'DRAFT',
       countryCode: 'CL',
@@ -558,6 +561,9 @@ describe('error mapping', () => {
       google.insertClass({
         id: CLASS_ID,
         issuerName: 'Lawen Tech Solutions',
+        localizedIssuerName: {
+          defaultValue: { language: 'es-CL', value: 'Café Central' },
+        },
         programName: 'Puntos Café Central',
         reviewStatus: 'DRAFT',
         countryCode: 'CL',

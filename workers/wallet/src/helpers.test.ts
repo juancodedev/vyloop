@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_WALLET_MEDIA_BASE_URL,
+  DEFAULT_WALLET_WEB_BASE_URL,
   OPERATOR_ROLE_REQUIRED,
   isCustomerRole,
   parseAllowedOrigins,
   parseDemoMode,
+  parseMediaBaseUrl,
+  parseWebBaseUrl,
   requireOperatorRole,
 } from './helpers';
 import type { AuthHeaders } from './helpers';
@@ -119,5 +123,68 @@ describe('parseDemoMode', () => {
     for (const raw of ['flase', 'maybe', 'off?', '2']) {
       expect(parseDemoMode(raw)).toBe(true);
     }
+  });
+});
+
+describe('parseMediaBaseUrl', () => {
+  it('answers the documented default when the var says nothing', () => {
+    // Unlike `WALLET_ALLOWED_ORIGINS`, where an absent var must fail loudly,
+    // this one has a correct value for every environment we have: it is our own
+    // domain, and the brand route under it exists precisely so a tenant with no
+    // logo of its own still resolves. A blank var is therefore not a
+    // misconfiguration to report but a default to apply.
+    for (const raw of [undefined, null, '', '   ']) {
+      expect(parseMediaBaseUrl(raw)).toBe(DEFAULT_WALLET_MEDIA_BASE_URL);
+    }
+    expect(DEFAULT_WALLET_MEDIA_BASE_URL).toBe('https://media.juancode.dev');
+  });
+
+  it('drops a trailing slash, which would double up in every path built from it', () => {
+    // The base is concatenated with `/brand/<tenantId>.jpg`. A trailing slash
+    // would produce `//brand/...`, which is a URL Google may answer and our own
+    // route may not.
+    expect(parseMediaBaseUrl('https://media.staging.juancode.dev/')).toBe(
+      'https://media.staging.juancode.dev',
+    );
+    expect(parseMediaBaseUrl('  https://media.staging.juancode.dev  ')).toBe(
+      'https://media.staging.juancode.dev',
+    );
+  });
+
+  it('keeps a path prefix, because a tenant-scoped deployment is a real shape', () => {
+    expect(parseMediaBaseUrl('https://example.dev/wallet')).toBe('https://example.dev/wallet');
+  });
+});
+
+describe('parseWebBaseUrl', () => {
+  it('answers the customer web when the var says nothing, never the media host', () => {
+    // The regression this split exists to prevent. A single shared var made the
+    // media host the default homepage, and `media.juancode.dev/program` is a 404
+    // that Google finds when it opens `homepageUri` to review the class.
+    for (const raw of [undefined, null, '', '   ']) {
+      expect(parseWebBaseUrl(raw)).toBe(DEFAULT_WALLET_WEB_BASE_URL);
+    }
+    expect(DEFAULT_WALLET_WEB_BASE_URL).toBe('https://vyloop-customer-web.pages.dev');
+    expect(DEFAULT_WALLET_WEB_BASE_URL).not.toBe(DEFAULT_WALLET_MEDIA_BASE_URL);
+  });
+
+  it('drops a trailing slash, which would double up in the path built from it', () => {
+    // Same treatment as `parseMediaBaseUrl`, for the same reason: this base is
+    // concatenated with `/program`.
+    expect(parseWebBaseUrl('https://staging-customer.pages.dev/')).toBe(
+      'https://staging-customer.pages.dev',
+    );
+    expect(parseWebBaseUrl('  https://staging-customer.pages.dev  ')).toBe(
+      'https://staging-customer.pages.dev',
+    );
+  });
+
+  it('never falls through to the media parser, whatever it is handed', () => {
+    // The two parsers are the seam the bug came through, so each is asserted to
+    // answer for itself only. A shared implementation, or a parser defaulting to
+    // the other host, fails here rather than in a class Google rejects.
+    expect(parseWebBaseUrl('https://web.invalid-host.test')).toBe('https://web.invalid-host.test');
+    expect(parseMediaBaseUrl('https://web.invalid-host.test')).toBe('https://web.invalid-host.test');
+    expect(parseWebBaseUrl(undefined)).not.toBe(parseMediaBaseUrl(undefined));
   });
 });

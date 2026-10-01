@@ -4,6 +4,20 @@
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {},
+  // The wallet, so a business that just signed up gets its Google class. It runs
+  // under the signup response's `waitUntil` rather than inside the route: the
+  // Google call is a network round trip to the slowest dependency this system
+  // has, and a signup that fails because Google is down throws away a business
+  // that was perfectly registerable. A service binding rather than a `fetch`,
+  // because the class is created with the *wallet's* credentials and issuer
+  // account; a fetch would have to forward the service-account key across a
+  // boundary that takes tenant input. See `scheduleWalletProvisioning`.
+  "services": [
+    {
+      "binding": "WALLET",
+      "service": "wallet"
+    }
+  ],
   "queues": {
     "consumers": [
       {

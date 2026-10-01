@@ -21,9 +21,54 @@ describe('buildLoyaltyClass', () => {
     expect(loyaltyClass).toEqual({
       id: `${ISSUER}.tenant-${TENANT_UUID}`,
       issuerName: 'Café Origen',
+      // Not optional: `localizedIssuerName` is the field Google's loyalty pass
+      // renders at the top, and it is derived from the same required
+      // `issuerName` rather than being a second thing the caller has to supply.
+      localizedIssuerName: { defaultValue: { language: 'es-CL', value: 'Café Origen' } },
       programName: 'Puntos Café Origen',
       reviewStatus: 'DRAFT',
       countryCode: 'CL',
+    });
+  });
+
+  it('localises the issuer name rather than leaving a flat string for the header', () => {
+    // `issuerName` is the deprecated flat field. Google's own loyalty pass reads
+    // `localizedIssuerName`, so a class carrying only the flat one shows the
+    // platform's name — or nothing the merchant recognises — where their own
+    // business name belongs.
+    const loyaltyClass = buildLoyaltyClass(baseInput);
+
+    expect(loyaltyClass.localizedIssuerName).toEqual({
+      defaultValue: { language: 'es-CL', value: 'Café Origen' },
+    });
+  });
+
+  it('localises the very name it was given, including one Google will ellipsise', () => {
+    // The merchant's real name, whole. Truncating the localised copy while
+    // keeping the flat one would produce a class whose two names disagree.
+    const longName = 'Café Central de Providencia';
+    const loyaltyClass = buildLoyaltyClass({ ...baseInput, issuerName: longName });
+
+    expect(loyaltyClass.localizedIssuerName).toEqual({
+      defaultValue: { language: 'es-CL', value: longName },
+    });
+    expect(loyaltyClass.issuerName).toBe(longName);
+  });
+
+  it('carries the homepage the pass links to, because Google rejects a class without one', () => {
+    // docs/11 records `homepageUri` as the most common reason a loyalty class
+    // fails Google's review, so it is not a cosmetic field.
+    const loyaltyClass = buildLoyaltyClass({
+      ...baseInput,
+      homepageUri: {
+        uri: 'https://media.juancode.dev/program',
+        description: 'Programa de lealtad',
+      },
+    });
+
+    expect(loyaltyClass.homepageUri).toEqual({
+      uri: 'https://media.juancode.dev/program',
+      description: 'Programa de lealtad',
     });
   });
 
@@ -42,6 +87,10 @@ describe('buildLoyaltyClass', () => {
     expect(loyaltyClass).not.toHaveProperty('accountNameLabel');
     expect(loyaltyClass).not.toHaveProperty('accountIdLabel');
     expect(loyaltyClass).not.toHaveProperty('rewardsTierLabel');
+    // Nothing invents a homepage either: there is no tenant homepage this
+    // repository can derive, so the field is absent unless a caller supplied
+    // one. A made-up URL is a link a merchant's customer taps.
+    expect(loyaltyClass).not.toHaveProperty('homepageUri');
   });
 
   it('includes the optional fields it is given', () => {

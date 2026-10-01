@@ -19,6 +19,7 @@ import type {
   WalletPassRow,
   WalletProgramRow,
   WalletStore,
+  WalletTenantBrandingRow,
   WalletTierRow,
 } from './store';
 
@@ -130,6 +131,22 @@ class FakeStore implements WalletStore {
   async findProgram(tenantId: string): Promise<WalletProgramRow | null> {
     this.record('findProgram', tenantId);
     return this.programs[tenantId] ?? null;
+  }
+
+  // The three provisioning methods. Not `implements`-required by any rule this
+  // suite exercises, and deliberately kept out of `tenantsTouched()`'s reach:
+  // an issuance path that called one of them would be a second answer to
+  // "does this tenant have a class", which `findProgram` already owns.
+  async insertProgram(): Promise<void> {
+    throw new Error('insertProgram is not part of the issuance path');
+  }
+
+  async findTenantBranding(): Promise<WalletTenantBrandingRow | null> {
+    throw new Error('findTenantBranding is not part of the issuance path');
+  }
+
+  async findProgramName(): Promise<string | null> {
+    throw new Error('findProgramName is not part of the issuance path');
   }
 
   async findPointsCurrency(tenantId: string): Promise<string | null> {
