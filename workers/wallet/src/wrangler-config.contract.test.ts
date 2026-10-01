@@ -21,13 +21,58 @@ describe('wrangler.jsonc', () => {
   });
 
   it('declares exactly the intended vars', () => {
+    // An exact list, on purpose: this file is the only place that notices a var
+    // added for a one-off debug, or a `vars` entry whose value is a secret. A
+    // subset assertion would let both through and the test would keep passing,
+    // which is the reason this asserts with `toEqual` rather than
+    // `toContain`.
     const vars = /"vars"\s*:\s*\{([^}]*)\}/.exec(config)?.[1] ?? '';
     const names = [...vars.matchAll(/"([^"]+)"\s*:/g)].map((match) => match[1]);
     expect(names.sort()).toEqual([
       'GOOGLE_WALLET_ISSUER_ID',
       'WALLET_ALLOWED_ORIGINS',
       'WALLET_DEMO_MODE',
+      'WALLET_MEDIA_BASE_URL',
+      'WALLET_WEB_BASE_URL',
     ]);
+  });
+
+  it('declares two separate base URLs, because a class logo and a homepage are not the same URL', () => {
+    // One var for both was the bug: `media.juancode.dev` serves the gateway's
+    // brand route and answers 404 on `/program`, so a single shared var produced
+    // a `homepageUri` that Google opens during review and rejects the class over
+    // (docs/11 records it as the most common rejection reason). Declaring one var
+    // again would have to also pass the exact-list assertion above, so the two
+    // guards together refuse the merge rather than merely documenting it.
+    expect(config).toContain('"WALLET_MEDIA_BASE_URL"');
+    expect(config).toContain('"WALLET_WEB_BASE_URL"');
+    expect(config).not.toContain('"WALLET_PUBLIC_BASE_URL"');
+  });
+
+  it('declares each base URL as an origin with no trailing slash', () => {
+    // Google fetches `programLogo` from a public HTTPS URL and a customer taps
+    // `homepageUri`, so a wrong host is not a config nit: it is a class that
+    // cannot be reviewed and a link that 404s. Both values must be an origin,
+    // with no trailing slash — the parsers strip one, but a var that carries it
+    // is a sign it was pasted rather than written.
+    for (const name of ['WALLET_MEDIA_BASE_URL', 'WALLET_WEB_BASE_URL']) {
+      const base = new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(config)?.[1];
+      expect(base).toBeDefined();
+      expect(base).toMatch(/^https:\/\/[^/\s]+\/?$/);
+    }
+  });
+
+  it('points the two base URLs at two different hosts', () => {
+    // The value half of the invariant. If someone sets both vars to the same host
+    // the code is correct and the deployment is not: Google's homepage check will
+    // 404 exactly as it did before the split, and no unit test can catch that —
+    // only this file, which reads what is actually deployed, can.
+    const read = (name: string) =>
+      new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(config)?.[1];
+
+    expect(read('WALLET_MEDIA_BASE_URL')).toBeDefined();
+    expect(read('WALLET_WEB_BASE_URL')).toBeDefined();
+    expect(read('WALLET_MEDIA_BASE_URL')).not.toBe(read('WALLET_WEB_BASE_URL'));
   });
 
   it('declares the origins Google requires before it will issue a save link', () => {

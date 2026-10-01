@@ -11,6 +11,7 @@ import type {
   WalletPassRow,
   WalletProgramRow,
   WalletStore,
+  WalletTenantBrandingRow,
 } from './store';
 import {
   MAX_PAGES_PER_TENANT,
@@ -198,6 +199,21 @@ class SweepStore implements WalletStore {
   async findProgram(tenant: string): Promise<WalletProgramRow | null> {
     this.record('findProgram', tenant);
     return this.programs[tenant] ?? null;
+  }
+
+  // Provisioning's three methods, which a sweep has no reason to reach: it
+  // enumerates tenants that already have a row, and one that did not is not its
+  // work. They throw so a sweep that grew a dependency would say so.
+  async insertProgram(): Promise<void> {
+    throw new Error('insertProgram is not part of the sweep path');
+  }
+
+  async findTenantBranding(): Promise<WalletTenantBrandingRow | null> {
+    throw new Error('findTenantBranding is not part of the sweep path');
+  }
+
+  async findProgramName(): Promise<string | null> {
+    throw new Error('findProgramName is not part of the sweep path');
   }
 
   async findPointsCurrency(tenant: string): Promise<string | null> {

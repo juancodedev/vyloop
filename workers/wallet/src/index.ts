@@ -3,7 +3,15 @@ import { HTTPException } from 'hono/http-exception';
 
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
 import type { AuthHeaders, WalletBindings } from './helpers';
-import { extractAuthHeaders, googleWalletClientFor, parseDemoMode } from './helpers';
+import {
+  extractAuthHeaders,
+  googleWalletClientFor,
+  parseDemoMode,
+  parseMediaBaseUrl,
+  parseWebBaseUrl,
+} from './helpers';
+import { provisionTenantClass } from './provision';
+import type { ProvisionOutcome } from './provision';
 import { reconcilePass } from './reconcile';
 import type { ReconcileOutcome } from './reconcile';
 import router from './routes';
@@ -38,6 +46,12 @@ import { runScheduledSweep } from './sweep';
  * which is longer than a shift. None of them knows a sale happened. All three
  * converge through the same `reconcilePass`, which is the property that makes a
  * third trigger safe to add.
+ *
+ * The fifth half is **onboarding**, and it is the other exported method:
+ * `provisionClass` below, called over a service binding by the identity worker
+ * the moment a business signs up. It creates the tenant's Google class and the
+ * row that records it, in that order, and it is the first production caller of
+ * `insertClass`. See `provision.ts`.
  *
  * ## T9 is still not here, and that is deliberate
  *
@@ -138,6 +152,7 @@ export * from './issuance';
 export * from './jwt';
 export * from './member-code';
 export * from './object';
+export * from './provision';
 export * from './reconcile';
 export * from './store';
 export * from './sweep';
@@ -269,4 +284,59 @@ export async function reconcileCustomer(
   return outcome;
 }
 
-export default { fetch: app.fetch.bind(app), scheduled, reconcileCustomer };
+// ---------------------------------------------------------------------------
+// Onboarding trigger
+// ---------------------------------------------------------------------------
+
+/**
+ * Give a newly signed-up tenant its Google class and its program row.
+ *
+ * ## Why this is an export and not a route
+ *
+ * The only caller is the identity worker, at the moment a business signs up, and
+ * it runs with this worker's Google credentials and *its* issuer account. A route
+ * would need a forwarding `fetch`, and a `fetch` to this worker would have to
+ * carry the service-account key across a boundary that takes tenant input. The
+ * service binding calls the exported method directly, for the same reason
+ * `reconcileCustomer` above is one.
+ *
+ * ## Why the caller does not wait for it
+ *
+ * It runs under the signup response's `waitUntil`, and this is where the cost
+ * would land if it did not: a Google call is a network round trip to the slowest
+ * and least reliable dependency this system has, inside a request a merchant is
+ * watching a spinner for. A signup that fails because Google is down has also
+ * thrown away a business that was perfectly registerable. The order inside
+ * `provisionTenantClass` is what makes the delay safe — the business exists
+ * before this is asked for, and this only adds a card to it.
+ *
+ * ## Errors
+ *
+ * Never throws. Every failure is a typed outcome, because this crosses a service
+ * boundary into a `waitUntil` the caller cannot see: a rejection there is
+ * attributed to an invocation whose visible result was a 201, so it would be a
+ * logged stack trace with nothing to attach it to. The caller logs the code.
+ *
+ * Unlike `reconcileCustomer`, this **does** read `GOOGLE_WALLET_ISSUER_ID` — see
+ * `ProvisionDeps.issuerId` for why a tenant with no row has no other authority.
+ */
+export async function provisionClass(
+  input: { tenantId: string },
+  env: WalletBindings,
+): Promise<ProvisionOutcome> {
+  const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
+
+  return provisionTenantClass(
+    {
+      store: createDrizzleWalletStore(db),
+      client: googleWalletClientFor(env),
+      issuerId: env.GOOGLE_WALLET_ISSUER_ID,
+      // Two hosts, two parsers, on purpose. See `WalletBindings.WALLET_WEB_BASE_URL`.
+      mediaBaseUrl: parseMediaBaseUrl(env.WALLET_MEDIA_BASE_URL),
+      webBaseUrl: parseWebBaseUrl(env.WALLET_WEB_BASE_URL),
+    },
+    { tenantId: input.tenantId },
+  );
+}
+
+export default { fetch: app.fetch.bind(app), scheduled, reconcileCustomer, provisionClass };

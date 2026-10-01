@@ -62,6 +62,7 @@ const ORIGIN = 'https://app.vyloop.app';
 const loyaltyClass: LoyaltyClass = {
   id: `${ISSUER}.tenant-${TENANT_UUID}`,
   issuerName: 'Café Origen',
+  localizedIssuerName: { defaultValue: { language: 'es-CL', value: 'Café Origen' } },
   programName: 'Puntos Café Origen',
   reviewStatus: 'APPROVED',
   countryCode: 'CL',

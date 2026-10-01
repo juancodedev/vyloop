@@ -92,14 +92,17 @@ vi.mock('@vyloop/db', async (importOriginal) => {
 
 const app = (await import('./index')).default;
 
-function post(body: unknown) {
+const BASE_ENV = { JWT_SECRET: 'test-secret', DATABASE_URL: 'postgres://mock' } as const;
+
+function post(body: unknown, options: { env?: Record<string, unknown>; executionCtx?: unknown } = {}) {
   return app.fetch(
     new Request('http://localhost/v1/auth/business/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-    { JWT_SECRET: 'test-secret', DATABASE_URL: 'postgres://mock' },
+    { ...BASE_ENV, ...options.env } as never,
+    options.executionCtx as never,
   );
 }
 
@@ -405,5 +408,195 @@ describe('POST /v1/auth/business/signup failure handling', () => {
     // the truth is the database is unreachable.
     expect(res.status).toBe(500);
     expect(body.error.code).toBe('INTERNAL_ERROR');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Google Wallet class provisioning
+//
+// The Google call is a `fetch` to the slowest and least reliable dependency this
+// system has, and it must not sit on the response of an endpoint a merchant is
+// staring at. So it is handed to `waitUntil` after the transaction has already
+// committed, and nothing it answers can change what signup returned.
+// ---------------------------------------------------------------------------
+
+/** What the wallet binding was asked, and what the context was handed. */
+interface WalletProbe {
+  calls: Array<{
+    input: unknown;
+    insertsAtCall: number;
+    sessionStatementsAtCall: number;
+    lastStatementAtCall: string;
+  }>;
+  /** The promises this request handed to `waitUntil`. */
+  handovers: Array<Promise<unknown>>;
+}
+
+function installWalletProbe(
+  provision: (input: unknown) => Promise<unknown>,
+): { probe: WalletProbe; executionCtx: unknown; env: Record<string, unknown> } {
+  const probe: WalletProbe = { calls: [], handovers: [] };
+
+  const wallet = {
+    provisionClass: (input: unknown) => {
+      probe.calls.push({
+        input,
+        insertsAtCall: statements.filter((s) => s.startsWith('INSERT INTO')).length,
+        sessionStatementsAtCall: statements.filter((s) => s.includes('set_config')).length,
+        lastStatementAtCall: statements[statements.length - 1] ?? '',
+      });
+      return provision(input);
+    },
+  };
+
+  const executionCtx = {
+    waitUntil: (promise: Promise<unknown>) => {
+      probe.handovers.push(promise);
+    },
+    passThroughOnException: () => {},
+  };
+
+  return { probe, executionCtx, env: { ...BASE_ENV, WALLET: wallet } };
+}
+
+/**
+ * What the route logged while a request ran.
+ *
+ * The three tolerance tests below all assert a 201, and a 201 is also what an
+ * implementation that never touched the wallet would answer. The log line is
+ * what says *which* tolerance fired, so each of those tests pins one.
+ *
+ * `stop()` reads before it restores, deliberately: `mockRestore` also clears the
+ * recorded calls, so reading afterwards would assert on an empty spy and pass for
+ * the wrong reason on a `not.toContain` and fail on a `toContain` for a reason
+ * that has nothing to do with the route.
+ */
+function captureErrors() {
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  return {
+    stop: () => {
+      const text = spy.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+      spy.mockRestore();
+      return text;
+    },
+  };
+}
+
+describe('POST /v1/auth/business/signup provisioning', () => {
+  it('provisions after signup commits, not inside the transaction', async () => {
+    reset();
+    const { probe, executionCtx, env } = installWalletProbe(async () => ({ kind: 'created' }));
+
+    await post(VALID, { env, executionCtx });
+
+    expect(probe.calls).toHaveLength(1);
+    expect(probe.calls[0]!.input).toEqual({ tenantId: IDS.tenant });
+
+    // The ordering claim, measured rather than asserted in prose. At the moment the
+    // RPC was made, all four writes and the one RLS session statement were
+    // already issued, and the last of them was the tier INSERT. Provisioning from
+    // inside the transaction would have been called with one or two writes behind
+    // it, and a `fetch` to Google would have been holding the Neon connection
+    // open for the duration of the call.
+    expect(probe.calls[0]!.insertsAtCall).toBe(4);
+    expect(probe.calls[0]!.sessionStatementsAtCall).toBe(1);
+    expect(probe.calls[0]!.lastStatementAtCall).toContain('INTO membership_tiers');
+  });
+
+  it('hands the provision to waitUntil rather than awaiting it on the response path', async () => {
+    reset();
+    // A promise that never settles. If signup awaited it, this test would time
+    // out instead of passing, which is the point: a merchant's signup must not
+    // be held open by Google's latency.
+    const { probe, executionCtx, env } = installWalletProbe(() => new Promise(() => {}));
+
+    const res = await post(VALID, { env, executionCtx });
+
+    expect(res.status).toBe(201);
+    expect(probe.handovers).toHaveLength(1);
+  });
+
+  it('leaves the transaction at four writes, because provisioning is not one of them', async () => {
+    reset();
+    const { executionCtx, env } = installWalletProbe(async () => ({ kind: 'created' }));
+
+    await post(VALID, { env, executionCtx });
+
+    expect(statements.filter((s) => s.startsWith('INSERT INTO')).map((s) => s.match(/INTO (\w+)/)![1])).toEqual([
+      'tenants',
+      'users',
+      'loyalty_programs',
+      'membership_tiers',
+    ]);
+  });
+
+  it('answers 201 when the wallet rejects, and swallows the rejection', async () => {
+    reset();
+    // A business is registered and usable long before Google has a class for it.
+    // Failing the signup here would leave a merchant who has already been told
+    // "your business exists" with a form that says it does not.
+    const { probe, executionCtx, env } = installWalletProbe(async () =>
+      Promise.reject(new Error('Google Wallet API responded 503 (UNAVAILABLE)')),
+    );
+
+    const res = await post(VALID, { env, executionCtx });
+
+    expect(res.status).toBe(201);
+    // Handled before it reaches `waitUntil`, so no rejected promise is ever
+    // attached to an invocation whose only visible symptom would be an unhandled
+    // rejection in somebody else's log.
+    await expect(probe.handovers[0]).resolves.toBeUndefined();
+  });
+
+  it('does not fail the signup when the RPC throws synchronously', async () => {
+    reset();
+    const { executionCtx, env } = installWalletProbe(() => {
+      throw new Error('binding is not a worker');
+    });
+    const logged = captureErrors();
+
+    const res = await post(VALID, { env, executionCtx });
+    const text = logged.stop();
+
+    // A present-but-wrong binding would otherwise be caught by this route's
+    // `try` and reported as a 500 for a request already written to the database.
+    expect(res.status).toBe(201);
+    // The 201 alone proves nothing: an implementation that never called the
+    // wallet would also answer 201. The log line is what says this specific
+    // tolerance fired rather than "provisioning happened to succeed".
+    expect(text).toContain('Could not reach the wallet');
+  });
+
+  it('does not fail the signup when the binding is absent', async () => {
+    reset();
+
+    // The same tolerance `schedulePassReconcile` applies: a `wrangler.jsonc`
+    // that predates the binding, and every test that drives this app directly,
+    // reaches the route without one.
+    const logged = captureErrors();
+    const res = await post(VALID);
+    const text = logged.stop();
+
+    expect(res.status).toBe(201);
+    // As above: the status is necessary but not sufficient, and this assertion is
+    // the one that distinguishes "the absent binding was handled and logged" from
+    // "nothing was attempted at all" — which is also a 201, and also silent.
+    expect(text).toContain('No WALLET service binding');
+  });
+
+  it('does not fail the signup when there is no ExecutionContext to hand it to', async () => {
+    reset();
+    const { env } = installWalletProbe(async () => new Promise(() => {}));
+    const logged = captureErrors();
+
+    const res = await post(VALID, { env });
+    const text = logged.stop();
+
+    // `c.executionCtx` throws rather than answering undefined outside the
+    // Workers runtime, and a business must not depend on which environment the
+    // request arrived through. The RPC still happened — the wallet was asked —
+    // it simply ran unattached, which is what the log line names.
+    expect(res.status).toBe(201);
+    expect(text).toContain('No ExecutionContext');
   });
 });
