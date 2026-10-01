@@ -76,9 +76,16 @@ import { createDb } from '@vyloop/db';
 import { createDrizzleWalletStore } from './drizzle-store';
 import type { GoogleWalletClient } from './google-client';
 import type { WalletBindings } from './helpers';
-import { googleWalletClientFor, parseDemoMode } from './helpers';
+import {
+  googleWalletClientFor,
+  parseDemoMode,
+  parseMediaBaseUrl,
+  parseWebBaseUrl,
+} from './helpers';
 import { classReadinessFor } from './issuance';
 import { normaliseGoogleObjectState, type GoogleObjectState, type LoyaltyObject } from './object';
+import { provisionTenantClass } from './provision';
+import type { ProvisionDeps } from './provision';
 import { reconcilePass } from './reconcile';
 import type { ReconcileOutcome } from './reconcile';
 import type { PassLifecycleState, WalletPassRow, WalletStore } from './store';
@@ -150,6 +157,61 @@ export const SWEEP_CRON = '0 6 * * *';
 export const MAX_TENANTS_PER_RUN = 25;
 
 /**
+ * Tenants given a Google class in one invocation, if they have none. A **separate**
+ * budget from `MAX_TENANTS_PER_RUN`, and separate on purpose.
+ *
+ * ## Why it is not the same number
+ *
+ * `MAX_TENANTS_PER_RUN` bounds reconciliation, and its own comment says the
+ * tenants past it "are not reached at all, not merely reached late". A tenant with
+ * a row is a business whose customers have passes, and those passes are what the
+ * sweep exists for. A tenant without a row is a business whose signup lost a
+ * background call — usually one business at a time, and usually recoverable by the
+ * next signup.
+ *
+ * Charging the second group against the first group's budget is how the accounts
+ * already on the platform stop being swept: one day with a bad Google outage and
+ * every reconciliation pass that day goes to provisioning a tenant that has no
+ * customers yet. So this is its own constant, and `runScheduledSweep` keeps it
+ * visibly separate in the report.
+ *
+ * ## Why ten
+ *
+ * - **The population is small and bursty.** It is the number of signups that
+ *   happened while Google was unwell — not the merchant count. Ten in a day is
+ *   more than this platform signs up.
+ * - **It is below the reconciliation bound on purpose.** If the two numbers ever
+ *   drifted to the same value, "which half is this budget for" would become a
+ *   question a reader has to answer from context. Ten against twenty-five says it
+ *   without a comment.
+ * - **What one of them costs.** A provisioning attempt is one `insertClass` plus
+ *   three short reads and one insert. Reconciliation, for comparison, is up to
+ *   `MAX_PAGES_PER_TENANT` list calls and `MAX_RECONCILES_PER_TENANT` `getObject`
+ *   calls *per tenant*. Ten of the cheap thing is already generous against twenty
+ *   -five of the expensive one.
+ *
+ * ## Why a tenant that fails for ever is still bounded
+ *
+ * There is no attempt counter, so nothing moves a failing tenant to the back of
+ * the queue. Three properties make the cost bounded anyway, and all three are
+ * needed — remove any one and a permanently broken tenant starts costing:
+ *
+ * 1. **A deterministic order** (`tenants.id`, ascending, by keyset). Which
+ *    tenants the budget reaches must not depend on which run it was or on whether
+ *    an earlier tenant failed.
+ * 2. **This budget.** One `insertClass` per attempt and at most
+ *    `MAX_PROVISION_PER_RUN` attempts, so the daily Google write spend of this
+ *    feature is ten calls, whatever the backlog is.
+ * 3. **Success removes a tenant from the set.** The only thing that moves a
+ *    tenant is the row it now has, so a healthy backlog drains from the front and
+ *    a permanently failing tenant is retried once a day and costs one call.
+ *
+ * That last one is also why the bound is survivable: it delays rather than
+ * excludes, and the delay is a day per batch of ten.
+ */
+export const MAX_PROVISION_PER_RUN = 10;
+
+/**
  * `maxResults` sent to `loyaltyobject.list`.
  *
  * Google's documentation for this endpoint gives no maximum for `maxResults` —
@@ -187,8 +249,22 @@ export const MAX_RECONCILES_PER_TENANT = 200;
 /** One thing that went wrong, with the tenant it went wrong for. */
 export interface SweepFailure {
   tenantId: string;
-  /** Which stage failed, so a reader knows whether to retry or to fix config. */
-  stage: 'list_tenants' | 'list_objects' | 'resolve_passes' | 'reconcile';
+  /**
+   * Which stage failed, so a reader knows whether to retry or to fix config.
+   *
+   * The two provisioning stages are separate from the reconciliation ones because
+   * they mean different things to whoever reads the log: `reconcile` is a tenant
+   * that has customers whose balances may now be stale, and `provision` is a
+   * merchant who has no card yet. One is a support ticket about a number, the
+   * other is a signup that lost its background call.
+   */
+  stage:
+    | 'list_tenants'
+    | 'list_objects'
+    | 'resolve_passes'
+    | 'reconcile'
+    | 'list_unprovisioned_tenants'
+    | 'provision';
   reason: string;
 }
 
@@ -259,6 +335,26 @@ export interface SweepReport {
   observationsNotRecorded: number;
   /** Every `reconcilePass` outcome, tallied. The balance path's whole story. */
   outcomes: Record<ReconcileOutcome['kind'], number>;
+  /**
+   * Tenants this run found with no `tenant_wallet_programs` row.
+   *
+   * Not the same as `classesProvisioned`, and the difference is the interesting
+   * part: it is the size of the page the enumeration returned, so a report where
+   * it exceeds the number provisioned is a report saying the backlog is larger
+   * than one run reaches. That is a fact about the backlog rather than a failure,
+   * and it is reported as its own counter so it cannot be read as one.
+   */
+  tenantsWithoutProgram: number;
+  /**
+   * Tenants this run gave a Google class to, or finished giving one to.
+   *
+   * Counts every outcome that left the tenant holding a row, which includes the
+   * `409 alreadyExists` case where the class was already at Google from a run that
+   * died before its row was written.
+   */
+  classesProvisioned: number;
+  /** Tenants whose provisioning failed. Each is retried by a later run. */
+  tenantsProvisioningFailed: number;
   failures: SweepFailure[];
 }
 
@@ -291,6 +387,9 @@ function emptyReport(demoMode: boolean): SweepReport {
     lifecycleWritesSkipped: 0,
     observationsNotRecorded: 0,
     outcomes: emptyOutcomeCounts(),
+    tenantsWithoutProgram: 0,
+    classesProvisioned: 0,
+    tenantsProvisioningFailed: 0,
     failures: [],
   };
 }
@@ -365,6 +464,20 @@ export interface SweepDeps {
    * to be the wrong one would widen what this worker writes to Google.
    */
   demoMode: boolean;
+  /**
+   * What a class is built from: the issuer id and the two public hosts.
+   *
+   * A nested object rather than three more fields, because these three are the
+   * provisioning path's inputs and reconciliation reads none of them. A change to
+   * what a class is made of therefore cannot reach the balance path by being
+   * added to a flat dependency object, and the call site has to name them as a
+   * group or not at all.
+   *
+   * The issuer id is read from the deployment rather than from a row, which is
+   * the one place that is true: a tenant with no row has no issuer to consult.
+   * See `ProvisionDeps.issuerId`.
+   */
+  provisioning: Omit<ProvisionDeps, 'store' | 'client'>;
 }
 
 export interface SweepInput {
@@ -381,12 +494,26 @@ export interface SweepInput {
 }
 
 /**
- * Reconcile every pass in every tenant that has a class row.
+ * Reconcile every pass in every tenant that has a class row, and provision a
+ * bounded number of the tenants that have none.
  *
  * Never throws. Every failure is captured in the returned report, because a
  * scheduled handler that threw would have the whole invocation retried from
  * page one — and a sweep that is retried from the start forever, while one tenant
  * is broken, is a sweep that never reaches tenant two.
+ *
+ * ## The two halves run in that order, and neither shares the other's budget
+ *
+ * Reconciliation first, because it is the half customers are waiting on: a pass
+ * whose balance is a day stale is an active support problem, while a business
+ * without a class is a business whose customers cannot get a pass yet at all. A
+ * backstop for a broken signup has no business delaying the sweep that exists.
+ *
+ * They do not touch each other's budgets, and the tests that pin that are the
+ * ones worth keeping: a change that let the (usually small, usually self-healing)
+ * unprovisioned backlog draw on the reconciliation bound would silently stop the
+ * passes of every already-provisioned merchant from being swept. See
+ * `MAX_PROVISION_PER_RUN`.
  */
 export async function sweepPasses(deps: SweepDeps, input: SweepInput): Promise<SweepReport> {
   const report = emptyReport(input.demoMode);
@@ -445,7 +572,99 @@ export async function sweepPasses(deps: SweepDeps, input: SweepInput): Promise<S
     }
   }
 
+  // After the reconciliation loop, and deliberately not inside it: a tenant
+  // provisioned here is `draft` with no passes, so there is nothing of its own to
+  // reconcile in this run either way. The order is about priority, not about a
+  // dependency.
+  await provisionMissingClasses(deps, report);
+
   return report;
+}
+
+/**
+ * Give a Google class to the tenants that never got one.
+ *
+ * ## Why this goes straight to `provisionTenantClass` and not through the loop above
+ *
+ * The loop above gates every tenant on `classReadinessFor`, which rejects anything
+ * that is not `approved` and answers `class_not_provisioned` for a tenant with no
+ * row. That gate is the right one for a sweep that is about to write to a pass:
+ * a class Google has not approved cannot have live objects, and patching anyway
+ * would be the one path in this worker that writes to Google without the class
+ * being ready.
+ *
+ * It is the wrong gate here, because this loop's whole purpose is to *make* the
+ * class. Passing these tenants through a check that refuses to act on an
+ * unprovisioned tenant would either provision nobody or, worse, invert the check
+ * so the sweep provisions everything on the platform. So provisioning arrives by
+ * its own path, on its own budget, reporting its own counters — and it is the
+ * same `provisionTenantClass` the signup route calls, which is what keeps the
+ * "Google first, then the row" ordering in one place instead of two.
+ *
+ * ## Isolation is per tenant, because Google is a shared dependency
+ *
+ * A failure is caught inside the loop. If Google is unreachable for one class it
+ * is very likely unreachable for the next, and a loop that let the first throw end
+ * the run would report one failure instead of every tenant that needs one — which
+ * is the same silent-blindness the per-tenant isolation exists to avoid on the
+ * reconciliation side.
+ */
+async function provisionMissingClasses(deps: SweepDeps, report: SweepReport): Promise<void> {
+  let tenantIds: string[];
+  try {
+    tenantIds = await deps.store.listTenantsWithoutProgram({
+      limit: MAX_PROVISION_PER_RUN,
+      // No cursor, like `listProgramTenants`: the enumeration is one bounded page
+      // per run, and the row each success writes is what makes progress. A stored
+      // cursor would need a column, which is the completion marker that makes a
+      // sweep non-resumable.
+      afterTenantId: null,
+    });
+  } catch (err: unknown) {
+    // Its own stage, so a reader knows this was the database rather than Google,
+    // and knows the reconciliation half of this run was not affected by it.
+    report.failures.push({
+      tenantId: '',
+      stage: 'list_unprovisioned_tenants',
+      reason: describe(err),
+    });
+    return;
+  }
+
+  report.tenantsWithoutProgram += tenantIds.length;
+
+  for (const tenantId of tenantIds) {
+    try {
+      const outcome = await provisionTenantClass(
+        { store: deps.store, client: deps.client, ...deps.provisioning },
+        { tenantId },
+      );
+
+      if (outcome.kind === 'failed') {
+        report.tenantsProvisioningFailed += 1;
+        report.failures.push({
+          tenantId,
+          stage: 'provision',
+          reason: `${outcome.code}: ${outcome.message}`,
+        });
+        continue;
+      }
+
+      // Every other outcome left the tenant holding a row, including
+      // `already_exists` (the class was at Google and only the record was missing)
+      // and `already_provisioned` (a signup won the race between the enumeration
+      // and this call). Both are the state this loop exists to reach.
+      report.classesProvisioned += 1;
+      console.log(`[wallet] Provisioned the Google class ${outcome.classId} for tenant ${tenantId}.`);
+    } catch (err: unknown) {
+      // `provisionTenantClass` does not throw, so this is unreachable today and is
+      // here for the day someone edits it. It is still a per-tenant catch, because
+      // the alternative is that one edit to the provisioning module silently
+      // becomes "the sweep stopped provisioning" with every counter reading zero.
+      report.tenantsProvisioningFailed += 1;
+      report.failures.push({ tenantId, stage: 'provision', reason: describe(err) });
+    }
+  }
 }
 
 type TenantOutcome = 'complete' | 'deferred';
@@ -678,6 +897,14 @@ export async function runScheduledSweep(env: WalletBindings): Promise<SweepRepor
       store: createDrizzleWalletStore(db),
       client: googleWalletClientFor(env),
       demoMode,
+      // The issuer and the two hosts, read from the deployment because a tenant
+      // with no row has no issuer to consult — the one place that is true. See
+      // `ProvisionDeps.issuerId`.
+      provisioning: {
+        issuerId: env.GOOGLE_WALLET_ISSUER_ID,
+        mediaBaseUrl: parseMediaBaseUrl(env.WALLET_MEDIA_BASE_URL),
+        webBaseUrl: parseWebBaseUrl(env.WALLET_WEB_BASE_URL),
+      },
     },
     { demoMode },
   );
@@ -686,7 +913,10 @@ export async function runScheduledSweep(env: WalletBindings): Promise<SweepRepor
     `[wallet] Sweep complete: ${report.tenantsSwept} swept, ${report.tenantsDeferred} deferred, ` +
       `${report.tenantsSkipped} skipped, ${report.tenantsFailed} failed, ${report.listCalls} list ` +
       `calls, ${report.passesActedOn} passes acted on (${report.outcomes.patched} patched, ` +
-      `${report.outcomes.in_sync} already in sync), ${report.failures.length} failures.`,
+      `${report.outcomes.in_sync} already in sync), ${report.classesProvisioned} classes ` +
+      `provisioned of ${report.tenantsWithoutProgram} tenants without one, ` +
+      `${report.tenantsProvisioningFailed} provisioning failures, ` +
+      `${report.failures.length} failures.`,
   );
 
   return report;

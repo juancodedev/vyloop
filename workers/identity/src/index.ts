@@ -8,6 +8,7 @@ import { Hono } from 'hono';
 import { issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
 import { signupBusiness, SlugNotDerivableError } from './business-signup';
 import { handleTestEvent } from './event-handler';
+import { provisionClassWithRetry } from './wallet-provision';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -390,6 +391,17 @@ function isEmail(value: unknown): value is string {
  * because there is no class to sync — so the honest description of a loss is
  * "this tenant needs provisioning re-run", not "the card will catch up".
  *
+ * ## The retry narrows that window; it does not close it
+ *
+ * `waitUntil` is not durable. It buys this call the seconds the runtime keeps an
+ * invocation alive after the response, and a task still running when that window
+ * closes is gone without an error. So a single call left a transient Google
+ * failure indistinguishable from a permanent one: the business was registered and
+ * nothing would ever ask again. `wallet-provision.ts` asks a bounded number of
+ * times with a growing backoff, and that is a reduction in the size of the hole,
+ * not a plug in it — the daily sweep is what catches what the window drops, and
+ * even it is a once-a-day backstop rather than a guarantee.
+ *
  * Mirrors `schedulePassReconcile` in `workers/growth`: guard the dispatch,
  * handle the promise before handing it over, and tolerate a context that carries
  * no `ExecutionContext`.
@@ -408,28 +420,15 @@ function scheduleWalletProvisioning(c: Context<AppEnv>, tenantId: string): void 
     return;
   }
 
-  // Guarded separately from its promise: a binding that is present but is not a
-  // worker throws here, and this is called from inside the route's `try`, so an
-  // unguarded throw would be reported as a 500 for a request already committed.
-  let provisioning: Promise<unknown>;
-  try {
-    provisioning = wallet.provisionClass({ tenantId });
-  } catch (err: unknown) {
-    console.error(`[identity] Could not reach the wallet to provision tenant ${tenantId}:`, err);
-    return;
-  }
-
-  // Handled before it is handed over, so the promise `waitUntil` receives cannot
-  // reject. A rejected background task is attributed to the invocation that
-  // spawned it, and an unhandled rejection is indistinguishable from a real
-  // fault in a log somebody has to triage at 06:00.
-  const handled = provisioning.catch((err: unknown) => {
-    console.error(
-      `[identity] Google Wallet provisioning failed for tenant ${tenantId}; the business is ` +
-        'registered and the class has to be re-run:',
-      err,
-    );
-  });
+  // The retry lives in its own module, and its own dispatch guard lives with it:
+  // a binding that is present but is not a worker throws on the first call, and
+  // this runs from inside the route's `try`, so an unguarded throw would be
+  // reported as a 500 for a request already committed. It cannot reject either,
+  // which is what lets the promise below go to `waitUntil` untouched: a rejected
+  // background task is attributed to the invocation that spawned it, and an
+  // unhandled rejection is indistinguishable from a real fault in a log somebody
+  // has to triage at 06:00.
+  const handled = provisionClassWithRetry({ binding: wallet, tenantId });
 
   // `c.executionCtx` throws when the context carries no `ExecutionContext`, and
   // the callers that do this are the ones driving this app directly rather than

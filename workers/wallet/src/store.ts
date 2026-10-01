@@ -551,6 +551,54 @@ export interface WalletStore {
   }): Promise<WalletProgramRow[]>;
 
   /**
+   * One page of the tenants that have **no** `tenant_wallet_programs` row.
+   *
+   * ## Why this exists, given `listProgramTenants` exists
+   *
+   * `listProgramTenants` reads the program table, so it can only ever return a
+   * tenant that already has a class. The tenants that need one are precisely the
+   * ones it cannot see: provisioning runs off the signup response under
+   * `waitUntil`, which has no durability guarantee, so a business can be
+   * registered with no row and no class. An enumeration of the program table is
+   * blind to them by construction — not slow to reach them, unable to name them.
+   *
+   * ## It reads `tenants`, not the program table
+   *
+   * The roster is the root table: `tenants` is deliberately absent from
+   * `BUSINESS_ID_TABLES` in `packages/db`, because it is the table every other
+   * table's `business_id` points at and scoping it by itself would be circular.
+   * The answer therefore comes from an anti-join — every tenant, minus the ones a
+   * program row exists for — and this is the second cross-tenant query in this
+   * worker, for the same reason as the first: there is no tenant to scope to when
+   * the question is which tenants there are.
+   *
+   * ## Keyset, for the reason `listProgramTenants` is keyset
+   *
+   * `tenants.id` is a uuid primary key: unique, immutable and totally ordered, so
+   * `>` is an exact cursor and no `OFFSET` is involved. The order is also the
+   * budget's fairness — see `MAX_PROVISION_PER_RUN`.
+   *
+   * ## RLS
+   *
+   * **This returns no rows at all once the tenant policies are enabled**, the same
+   * gap `listProgramTenants` documents, and for the same reason: the sweep runs on
+   * a bare session with no `app.current_tenant_id`, and a policy keyed on that
+   * variable admits no rows to it.
+   *
+   * Stated rather than left to be discovered, because the failure mode is silence:
+   * the sweep would report zero unprovisioned tenants, every counter would read as
+   * healthy, and the businesses that need a class would stay without one. Giving
+   * these two queries a bypass role is a change to `packages/db` and a separate
+   * decision.
+   */
+  listTenantsWithoutProgram(options: {
+    /** Hard bound. The implementation must not fetch more than this. */
+    limit: number;
+    /** `tenants.id` to resume after, or `null` to start at the beginning. */
+    afterTenantId: string | null;
+  }): Promise<string[]>;
+
+  /**
    * The pass rows, within one tenant, whose `object_id` is in `objectIds`.
    *
    * ## Why this exists instead of reconciling everything the list returned

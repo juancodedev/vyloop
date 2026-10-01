@@ -28,6 +28,7 @@ import type { GoogleWalletClient, GoogleWalletErrorDetail } from './google-clien
 import { GoogleWalletApiError } from './google-client';
 import { googleWalletClientFor } from './helpers';
 import { classIdFor } from './ids';
+import type { ProvisionFailureCode } from './provision';
 import type { WalletProgramRow, WalletStore, WalletTenantBrandingRow } from './store';
 
 import { provisionClass } from './index';
@@ -156,6 +157,7 @@ function fakeStore(
     recordPassLifecycle: unused('recordPassLifecycle'),
     recordPassObservation: unused('recordPassObservation'),
     listProgramTenants: unused('listProgramTenants'),
+    listTenantsWithoutProgram: unused('listTenantsWithoutProgram'),
     findPassesByObjectIds: unused('findPassesByObjectIds'),
     updateProgramReviewStatus: unused('updateProgramReviewStatus'),
     setProgramDemoMode: unused('setProgramDemoMode'),
@@ -617,5 +619,115 @@ describe('provisionClass: it refuses rather than invents', () => {
     expect(store.insertProgram).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: TENANT }),
     );
+  });
+});
+
+// ============================================================================
+// Whether trying again is worth anything
+//
+// The caller of this is the signup path, which retries under `waitUntil`. It
+// cannot see a status code or an error body — it receives this outcome over a
+// service binding and nothing else — so the judgement about a retry belongs here,
+// next to the error, where the evidence is.
+//
+// These assertions are about the flag rather than about a retry loop on purpose:
+// the loop lives in another worker and is tested there. What has to be pinned
+// here is the fact this reports, because a `false` here is what stops three
+// Google writes being spent on an answer that cannot change.
+// ============================================================================
+
+describe('provisionClass: whether a failure is worth another attempt', () => {
+  type Outcome = Awaited<ReturnType<typeof install>>;
+
+  /** The failed outcome, or a throw naming what came back instead. */
+  function asFailed(outcome: Outcome): { code: string; message: string; retryable?: boolean } {
+    if (outcome.kind !== 'failed') throw new Error(`expected a failed outcome, got ${outcome.kind}`);
+    return outcome;
+  }
+
+  it('says a malformed payload will not be fixed by asking again', async () => {
+    // The case the flag exists for. Google read the request and rejected the
+    // request; a retry sends the same bytes and is rejected the same way, so the
+    // only thing three attempts buy is three `insertClass` calls.
+    const store = fakeStore();
+    const client = fakeClient({ failWith: apiError(400, 'invalidField') });
+
+    expect(asFailed(await install(store, client)).retryable).toBe(false);
+  });
+
+  it('says a 4xx from Google is permanent, whatever the reason it names', async () => {
+    // The rule is about the status, not about the code: `invalidField` is the
+    // documented example, but an id Google dislikes or a class in the wrong state
+    // is the same shape of answer — a statement about our request.
+    for (const code of ['invalidField', 'wallet_class.invalidId', 'notFound']) {
+      const store = fakeStore();
+      const client = fakeClient({ failWith: apiError(404, code) });
+
+      expect(asFailed(await install(store, client)).retryable).toBe(false);
+    }
+  });
+
+  it('says a 5xx is worth another attempt', async () => {
+    const store = fakeStore();
+    const client = fakeClient({ failWith: apiError(503, 'UNAVAILABLE') });
+
+    // A statement about Google, not about us. This is the failure the signup
+    // retry exists for.
+    expect(asFailed(await install(store, client)).retryable).toBe(true);
+  });
+
+  it('says a throttled request is worth another attempt', async () => {
+    // 429 is the one 4xx that is not about the request. Collapsing it with the
+    // rest of the 4xx range would make a rate limit permanently un-retryable,
+    // which is backwards: it is the clearest signal there is to wait.
+    const store = fakeStore();
+    const client = fakeClient({ failWith: apiError(429, 'rateLimitExceeded') });
+
+    expect(asFailed(await install(store, client)).retryable).toBe(true);
+  });
+
+  it('says a failure to reach Google at all is worth another attempt', async () => {
+    // No status, no body: the token exchange failed, or the socket did. Nothing
+    // has told us anything about the request, so nothing forbids trying again.
+    const store = fakeStore();
+    const client = fakeClient({ failWith: new Error('Could not obtain a Google Wallet access token') });
+
+    expect(asFailed(await install(store, client)).retryable).toBe(true);
+  });
+
+  it('says a row that could not be written is worth another attempt', async () => {
+    // The orphan case, and the clearest retry in the whole module: the class is at
+    // Google, only the record is missing, and the next attempt writes it.
+    const store = fakeStore({ insertFails: true });
+    const client = fakeClient();
+
+    expect(asFailed(await install(store, client)).retryable).toBe(true);
+  });
+
+  const permanentData: Array<[string, ProvisionFailureCode, () => FakeStore]> = [
+    ['a tenant with no row', 'tenant_not_found', () => fakeStore({ branding: null })],
+    ['a tenant with no loyalty program', 'loyalty_program_not_found', () => fakeStore({ programName: null })],
+    ['a payload it refuses to build', 'class_payload_invalid', () => fakeStore({ branding: brandingRow({ name: '   ' }) })],
+  ];
+
+  for (const [what, code, build] of permanentData) {
+    it(`says ${what} is not fixed by waiting`, async () => {
+      // Data-shaped failures, all three. Waiting changes none of them: the tenant
+      // row, the loyalty program and a blank name are facts about this business,
+      // and only somebody editing them can change the answer.
+      const failed = asFailed(await install(build(), fakeClient()));
+
+      expect(failed.code).toBe(code);
+      expect(failed.retryable).toBe(false);
+    });
+  }
+
+  it('reports no flag at all on a success, so a success cannot be read as a retryable failure', async () => {
+    const store = fakeStore();
+    const client = fakeClient();
+
+    const outcome = await install(store, client);
+
+    expect(outcome).not.toHaveProperty('retryable');
   });
 });
