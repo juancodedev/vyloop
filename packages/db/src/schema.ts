@@ -228,6 +228,24 @@ export const loyaltyPrograms = pgTable('loyalty_programs', {
   earnRate: numeric('earn_rate', { precision: 10, scale: 4 }).notNull().default('1.0'),
   minRedeemPoints: integer('min_redeem_points').notNull().default(100),
   pointsExpiryDays: integer('points_expiry_days'),
+  // The merchant's own sentence about what the programme is for, shown on the
+  // Google Wallet pass ("¡Cada 10 sellos, un burger gratis!"). Rendered as a
+  // `textModulesData` entry on the loyalty *class*, not the object: it is the
+  // same for every customer, and changing a promotion must be one class patch
+  // rather than N object patches.
+  //
+  // Nullable, and read as "absent" rather than as an empty string. Every other
+  // text in this table has a default, and copying that here would put a
+  // merchant's card in front of a comensal reading a generic sentence nobody
+  // wrote. Google documents a 500-character recommendation for
+  // `TextModuleData.body`; the pass builder is where that limit is enforced, so
+  // a value written here directly is caught at build time rather than at
+  // Google's insert.
+  //
+  // Not derivable from `name`, `pointsCurrency`, `earnRate`, `minRedeemPoints`
+  // or `pointsExpiryDays`: none of those says anything about what the member
+  // gets for earning, which is the entire content of this field.
+  promoCopy: text('promo_copy'),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),

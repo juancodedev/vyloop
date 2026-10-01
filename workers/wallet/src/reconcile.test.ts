@@ -129,6 +129,16 @@ class FakeStore implements WalletStore {
     return tenantId in this.currencies ? this.currencies[tenantId] : null;
   }
 
+  /**
+   * Absent. Reconciliation patches the balance and nothing else, so the promo
+   * copy never enters this path: it lives on the class, and Google's patch
+   * semantics leave a class field alone.
+   */
+  async findPromoCopy(): Promise<null> {
+    this.record('findPromoCopy', '');
+    return null;
+  }
+
   async findTierName(): Promise<null> {
     this.record('findTierName', TENANT);
     return null;

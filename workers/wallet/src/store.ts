@@ -296,14 +296,26 @@ export interface WalletStore {
    */
   findProgramName(tenantId: string): Promise<string | null>;
 
-  /**
-   * The tenant's points currency, `loyalty_programs.points_currency`.
+/**
+   * `loyalty_programs.points_currency`, e.g. `puntos`.
    *
    * `null` when the tenant has no program row at all, which is a real state
    * during onboarding: a loyalty program is configured separately from a
    * Google class, and a tenant can have one without the other.
    */
   findPointsCurrency(tenantId: string): Promise<string | null>;
+
+  /**
+   * `loyalty_programs.promo_copy`: the merchant's own sentence about what the
+   * programme is for.
+   *
+   * `null` for a merchant who has written none, which is most of them today.
+   * That is the point of the nullable column: the pass carries no promo row
+   * rather than one carrying a default sentence the merchant never wrote, which
+   * is the same "omitted, never substituted" rule `findProgramName` follows for
+   * a blank name.
+   */
+  findPromoCopy(tenantId: string): Promise<string | null>;
 
   /** The name of a membership tier within one tenant, or `null`. */
   findTierName(tierId: string, tenantId: string): Promise<WalletTierRow | null>;
