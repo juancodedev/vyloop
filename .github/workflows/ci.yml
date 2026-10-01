@@ -36,3 +36,16 @@ jobs:
 
       - name: Test
         run: pnpm -r test
+
+      # `pnpm -r test` walks the workspace packages, which skips this repo's own
+      # root — so the operational scripts under `scripts/` had tests that nothing
+      # ever ran. A test that cannot fail is worse than no test: it reads as
+      # coverage in review and is not. `wallet:readiness` guards the public
+      # program page that Google opens while reviewing a class, and a 404 there
+      # rejects the class; that gate was only verifiable by hand.
+      #
+      # `--dir`, not a bare `scripts/`: the substring form also matches
+      # `packages/*/scripts/`, and those belong to packages that configure their
+      # own globals — collecting them here fails on `beforeEach is not defined`.
+      - name: Test operational scripts
+        run: npx vitest run --dir scripts
