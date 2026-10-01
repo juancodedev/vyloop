@@ -42,6 +42,62 @@ export interface GoogleImage {
 }
 
 /**
+ * A text row, as Google models it.
+ *
+ * Used here instead of `infoModuleData`, which Google's discovery document marks
+ * **deprecated on both the class and the object**: *"Deprecated. Use
+ * textModulesData instead."* It is also the field with the documented character
+ * limits, which is what makes a limit checkable before the insert rather than
+ * after it.
+ *
+ * `id` is stable per row so a later `patchClass` replaces that row rather than
+ * appending a second copy of it. The same reason `REWARDS_TIER_MODULE_ID`
+ * exists on the object side.
+ *
+ * @see https://developers.google.com/wallet/reference/rest/v1/TextModuleData
+ */
+export interface GoogleTextModuleData {
+  /** Recommended maximum 35 characters. */
+  header: string;
+  /** Recommended maximum 500 characters. */
+  body: string;
+  /** Alphanumeric, `_` and `-` only. Google rejects dots. */
+  id: string;
+}
+
+/**
+ * Google's `LinksModuleData`. The field is called `linksModuleData`, not
+ * `links`, and it exists on **both** the class and the object.
+ *
+ * @see https://developers.google.com/wallet/reference/rest/v1/LinksModuleData
+ */
+export interface GoogleLinksModuleData {
+  uris: GoogleUri[];
+}
+
+/**
+ * Google's documented recommended maxima, in characters.
+ *
+ * Every one of these is a *recommendation*, not a rejection: Google ellipsises
+ * what does not fit rather than refusing the request. That is exactly why they
+ * are enforced here. "Puntos disponibles" is 18 characters against a documented
+ * 15 for `rewardsTierLabel`, and the pass would render "Puntos disponibl…" in
+ * front of a customer with no error anywhere to explain it — a build-time
+ * failure names the limit, a Google error at insert time names nothing about
+ * which field was too long.
+ *
+ * Verified against the API discovery document, revision 20261001.
+ */
+export const GOOGLE_LABEL_MAX_LENGTHS = {
+  accountNameLabel: 15,
+  accountIdLabel: 15,
+  rewardsTierLabel: 9,
+  textModuleHeader: 35,
+  textModuleBody: 500,
+  uriDescription: 20,
+} as const;
+
+/**
  * A link the pass offers, as Google models it.
  *
  * `description` is not decoration: Google's review reads the label next to the
@@ -86,7 +142,6 @@ export interface LoyaltyClass {
   /** ISO 3166-1 alpha-2, from `tenants.country`. */
   countryCode: string;
   programLogo?: GoogleImage;
-  issuerLogo?: GoogleImage;
   /**
    * Where the pass's programme lives.
    *
@@ -103,6 +158,28 @@ export interface LoyaltyClass {
   accountIdLabel?: string;
   /** Row label above the per-customer tier. Recommended max 9. */
   rewardsTierLabel?: string;
+  /**
+   * The merchant's own sentence about the programme, as a text row.
+   *
+   * On the **class**, not the object, and that is the load-bearing part of the
+   * decision. Google's discovery document says both sides are displayed when
+   * both define it — *"If text module data is also defined on the class, both
+   * will be displayed. The maximum number of these fields displayed is 10 from
+   * the object and 10 from the class"* — so the two sides do not compete for the
+   * same ten slots and the object's tier row survives.
+   *
+   * The reason it is still the right side: this text is the same for every
+   * customer of a merchant. Changing a promotion is one class patch; on the
+   * object it would be N patches, one per customer, and Google's patch semantics
+   * replace an array wholesale — so a balance projection that rebuilt
+   * `textModulesData` would silently drop the promotion. See `reconcile.ts`.
+   */
+  textModulesData?: GoogleTextModuleData[];
+  /**
+   * The pass's links, on the class for the same reason `textModulesData` is:
+   * they are per-merchant, and a class patch propagates to every object.
+   */
+  linksModuleData?: GoogleLinksModuleData;
 }
 
 export interface BuildLoyaltyClassInput {
@@ -117,17 +194,52 @@ export interface BuildLoyaltyClassInput {
   countryCode: string;
   reviewStatus: GoogleReviewStatus;
   programLogo?: GoogleImage;
-  issuerLogo?: GoogleImage;
   /** Supplied, never derived: see `LoyaltyClass.homepageUri`. */
   homepageUri?: GoogleUri;
   hexBackgroundColor?: string;
   accountNameLabel?: string;
   accountIdLabel?: string;
   rewardsTierLabel?: string;
+  /**
+   * `loyalty_programs.promo_copy`: the merchant's own sentence about what the
+   * programme is for.
+   *
+   * Omitted, never substituted. A business that has written no promotion gets a
+   * pass with no promo row rather than one reading a generic sentence nobody
+   * authored, and never an empty string, which Google renders as a header over
+   * nothing.
+   */
+  promoCopy?: string;
+  /**
+   * The pass's links. Supplied by the caller because only it knows the customer
+   * web's origin; see `LoyaltyClass.linksModuleData`.
+   */
+  links?: GoogleUri[];
 }
 
 /**
- * True when the class state blocks object creation.
+ * The row id of the merchant's promo copy.
+ *
+ * Stable, so a later `patchClass` replaces that row rather than appending a
+ * second copy. Same reason `REWARDS_TIER_MODULE_ID` exists on the object side.
+ */
+export const PROMO_COPY_MODULE_ID = 'PROMO_COPY';
+
+/**
+ * The header above the merchant's promo copy.
+ *
+ * Pass-surface chrome in the pass-surface language, on the same footing as
+ * `ISSUER_NAME_LANGUAGE`: it names what the row *is* ("this business's own
+ * words"), not anything the merchant said. Making it per-merchant is a column
+ * and a review question, not a constant to vary.
+ *
+ * Within Google's documented 35-character maximum for
+ * `TextModuleData.header`, which the builder checks.
+ */
+export const PROMO_COPY_HEADER = 'Info';
+
+/**
+ * True when a class state blocks object creation.
  *
  * Google documents that a `DRAFT` class "cannot be used to create any object",
  * and the spec requires objects to reference an approved class. `REJECTED` is
@@ -136,6 +248,36 @@ export interface BuildLoyaltyClassInput {
  */
 export function reviewStatusBlocksObjects(status: GoogleReviewStatus): status is ReviewBlockingStatus {
   return status === 'DRAFT' || status === 'UNDER_REVIEW' || status === 'REJECTED';
+}
+
+/**
+ * Refuse a label Google would ellipsise, naming the limit in the message.
+ *
+ * ## Why this is not left to Google
+ *
+ * Every limit in `GOOGLE_LABEL_MAX_LENGTHS` is documented as a *recommendation*.
+ * Nothing is rejected. Google renders `Puntos disponibl…` and the insert returns
+ * 200, so the defect surfaces in a customer's wallet and nowhere else — no log,
+ * no error, no review finding. A build-time refusal moves the same fact to where
+ * it can be acted on and says which field and which number.
+ *
+ * `undefined` is not a violation: these fields are optional and an absent label
+ * is a legitimate merchant choice, distinct from a too-long one.
+ */
+function assertWithinLabelLimit(
+  field: string,
+  value: string | undefined,
+  limitKey: keyof typeof GOOGLE_LABEL_MAX_LENGTHS = field as keyof typeof GOOGLE_LABEL_MAX_LENGTHS,
+): void {
+  if (value === undefined) return;
+  const max = GOOGLE_LABEL_MAX_LENGTHS[limitKey];
+  if (value.length > max) {
+    throw new Error(
+      `${field} is ${value.length} characters long and Google documents a maximum of ${max} for ` +
+        'this field. It would be ellipsised on the pass with no error from Google, so the class is ' +
+        'refused here instead. Shorten the value rather than raising the limit.',
+    );
+  }
 }
 
 /**
@@ -157,6 +299,9 @@ export function reviewStatusBlocksObjects(status: GoogleReviewStatus): status is
  * of the pass surface. It is not a second name: it is the field Google reads,
  * and truncating or reformatting it while `issuerName` stayed whole would give a
  * class whose two names disagree.
+ *
+ * @throws {Error} for a blank required field, or for a label longer than the
+ *   limit Google documents for it. See `assertWithinLabelLimit`.
  */
 export function buildLoyaltyClass(input: BuildLoyaltyClassInput): LoyaltyClass {
   if (input.issuerName.trim().length === 0) {
@@ -186,7 +331,6 @@ export function buildLoyaltyClass(input: BuildLoyaltyClassInput): LoyaltyClass {
   // them. Inventing a default logo URL or a background colour would put fake
   // merchant branding in front of a real customer.
   if (input.programLogo !== undefined) loyaltyClass.programLogo = input.programLogo;
-  if (input.issuerLogo !== undefined) loyaltyClass.issuerLogo = input.issuerLogo;
   if (input.homepageUri !== undefined) loyaltyClass.homepageUri = input.homepageUri;
   if (input.hexBackgroundColor !== undefined) {
     loyaltyClass.hexBackgroundColor = input.hexBackgroundColor;
@@ -194,6 +338,40 @@ export function buildLoyaltyClass(input: BuildLoyaltyClassInput): LoyaltyClass {
   if (input.accountNameLabel !== undefined) loyaltyClass.accountNameLabel = input.accountNameLabel;
   if (input.accountIdLabel !== undefined) loyaltyClass.accountIdLabel = input.accountIdLabel;
   if (input.rewardsTierLabel !== undefined) loyaltyClass.rewardsTierLabel = input.rewardsTierLabel;
+
+  // Checked here rather than left to Google. Every one of these is a documented
+  // *recommendation*, so exceeding it does not fail the insert — Google
+  // ellipsises. That is precisely the failure worth catching early: a label
+  // reading "Puntos disponibl…" in a customer's wallet with no error anywhere,
+  // versus a build that refuses and names the limit.
+  assertWithinLabelLimit('accountNameLabel', input.accountNameLabel);
+  assertWithinLabelLimit('accountIdLabel', input.accountIdLabel);
+  assertWithinLabelLimit('rewardsTierLabel', input.rewardsTierLabel);
+
+  // Omitted, never substituted. Blank is absent: an empty `body` renders as a
+  // promo row with a header and nothing under it, which is worse than no row.
+  if (input.promoCopy !== undefined && input.promoCopy.trim() !== '') {
+    assertWithinLabelLimit(
+      `textModulesData[${PROMO_COPY_MODULE_ID}].header`,
+      PROMO_COPY_HEADER,
+      'textModuleHeader',
+    );
+    assertWithinLabelLimit(
+      `textModulesData[${PROMO_COPY_MODULE_ID}].body`,
+      input.promoCopy,
+      'textModuleBody',
+    );
+    loyaltyClass.textModulesData = [
+      { id: PROMO_COPY_MODULE_ID, header: PROMO_COPY_HEADER, body: input.promoCopy },
+    ];
+  }
+
+  if (input.links !== undefined && input.links.length > 0) {
+    for (const link of input.links) {
+      assertWithinLabelLimit('linksModuleData.uris[].description', link.description, 'uriDescription');
+    }
+    loyaltyClass.linksModuleData = { uris: input.links };
+  }
 
   return loyaltyClass;
 }

@@ -262,6 +262,30 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
       return currency;
     },
 
+    /**
+     * The merchant's promo sentence, or `null` when they have written none.
+     *
+     * Blank is absent, for the reason `findProgramName` treats a blank name as
+     * absent: the column has no default, so an empty string here is a value a
+     * merchant can write by accident, and passing it on would render a promo
+     * row with a header and nothing under it.
+     */
+    async findPromoCopy(tenantId: string): Promise<string | null> {
+      const [row] = await db
+        .select({ promoCopy: loyaltyPrograms.promoCopy })
+        .from(loyaltyPrograms)
+        .where(eq(loyaltyPrograms.businessId, tenantId))
+        .limit(1);
+
+      // Both spellings, and the `null` one is the load-bearing half: the column is
+      // nullable, so a merchant who wrote none yields `null` rather than
+      // `undefined`, and a `null.trim()` is a 500 on the signup path rather
+      // than a class with no promo row.
+      const promo = (row as { promoCopy?: string | null } | undefined)?.promoCopy;
+      if (promo === undefined || promo === null || promo.trim() === '') return null;
+      return promo;
+    },
+
     async findTierName(tierId: string, tenantId: string): Promise<WalletTierRow | null> {
       const [row] = await db
         .select({ name: membershipTiers.name })
