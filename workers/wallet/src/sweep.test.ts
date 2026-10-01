@@ -280,6 +280,16 @@ class SweepStore implements WalletStore {
     return this.currencies[tenant] ?? CURRENCY;
   }
 
+  /**
+   * Absent for every tenant, which is the state the sweep actually has to
+   * handle: these fixtures model businesses that have not written a promotion,
+   * so the class carries no promo row.
+   */
+  async findPromoCopy(): Promise<null> {
+    this.record('findPromoCopy', '');
+    return null;
+  }
+
   async findTierName(): Promise<null> {
     this.record('findTierName', '');
     return null;
