@@ -115,6 +115,60 @@ Objetivo: 10 a 15 negocios reales usando el producto. Datos reales para la sigui
 
 ---
 
+## Bloquean la experiencia del comensal
+
+> Google Wallet funciona de punta a punta en producción: clase aprobada, pase verificado en
+> un teléfono real, webhooks entrando. **Estos pendientes no son del backend.** Son el muro
+> entre que un comensal se registre y llegue a tener una tarjeta en la billetera. Cada ítem
+> dice cómo se verificó.
+
+### Identidad del comensal
+
+- [ ] **Ningún comensal tiene email: el registro no lo pide y nadie lo captura.**
+      El campo existe en `apps/customer-web/app/register/page.tsx` pero vive dentro de un
+      `<details>` de "opcionales", con el texto *"Solo si te resulta cómodo"*. **Verificado
+      en producción: los 12 clientes tienen `email = NULL`.**
+      El email sí se lee, pero solo en el backend: el buscador de clientes del worker
+      `customer` lo incluye entre los tokens (`like(customers.email, ...)`) y lo devuelve en
+      la proyección. Es decir, **el merchant puede buscar por email a un comensal que nunca
+      dio uno** — siempre que lo escribiera, lo que nunca ocurre.
+      **Hoy esto no bloquea el regreso** — el login de cliente
+      (`POST /v1/auth/customer/token`) busca por `eq(customers.phone, ...)` y el formulario
+      de ingreso pide teléfono, no email. El día que el login por teléfono exija OTP o
+      verificación real, no hay ningún canal de recuperación para nadie. Conviene decidirlo
+      antes de que el sistema lo decida solo.
+
+### El perfil nunca pide el pase
+
+- [ ] **`profile/page.tsx` nunca llama a `GET /v1/wallet/pass`.**
+      Verificado: no hay una sola referencia a `/v1/wallet` en todo `apps/customer-web`
+      (grep sobre `.ts` y `.tsx`, sin resultados). El backend responde bien — hay 3 pases
+      en estado `issued` en producción — pero **el frontend no lo consulta**.
+      El comensal llega a su perfil y no ve el botón de guardar el pase en Google Wallet,
+      porque no hay código que lo pida.
+
+- [ ] **`member_code`: se genera al pedir el pase, pero el alta por sí sola no lo dispara.**
+      `ensureMemberCode` se llama desde `issuePass` en `workers/wallet/src/issuance.ts:418`,
+      es decir dentro de la emisión del pase. El alta del cliente no lo dispara, así que un
+      comensal registrado y que nunca pide pase tiene `member_code = NULL` — verificado:
+      4 de los 12 clientes en producción lo tienen, y son los que pidieron pase. El código
+      de intercambio (`accountId` en el pase) existe para que el cajero identifique al
+      cliente, así que queda ausente justo en el caso de quien todavía no tiene el pase.
+
+### La página pública del comercio está muerta para las personas
+
+- [ ] **`/p/{slug}` no tiene ningún link. Verificado.**
+      La página responde 200 y contiene el nombre del comercio en el `<h1>` — eso es lo que
+      la review de Google lee, y por eso se construyó así. Pero `curl` sobre
+      `media.juancode.dev/p/cafe-central` devuelve **cero** elementos `<a>`: no hay un CTA,
+      ni un botón, ni un link a ningún lado. Se construyó para que Google la revise, y quedó
+      muerta para las personas: es una página pública y sin puerta de entrada.
+      Necesita un CTA a `customer-web/register?biz={slug}`. Al agregarlo hay que tener en
+      cuenta que el mismo HTML lo lee el revisor de Google: el texto visible del CTA cuenta
+      a favor, no en contra.
+
+---
+
 ## Backlog Fase 2+ (post-PMV)
 
 Estos ítems están en la visión del producto pero **no entran al PMV**. Se priorizan en la siguiente ronda de planificación tras los aprendizajes de los pilotos.
@@ -147,19 +201,66 @@ Estos ítems están en la visión del producto pero **no entran al PMV**. Se pri
       - Modelo de pase completo: derivación de ids, member code Crockford Base32 de 6 caracteres
         con salt por tenant, `LoyaltyClass`, `LoyaltyObject`, formato de saldo, firmante JWT y cliente
         REST de Google detrás de una interfaz. PRs #121, #122, #123, #124.
-      - Superficie HTTP de 3 rutas (`GET /v1/wallet/status`, `GET /v1/wallet/pass`,
-        `POST /v1/wallet/program/sync`), enrutadas por el gateway bajo `/v1/wallet`.
+      - Superficie HTTP de 6 rutas (`GET /v1/wallet/status`, `GET /v1/wallet/pass`,
+        `GET /v1/wallet/program`, `PUT /v1/wallet/program/demo-mode`,
+        `POST /v1/wallet/program/sync`, `POST /v1/wallet/google/callback`), enrutadas por el
+        gateway bajo `/v1/wallet`. La última es la que Google llama, y está exenta del
+        middleware de auth junto con `robots.txt`.
       - Schema: `tenant_wallet_programs`, `customer_wallet_passes`, `customers.member_code`,
         con migración `0004` aplicada al schema.
+      - Callback de Google: verificación de firma, resolución del tenant por `classId`, y
+        supresión de reentrega por `nonce` (`wallet_callback_deliveries`, `0008`).
+      - Página pública por comercio `/p/{slug}`, servida por el gateway. Es lo que Google
+        revisa como `homepageUri`.
 
-      **Bloqueado por aprobación de Google (no es código):** el acceso de publicación es **una sola
-      aprobación para todo el emisor**, no una por clase. Hasta que llegue, todo pase emitido solo
-      llega a las cuentas Admin/Developer de prueba del propio emisor. El worker lo declara explícito
-      con `WALLET_DEMO_MODE`, cuyo default es `true` a propósito, y las dos rutas de cliente responden
-      en negativo en vez de ofrecer un botón que falla. Mientras tanto, la fila de tier del pase se
+      **Restricciones que siguen en pie (no son código):** el acceso de publicación es **una sola
+      aprobación para todo el emisor**, no una por clase. El worker lo declara explícito
+      con `WALLET_DEMO_MODE`, cuyo default es `true` a propósito, y las dos rutas de cliente
+      responden en negativo en vez de ofrecer un botón que falla. La fila de tier del pase se
       omite porque no hay columna que guarde su header de display (`tier_row_available` es siempre
       `false`), y un saldo sobre 9,999,999 se rechaza con `WALLET_BALANCE_NOT_DISPLAYABLE` en vez de
       truncarse.
+
+      **Pendientes abiertos, con el estado real de cada uno.** Ninguno de estos se resuelve
+      con más backend: el backend responde, lo que falta es que alguien lo pregunte o que el
+      pipeline lo compruebe.
+
+      - [ ] **El merchant no puede ver ni gestionar las tarjetas de sus clientes.**
+            Es el pendiente que pidió el usuario explícitamente. `/dashboard/settings` muestra
+            el estado del *programa* — clase, `review_status`, demo mode — pero no las
+            tarjetas: no hay ninguna vista que liste los pases de los clientes de un negocio,
+            ni que permita reemitir o revocar uno. Sin esto el merchant tiene la mitad
+            operador del producto y no la otra.
+      - [ ] **Los 7 rechazos (HTTP 400) sobre 18 callbacks reales no están explicados.**
+            Google entregó 18 callbacks contra la clase de producción: 7 rechazados con 400,
+            6 aceptados. Los 6 que pasaron demuestran que la verificación de firma funciona
+            — un atacante no los habría colado — pero los 7 rechazos no tienen causa conocida.
+            Un 39% de rechazo sobre tráfico real de Google es un defecto, no ruido.
+            *Pendiente además:* `wallet_callback_deliveries` está **vacía** en producción, así
+            que ninguno de los 6 escribió una fila. O los eventos llegaron antes de que `0008`
+            existiera, o el paso de escritura está fallando. Hay que averiguarlo antes de
+            confiar en que el estado de un pase refleja lo que Google dijo.
+      - [ ] **`loyaltyPoints.balance` se manda como `{"string": "0"}` y Google usa `int`.**
+            Verificado en `workers/wallet/src/reconcile.ts:308`. No rompe: Google acepta el
+            saldo como string y el pase renderiza bien. Pero es un tipo equivocado en el
+            contrato, y el día que Google lo valide estrictamente deja de funcionar sin aviso.
+      - [ ] **El gate de migraciones en el deploy.**
+            **Ningún job de CI aplica migraciones** — `grep db:migrate .github/workflows/` da
+            cero — y el deploy sale `success` aunque el schema destino esté atrasado. Ya costó
+            dos rutas muertas en producción (`/p/{slug}` y el callback de Google, por columnas
+            de `0007` y `0008` sin aplicar) sin que nada lo dijera.
+            Verificado: `drizzle.__drizzle_migrations` tiene 4 filas (los hashes de `0000` a
+            `0003`) mientras el schema real ya tiene `0007` y `0008`. **El ledger miente** —
+            `drizzle-kit push` no lo escribe — así que el gate tiene que comparar el schema
+            contra el journal, no confiar en el ledger.
+            Detalle: [`18-Verificacion-y-Seguridad-Operativa.md`](18-Verificacion-y-Seguridad-Operativa.md) §5.
+      - [ ] **El hueco de `request_id` en todos los workers.**
+            `workers/*/src/index.ts` tienen un `console.error` pelado en el catch final
+            (`'[customer] Unhandled error:'`, `'[growth] Unhandled error:'`, y uno por worker).
+            El gateway ya loguea el `request_id` de un 500 para que el error sea rastreable
+            — ese es el patrón — pero el `request_id` se corta en el borde gateway/worker:
+            un 500 que nace dentro de un worker llega al cliente sin correlación con el log
+            del worker.
 
       **No construido:**
       - **Apple Wallet.** Sin trabajo en el repositorio. Este ítem sigue abierto en su mitad.
