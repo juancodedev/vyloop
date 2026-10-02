@@ -31,8 +31,20 @@ export const PASS_BLOCKED = 'blocked';
 export const PASS_OK = 'ok';
 export const PASS_UNKNOWN = 'unknown';
 
-/** The route a class's `homepageUri` points at, as `provision.ts` builds it. */
-export const PROGRAM_PAGE_PATH = '/program';
+/**
+ * The route prefix a class's `homepageUri` points at, as `provision.ts` builds it.
+ *
+ * Was `/program`. It is now `/p/{slug}` — the per-merchant page the gateway
+ * renders server-side from `loyalty_programs.promo_copy` — because a class review
+ * is judged on the bytes Google's reviewer receives, and a `next-on-pages` static
+ * export serves 18 characters of text no matter how good the page behind it is.
+ *
+ * A prefix, not a complete path, and that is the whole reason the slug is
+ * threaded in from the database: probing `/p` alone would read a 404 on a route
+ * that is working perfectly and report the deployment as blocked. See
+ * `observeProgramPage`.
+ */
+export const PROGRAM_PAGE_PATH = '/p';
 
 /**
  * How long the program page gets to answer.
@@ -135,7 +147,7 @@ export function buildGates(observed) {
         observed.programPageStatus < 300,
       `The program page a class points at answers ${observed.programPageStatus}` +
         `${observed.programPageUrl ? ` (${observed.programPageUrl})` : ''}, so Google's reviewer opens no page.`,
-      'Redeploy apps/customer-web, or point WALLET_WEB_BASE_URL at a host where /program resolves. Google opens this URL during class review and rejects the class on a non-2xx — docs/11 records it as the most common rejection reason.',
+      'Redeploy apps/gateway, or point WALLET_WEB_BASE_URL at a host where /p/{slug} resolves. Google opens this URL during class review and rejects the class on a non-2xx — docs/11 records it as the most common rejection reason. Note that moving the host after a class is approved puts that class back under review with no way to return it to draft, so treat a change here as a product decision.',
       { programPageUrl: observed.programPageUrl ?? null },
     ),
   );
@@ -336,6 +348,13 @@ export async function probeProgramPage(
 /**
  * The public program page, as a fact.
  *
+ * @param slug `tenants.slug` — the last segment of the route. Required, because
+ *   `homepageUri` is `/p/{slug}` and there is no page without one. Read by
+ *   `main` from the database rather than invented here: a made-up slug 404s, and
+ *   a gate that reports a healthy deployment as blocked is one nobody reads.
+ *   A deployment with no tenant yet has nothing to check, which is `unknown`
+ *   rather than a pass.
+ *
  * Read-only: one GET on a public route, nothing opened and nothing mutated. The
  * `fetch` implementation is injected so the tests can drive 404, no-network and
  * timeout without ever leaving the machine.
@@ -344,6 +363,7 @@ export async function observeProgramPage({
   override,
   configPath,
   sourcePath,
+  slug,
   fetchImpl = fetch,
   timeoutMs = PROGRAM_PAGE_TIMEOUT_MS,
 }) {
@@ -356,7 +376,17 @@ export async function observeProgramPage({
   // No host is a fact about this check, not about the page: do not invent one.
   if (origin === null) return { known: false, status: null, url: null };
 
-  return probeProgramPage(`${origin}${PROGRAM_PAGE_PATH}`, { fetchImpl, timeoutMs });
+  // A blank slug is no different from an absent one. `parseWebBaseUrl` treats ''
+  // as "use the default", so this has to treat it the same rather than fetching
+  // `/p` and reporting the 404 as a broken page.
+  if (typeof slug !== 'string' || slug.trim() === '') {
+    return { known: false, status: null, url: null };
+  }
+
+  return probeProgramPage(`${origin}${PROGRAM_PAGE_PATH}/${slug.trim()}`, {
+    fetchImpl,
+    timeoutMs,
+  });
 }
 
 function deployedSecretNames() {
@@ -382,7 +412,7 @@ async function databaseFacts() {
   const url =
     process.env.DATABASE_URL ??
     (/^DATABASE_URL=(.*)$/m.exec(readFileSync('apps/gateway/.dev.vars', 'utf8')) || [])[1];
-  if (!url) return { known: false, migrationApplied: false, reviewStatus: null };
+  if (!url) return { known: false, migrationApplied: false, reviewStatus: null, slug: null };
 
   try {
     // `pg` is a dependency of packages/db, not of the repository root, so a
@@ -421,6 +451,19 @@ async function databaseFacts() {
         .query(`SELECT review_status, demo_mode, current_database() AS db FROM tenant_wallet_programs`)
         .catch(() => ({ rows: [] }));
 
+      // A slug to probe `/p/{slug}` with. Read from `tenants` rather than
+      // invented: the program page is per-merchant, so there is no slug-free
+      // URL to check, and a made-up one would 404 and report a healthy
+      // deployment as blocked. `tenant_wallet_programs` does not carry it.
+      //
+      // `LIMIT 1` with no ordering, because any tenant's page proves the route
+      // works — this gate asks "does the route answer", not "does this merchant
+      // have one". Absent or blank is `null`, which reaches the page check as
+      // `unknown` rather than as a pass.
+      const slugRow = await pool
+        .query(`SELECT slug FROM tenants WHERE slug IS NOT NULL AND slug <> '' LIMIT 1`)
+        .catch(() => ({ rows: [] }));
+
       const statuses = programs.rows.map((row) => row.review_status);
       return {
         known: true,
@@ -431,12 +474,13 @@ async function databaseFacts() {
         demoMode: programs.rows.length === 1 ? programs.rows[0].demo_mode !== false : null,
         databaseLabel: identity.rows[0]?.db ?? null,
         programCount: statuses.length,
+        slug: typeof slugRow.rows[0]?.slug === 'string' ? slugRow.rows[0].slug : null,
       };
     } finally {
       await pool.end();
     }
   } catch {
-    return { known: false, migrationApplied: false, reviewStatus: null };
+    return { known: false, migrationApplied: false, reviewStatus: null, slug: null };
   }
 }
 
@@ -465,6 +509,10 @@ async function main() {
     override: process.env.WALLET_WEB_BASE_URL,
     configPath,
     sourcePath: helpersPath,
+    // Read, never invented: the route is per-merchant, so there is no slug-free
+    // URL to probe. A deployment with no tenant reports `unknown` here rather
+    // than a pass — see `observeProgramPage`.
+    slug: database.slug,
   });
 
   const gates = buildGates({
