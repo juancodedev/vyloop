@@ -94,30 +94,51 @@ export interface WalletBindings {
    */
   WALLET_MEDIA_BASE_URL?: string | undefined;
   /**
-   * The customer-web origin a class's `homepageUri` is built from.
+   * The origin a class's `homepageUri` is built from. See
+   * `DEFAULT_WALLET_WEB_BASE_URL` for why it is the gateway and why the host
+   * cannot be changed after the first class is approved.
    *
-   * ## Why this is not the same var as `WALLET_MEDIA_BASE_URL`
+   * ## Why this is still a separate var from `WALLET_MEDIA_BASE_URL`
    *
-   * They are different hosts serving different things, and they are not
-   * interchangeable:
+   * They now hold the same host, which makes "why two?" a fair question, and the
+   * answer is not tidiness. They are two *consumers* with independent histories:
+   * this one builds `homepageUri`, which Google opens during review; that one
+   * builds `programLogo`, which Google fetches at render time. Collapsing them
+   * once already cost a class review — `docs/11-crear-tarjeta-lealtad.md` records
+   * a 404 on `homepageUri` as the most common rejection reason, and the collapsed
+   * var put the media host in the homepage field. They are also allowed to diverge
+   * later: moving a logo to a CDN must not require redeploying every pass's
+   * homepage, and the reverse.
    *
-   * - `WALLET_MEDIA_BASE_URL` is the gateway, and its brand route is the only
-   *   public door to the private R2 bucket. It serves `/brand/<tenantId>.jpg`
-   *   and nothing else — `media.juancode.dev/program` answers 404.
-   * - `WALLET_WEB_BASE_URL` is the customer web, where the program page a
-   *   customer taps actually lives (`vyloop-customer-web.pages.dev/program`).
-   *
-   * `docs/11-crear-tarjeta-lealtad.md` records `homepageUri` as the most common
-   * rejection reason in Google's review: Google opens the URL, and a 404 is a
-   * rejected class. One shared var built `homepageUri` from the media host, so
-   * every class this worker provisioned pointed Google's reviewer at a 404.
-   * Keeping them apart is the fix; collapsing them back is the regression.
-   *
-   * `parseWebBaseUrl` is used for this and `parseMediaBaseUrl` for the logo.
-   * Crossing them is what `provision.test.ts` refuses.
+   * `parseWebBaseUrl` serves this and `parseMediaBaseUrl` the logo. Swapping the
+   * two is what `provision.test.ts` refuses.
    */
   WALLET_WEB_BASE_URL?: string | undefined;
+  /**
+   * The customer-web origin the pass's **links** are built from — `/profile`,
+   * `/profile/history`.
+   *
+   * Separate from `WALLET_WEB_BASE_URL` because the two now resolve to different
+   * hosts serving different things, and reusing one var for both is the exact
+   * mistake the two-var split above exists to prevent: pointing the links at the
+   * gateway would make every link on every pass a 404, which is the
+   * `homepageUri` defect at a different URL — nothing errors, the link is simply
+   * a lie.
+   *
+   * Kept as its own var rather than a second constant buried in `provision.ts` so
+   * a staging customer web is a configuration change and not a code change.
+   */
+  WALLET_CUSTOMER_WEB_BASE_URL?: string | undefined;
 }
+
+/**
+ * The customer-web origin used for the pass's **links** when
+ * `WALLET_CUSTOMER_WEB_BASE_URL` says nothing.
+ *
+ * The pages.dev deployment, not the custom domain, because `/profile` and
+ * `/profile/history` exist in `apps/customer-web/app` and are served from there.
+ */
+export const DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
 
 /**
  * The gateway origin used when `WALLET_MEDIA_BASE_URL` says nothing.
@@ -129,13 +150,41 @@ export interface WalletBindings {
 export const DEFAULT_WALLET_MEDIA_BASE_URL = 'https://media.juancode.dev';
 
 /**
- * The customer-web origin used when `WALLET_WEB_BASE_URL` says nothing.
+ * The origin a class's `homepageUri` is built from when `WALLET_WEB_BASE_URL`
+ * says nothing.
  *
- * The pages.dev deployment, not `vyloop.juancode.dev`: the program route does
- * not exist on the custom domain either, so naming it here would put the same
- * 404 back on the only field Google rejects a class over.
+ * ## The gateway, and why that changed
+ *
+ * `homepageUri` is now `{WALLET_WEB_BASE_URL}/p/{slug}` — the per-merchant page
+ * the gateway renders server-side (`apps/gateway/src/merchant-page.ts`). It used
+ * to be `https://vyloop-customer-web.pages.dev/program`.
+ *
+ * The reason is what Google's reviewer actually receives, measured rather than
+ * assumed:
+ *
+ * - `vyloop-customer-web.pages.dev/program` is a server component and serves
+ *   5,917 characters of visible text.
+ * - The dashboard is a `next-on-pages` static export. Its whole page is 9,638
+ *   bytes of which **18** are text — every byte of content is fetched from the
+ *   client, so the HTML a crawler reads is empty.
+ *
+ * A review page placed on the static export would hand the reviewer a `<title>`
+ * and nothing else.
+ *
+ * ## Why this host, and why it cannot be changed later
+ *
+ * Same host as `WALLET_MEDIA_BASE_URL`, but that is not a merge of the two vars:
+ * they are separate vars with separate consumers, and this one feeds
+ * `homepageUri` while that one feeds `programLogo`.
+ *
+ * **The domain is load-bearing and one-way.** Google reviews a loyalty class by
+ * opening `homepageUri` and reading it. Changing the host afterwards returns
+ * every class pointing at the old one to review, and a reviewed class cannot go
+ * back to `draft` — the transition out of draft does not reverse. So the host has
+ * to be settled before the first class is submitted, and changing it afterwards
+ * is a re-review, not a config edit. Treat a change here as a product decision.
  */
-export const DEFAULT_WALLET_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+export const DEFAULT_WALLET_WEB_BASE_URL = 'https://media.juancode.dev';
 
 /**
  * Read the media base URL, with a documented default and no trailing slash.
@@ -155,14 +204,32 @@ export function parseMediaBaseUrl(raw: string | undefined | null): string {
  * Read the web base URL, with a documented default and no trailing slash.
  *
  * Identical trailing-slash treatment to `parseMediaBaseUrl` because it is
- * concatenated with `/program` in exactly the same way. Deliberately a separate
- * function rather than a parameter of the media one: the two defaults differ, so
- * a shared implementation would need a "which host" argument that callers can
- * get wrong — and getting it wrong is the bug these functions exist to prevent.
+ * concatenated with `/p/{slug}` in exactly the same way, and `/p//slug` is a
+ * different URL to the route. Deliberately a separate function rather than a
+ * parameter of the media one: the two defaults are independent and each is
+ * documented where its consumer reads it, so a shared implementation would need
+ * a "which host" argument that callers can get wrong — and getting it wrong is
+ * the bug these functions exist to prevent.
  */
 export function parseWebBaseUrl(raw: string | undefined | null): string {
   const trimmed = (raw ?? '').trim();
   if (trimmed === '') return DEFAULT_WALLET_WEB_BASE_URL;
+
+  return trimmed.replace(/\/+$/, '');
+}
+
+/**
+ * Read the customer-web origin the pass's links are built from.
+ *
+ * A separate function rather than a parameter of `parseWebBaseUrl`, for the
+ * reason `parseMediaBaseUrl` is separate from that one: the defaults differ, so
+ * a shared implementation would need a "which host" argument a caller can get
+ * wrong — and here getting it wrong sends a customer to a 404 from their own
+ * pass.
+ */
+export function parseCustomerWebBaseUrl(raw: string | undefined | null): string {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL;
 
   return trimmed.replace(/\/+$/, '');
 }
