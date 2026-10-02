@@ -73,9 +73,11 @@ export type GatewayEnv = {
    *
    * Optional with a documented default (`parseCustomerWebBaseUrl`), because there
    * is one correct host for this platform and a blank var is a default to apply
-   * rather than a misconfiguration to report. `wrangler.jsonc` declares
-   * `vars: {}` deliberately — a deploy `--var` replaces the whole map — so this
-   * is injected by the deploy job, not declared there.
+   * rather than a misconfiguration to report. It is still declared in
+   * `wrangler.jsonc`, which is where every non-secret value this worker reads
+   * lives; a deploy `--var` merges into that map rather than replacing it, so
+   * `JWT_SECRET` and `DATABASE_URL` arrive as flags without displacing it. The
+   * default is the floor, not the mechanism.
    */
   WALLET_CUSTOMER_WEB_BASE_URL?: string | undefined;
   RATE_LIMITER: KVNamespace;
