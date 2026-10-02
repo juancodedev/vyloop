@@ -78,6 +78,7 @@ import type { GoogleWalletClient } from './google-client';
 import type { WalletBindings } from './helpers';
 import {
   googleWalletClientFor,
+  parseCustomerWebBaseUrl,
   parseDemoMode,
   parseMediaBaseUrl,
   parseWebBaseUrl,
@@ -897,13 +898,17 @@ export async function runScheduledSweep(env: WalletBindings): Promise<SweepRepor
       store: createDrizzleWalletStore(db),
       client: googleWalletClientFor(env),
       demoMode,
-      // The issuer and the two hosts, read from the deployment because a tenant
-      // with no row has no issuer to consult — the one place that is true. See
-      // `ProvisionDeps.issuerId`.
+      // The issuer and the three origins, read from the deployment because a
+      // tenant with no row has no issuer to consult — the one place that is true.
+      // See `ProvisionDeps.issuerId`.
       provisioning: {
         issuerId: env.GOOGLE_WALLET_ISSUER_ID,
         mediaBaseUrl: parseMediaBaseUrl(env.WALLET_MEDIA_BASE_URL),
         webBaseUrl: parseWebBaseUrl(env.WALLET_WEB_BASE_URL),
+        // A different host from the two above: the pass links point at
+        // `apps/customer-web` routes, and building them from a gateway origin
+        // makes every link on every pass a 404.
+        customerWebBaseUrl: parseCustomerWebBaseUrl(env.WALLET_CUSTOMER_WEB_BASE_URL),
       },
     },
     { demoMode },

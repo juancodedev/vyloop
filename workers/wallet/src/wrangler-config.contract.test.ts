@@ -31,48 +31,75 @@ describe('wrangler.jsonc', () => {
     expect(names.sort()).toEqual([
       'GOOGLE_WALLET_ISSUER_ID',
       'WALLET_ALLOWED_ORIGINS',
+      'WALLET_CUSTOMER_WEB_BASE_URL',
       'WALLET_DEMO_MODE',
       'WALLET_MEDIA_BASE_URL',
       'WALLET_WEB_BASE_URL',
     ]);
   });
 
-  it('declares two separate base URLs, because a class logo and a homepage are not the same URL', () => {
-    // One var for both was the bug: `media.juancode.dev` serves the gateway's
-    // brand route and answers 404 on `/program`, so a single shared var produced
-    // a `homepageUri` that Google opens during review and rejects the class over
-    // (docs/11 records it as the most common rejection reason). Declaring one var
-    // again would have to also pass the exact-list assertion above, so the two
-    // guards together refuse the merge rather than merely documenting it.
+  it('declares three separate base URLs, because a logo, a homepage and a link are not the same URL', () => {
+    // One var for all was the bug: `media.juancode.dev` serves the gateway's
+    // brand route and answers 404 on the customer web's `/profile`, so a single
+    // shared var produced both a `homepageUri` Google opens during review and
+    // links that 404 in a customer's hand (docs/11 records the homepage as the
+    // most common rejection reason). Declaring one var again would have to also
+    // pass the exact-list assertion above, so the two guards together refuse the
+    // merge rather than merely documenting it.
     expect(config).toContain('"WALLET_MEDIA_BASE_URL"');
     expect(config).toContain('"WALLET_WEB_BASE_URL"');
+    expect(config).toContain('"WALLET_CUSTOMER_WEB_BASE_URL"');
     expect(config).not.toContain('"WALLET_PUBLIC_BASE_URL"');
   });
 
-  it('declares each base URL as an origin with no trailing slash', () => {
+  it('declares all three origins with no trailing slash', () => {
     // Google fetches `programLogo` from a public HTTPS URL and a customer taps
     // `homepageUri`, so a wrong host is not a config nit: it is a class that
     // cannot be reviewed and a link that 404s. Both values must be an origin,
     // with no trailing slash — the parsers strip one, but a var that carries it
     // is a sign it was pasted rather than written.
-    for (const name of ['WALLET_MEDIA_BASE_URL', 'WALLET_WEB_BASE_URL']) {
+    for (const name of [
+      'WALLET_MEDIA_BASE_URL',
+      'WALLET_WEB_BASE_URL',
+      'WALLET_CUSTOMER_WEB_BASE_URL',
+    ]) {
       const base = new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(config)?.[1];
-      expect(base).toBeDefined();
-      expect(base).toMatch(/^https:\/\/[^/\s]+\/?$/);
+      expect(base, name).toBeDefined();
+      expect(base, name).toMatch(/^https:\/\/[^/\s]+\/?$/);
     }
   });
 
-  it('points the two base URLs at two different hosts', () => {
-    // The value half of the invariant. If someone sets both vars to the same host
-    // the code is correct and the deployment is not: Google's homepage check will
-    // 404 exactly as it did before the split, and no unit test can catch that —
-    // only this file, which reads what is actually deployed, can.
+  it('points the two gateway base URLs at the same host, because the gateway serves both routes', () => {
+    // This inverts the invariant the same file used to assert, and the reason is
+    // worth stating because it looks like a regression otherwise.
+    //
+    // `WALLET_WEB_BASE_URL` used to be the customer web, because the program page
+    // lived there. It now points at the gateway, where `/p/{slug}` is rendered
+    // server-side — the customer web's own pages are fine, but a review page has
+    // to have its content in the bytes Google's reviewer receives, and the
+    // dashboard's static export serves 18 characters of text.
+    //
+    // So MEDIA and WEB are the same host today: one origin serving `/brand/*`
+    // and `/p/*`. They stay separate vars because they are separate consumers
+    // with independent histories, and either may have to move without the other.
     const read = (name: string) =>
       new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(config)?.[1];
 
     expect(read('WALLET_MEDIA_BASE_URL')).toBeDefined();
     expect(read('WALLET_WEB_BASE_URL')).toBeDefined();
-    expect(read('WALLET_MEDIA_BASE_URL')).not.toBe(read('WALLET_WEB_BASE_URL'));
+    expect(read('WALLET_MEDIA_BASE_URL')).toBe(read('WALLET_WEB_BASE_URL'));
+  });
+
+  it('keeps the links host separate from the two gateway hosts', () => {
+    // The half that actually has to differ. `/profile` and `/profile/history` are
+    // `apps/customer-web` routes, and `provision.test.ts` asserts the pass links
+    // resolve against that app's filesystem. Pointing them at the gateway makes
+    // every link on every pass a 404 while the class itself looks healthy.
+    const read = (name: string) =>
+      new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(config)?.[1];
+
+    expect(read('WALLET_CUSTOMER_WEB_BASE_URL')).toBeDefined();
+    expect(read('WALLET_CUSTOMER_WEB_BASE_URL')).not.toBe(read('WALLET_WEB_BASE_URL'));
   });
 
   it('declares the origins Google requires before it will issue a save link', () => {

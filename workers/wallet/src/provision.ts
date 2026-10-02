@@ -72,14 +72,26 @@ export interface ProvisionDeps {
    */
   mediaBaseUrl: string;
   /**
-   * Customer-web origin for the class's `homepageUri`. See `parseWebBaseUrl`.
+   * Origin for the class's `homepageUri`, i.e. the gateway's public per-merchant
+   * page. See `parseWebBaseUrl` and `DEFAULT_WALLET_WEB_BASE_URL`.
    *
-   * Separate from `mediaBaseUrl` on purpose, and this is where the two hosts are
-   * kept apart: Google opens `homepageUri` during review and rejects the class
-   * when it 404s, so a media host here produces a class that cannot be
-   * approved. `provision.test.ts` asserts the two never cross.
+   * Read here and nowhere else, and **not** interchangeable with `mediaBaseUrl`:
+   * they happen to resolve to the same host today, but `mediaBaseUrl` builds the
+   * logo URL and this builds the page URL, and the two are allowed to diverge.
+   * `provision.test.ts` asserts they never cross.
+   *
+   * The host is one-way — see the note where `homepageUri` is assembled.
    */
   webBaseUrl: string;
+  /**
+   * Customer-web origin for the pass's **links** (`/profile`,
+   * `/profile/history`). See `parseCustomerWebBaseUrl`.
+   *
+   * A third host, and the reason it cannot be folded into `webBaseUrl`: those
+   * routes live in `apps/customer-web`, and building them from the gateway origin
+   * turns every link on every pass into a 404.
+   */
+  customerWebBaseUrl: string;
 }
 
 export interface ProvisionInput {
@@ -93,6 +105,12 @@ export type ProvisionFailureCode =
   | 'tenant_not_found'
   /** No `loyalty_programs` row, or one with a blank name. */
   | 'loyalty_program_not_found'
+  /**
+   * `tenants.slug` is blank, so there is no public page for `homepageUri` to
+   * name. A `notNull` column with no check constraint, so this is reachable by a
+   * write rather than impossible.
+   */
+  | 'tenant_slug_missing'
   /** `buildLoyaltyClass` refused: a required field is blank or an id is invalid. */
   | 'class_payload_invalid'
   /** Google refused the class, or could not be reached or authenticated. */
@@ -198,7 +216,7 @@ export async function provisionTenantClass(
   deps: ProvisionDeps,
   input: ProvisionInput,
 ): Promise<ProvisionOutcome> {
-  const { store, client, issuerId, mediaBaseUrl, webBaseUrl } = deps;
+  const { store, client, issuerId, mediaBaseUrl, webBaseUrl, customerWebBaseUrl } = deps;
   const { tenantId } = input;
 
   // The cheap exit, before the expensive dependency. Re-running provisioning
@@ -216,6 +234,23 @@ export async function provisionTenantClass(
       `No tenants row for ${tenantId}, so there is no merchant name to brand the class with.`,
       // Not retryable: no amount of waiting creates a `tenants` row. This is a lost
       // race or a wrong id, and both are settled by a caller rather than by time.
+      false,
+    );
+  }
+
+  // A tenant with no usable slug has no public page, and a `homepageUri` pointing
+  // at `/p/` is a 404 on the one field Google rejects a class over — silently,
+  // long after this run returned `created`. Refused here, where the caller is
+  // still watching, rather than at Google's API.
+  //
+  // Blank rather than absent: `tenants.slug` is `notNull`, so an empty string is
+  // a value some writer can produce, and `/p/` is what it builds.
+  if (branding.slug.trim() === '') {
+    return failed(
+      'tenant_slug_missing',
+      `Tenant ${tenantId} has no slug, so there is no public page for its class to point at.`,
+      // Not retryable, and not a fact about this call: the column is `notNull`
+      // and only a write to this business's row can change the answer.
       false,
     );
   }
@@ -253,11 +288,35 @@ export async function provisionTenantClass(
       // which is the case signup produces. The media host, because `/brand/*` is
       // the gateway's route and only the gateway serves it.
       programLogo: { sourceUri: { uri: `${mediaBaseUrl}/brand/${tenantId}.jpg` } },
-      // The customer web, because `/program` is the program page and the media
-      // host has no such route. Google opens this URL during class review and
-      // rejects the class on a 404 — docs/11 records it as the most common
-      // rejection reason — so the host is load-bearing, not cosmetic.
-      homepageUri: { uri: `${webBaseUrl}/program`, description: 'Programa de lealtad' },
+      // Where the pass sends a customer who taps it, and the field Google's
+      // reviewer opens while deciding the class.
+      //
+      // **The host is one-way.** `homepageUri` is set once, at insert, and a
+      // class cannot be recreated under the same id. Google's review reads this
+      // URL, so pointing it at a host that 404s gets the class rejected — and
+      // once a class has left `draft`, moving this host returns it to review
+      // with **no path back to `draft`**: the state transition out of draft does
+      // not reverse. A host change here is therefore not a config edit, it is a
+      // re-review of every class that carries the old one.
+      //
+      // That is the whole reason the domain was settled before the first class
+      // was submitted, and the reason the next person assembling a class needs
+      // to read this: do not "just move it to staging", and do not merge this var
+      // into `mediaBaseUrl` to tidy up two identical-looking strings. The two
+      // vars happen to hold the same host today and serve different routes; they
+      // are kept apart so one can move without the other.
+      //
+      // The path is `/p/{slug}` — the gateway's per-merchant page, rendered
+      // server-side from `tenants` and `loyalty_programs`
+      // (`apps/gateway/src/merchant-page.ts`). Not `/program` on the customer
+      // web: that host's page is a server component today, but the reason this
+      // moved is that a review page must have its content in the bytes the
+      // reviewer receives, and the dashboard's static export serves 18
+      // characters of text.
+      homepageUri: {
+        uri: `${webBaseUrl}/p/${encodeURIComponent(branding.slug)}`,
+        description: 'Programa de lealtad',
+      },
       // The merchant's own sentence, on the class. Google combines class and
       // object text modules, so this does not compete with the object's tier row
       // for its ten slots, and changing a promotion is one class patch instead
@@ -282,8 +341,8 @@ export async function provisionTenantClass(
       //   code would tell a comensal they can share something that resolves to
       //   nobody. Tracked as a gap, not implemented.
       links: [
-        { uri: `${webBaseUrl}/profile`, description: 'Ver mi perfil' },
-        { uri: `${webBaseUrl}/profile/history`, description: 'Mi historial' },
+        { uri: `${customerWebBaseUrl}/profile`, description: 'Ver mi perfil' },
+        { uri: `${customerWebBaseUrl}/profile/history`, description: 'Mi historial' },
       ],
     });
   } catch (err) {

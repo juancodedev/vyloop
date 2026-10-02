@@ -49,6 +49,17 @@ export function matchRoute(path: string): ServiceBinding | undefined {
 
 export type GatewayEnv = {
   JWT_SECRET: string;
+  /**
+   * Neon connection string, injected by the deploy job as a plain var — the same
+   * one `identity`, `wallet` and `growth` receive, and not a secret.
+   *
+   * Present for `/p/{slug}` only: that page resolves a slug to a tenant and
+   * reads its loyalty programme. It is not reached through a service binding
+   * because every `/v1/*` route requires a JWT and this page is public by
+   * requirement. See `apps/gateway/src/merchant-store.ts` for why the read has to
+   * resolve the tenant before arming RLS.
+   */
+  DATABASE_URL: string;
   RATE_LIMITER: KVNamespace;
   /** Private bucket of brand assets, served publicly through /brand/*. */
   BRAND_ASSETS: R2Bucket;

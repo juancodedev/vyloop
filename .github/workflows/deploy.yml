@@ -137,8 +137,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `DATABASE_URL` for `/p/{slug}`, the public per-merchant page a Google
+      # class review opens. The gateway reads it directly rather than reaching a
+      # worker over a service binding, because every `/v1/*` route requires a JWT
+      # and that page must answer with no credentials at all. Same secret, same
+      # `--var` mechanism `identity` and `wallet` use two steps above.
+      #
+      # Note these flags REPLACE `vars` in wrangler.jsonc rather than merging, so
+      # a var added there without adding it here is deployed as absent.
       - name: Deploy gateway worker
-        run: npx --yes wrangler deploy --var JWT_SECRET:${{ secrets.JWT_SECRET }}
+        run: |
+          npx --yes wrangler deploy \
+            --var JWT_SECRET:${{ secrets.JWT_SECRET }} \
+            --var DATABASE_URL:${{ secrets.DATABASE_URL }}
         working-directory: apps/gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
