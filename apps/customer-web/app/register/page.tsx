@@ -18,6 +18,39 @@ interface RegisterFormValues {
   birthDate: string;
 }
 
+/**
+ * Why the email is offered but not required.
+ *
+ * ## What the customer is told
+ *
+ * `email` is a **visible field** in the main group, next to the name and the
+ * phone, and it is optional. That used to be true in name only: it existed, but
+ * inside a collapsed `<details>` under "¿Querés completar algo más ahora?" with
+ * the helper "Solo si te resulta cómodo". A merchant who needs to be able to
+ * reach their customer was asking for a channel and the form hid it.
+ *
+ * ## Why it is optional, stated plainly
+ *
+ * **Nothing verifies it.** There is no OTP for the phone either —
+ * `POST /v1/auth/customer/token` is documented in `workers/identity/src/index.ts`
+ * as "phone-only auth (demo mode, no OTP)" and selects `customers.phone`. So
+ * the register form collects two unverified identifiers and no verified one.
+ *
+ * That is the whole reason this cannot be a required field. An unverified email
+ * is worth exactly as much as no email as a recovery channel — and the moment
+ * phone login starts requiring an OTP, an email nobody has confirmed is not a
+ * fallback either. Requiring it now would add a PII obligation and a false
+ * promise of reachability, and would block a customer with no email address
+ * from joining a programme that only asks for a phone to identify them.
+ *
+ * ## What it is actually for
+ *
+ * Letting the business reach the customer who joined it: a promotion, a change
+ * of hours, a closure. Not authentication, and not recovery — and the helper
+ * text says so, so a customer does not read it as a promise that a lost phone
+ * can be reset by mail.
+ */
+
 interface FormErrors {
   fullName?: string;
   phone?: string;
@@ -334,6 +367,24 @@ function RegisterContent() {
                 required
                 inputRef={phoneRef}
               />
+              {/*
+                A visible field, not a collapsed one. See the note on
+                `RegisterFormValues` for why it is optional — the short version is
+                that nothing verifies it, so it is a channel for the business to
+                reach the customer and nothing more. The helper text says exactly
+                that, so a customer does not read it as a recovery address.
+              */}
+              <FormField
+                id="email"
+                name="email"
+                label="Email"
+                type="email"
+                value={form.email}
+                onChange={(event) => updateField('email', event)}
+                autoComplete="email"
+                helperText="Opcional. Es para que el negocio te pueda avisar de novedades."
+                spellCheck={false}
+              />
             </div>
 
             <details className="club-register__optional">
@@ -344,17 +395,6 @@ function RegisterContent() {
                 Estos datos son opcionales y podés dejarlos para más adelante.
               </p>
               <div className="club-register__optional-fields">
-                <FormField
-                  id="email"
-                  name="email"
-                  label="Email"
-                  type="email"
-                  value={form.email}
-                  onChange={(event) => updateField('email', event)}
-                  autoComplete="email"
-                  helperText="Solo si te resulta cómodo."
-                  spellCheck={false}
-                />
                 <FormField
                   id="birthDate"
                   name="birthDate"

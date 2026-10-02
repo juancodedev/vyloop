@@ -2411,3 +2411,65 @@ a {
   padding-inline: var(--space-5);
   white-space: nowrap;
 }
+
+/* ---------------------------------------------------------------------------
+   The Google Wallet card on the profile
+   ---------------------------------------------------------------------------
+   The only consumer is `components/wallet-card.tsx`, and this block exists
+   because `globals.contract.test.ts` requires a rule for every class a page
+   applies. Names are honest rather than borrowed: reusing `.club-qr__id*` here
+   would have saved these lines and left a member code styled as a QR payload.
+   --------------------------------------------------------------------------- */
+
+.club-wallet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.club-wallet__ready {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  border: 1px solid var(--club-line);
+  border-radius: var(--club-radius);
+  background: var(--club-surface);
+  text-align: center;
+}
+
+.club-wallet__note {
+  max-width: 38ch;
+  margin: 0;
+  color: var(--club-ink-soft);
+  text-wrap: pretty;
+}
+
+/* The code a person reads out at the counter. Monospace and tabular figures
+   because it is read character by character, and `text-wrap: anywhere` because
+   it is six characters from a signed claim and must not widen the frame if a
+   future value is longer than the alphabet allows today. */
+.club-wallet__code {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.club-wallet__code-label {
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+.club-wallet__code-value {
+  margin: 0;
+  color: var(--club-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.1em;
+  overflow-wrap: anywhere;
+}
