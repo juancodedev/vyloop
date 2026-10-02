@@ -61,6 +61,12 @@ export type GatewayEnv = {
    */
   DATABASE_URL: string;
   RATE_LIMITER: KVNamespace;
+  /**
+   * Static assets from `apps/gateway/public/`, declared by the `assets` block in
+   * `wrangler.jsonc`. Used only to serve `robots.txt`; see `robots.ts` for why
+   * that one file is worth a Worker route.
+   */
+  ASSETS?: Fetcher;
   /** Private bucket of brand assets, served publicly through /brand/*. */
   BRAND_ASSETS: R2Bucket;
   SCHEDULER: Queue;

@@ -1,0 +1,59 @@
+# This host is an API gateway, not a site to index. There is no content on it
+# that a search result should point at, so the default below is to stay out of
+# the way entirely. One exception exists, and it is not a choice we made for
+# ourselves.
+#
+# THE CALLBACK MUST BE CRAWLABLE
+#
+# Google POSTs save and delete events for every loyalty pass a customer keeps, to
+# `callbackOptions.url` on the class. A `Disallow` in front of it does not slow
+# delivery down, it stops it — Google will not fetch a URL its own crawler is
+# forbidden to reach. This file being absent is the first thing to check when a
+# callback is configured correctly and nothing ever arrives.
+#
+# ALLOWED FOR GOOGLEBOT: /v1/wallet/google/callback
+#
+# ALLOWED FOR GOOGLE-VALUABLES: /v1/wallet/google/callback
+#
+# WHY /p/ IS BLOCKED, AND WHY THAT IS SAFE
+#
+# `/p/{slug}` is the public page for a single merchant. It is real HTML on a
+# public URL, and it is deliberately kept out of search indexes: these are
+# individual businesses' pages, not content we want surfaced in results.
+#
+# Blocking crawlers here does not break the pass. Verified before writing this
+# line: the class's `homepageUri` is a link the *customer* taps inside the Wallet
+# app, which opens their browser, and Google's class review is a *person*
+# opening that same link in a browser. robots.txt governs crawlers and nothing
+# else, so neither path is affected. `Disallow` is also not an access control —
+# the page stays reachable by URL for anyone, which is the intent.
+#
+# The `/p/` rule is repeated even though `Disallow: /` below already covers it.
+# The reason is that the rule is a decision about *these* pages, and naming it
+# keeps it legible and survives someone later relaxing the wildcard block to
+# open up an unrelated path.
+#
+# NO `Sitemap:` LINE, ON PURPOSE
+#
+# A `Sitemap:` directive must name a URL that serves a real sitemap. No route in
+# this worker produces one, so advertising it here would point crawlers at a 404
+# and teach them to distrust the other lines in this file. When a sitemap route
+# exists, this line gets added in the same commit that adds the route.
+
+User-agent: *
+Disallow: /
+
+# See the note at the top: an explicit decision about merchant pages.
+Disallow: /p/
+
+# Googlebot is what fetches pass callbacks, and what validates `callbackOptions.url`
+# during class review.
+User-agent: Googlebot
+Disallow: /
+Allow: /v1/wallet/google/callback
+
+# The Valuables app predates Google Wallet and still reports saves for older
+# passes, so it needs the same reach.
+User-agent: Google-Valuables
+Disallow: /
+Allow: /v1/wallet/google/callback
