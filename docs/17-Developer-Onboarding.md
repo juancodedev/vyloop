@@ -16,6 +16,7 @@ Antes de escribir una sola línea de código, lee los siguientes documentos en o
 | 3 | `06-Domain-Driven-Design.md` | Entiende la arquitectura de dominios antes de tocar código |
 | 4 | `07-Architecture.md` | Entiende el flujo de eventos — el núcleo del sistema |
 | 5 | `09-Database-Design.md` | Entiende el modelo de datos antes de escribir cualquier query |
+| 6 | `18-Verificacion-y-Seguridad-Operativa.md` | Entra antes de tu primer deploy: bases de datos, migraciones, secretos, y cómo se verifican las cosas |
 
 ---
 
@@ -38,6 +39,12 @@ Antes de hacer merge de cualquier feature, pregunta: **"¿Qué gana el negocio o
 ### 5. Idempotencia en los Workers
 Los Workers que consumen eventos del bus pueden recibir el mismo evento más de una vez (at-least-once delivery). **Todo Worker debe ser idempotente**: procesar el mismo evento dos veces no debe generar duplicados ni efectos secundarios no deseados. Usa el `X-Request-ID` del header o el `id` del evento para detectar duplicados.
 
+### 6. Verificá la salida antes de creerla
+Una herramienta que imprimió algo no es evidencia de que ese algo sea cierto. Antes de afirmar que falta un símbolo en el código, confirmá con `git log --all -S'<símbolo>'` que existió alguna vez. Antes de confiar en un `sed` o un `perl` que filtra un secreto, comprobá que el patrón matchea: uno que no matchea sale 0 y deja pasar el texto entero. Detalle y comandos en [`docs/18-Verificacion-y-Seguridad-Operativa.md`](18-Verificacion-y-Seguridad-Operativa.md).
+
+### 7. El schema se despliega a mano, y el pipeline no lo comprueba
+**Ningún job de CI aplica migraciones.** Se aplican a mano, y el deploy sale `success` aunque el schema destino esté atrasado. Antes de escribir en una base, confirmá cuál es: `.dev.vars` **no es producción**. Y nunca corras `drizzle-kit migrate` sobre una base con drift — el ledger miente. Ver [`docs/18`](18-Verificacion-y-Seguridad-Operativa.md) §4 y §5.
+
 ---
 
 ## Checklist del primer día
@@ -56,6 +63,7 @@ Los Workers que consumen eventos del bus pueden recibir el mismo evento más de 
   npm run db:migrate
   npm run db:verify-rls
   ```
+  Contra **Docker local**, no contra la base de `.dev.vars`. Ver `18-Verificacion-y-Seguridad-Operativa.md` §4.
 - [ ] **Tu primera tarea:** Crea un evento nuevo en el Schema Registry, publícalo al bus desde el Event Ingestor, y suscríbete a él desde el Worker del dominio `Customer`. Haz que el Worker loguee el payload recibido. Esto valida que tu entorno local funciona de extremo a extremo.
 - [ ] **Lee la `00-Product-Vision.md`:** Es la única fuente de verdad sobre qué estamos construyendo.
 
@@ -68,6 +76,18 @@ Cada Worker declara sus bindings en su propio `wrangler.jsonc` y sus tipos en el
 ```bash
 wrangler secret put <NOMBRE> --config workers/<worker>/wrangler.jsonc
 ```
+
+### `DATABASE_URL` no es una variable: son tres
+
+`DATABASE_URL` es la que más se confunde, porque **hay tres bases distintas y solo una es producción**:
+
+| Dónde vive | Qué es | Estado |
+|---|---|---|
+| `workers/*/.dev.vars` (7 archivos, gitignored) | Neon `ep-divine-bonus-ai05bdy3` | 1 tenant, sin fila de clase de wallet. Es de desarrollo. **No es producción.** |
+| Secret de GitHub `DATABASE_URL`, inyectado por `.github/workflows/deploy.yml` a `identity`, `wallet` y `gateway` | Neon `polished-firefly-68401534` | **PRODUCCIÓN.** Los secrets de GitHub son write-only: esta URL no se puede leer de vuelta |
+| Proyecto Supabase `mysrgtsuoxhpsyfhdnsp` | Proyecto migrado, ya no en uso | Vacía, sin schema |
+
+El `.dev.vars` no se commitea, pero **sí contiene credenciales reales**, así que no se imprime: enmascaralo antes de mostrarlo. Ver [`docs/18`](18-Verificacion-y-Seguridad-Operativa.md) §3 y §4.
 
 ### Worker `wallet` — Google Wallet
 
@@ -87,7 +107,7 @@ En dev local, `.dev.vars` (gitignored) es la excepción habitual, porque `wrangl
 |---|---|---|
 | `GOOGLE_WALLET_ISSUER_ID` | `vars` en `wrangler.jsonc` | El id de emisor que entrega Google. No es secreto, pero es un valor real de la consola, así que se configura por entorno en vez de hardcodearlo en el código |
 | `WALLET_DEMO_MODE` | `vars` en `wrangler.jsonc` | `'true'` o `'false'`. Si el despliegue todavía no tiene acceso de publicación de Google. **El default es `true` a propósito**: ausente, vacío o no reconocido se interpreta como demo mode, porque el costo de equivocarse es asétrico — un despliegue en demo mode que responde "no estoy en demo" le entrega un pase a un cliente real que solo funciona en las cuentas de prueba, y eso es un incidente de soporte |
-| `DATABASE_URL` | por entorno (no commiteado) | Connection string de Neon, exactamente como la reciben los demás Workers |
+| `DATABASE_URL` | por entorno (no commiteado) | Connection string de Neon, exactamente como la reciben los demás Workers. **Cuál de las tres es, importa:** ver la tabla de arriba y [`docs/18`](18-Verificacion-y-Seguridad-Operativa.md) §4 |
 | `WALLET_ALLOWED_ORIGINS` | por entorno (no commiteado) | Lista separada por comas de origins donde se va a renderizar el control. Se convierte en el claim `origins` del token, y Google no renderiza el botón sin él. Si queda vacía, `GET /v1/wallet/pass` responde `WALLET_NOT_CONFIGURED` 500 en vez de firmar un token cuyo botón no hace nada |
 
 **Puerto de dev:** `8795` (`wrangler dev --port 8795` en el script `dev` de `workers/wallet/package.json`). Los puertos de los demás Workers van del 8788 al 8794 y el gateway en 8787.
