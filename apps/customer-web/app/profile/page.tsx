@@ -10,6 +10,7 @@ import { ClubError, ClubStatus } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
 import { ActivitySkeleton, MemberPass } from '../components/member-pass';
 import { MemberQr } from '../components/member-qr';
+import { WalletCard } from '../components/wallet-card';
 import { api, type CustomerProfile } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
@@ -274,6 +275,31 @@ export default function ProfilePage() {
       <MemberPass profile={profile} />
 
       <MemberQr globalId={profile.globalId} fullName={profile.fullName} />
+
+      {/*
+        The Google Wallet pass, and the third link in the path from the merchant's
+        page to a card in the customer's phone. It used to be absent from here
+        entirely while the endpoint behind it worked, so a customer could reach
+        their profile and never be offered the pass.
+
+        It renders after `MemberQr` because it is the same identity told a second
+        way: the QR for a machine at the counter, the card for the customer's own
+        phone.
+
+        On the **member code** — the six characters read out at the counter, and
+        `LoyaltyObject.accountId`. It appears here and only here, because this is
+        the first thing in a customer's life that mints it. It is derived lazily,
+        on the pass request, and deliberately not at registration: doing it in
+        `workers/customer` would mean handing `MEMBER_CODE_PEPPER` — the secret
+        that makes the code non-recomputable by anyone who has scanned a pass — to
+        a worker with no other reason to hold it (`workers/wallet/src/issuance.ts`).
+
+        So a profile whose wallet card has not answered yet shows no code, and
+        that is the ordinary state rather than a broken account. The card says so
+        in as many words while it is asking, which is why this comment is about
+        the reader's expectation and not about the rendering.
+      */}
+      <WalletCard />
 
       <Activity items={timeline} currency={currency} />
 

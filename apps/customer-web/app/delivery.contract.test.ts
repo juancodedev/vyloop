@@ -64,12 +64,120 @@ function offenders(pattern: RegExp, files: string[] = production): string[] {
   return found;
 }
 
+/**
+ * The same scan with comments removed.
+ *
+ * Rules about **copy** need this and rules about **identifiers** must not use it.
+ * A rule about the words a page can say to a customer should be about what the
+ * customer can be shown, so a comment explaining why a phrase was retired must
+ * be able to quote that phrase — otherwise the documentation of the failure
+ * becomes the failure. A rule about a `WALLET_*` constant is the opposite: it is
+ * about where an identifier is *written*, and a comment naming one is harmless,
+ * so that scan stays raw.
+ *
+ * Block comments and line comments, both. Not a parser, and it does not need to
+ * be: it only has to make prose invisible to a prose rule, and a `//` inside a
+ * string literal is rarer than the false positives this removes.
+ */
+function copyOffenders(pattern: RegExp, files: string[] = production): string[] {
+  const found: string[] = [];
+
+  for (const path of files) {
+    const withoutComments = readFileSync(path, 'utf8')
+      .replaceAll(/\/\*[\s\S]*?\*\//g, (block) => block.replaceAll(/[^\n]/g, ' '))
+      .replaceAll(/\/\/[^\n]*/g, (line) => line.replaceAll(/[^\n]/g, ' '));
+
+    withoutComments
+      .split('\n')
+      .forEach((line, i) => {
+        if (pattern.test(line)) {
+          found.push(`${path.replace(appDir, 'app/')}:${i + 1}  ${line.trim().slice(0, 90)}`);
+        }
+      });
+  }
+
+  return found;
+}
+
 describe('delivery gate: claims the customer web must never make', () => {
-  it('never presents a wallet call to action', () => {
-    // Google Wallet is a planned capability, not a shipped one. Until the
-    // issuer is approved, a "Add to Google Wallet" button is a promise the
-    // product cannot keep.
-    expect(offenders(/apple\s*wallet|google\s*wallet|\bpass\s*to\s*wallet\b|add\s*to\s*wallet/i)).toEqual([]);
+  it('offers the wallet pass, and routes its copy through one module', () => {
+    // This rule used to be the opposite: "never presents a wallet call to
+    // action", because the issuer was unapproved and a button would have been a
+    // promise the product could not keep. The issuer is approved and a pass
+    // works on a real phone, so that premise is retired — and the replacement is
+    // deliberately not "the button is allowed".
+    //
+    // What replaces it is a rule about **where the copy lives and what it may
+    // say**, which is checkable where a word-ban was not. Two halves:
+    //
+    //   a) the UI exists — asserted positively, so this cannot pass on an app
+    //      that quietly dropped the feature again;
+    //   b) every `WALLET_*` code and every refusal message lives in
+    //      `lib/wallet.ts` alone. A component cannot grow its own "no tenés
+    //      tarjeta" branch, and cannot add a code the mapping does not know,
+    //      because both would put a code somewhere but there.
+    //
+    // So this is tighter than what it replaces: the old guard forbade a
+    // capability, this one constrains how the capability is allowed to speak.
+    const profile = readFileSync(join(appDir, 'profile/page.tsx'), 'utf8');
+
+    expect(profile).toMatch(/<WalletCard\b/);
+    expect(profile).not.toMatch(/WALLET_[A-Z_]+/);
+
+    // The API method has to exist and the client has to have one.
+    const apiClient = readFileSync(join(appDir, 'lib/api.ts'), 'utf8');
+    expect(apiClient).toMatch(/getWalletPass/);
+    expect(apiClient).toMatch(/'\/v1\/wallet\/pass'/);
+
+    // The codes, and only there.
+    const wallet = readFileSync(join(appDir, 'lib/wallet.ts'), 'utf8');
+    expect(wallet).toMatch(/WALLET_CLASS_NOT_PROVISIONED/);
+    expect(wallet).toMatch(/WALLET_CLASS_NOT_APPROVED/);
+    expect(wallet).toMatch(/WALLET_NOT_CONFIGURED/);
+    expect(wallet).toMatch(/WALLET_PASS_NOT_CREATABLE/);
+
+    // Spelled as a **string literal**, not merely mentioned. An identifier imported
+    // from this module is the guard working: it is the one way a caller may name
+    // a code without owning its wording. What must not exist anywhere else is a
+    // code someone typed, because that is a new branch with no reason attached.
+    const spelledElsewhere = copyOffenders(
+      /['"`][^'"`\n]*WALLET_[A-Z_]+/,
+      production.filter((p) => !p.endsWith('lib/wallet.ts')),
+    );
+
+    expect(spelledElsewhere).toEqual([]);
+  });
+
+  it('never tells a customer their account is why there is no pass', () => {
+    // The precise failure the retired guard was reaching for, stated as the
+    // thing it was actually afraid of. A ban on the words "Google Wallet" could
+    // never have caught a 409 rendered as "no tenés tarjeta" — it caught the
+    // feature instead. These are the phrasings that do the damage, enumerated
+    // because each one is a specific way of blaming the customer.
+    const blaming = [
+      /no ten[eé]s (una |tu )?(tarjeta|pase|pass)/i,
+      /no tienes (una |tu )?(tarjeta|pase|pass)/i,
+      /tu cuenta no (tiene|posee|alcanza)/i,
+      /tu cuenta (est[áa] mal|est[áa] rota|no existe|est[áa] incompleta)/i,
+      /no sos (un |una )?(cliente|socio|miembro)/i,
+    ];
+
+    for (const pattern of blaming) {
+      expect(copyOffenders(pattern), pattern.source).toEqual([]);
+    }
+  });
+
+  it('never promises a pass that a refusal cannot back', () => {
+    // A 409 is not a queued success. For a merchant whose class was never
+    // submitted, the card may never arrive at all, so "ya va a estar
+    // disponible" is a promise nobody can keep — which is the claim the old
+    // word-ban was really about, and which a word-ban could not express.
+    const wallet = readFileSync(join(appDir, 'lib/wallet.ts'), 'utf8');
+
+    expect(copyOffenders(/pr[óo]ximamente|very soon|en breve|coming soon|m[áa]s pronto/i)).toEqual(
+      [],
+    );
+    expect(wallet).not.toMatch(/pr[óo]ximamente|en breve|coming soon/i);
   });
 
   it('never claims to be installable or offline-capable', () => {
