@@ -37,9 +37,10 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
   de integración. En producción hay **3 pases en estado `issued`** — ese estado lo escribe la
   reconciliación leyendo el objeto en Google, así que el objeto existe del lado de Google.
 - **Callback de Google deploying y firmando.** `POST /v1/wallet/google/callback` verifica la
-  firma antes de tocar la base, y `media.juancode.dev` lo sirve con `robots.txt` que permite a
-  Googlebot alcanzarlo. **No verificado que un callback haya llegado a aplicarse**: la tabla
-  `wallet_callback_deliveries` está vacía en producción.
+  firma antes de tocar la base, y `media.juancode.dev` lo sirve con un `robots.txt` que permite
+  a Googlebot alcanzarlo. *No verificado de punta a punta:* la tabla
+  `wallet_callback_deliveries` está vacía en producción, así que no hay evidencia de que un
+  callback haya llegado a aplicarse. Está en el backlog.
 
 > ⚠️ **La fila de `tenant_wallet_programs` todavía dice `review_status = 'draft'` y su
 > `demo_mode` es `false`.** Nadie corrió `POST /v1/wallet/program/sync` después de la aprobación,
