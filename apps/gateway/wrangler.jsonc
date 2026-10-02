@@ -3,6 +3,19 @@
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
+  // No var is declared here, and that is deliberate: `wrangler deploy --var …`
+  // *replaces* the whole `vars` map rather than merging into it, so anything
+  // declared here would be silently dropped in favour of the flags the deploy
+  // job passes. `JWT_SECRET` and `DATABASE_URL` are both injected that way, from
+  // GitHub secrets, and are never in source control.
+  //
+  // `DATABASE_URL` arrived with `/p/{slug}`, the public per-merchant page a
+  // Google class review opens. It is read in the gateway rather than reached
+  // through a service binding on purpose: every `/v1/*` route requires a JWT and
+  // this one is public by requirement, so routing it through the binding chain
+  // would mean inventing an auth bypass. It is the same Neon connection string,
+  // as a plain var, that `identity`, `wallet` and `growth` already receive.
+  // See `apps/gateway/src/merchant-store.ts`.
   "vars": {},
   // Brand assets. The bucket is private: this route is the only public door, so the
   // r2.dev preview URL is never what Google fetches and disabling it breaks nothing.

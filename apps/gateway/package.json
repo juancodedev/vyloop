@@ -10,9 +10,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@vyloop/db": "workspace:*",
     "@vyloop/event-bus": "workspace:*",
     "@vyloop/schema-registry": "workspace:*",
     "@vyloop/types": "workspace:*",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.13.5",
     "jose": "^6.2.3"
   },
