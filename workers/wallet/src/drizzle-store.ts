@@ -218,8 +218,10 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
      * belong to a merchant other than the one the caller asked for.
      */
     async findTenantBranding(tenantId: string): Promise<WalletTenantBrandingRow | null> {
+      // `slug` is selected because the class's `homepageUri` is built from it and
+      // it has to be the tenant's real slug rather than one derived from `name`.
       const [row] = await db
-        .select({ name: tenants.name, country: tenants.country })
+        .select({ name: tenants.name, country: tenants.country, slug: tenants.slug })
         .from(tenants)
         .where(eq(tenants.id, tenantId))
         .limit(1);

@@ -6,6 +6,7 @@ import type { AuthHeaders, WalletBindings } from './helpers';
 import {
   extractAuthHeaders,
   googleWalletClientFor,
+  parseCustomerWebBaseUrl,
   parseDemoMode,
   parseMediaBaseUrl,
   parseWebBaseUrl,
@@ -331,9 +332,16 @@ export async function provisionClass(
       store: createDrizzleWalletStore(db),
       client: googleWalletClientFor(env),
       issuerId: env.GOOGLE_WALLET_ISSUER_ID,
-      // Two hosts, two parsers, on purpose. See `WalletBindings.WALLET_WEB_BASE_URL`.
+      // Three origins, three parsers, on purpose. The logo and the homepage
+      // resolve to the same host today and are still kept apart: they have
+      // independent histories and one may have to move without the other. See
+      // `WalletBindings.WALLET_WEB_BASE_URL` and `.WALLET_CUSTOMER_WEB_BASE_URL`.
       mediaBaseUrl: parseMediaBaseUrl(env.WALLET_MEDIA_BASE_URL),
       webBaseUrl: parseWebBaseUrl(env.WALLET_WEB_BASE_URL),
+      // A different host from the two above: `/profile` and `/profile/history`
+      // are customer-web routes, and building them from the gateway origin would
+      // make every link on every pass a 404.
+      customerWebBaseUrl: parseCustomerWebBaseUrl(env.WALLET_CUSTOMER_WEB_BASE_URL),
     },
     { tenantId: input.tenantId },
   );

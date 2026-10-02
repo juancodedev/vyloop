@@ -80,7 +80,8 @@ export interface WalletTierRow {
 }
 
 /**
- * The slice of `tenants` a Google class is branded with.
+ * The tenant's own name, country and slug — what a Google class is branded with
+ * and where its `homepageUri` points.
  *
  * Read by provisioning and by nothing else on the issuance path: a pass carries
  * the merchant's name because Google copied it into the class at signup, not
@@ -91,6 +92,20 @@ export interface WalletTenantBrandingRow {
   name: string;
   /** `tenants.country`. ISO 3166-1 alpha-2, free text in the column. */
   country: string;
+  /**
+   * `tenants.slug` — the tenant's own public identifier.
+   *
+   * Read, never derived. `homepageUri` is `{webBaseUrl}/p/{slug}`, and that
+   * page is a real route in the gateway that resolves this exact column. A slug
+   * reconstructed from `name` at provision time would be a *guess*: `slugify`
+   * truncates at a word boundary and the unique index settles collisions, so two
+   * businesses called "Café Central" do not both end up at `cafe-central`, and
+   * the slug a merchant actually owns is the one in this row.
+   *
+   * Absent rather than blank when the tenant has none. A blank slug would build
+   * `/p/`, which is a 404 on the one field Google rejects a class over.
+   */
+  slug: string;
 }
 
 /**

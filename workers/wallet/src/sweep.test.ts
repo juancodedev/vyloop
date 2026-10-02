@@ -82,15 +82,20 @@ const RUN_ONE = new Date('2026-09-28T06:00:00.000Z');
 const RUN_TWO = new Date('2026-09-29T06:00:00.000Z');
 
 /**
- * The issuer and the two hosts provisioning builds a class from. Reconciliation
- * reads none of them, which is why they are a separate part of the deps rather
- * than three more fields: a change to what a class is made of must not be able
- * to reach the balance path.
+ * The issuer and the three origins provisioning builds a class from.
+ * Reconciliation reads none of them, which is why they are a separate part of
+ * the deps rather than four more fields: a change to what a class is made of must
+ * not be able to reach the balance path.
+ *
+ * `media` and `web` are the same host in production today — the gateway serves
+ * both `/brand/*` and `/p/*` — and are kept apart because they are separate
+ * consumers. `customerWeb` is a genuinely different host, holding the pass links.
  */
 const PROVISIONING = {
   issuerId: ISSUER,
   mediaBaseUrl: 'https://media.juancode.dev',
-  webBaseUrl: 'https://vyloop-customer-web.pages.dev',
+  webBaseUrl: 'https://media.juancode.dev',
+  customerWebBaseUrl: 'https://vyloop-customer-web.pages.dev',
 };
 
 function tenantId(n: number): string {
@@ -265,7 +270,10 @@ class SweepStore implements WalletStore {
     this.record('findTenantBranding', tenant);
     if (!this.tenants.includes(tenant)) return null;
     if (this.missingBranding.has(tenant)) return null;
-    return { name: `Café ${tenant.slice(-4)}`, country: 'CL' };
+    // A real slug, not the name folded: the class's `homepageUri` is built from
+    // this column, and provisioning refuses a blank one rather than pointing
+    // Google at `/p/`.
+    return { name: `Café ${tenant.slice(-4)}`, country: 'CL', slug: `cafe-${tenant.slice(-4)}` };
   }
 
   async findProgramName(tenant: string): Promise<string | null> {
