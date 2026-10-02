@@ -24,9 +24,57 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | Dashboard PMV (login, sidebar, clientes, loyalty) | ✅ Completado |
 | **POS Emulator — menú, carrito, QR scanner, cobro+puntos** | **✅ Completado** |
 | Customer detail card SDK | ✅ Completado |
-| Google Wallet — pase de lealtad de punta a punta | ✅ Funcionando: emitir, guardar en Google y proyectar el saldo |
+| Google Wallet — pase de lealtad de punta a punta | ✅ Clase aprobada; pase emitido y guardado desde un teléfono real |
 | CI/CD automático (GitHub Actions → Cloudflare) | ✅ 11/11 jobs verdes |
 | **Deployado y demo-list** | **✅ VIVO** |
+
+### Google Wallet — estado real
+
+- **Clase de Google Wallet aprobada.** La clase de Café Central pasó la review de Google. *No
+  verificado desde este repositorio*: vive en la consola de Google Pay & Wallet, y la única
+  huella local es la fila de `tenant_wallet_programs`.
+- **Pase emitido y guardado en Google Wallet desde un teléfono real.** Verificado en la sesión
+  de integración. En producción hay **3 pases en estado `issued`** — ese estado lo escribe la
+  reconciliación leyendo el objeto en Google, así que el objeto existe del lado de Google.
+- **Callback de Google deploying y firmando.** `POST /v1/wallet/google/callback` verifica la
+  firma antes de tocar la base, y `media.juancode.dev` lo sirve con `robots.txt` que permite a
+  Googlebot alcanzarlo. **No verificado que un callback haya llegado a aplicarse**: la tabla
+  `wallet_callback_deliveries` está vacía en producción.
+
+> ⚠️ **La fila de `tenant_wallet_programs` todavía dice `review_status = 'draft'` y su
+> `demo_mode` es `false`.** Nadie corrió `POST /v1/wallet/program/sync` después de la aprobación,
+> así que la fila local no refleja lo que Google ya dijo. Es el paso 4 de
+> [`docs/11-crear-tarjeta-lealtad.md`](docs/11-crear-tarjeta-lealtad.md), y el orden importa:
+> sincronizar primero, después el flag. `scripts/check-wallet-readiness.mjs` lo reporta.
+
+Lo que **no** está: el gate de migraciones en el deploy, y las piezas de UX que faltan para que
+un comensal llegue solo hasta la tarjeta — están en [`docs/14-Backlog.md`](docs/14-Backlog.md).
+
+---
+
+## Ambientes y bases de datos
+
+**Hay tres bases, y solo una es producción.**
+
+| | Base | Qué es |
+|---|---|---|
+| **Producción** | Neon `polished-firefly-68401534` | La que inyecta `.github/workflows/deploy.yml` desde el secret de GitHub `DATABASE_URL` |
+| **Dev** | Neon `ep-divine-bonus-ai05bdy3` | La `DATABASE_URL` de los `workers/*/.dev.vars`. 1 tenant, sin fila de clase de wallet |
+| **Migrado** | Supabase `mysrgtsuoxhpsyfhdnsp` | Proyecto anterior, ya no en uso. Vacía, sin schema |
+
+> ⚠️ **`.dev.vars` NO es producción.** Es la que se usa cuando corrés `wrangler dev` en local, pero contiene credenciales reales de una base Neon real. Antes de aplicar una migración, confirmá contra cuál base estás escribiendo.
+>
+> Los secrets de GitHub son **write-only**: la `DATABASE_URL` de producción no se puede leer de vuelta. Por eso la tabla de arriba es la forma de saber a qué base apunta.
+>
+> Detalle completo: [`docs/18-Verificacion-y-Seguridad-Operativa.md`](docs/18-Verificacion-y-Seguridad-Operativa.md) §4.
+
+### Qué corre dónde
+
+| | Local | Producción |
+|---|---|---|
+| **Base de datos** | **Docker** (`docker compose -f docker/docker-compose.yml up -d`) | **Neon** |
+| **`DATABASE_URL`** | `docker/postgres`, o el `.dev.vars` si necesitás tocar datos reales | Secret de GitHub |
+| **Migraciones** | `pnpm --filter @vyloop/db db:migrate` | **A mano.** Ningún job de CI las aplica, y el deploy sale `success` igual |
 
 ---
 
@@ -37,6 +85,9 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | Dashboard | [vyloop.juancode.dev](https://vyloop.juancode.dev) | Login + gestión del comercio |
 | Customer Web | [vyloop-customer-web.pages.dev](https://vyloop-customer-web.pages.dev) | Tarjeta de puntos del cliente |
 | API Gateway | `gateway.cl-jmunoz.workers.dev` | Backend API (8 workers) |
+| Gateway (dominio propio) | `media.juancode.dev` | Sirve `/p/{slug}`, `/brand/*`, `robots.txt` y el callback de Google. Sin path raíz: responde 404, y es lo esperado |
+| Página del comercio | [media.juancode.dev/p/cafe-central](https://media.juancode.dev/p/cafe-central) | Página pública que Google revisa como `homepageUri` |
+| Callback de Google Wallet | `POST media.juancode.dev/v1/wallet/google/callback` | Recibe los eventos `save`/`del` del pase. Responde 400 a un POST sin firma válida, que es lo correcto |
 
 ### Demo: Tarjeta del Cliente
 
@@ -79,7 +130,7 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 | **Workspace** | pnpm 9 — apps, workers, packages, tooling |
 | **Frontend** | Next.js 14/15 (App Router), Tailwind CSS, shadcn/ui |
 | **API** | Cloudflare Workers + Hono |
-| **Database** | PostgreSQL 16 (Neon), Drizzle ORM |
+| **Database** | PostgreSQL 16, Drizzle ORM — **Neon en producción**, **Docker en local** |
 | **Auth** | JWT (Web Crypto API), PBKDF2, service bindings |
 | **Events** | Cloudflare Queues + Schema Registry (AJV) |
 | **Infrastructure** | Docker (Postgres + Mailpit), `wrangler dev` (workers) |
@@ -113,6 +164,14 @@ done
 # 4. Ejecutar todo en modo dev (todos los workers + dashboard)
 pnpm dev
 ```
+
+> ⚠️ **`.dev.vars` apunta a Neon, no a Docker.** Los `.dev.vars` de los workers traen la
+> `DATABASE_URL` de la base de desarrollo en Neon (`ep-divine-bonus-ai05bdy3`), porque los
+> workers corren fuera de Docker y no alcanzan `localhost`. El `docker compose` de arriba
+> levanta PostgreSQL y Mailpit para lo que sí puede usar red local.
+>
+> El desarrollo local **usa Docker** para su base. Producción **es Neon**, y es otra base
+> distinta. Ver *Ambientes y bases de datos* arriba antes de aplicar cualquier migración.
 
 Esto arranca en paralelo:
 - `next dev -p 3000` para el dashboard (admin sell flow)
@@ -234,10 +293,12 @@ vyloop/
 
 Ver [docs/](./docs) para:
 
-- **[PRD y Visión de Producto](./docs/prd/)** — requirements, mercado, business model
-- **[Arquitectura](./docs/architecture/)** — system design, DDD, API, DB
-- **[Operaciones](./docs/operations/)** — onboarding, backlog
-- **[ADR](./docs/decisions/)** — Architecture Decision Records
+- **[Visión y producto](./docs/00-Product-Vision.md)** — qué estamos construyendo y por qué
+- **[Arquitectura](./docs/07-Architecture.md)** — system design, DDD, API, DB
+- **[Onboarding](./docs/17-Developer-Onboarding.md)** — reglas de oro y variables por worker
+- **[Verificación y seguridad operativa](./docs/18-Verificacion-y-Seguridad-Operativa.md)** — bases de datos, migraciones, secretos, y cómo se verifica una herramienta antes de creerle
+- **[Backlog](./docs/14-Backlog.md)** — lo que falta, con el estado real de cada cosa
+- **[Google Wallet: crear una tarjeta](./docs/11-crear-tarjeta-lealtad.md)** — el alta de un negocio
 - **[TASKS.md](./TASKS.md)** — Estado detallado de tareas
 
 ## Workers Deployados (Cloudflare)
@@ -257,17 +318,8 @@ Ver [docs/](./docs) para:
 > `/v1/wallet/*` están enrutadas por el gateway. Se despliega después que el gateway
 > porque el gateway lo tiene como service binding.
 >
-> ### Google Wallet — estado real
->
-> El pase funciona de punta a punta y está verificado contra la API de Google, no solo
-> contra los tests: emitir guarda el objeto en Google, firma el link, y una venta en el
-> POS proyecta el saldo sin que el cliente abra la app.
->
-> Lo que falta para clientes reales es el **acceso de publicación** del emisor, que se
-> pide en la consola de Google y revisa Google. Mientras no esté, los pases salen con
-> `[SOLO PARA PRUEBAS]` y solo funcionan en las cuentas de prueba del emisor.
->
-> Para darle una tarjeta a un negocio nuevo: **[`docs/11-crear-tarjeta-lealtad.md`](docs/11-crear-tarjeta-lealtad.md)**.
+> El detalle del pase está arriba, en *Google Wallet — estado real*. Para darle una
+> tarjeta a un negocio nuevo: **[`docs/11-crear-tarjeta-lealtad.md`](docs/11-crear-tarjeta-lealtad.md)**.
 > Hoy es un procedimiento manual —el alta de un tenant no crea su clase automáticamente—
 > y el documento dice exactamente eso.
 
