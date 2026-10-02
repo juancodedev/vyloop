@@ -187,3 +187,129 @@ describe('registration behavior', () => {
     expect(mocks.push).not.toHaveBeenCalled();
   });
 });
+
+// ─── The email field ──────────────────────────────────────────────────
+//
+// It always existed and was always optional. What was wrong was that it was
+// inside a collapsed `<details>` under "¿Querés completar algo más ahora?",
+// with "Solo si te resulta cómodo" as its only justification — so a business
+// asking for a way to reach its customer had to know to go looking for it.
+//
+// It is a visible field now, in the main group, and it stays optional: nothing
+// verifies it, and nothing verifies the phone either.
+
+describe('the email field', () => {
+  // A sibling `describe`, so none of the outer suite's setup applies here — the
+  // `fetch` stub included. Restated rather than extracted, because this block is
+  // about one field and a shared helper for two fields is the wrong shape.
+  beforeEach(() => {
+    mocks.businessSlug = 'barber';
+    mocks.push.mockReset();
+    mocks.loginCustomer.mockReset();
+    mocks.loginCustomer.mockResolvedValue({
+      token: 'customer-token',
+      customer: { name: 'Ada Lovelace', globalId: 'customer-1' },
+      expiresIn: 3600,
+    });
+    vi.stubGlobal('fetch', vi.fn());
+    vi.mocked(fetch).mockResolvedValue(createResponse(201));
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('is a visible field, not something behind a disclosure', async () => {
+    // The defect. `getByLabelText` does not care whether a field is collapsed, so
+    // this would have passed before the change too — which is why the next
+    // assertion is the one that carries the weight.
+    render(<RegisterPage />);
+
+    expect(screen.getByLabelText(/^Email/)).toBeTruthy();
+
+    const field = screen.getByLabelText(/^Email/);
+    const insideDisclosure = field.closest('details');
+
+    expect(insideDisclosure).toBeNull();
+  });
+
+  it('is reachable without expanding anything', async () => {
+    // Stated behaviourally on purpose: a screen reader and a keyboard user both
+    // hit the collapsed `<details>` as a closed control, so "it is in the DOM" was
+    // never the same claim as "the customer can get to it".
+    render(<RegisterPage />);
+
+    const email = screen.getByLabelText(/^Email/);
+    const summaries = document.querySelectorAll('details > summary');
+
+    for (const summary of summaries) {
+      expect(summary.contains(email)).toBe(false);
+    }
+
+    expect(email.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('is optional, because nothing verifies it', () => {
+    render(<RegisterPage />);
+
+    // Cast rather than `getByLabelText<HTMLInputElement>`: the helper above
+    // already narrows, and a second narrowing in one expression reads like the
+    // generic does nothing.
+    expect((screen.getByLabelText(/^Email/) as HTMLInputElement).required).toBe(false);
+  });
+
+  it('says what it is for, and does not offer it as a recovery address', () => {
+    // The copy matters as much as the field. An email a customer reads as a
+    // password-reset address they cannot actually use is worse than no email.
+    render(<RegisterPage />);
+
+    const helper = screen.getByText(/negocio te pueda avisar/i);
+
+    expect(helper).toBeTruthy();
+    expect(helper.textContent?.toLowerCase()).not.toMatch(/recuper|restable|contrase|olvid/);
+  });
+
+  it('sends the email when it is filled in', async () => {
+    render(<RegisterPage />);
+    setRequiredFields('Ada Lovelace', '+56 9 1234 5678');
+    fireEvent.change(getInput(/^Email/), { target: { value: 'ada@example.com' } });
+
+    await submitForm();
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] ?? [];
+    const body = JSON.parse(String((init as RequestInit).body));
+
+    expect(body.email).toBe('ada@example.com');
+  });
+
+  it('omits it entirely when it is left blank, rather than sending an empty string', async () => {
+    // `PUT /v1/customers` writes `body.email` whenever the key is present, so an
+    // empty string would overwrite an email the customer gave on an earlier
+    // registration for the same phone. The key must be absent.
+    render(<RegisterPage />);
+    setRequiredFields('Ada Lovelace', '+56 9 1234 5678');
+
+    await submitForm();
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] ?? [];
+    const body = JSON.parse(String((init as RequestInit).body));
+
+    expect('email' in body).toBe(false);
+    expect(body).toMatchObject({ fullName: 'Ada Lovelace', businessSlug: 'barber' });
+  });
+
+  it('trims the email before sending it', async () => {
+    render(<RegisterPage />);
+    setRequiredFields('Ada Lovelace', '+56 9 1234 5678');
+    fireEvent.change(getInput(/^Email/), { target: { value: '  ada@example.com  ' } });
+
+    await submitForm();
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] ?? [];
+    const body = JSON.parse(String((init as RequestInit).body));
+
+    expect(body.email).toBe('ada@example.com');
+  });
+});
