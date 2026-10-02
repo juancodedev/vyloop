@@ -374,12 +374,25 @@ export default function CustomerDetailPage() {
 
               {amount > 0 && (
                 <div className="points-preview" style={{ background: '#f9fafb', padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem' }}>
-                  <p className="text-sm text-muted" style={{ marginBottom: '0.5rem' }}>Desglose de puntos</p>
+                  <p className="text-sm text-muted" style={{ marginBottom: '0.5rem' }}>
+                    Desglose de puntos (estimado)
+                  </p>
+                  {/* Every factor the total multiplies is displayed, and no factor
+                      is displayed that it does not. This breakdown used to
+                      multiply by `earnRate` while printing only the base and the
+                      multiplier, so the equation on screen was false for every
+                      program whose rate was not 1 — and exactly true, and so
+                      invisible, for the default one. */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
                     <span>Base: {amount} pts</span>
+                    <span>&times; Tasa ({earnRate}x)</span>
                     <span>&times; Multiplicador ({tierMultiplier}x)</span>
                     <span><strong>= {Math.floor(amount * earnRate * tierMultiplier)} pts</strong></span>
                   </div>
+                  <p className="text-sm text-muted" style={{ margin: '0.5rem 0 0' }}>
+                    El cobro real lo calcula el servidor, que resuelve el nivel en el momento del
+                    cobro.
+                  </p>
                 </div>
               )}
 

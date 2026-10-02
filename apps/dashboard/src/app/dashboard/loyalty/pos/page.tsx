@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './pos.module.css';
 
 import { api } from '@/lib/api';
+import { previewPoints } from '@/lib/loyalty-points';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -135,7 +136,15 @@ export default function PosPage() {
 
   // ─── Points calculation ───────────────────────────────────────────
 
-  const pointsToEarn = Math.floor(subtotal * earnRate * (customer?.multiplier ?? 1));
+  // An ESTIMATE, shown to the cashier before the charge.
+  //
+  // `pointsToEarn` is never sent to the server. `POST /v1/loyalty/points/assign`
+  // takes the base amount and applies `earnRate × tierMultiplier` itself, so
+  // sending this number would apply the tier a second time: a Gold customer
+  // (`×2`) would be credited `subtotal × earnRate × 2 × 2`. Because that number
+  // is what lands in `points_transactions.points`, with `balance_after`
+  // accumulated from it, the inflated balance would be permanent.
+  const pointsToEarn = previewPoints(subtotal, earnRate, customer?.multiplier ?? 1);
   // Canje máximo: no más de lo que tiene el cliente, ni más que el subtotal (1 pt = $1)
   const maxRedeem = customer ? Math.min(customer.points, Math.ceil(subtotal)) : 0;
   const redeemValue = Math.min(Number(redeemInput) || 0, maxRedeem);
@@ -247,10 +256,12 @@ export default function PosPage() {
     setErrorMsg('');
 
     try {
-      // 1. Assign points
+      // 1. Assign points. The `subtotal` is the BASE amount: the server resolves
+      // the earn rate and the tier from it, at the moment of the charge. The
+      // preview above is not sent — see `pointsToEarn`.
       const earned = await api.assignPoints(
         customer.id,
-        pointsToEarn,
+        subtotal,
         `Venta POS: ${cart.map((e) => `${e.item.name} x${e.qty}`).join(', ')}`,
       );
 
@@ -416,10 +427,21 @@ export default function PosPage() {
                   </div>
 
                   {pointsToEarn > 0 && (
-                    <div className={styles.earnRow}>
-                      <span>Puntos a ganar</span>
-                      <span>+{pointsToEarn}</span>
-                    </div>
+                    <>
+                      <div className={styles.earnRow}>
+                        <span>Puntos a ganar (estimado)</span>
+                        <span>+{pointsToEarn}</span>
+                      </div>
+                      {/* The number above cannot be the charge. The server resolves
+                          the tier when it charges, and the tier can change between
+                          this estimate and the sale, so the receipt shows what the
+                          server decided instead. An estimate dressed as a final
+                          figure is worse than showing none. */}
+                      <p className={styles.earnNote}>
+                        Estimado con la tasa y el nivel actuales. El cobro real lo calcula el
+                        servidor, que resuelve el nivel en el momento del cobro.
+                      </p>
+                    </>
                   )}
 
                   {customer.points > 0 && !redeemResult && subtotal > 0 && (
