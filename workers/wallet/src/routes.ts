@@ -4,7 +4,11 @@ import { Hono } from 'hono';
 import { BalanceNotDisplayableError, balanceDisplayFailure } from './balance';
 import { applyVerifiedCallback } from './callback-handler';
 import type { VerifiedCallbackOutcome } from './callback-handler';
-import { PassCallbackVerificationError, verifyPassCallback } from './callbacks';
+import {
+  PassCallbackVerificationError,
+  formatCallbackRejection,
+  verifyPassCallback,
+} from './callbacks';
 import type { PassCallbackEvent } from './callbacks';
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
 import {
@@ -168,9 +172,10 @@ router.post('/v1/wallet/google/callback', async (c) => {
     event = await verifyPassCallback(rawBody, { recipientId: c.env.GOOGLE_WALLET_ISSUER_ID });
   } catch (err: unknown) {
     if (err instanceof PassCallbackVerificationError) {
-      // A reason code and nothing else. A forgery is worth noticing, and the
-      // code is what says which of the several refusals it was.
-      console.warn(`[wallet] Refused a Google Wallet callback: ${err.code}.`);
+      // A reason code and the diagnostic that goes with it. A code says what
+      // failed and never why, and a refusal whose only trace is a code costs a
+      // session of guessing every time one occurs.
+      console.warn(formatCallbackRejection(err));
       return callbackRefusal(
         c,
         400,

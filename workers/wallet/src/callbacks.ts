@@ -15,12 +15,19 @@
  *   "protocolVersion": "ECv2SigningOnly",
  *   "signature": "<base64 DER ECDSA>",
  *   "intermediateSigningKey": {
- *     "signedKey": "{\"keyValue\":\"<base64 SPKI>\",\"keyExpiration\":\"…\"}",
- *     "signatures": ["<base64 DER ECDSA>"]
+ *     "signedKey": "{\"keyValue\":\"<base64 SPKI>\",\"keyExpiration\":\"…\"}"
  *   },
  *   "signedMessage": "{\"classId\":\"…\",\"objectId\":\"…\",\"eventType\":\"save\",\"expTimeMillis\":…,\"nonce\":\"…\"}"
  * }
  * ```
+ *
+ * Note what is **not** in that sample: `intermediateSigningKey.signatures`. The
+ * documented algorithm and Tink's reference implementation both require it, and
+ * Google's `ECv2` payment tokens carry it — but a loyalty pass callback
+ * captured live in production does not. See "The absent intermediate key
+ * signature" below, which is the one place in this file where a check the
+ * specification asks for is deliberately not performed.
+ *
  *
  * `classId`, `objectId`, `eventType` and `nonce` are **inside** that last string
  * and do not exist at the top level. Reading them off the top level yields
@@ -42,6 +49,79 @@
  * Reversing the order is the mistake worth naming: step 1 is what stops an
  * attacker from generating their own keypair, signing their own `save` event for
  * a stranger's `objectId`, and shipping a perfectly self-consistent envelope.
+ *
+ * ## The absent intermediate key signature
+ *
+ * **This is a deliberate departure from the specification, and the one place in
+ * this file where a check Tink performs is not performed here.**
+ *
+ * Tink's `PaymentMethodTokenRecipient` requires
+ * `intermediateSigningKey.signatures`, and so does Google's written algorithm.
+ * A loyalty pass callback captured live in production does not carry the field
+ * at all — only `signedKey`. Requiring it meant this endpoint refused **100% of
+ * real deliveries**, refusing them for a condition Google does not produce.
+ *
+ * So when the array is empty or absent, this verifier **proceeds**. When
+ * signatures are present, they are verified exactly as before, and a set that
+ * verifies against no root key is refused as `intermediate_key_unverified`. The
+ * relaxation is of the *absence* of evidence, not of the *failure* of evidence:
+ * an empty array is not read as a negative result.
+ *
+ * ### Why that is acceptable, and what it is not
+ *
+ * Two of the three links still hold, and the one that matters most is the one
+ * that cannot be forged without Google's root private key:
+ *
+ * - The **root key set** must be non-empty, unexpired, and readable as P-256.
+ *   Nothing about an absent signature relaxes this.
+ * - The **message signature** must verify under the key the envelope carries.
+ *
+ * An attacker who wants in must produce a message signature that verifies under
+ * a P-256 key they choose. That is possible without the intermediate key
+ * signature, and it is exactly why the intermediate key signature existed in the
+ * first place: Tink's design does not require the sender to prove *which*
+ * intermediate key it used, only that the key verifies under a Google root —
+ * so the attack Tink's step 1 blocks is not "a self-consistent forgery" but
+ * "this envelope is not Google's".
+ *
+ * What an absent signature no longer buys us is the ability to say *which*
+ * Google-issued key signed this message. That claim is not made anywhere in
+ * this file, and nothing downstream depends on it: the only outputs of
+ * `verifyPassCallback` are the event fields inside a message that verified.
+ *
+ * The honest summary: with the signature we authenticate the message to *an*
+ * unsigned key; without it we authenticate it to *a* key, and the root key set
+ * is what stops an attacker from choosing that key. For a callback whose whole
+ * payload is "this pass was added to or removed from a phone", that is the
+ * trade this system makes, deliberately, in exchange for receiving its events
+ * at all.
+ *
+ * ### What is still refused, and must never be relaxed
+ *
+ * - Signatures present and **none verifying** → `intermediate_key_unverified`.
+ *   That is an attack or a corruption, not an absence.
+ * - Signatures present but **not decodable** → `malformed_envelope`.
+ * - The **root key set** unusable in any way → `no_usable_root_key`.
+ * - The **message signature** not verifying → `message_unverified`.
+ *
+ * ### The unresolved production failure this exposed
+ *
+ * Relaxing the empty case does **not** fix the production rejections. Those were
+ * logged as `intermediate_key_unverified`, which this verifier only ever emits
+ * when signatures were present and none verified — a different fault, with two
+ * live candidates and no confirmation between them:
+ *
+ * 1. The **signed bytes** for the key signature are wrong. The derivation below
+ *    is transcribed from Tink and, as of this writing, has never been run
+ *    against a real envelope. Nothing in this repository closes that gap, and
+ *    the fixture this file's tests use cannot: a test-generated envelope agrees
+ *    with a test-generated expectation by construction.
+ * 2. A **root key failed to import** and was silently dropped. See
+ *    `importP256PublicKey`, which swallows every import error.
+ *
+ * Neither is fixed here. What is fixed here is that the next occurrence is
+ * *diagnosable*: rejections now carry counts and key descriptions — never key
+ * material — so the two candidates can be told apart from a log line.
  *
  * Each signature covers a **length-prefixed concatenation**, not the raw string.
  * For each part in order, the signed bytes are `uint16be(utf8ByteLength)` then
@@ -205,8 +285,21 @@ export type PassCallbackFailureCode =
   | 'root_keys_unavailable'
   /** The root key set held no unexpired key for this protocol. */
   | 'no_usable_root_key'
-  /** The intermediate key is not signed by any current Google root key. */
+  /**
+   * Intermediate key signatures were present, and none verified under any root.
+   *
+   * Only reachable when the envelope actually shipped signatures. An absent
+   * array is not a negative result — see the module header.
+   */
   | 'intermediate_key_unverified'
+  /**
+   * The key inside `intermediateSigningKey` is not a readable P-256 key.
+   *
+   * Split from `intermediate_key_unverified` because the two are different
+   * faults: one is a signature that failed, the other is a key this runtime
+   * cannot use at all. A code that means both cannot be counted as either.
+   */
+  | 'intermediate_key_unreadable'
   /** The intermediate key verified, but the message signature did not. */
   | 'message_unverified'
   /** `signedMessage` was not JSON, or lacked a required event field. */
@@ -217,25 +310,112 @@ export type PassCallbackFailureCode =
   | 'expired';
 
 /**
+ * What a rejection can say about the cryptography that produced it.
+ *
+ * ## Why this exists
+ *
+ * The endpoint logs one string per refusal. For a long time that string was the
+ * failure code alone, and the code says what failed and never why — which is
+ * how `intermediate_key_unverified` was read twice as "the signature array was
+ * empty", a reading the code cannot produce. Guessing at a cause from a log
+ * line that does not contain one costs a session every time.
+ *
+ * So a refusal carries enough to answer the two open questions without the
+ * body: how many signatures arrived, and which keys were actually usable.
+ *
+ * ## What is deliberately absent
+ *
+ * **No key material, no signature bytes, no body fragment, no subject
+ * identifier.** Every field here is a count or a name from a fixed vocabulary.
+ * That is not only about secrecy: this is an unauthenticated public endpoint,
+ * so `objectId`, `nonce` and `classId` would be attacker-chosen strings, and
+ * echoing any of them into a log is an injection vector. `algorithm` names come
+ * from a lookup table, never from the bytes — an unrecognised OID renders as
+ * `unknown-algorithm`, not as the attacker's own encoding of one.
+ */
+export interface PassCallbackDiagnostic {
+  /**
+   * How many signatures shipped in `intermediateSigningKey.signatures`.
+   *
+   * `0` is the number that settles the question this diagnostic was built for:
+   * it distinguishes "the sender vouched for nothing" from "the sender vouched
+   * and it failed", which no failure code can.
+   */
+  intermediateKeySignatureCount?: number;
+  /** Root keys Google's document offered, after the protocol and expiry filters. */
+  rootKeyCount?: number;
+  /** How many of those imported as P-256 verification keys. */
+  importedRootKeyCount?: number;
+  /**
+   * One entry per offered root key, in document order.
+   *
+   * `imported: false` on a key whose algorithm is a real, readable name is the
+   * signature of the silent-import failure: Google published a key, this
+   * runtime declined it, and nothing else in the refusal says so.
+   */
+  rootKeys?: Array<{ algorithm: string; imported: boolean }>;
+  /**
+   * The key inside the envelope, named. Only present once `signedKey` parsed.
+   *
+   * `unreadable` means the bytes are not a DER SPKI this reader could parse —
+   * which is also what WebCrypto refused, though for possibly unrelated reasons.
+   */
+  envelopeKeyAlgorithm?: string;
+}
+
+/**
  * A callback this worker refused.
  *
  * A single class with a `code`, so the route can log the reason and answer
  * without parsing prose, and so a new failure reason cannot be added without
  * also deciding what it means. Every code is a rejection.
+ *
+ * `diagnostic` is optional because the structural refusals happen before there
+ * is anything to describe — a body that is not JSON has no counts worth having.
  */
 export class PassCallbackVerificationError extends Error {
   readonly code: PassCallbackFailureCode;
+  /**
+   * Declared with an explicit `undefined` rather than bare `?`, because this
+   * package compiles with `exactOptionalPropertyTypes`: a bare optional property
+   * may be absent but never `undefined`, and the constructor assigns it
+   * unconditionally.
+   */
+  readonly diagnostic?: PassCallbackDiagnostic | undefined;
 
-  constructor(code: PassCallbackFailureCode, message: string) {
+  constructor(code: PassCallbackFailureCode, message: string, diagnostic?: PassCallbackDiagnostic) {
     super(message);
     this.name = 'PassCallbackVerificationError';
     this.code = code;
+    this.diagnostic = diagnostic;
   }
 }
 
 /** Build a rejection. Named so the call sites read as assertions. */
-function refuse(code: PassCallbackFailureCode, message: string): never {
-  throw new PassCallbackVerificationError(code, message);
+function refuse(
+  code: PassCallbackFailureCode,
+  message: string,
+  diagnostic?: PassCallbackDiagnostic,
+): never {
+  throw new PassCallbackVerificationError(code, message, diagnostic);
+}
+
+/**
+ * The log line for a refusal.
+ *
+ * One line, structured, and safe to read: the code first so it is greppable on
+ * its own, then the diagnostic as JSON so a single log line answers "how many
+ * signatures, how many roots, which curve" without a second query.
+ *
+ * Kept here rather than in the route because it is the thing with the security
+ * property — see `PassCallbackDiagnostic` for why it carries names and counts
+ * only — and a property that lives in a route is a property nothing tests.
+ */
+export function formatCallbackRejection(err: PassCallbackVerificationError): string {
+  const head = `[wallet] Refused a Google Wallet callback: ${err.code}.`;
+  return err.diagnostic === undefined
+    ? head
+    : `${head} diagnostic=${JSON.stringify(err.diagnostic)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +680,199 @@ async function importP256PublicKey(keyValue: string): Promise<CryptoKey | null> 
     // A key that will not import is a key that cannot verify anything. Returning
     // null lets the caller try the next one; a thrown error here would abort a
     // verification that another root key could still have satisfied.
+    //
+    // This silence is why `PassCallbackDiagnostic` exists. If Google published a
+    // root key this runtime cannot read, the only trace of it was the *absence*
+    // of a successful verification — indistinguishable from a signature that
+    // simply failed. The caller now records what each key turned out to be.
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Naming a key without trusting it
+// ---------------------------------------------------------------------------
+
+/**
+ * A minimal DER TLV locator, and the only TLV knowledge this file has.
+ *
+ * Returns the tag, where the content starts, its length, and the size of the
+ * header that got there — or `null` for anything it does not fully understand.
+ * Refusing rather than guessing is the same rule `derSignatureToP1363` follows,
+ * for the same reason: a lenient reader that mislocates a field produces a
+ * confident wrong answer.
+ *
+ * Long-form lengths are handled because RSA SPKI needs them: a 2048-bit key is
+ * ~294 bytes, so its outer `SEQUENCE` header is `82 01 22`. Refusing those would
+ * make every RSA key report as `unreadable`, which is precisely the wrong answer
+ * for a key whose type is the thing being diagnosed.
+ */
+function readTlv(
+  der: Uint8Array,
+  at: number,
+): { tag: number; start: number; length: number } | null {
+  if (at + 2 > der.length) return null;
+
+  const tag = der[at];
+  // `(tag & 0x1f) === 0x1f` is the high-tag-number form, where the tag number
+  // continues in following bytes. Note that this is *not* an upper bound of
+  // 0x1f: the ordinary single-byte tags here are 0x06 (OBJECT IDENTIFIER) and
+  // 0x30 (SEQUENCE), both of which are above it. Rejecting "tags above 0x1f"
+  // instead would refuse every SPKI in existence.
+  if ((tag & 0x1f) === 0x1f) return null;
+
+  const first = der[at + 1];
+  let start: number;
+  let length: number;
+
+  if (first < 0x80) {
+    start = at + 2;
+    length = first;
+  } else {
+    // 0x80 is indefinite length, which DER forbids and this does not model.
+    const octets = first & 0x7f;
+    // Four or more length bytes would exceed any key this cares about, and are
+    // a cheap way for a hostile input to make this allocate.
+    if (octets === 0 || octets > 3 || at + 2 + octets > der.length) return null;
+
+    start = at + 2 + octets;
+    length = 0;
+    for (let i = 0; i < octets; i += 1) {
+      const byte = der[at + 2 + i];
+      if (byte === undefined) return null;
+      length = length * 256 + byte;
+    }
+  }
+
+  const end = start + length;
+  if (end > der.length) return null;
+
+  return { tag, start, length };
+}
+
+/** OIDs this system has a name for. Anything else renders as unknown. */
+const SPKI_ALGORITHM_OIDS: Record<string, string> = {
+  '1.2.840.10045.2.1': 'ECDSA',
+  '1.2.840.113549.1.1.1': 'RSA',
+  '1.2.840.113549.1.1.10': 'RSA-PSS',
+};
+
+const SPKI_CURVE_OIDS: Record<string, string> = {
+  '1.2.840.10045.3.1.7': 'P-256',
+  '1.2.840.10045.3.1.34': 'P-384',
+  '1.2.840.10045.3.1.35': 'P-521',
+  '1.3.132.0.34': 'P-384',
+  '1.3.132.0.35': 'P-521',
+  '1.3.132.0.10': 'secp256k1',
+  '1.3.101.112': 'Ed25519',
+  '1.3.101.113': 'Ed448',
+};
+
+/** Enough for any OID in the tables above, and a hard stop on hostile input. */
+const MAX_OID_BYTES = 20;
+
+/**
+ * Dotted-decimal form of an OBJECT IDENTIFIER, or `''` if it is not one.
+ *
+ * `''` is the safe failure: the result is only ever a lookup key, so an
+ * unreadable OID falls through to `unknown-algorithm` and no part of the input
+ * reaches the log.
+ */
+function decodeOid(der: Uint8Array, tlv: { start: number; length: number }): string {
+  if (tlv.length < 1 || tlv.length > MAX_OID_BYTES) return '';
+
+  const first = der[tlv.start];
+  if (first === undefined) return '';
+
+  // The first subidentifier packs two arcs into one byte: below 80 it is
+  // `first * 40 + second`, and from 80 it is `2 * 80 + second`. P-256's
+  // id-ecPublicKey starts `2a`, which is 40 * 1 + 2 — reading that as a plain
+  // division yields arc "21" and the whole OID stops matching.
+  const [firstArc, secondArc] = first < 80 ? [Math.floor(first / 40), first % 40] : [2, first - 80];
+  const parts: number[] = [firstArc, secondArc];
+  let value = 0;
+  for (let i = 1; i < tlv.length; i += 1) {
+    const byte = der[tlv.start + i];
+    if (byte === undefined) return '';
+    value = value * 128 + (byte & 0x7f);
+    // Seven bits per byte, bounded by MAX_OID_BYTES: this cannot overflow a
+    // double at these lengths, and the loop is over a bounded slice anyway.
+    if ((byte & 0x80) === 0) {
+      parts.push(value);
+      value = 0;
+    }
+  }
+
+  // A trailing continuation bit with no final byte is a truncated OID, not a
+  // shorter one.
+  if (value !== 0) return '';
+  return parts.join('.');
+}
+
+/**
+ * Name the algorithm a DER SPKI key declares, e.g. `ECDSA P-256` or `RSA`.
+ *
+ * ## What this is for
+ *
+ * Strictly a **reader for diagnostics**. It gates nothing: no verification
+ * decision anywhere in this file consults its output, and `importP256PublicKey`
+ * still hands the bytes to WebCrypto and accepts or rejects on WebCrypto's
+ * answer. It exists because when a key fails to import, "it failed" is not an
+ * answer — `P-384` or `RSA` in the log is, and that is the difference between
+ * diagnosing a wrong-key-type in a minute and not diagnosing it at all.
+ *
+ * ## Why it never echoes what it read
+ *
+ * The keys it inspects are attacker-supplied. It therefore renders **only**
+ * names from the two tables above; an OID it does not recognise becomes
+ * `unknown-algorithm` or `unknown-curve`, never the attacker's own encoding of
+ * one. Nothing derived from the bytes is returned, so there is nothing here that
+ * could carry key material or an injected string into a log line.
+ *
+ * Never throws. A reader that can fail the verification it observes would be a
+ * second, worse parser.
+ */
+function describeSpkiKey(spki: Uint8Array | null): string {
+  if (spki === null) return 'unreadable';
+
+  try {
+    // SEQUENCE { SEQUENCE { OID algorithm, OID parameters }, BIT STRING }
+    const outer = readTlv(spki, 0);
+    if (outer === null || outer.tag !== 0x30) return 'unreadable';
+
+    const algorithmIdentifier = readTlv(spki, outer.start);
+    if (algorithmIdentifier === null || algorithmIdentifier.tag !== 0x30) return 'unreadable';
+
+    const algorithmOid = readTlv(spki, algorithmIdentifier.start);
+    if (algorithmOid === null || algorithmOid.tag !== 0x06) return 'unreadable';
+
+    const algorithm = SPKI_ALGORITHM_OIDS[decodeOid(spki, algorithmOid)];
+    if (algorithm === undefined) return 'unknown-algorithm';
+
+    // EC keys carry the curve as the parameters OID; RSA keys carry NULL, and
+    // the algorithm name alone is the answer.
+    const parameters = readTlv(spki, algorithmOid.start + algorithmOid.length);
+    if (parameters === null || parameters.tag !== 0x06) return algorithm;
+
+    const curve = SPKI_CURVE_OIDS[decodeOid(spki, parameters)];
+    return curve === undefined ? `${algorithm} unknown-curve` : `${algorithm} ${curve}`;
+  } catch {
+    return 'unreadable';
+  }
+}
+
+/**
+ * Base64 → bytes, or `null` instead of refusing.
+ *
+ * The non-refusing twin of `base64ToBytes`, for the places that must *describe*
+ * a key rather than validate one. Key material is untrusted and routinely
+ * malformed; a diagnostic reader that refuses on bad input is useless exactly
+ * when it is needed.
+ */
+function tryBase64ToBytes(value: string): Uint8Array | null {
+  try {
+    return base64ToBytes(value);
+  } catch {
     return null;
   }
 }
@@ -723,43 +1096,69 @@ export async function verifyPassCallback(
     'intermediateSigningKey.signedKey',
     'malformed_envelope',
   );
+  // `signatures` is optional in practice: a loyalty pass callback captured live
+  // in production carries only `signedKey`. Absence is not treated as a
+  // negative result — see the module header, "The absent intermediate key
+  // signature". What matters is that a signature array which *does* arrive is
+  // verified, and an empty one is not silently counted as a pass.
   const keySignatures = (intermediate as CallbackEnvelope['intermediateSigningKey']).signatures;
-  if (!Array.isArray(keySignatures) || keySignatures.length === 0) {
-    refuse(
-      'malformed_envelope',
-      'The callback has no `intermediateSigningKey.signatures`, so its key cannot be attributed to Google.',
-    );
-  }
+  const shippedKeySignatures = Array.isArray(keySignatures) ? keySignatures : [];
 
   // -- 3. Intermediate key, against Google's roots -------------------------
+  //
+  // `diagnostic` accumulates as the crypto proceeds, so every refusal from here
+  // on can describe what it actually saw. Fields stay unset until they are
+  // known, rather than being filled in with zeroes that would read as measured
+  // facts about a stage that never ran.
+  const diagnostic: PassCallbackDiagnostic = {
+    intermediateKeySignatureCount: shippedKeySignatures.length,
+  };
+
   const rootKeys = deps.fetchRootKeys
     ? await deps.fetchRootKeys()
     : await currentRootKeys(nowMillis);
+
+  diagnostic.rootKeyCount = rootKeys.length;
 
   if (rootKeys.length === 0) {
     refuse(
       'no_usable_root_key',
       'No unexpired Google root key is available for this protocol, so no callback can be authenticated.',
+      diagnostic,
     );
   }
 
+  // Every offered key is described, imported or not. The `imported: false`
+  // entries are the point: without them a key this runtime declined is
+  // indistinguishable from a key that verified nothing.
   const rootCryptoKeys: CryptoKey[] = [];
+  const describedRootKeys: Array<{ algorithm: string; imported: boolean }> = [];
   for (const rootKey of rootKeys) {
     const imported = await importP256PublicKey(rootKey.keyValue);
+    const algorithm = describeSpkiKey(tryBase64ToBytes(rootKey.keyValue));
+    describedRootKeys.push({ algorithm, imported: imported !== null });
     if (imported !== null) rootCryptoKeys.push(imported);
   }
+  diagnostic.rootKeys = describedRootKeys;
+  diagnostic.importedRootKeyCount = rootCryptoKeys.length;
+
   if (rootCryptoKeys.length === 0) {
     refuse(
       'no_usable_root_key',
       'Google published root keys but none could be read as P-256 verification keys.',
+      diagnostic,
     );
   }
 
   let keySignatureBytes: Bytes[];
   try {
-    keySignatureBytes = keySignatures.map((value) => base64ToBytes(value));
+    keySignatureBytes = shippedKeySignatures.map((value) => base64ToBytes(value));
   } catch {
-    refuse('malformed_envelope', 'An `intermediateSigningKey.signatures` entry is not valid base64.');
+    refuse(
+      'malformed_envelope',
+      'An `intermediateSigningKey.signatures` entry is not valid base64.',
+      diagnostic,
+    );
   }
 
   const intermediateKeyBytes = toLengthValue([
@@ -768,10 +1167,19 @@ export async function verifyPassCallback(
     signedKey,
   ]);
 
-  if (!(await anySignatureVerifies(keySignatureBytes, intermediateKeyBytes, rootCryptoKeys))) {
+  // Verified only when the envelope actually shipped signatures. Note the
+  // asymmetry, which is the whole decision: an empty array skips the check,
+  // while a non-empty array that verifies against nothing is a refusal. An
+  // absence of evidence is tolerated; failing evidence is not.
+  if (
+    keySignatureBytes.length > 0 &&
+    !(await anySignatureVerifies(keySignatureBytes, intermediateKeyBytes, rootCryptoKeys))
+  ) {
     refuse(
       'intermediate_key_unverified',
-      'The callback carries an intermediate key that no current Google root key vouches for.',
+      'The callback carries intermediate key signatures, and none of them verifies under any current ' +
+        'Google root key.',
+      diagnostic,
     );
   }
 
@@ -782,14 +1190,20 @@ export async function verifyPassCallback(
     intermediateKeyValue = requireString(decodedKey?.keyValue, 'keyValue', 'malformed_envelope');
   } catch (err) {
     if (err instanceof PassCallbackVerificationError) throw err;
-    refuse('malformed_envelope', 'The callback intermediate key is not valid JSON.');
+    refuse('malformed_envelope', 'The callback intermediate key is not valid JSON.', diagnostic);
   }
+
+  diagnostic.envelopeKeyAlgorithm = describeSpkiKey(tryBase64ToBytes(intermediateKeyValue));
 
   const intermediateCryptoKey = await importP256PublicKey(intermediateKeyValue);
   if (intermediateCryptoKey === null) {
+    // Its own code, not `intermediate_key_unverified`: the signature over this
+    // key may well have verified. What failed is that this runtime cannot use
+    // the key, which is a different fault with a different fix.
     refuse(
-      'intermediate_key_unverified',
+      'intermediate_key_unreadable',
       'The callback intermediate key is not a readable P-256 public key.',
+      diagnostic,
     );
   }
 
@@ -802,7 +1216,11 @@ export async function verifyPassCallback(
   ]);
 
   if (!(await anySignatureVerifies([messageSignatureBytes], messageBytes, [intermediateCryptoKey]))) {
-    refuse('message_unverified', 'The callback message is not signed by its own intermediate key.');
+    refuse(
+      'message_unverified',
+      'The callback message is not signed by its own intermediate key.',
+      diagnostic,
+    );
   }
 
   // -- 5. Only now is the payload read -------------------------------------
