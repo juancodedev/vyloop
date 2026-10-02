@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 
 import { brandRoute } from './brand';
@@ -268,18 +269,61 @@ app.notFound((c) => {
 // Error handler
 // ---------------------------------------------------------------------------
 
+/**
+ * The path, with no query string.
+ *
+ * A query string is where credentials live — `?token=`, `?code=` for an OAuth
+ * exchange, `?signature=` — and `wrangler tail` retains logs where anyone with
+ * dashboard access can read them. The pathname is what triage actually needs to
+ * identify the failing route, and it carries no credential, so that is all this
+ * logs. Reaching for `c.req.url` here would put the full query into an error log
+ * on every 500, which is the exact leak the next paragraph exists to prevent.
+ */
+function logPathname(c: Context<{ Bindings: GatewayEnv }>): string {
+  return new URL(c.req.url).pathname;
+}
+
 app.onError((err, c) => {
-  console.error('Gateway error:', err);
-  return c.json(
+  // One value, used for both the response and the log. Generating a second UUID
+  // for either side is the bug this replaces: the client was handed an id that
+  // existed nowhere but the response body, so `wrangler tail --search <id>` came
+  // back empty and the id could not be tied to anything. A `request_id` nobody
+  // can find is worse than none, because the user is told to report it.
+  const requestId = crypto.randomUUID();
+
+  // Built before logging so the status in the log is read off the response that
+  // is actually going out. Logging a literal 500 here would be true today and
+  // silently wrong the day a handler returns a different status after throwing.
+  const response = c.json(
     {
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Internal server error',
-        request_id: crypto.randomUUID(),
+        request_id: requestId,
       },
     },
     500,
   );
+
+  // ## What is deliberately absent
+  //
+  // No headers, no cookies, no request body. This is the gateway: it carries a
+  // customer's `Authorization: Bearer`, session cookies and card-adjacent JSON
+  // for every tenant on the platform, and an error handler is the single place
+  // that sees all of it at once. Serialising the request "for context" would
+  // write live customer credentials into retained logs on every 500 — and an
+  // error log is exactly the thing that gets copied into an issue, a pastebin
+  // and a support ticket. Method, path, status and the error itself are what
+  // triage needs; a token would help nobody and would outlive the incident.
+  //
+  // The error object is logged as a second argument rather than interpolated, so
+  // its stack survives instead of being flattened into `String(err)`.
+  console.error(
+    `[gateway] request_id=${requestId} ${c.req.method} ${logPathname(c)} ${response.status}:`,
+    err,
+  );
+
+  return response;
 });
 
 export default app;
