@@ -24,6 +24,7 @@ import ProfilePage from './page';
 
 const mocks = vi.hoisted(() => ({
   getProfile: vi.fn(),
+  getWalletPass: vi.fn(),
   replace: vi.fn(),
   push: vi.fn(),
   logout: vi.fn(),
@@ -48,8 +49,14 @@ vi.mock('../lib/auth', () => ({
 
 // `updateConsent` is intentionally absent: it was removed because
 // `PUT /v1/customers/me/consent` does not exist in any worker.
+//
+// `getWalletPass` is present because the profile now asks for the pass, and it
+// is stubbed rather than left undefined so that a refusal path could not throw
+// inside a test that was only about the balance. The wallet behaviour itself is
+// asserted in `wallet-card.behavior.test.tsx`; what is asserted here is that the
+// profile asks at all.
 vi.mock('../lib/api', () => ({
-  api: { getProfile: mocks.getProfile },
+  api: { getProfile: mocks.getProfile, getWalletPass: mocks.getWalletPass },
 }));
 
 vi.mock('qrcode', () => ({
@@ -104,6 +111,26 @@ function ladder(): HTMLElement {
   return screen.getByRole('list', { name: 'Niveles del programa' });
 }
 
+/**
+ * A pass as `GET /v1/wallet/pass` answers it.
+ *
+ * Stubbed on every test rather than per-test, so a test that is only about the
+ * balance is not also the place where a missing stub turns into an unhandled
+ * rejection. The behaviour of the card itself is asserted in
+ * `wallet-card.behavior.test.tsx`.
+ */
+function makeWalletPass(overrides: Record<string, unknown> = {}) {
+  return {
+    save_url: 'https://pay.google.com/gp/v/save/ABC123?jwt.encoded',
+    object_id: '3388000000023206930.tenant-1.member-3f8a',
+    class_id: '3388000000023206930.tenant-1',
+    member_code: 'K7M2QX',
+    balance_points: 1200,
+    points_currency: 'puntos',
+    ...overrides,
+  };
+}
+
 function rungNames(): (string | null | undefined)[] {
   return within(ladder())
     .getAllByRole('listitem')
@@ -139,6 +166,7 @@ function gapText(): string | null {
 describe('profile pass behavior', () => {
   beforeEach(() => {
     mocks.getProfile.mockReset();
+    mocks.getWalletPass.mockReset();
     mocks.replace.mockReset();
     mocks.push.mockReset();
     mocks.logout.mockReset();
@@ -146,6 +174,7 @@ describe('profile pass behavior', () => {
     mocks.authLoading = false;
     mocks.customer = { fullName: 'Ada Lovelace', globalId: GLOBAL_ID };
     mocks.getProfile.mockResolvedValue(makeProfile());
+    mocks.getWalletPass.mockResolvedValue(makeWalletPass());
     mocks.toDataURL.mockResolvedValue('data:image/png;base64,SEVMTE8=');
     vi.stubGlobal('fetch', vi.fn());
     localStorage.clear();
@@ -538,11 +567,64 @@ describe('profile pass behavior', () => {
     expect(mocks.push).toHaveBeenCalledWith('/');
   });
 
-  it('offers no wallet pass, not even disabled', async () => {
+  // ─── The Google Wallet pass ────────────────────────────────────────────
+  //
+  // This block replaces `offers no wallet pass, not even disabled`, which
+  // asserted the absence of a control on the premise that the issuer was
+  // unapproved. The issuer is approved and a pass works on a real phone, so the
+  // premise is retired — and what replaces it is not "the button exists" but the
+  // rule the button has to obey: it says the truth about the state, and a
+  // refusal is never dressed as "you have no card".
+
+  it('asks for the pass, which is the link this page was missing', async () => {
+    // The bug being fixed, asserted as a call. A card that rendered without
+    // asking would satisfy every other assertion here and look identical in a
+    // screenshot.
     await renderPage();
 
-    expect(screen.queryByText(/wallet/i)).toBeNull();
-    expect(screen.queryByText(/billetera/i)).toBeNull();
-    expect(screen.queryByText(/Apple Pay|Google Pay/i)).toBeNull();
+    await waitFor(() => expect(mocks.getWalletPass).toHaveBeenCalled());
+  });
+
+  it('offers the save link the API returned', async () => {
+    mocks.getWalletPass.mockResolvedValue(
+      makeWalletPass({ save_url: 'https://pay.google.com/gp/v/save/XYZ?jwt.abc' }),
+    );
+
+    await renderPage();
+
+    const link = await screen.findByRole('link', { name: /google wallet/i });
+
+    expect(link.getAttribute('href')).toBe('https://pay.google.com/gp/v/save/XYZ?jwt.abc');
+  });
+
+  it('shows the member code that only exists once a pass has been asked for', async () => {
+    // A profile seen before this answers has no code. That is the ordinary state
+    // — `issuance.ts` mints it lazily and deliberately not at registration — and
+    // the page says so rather than leaving the customer to conclude their
+    // account is broken.
+    await renderPage();
+
+    expect(await screen.findByText('K7M2QX')).toBeTruthy();
+  });
+
+  it('still renders the balance and the QR when the pass is refused', async () => {
+    // The wallet card is an addition to this page, not a gate in front of it. A
+    // refusal from Google's side cannot take away the parts of the profile that
+    // work.
+    mocks.getWalletPass.mockRejectedValue(
+      Object.assign(new Error('refused'), {
+        name: 'ApiError',
+        code: 'WALLET_CLASS_NOT_APPROVED',
+        status: 409,
+      }),
+    );
+
+    await renderPage();
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    // The pass area is the one thing that is gone; the pass itself is not.
+    expect(screen.getByRole('region', { name: 'Tu pase' })).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Niveles del programa' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /c[oó]digo|qr/i })).toBeTruthy();
   });
 });

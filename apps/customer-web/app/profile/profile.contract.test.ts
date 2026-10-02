@@ -62,7 +62,39 @@ describe('Stage 4 club-barrio pass contract', () => {
     expect(qr).not.toMatch(/https?:\/\/[^`]*\$\{globalId\}/);
   });
 
-  it('offers no wallet pass', () => {
-    expect(page).not.toMatch(/wallet|billetera|Apple Pay|Google Pay/i);
+  it('names the truth of the wallet state instead of staying silent about it', () => {
+    // Replaces `offers no wallet pass`, which asserted that the profile must not
+    // mention a wallet at all. That was a delivery gate on an unapproved issuer,
+    // and it kept passing long after the reason for it stopped being true — so it
+    // held a page silent about a working feature instead of holding it honest.
+    //
+    // What replaces it is the rule that guard was reaching for, asserted on this
+    // file: the page renders the card, and it carries **no wallet copy of its
+    // own**. Every refusal message lives in `lib/wallet.ts`, which is where
+    // `delivery.contract.test.ts` asserts it stays. A branch invented inline here
+    // is exactly how a 409 would end up rendered as "no tenés tarjeta".
+    expect(page).toMatch(/<WalletCard\b/);
+
+    // No code and no refusal prose: this page delegates the wording.
+    expect(page).not.toMatch(/WALLET_[A-Z_]+/);
+    expect(page).not.toMatch(/no ten[eé]s (una |tu )?(tarjeta|pase)/i);
+    expect(page).not.toMatch(/tu cuenta (est[áa] mal|no tiene)/i);
+
+    // And the member code is shown, with the reason it only appears here. A
+    // customer who sees a profile without one has to be told it is normal, or
+    // they conclude their account is broken — see `issuance.ts` for why the
+    // code is minted lazily rather than at registration.
+    expect(page).toMatch(/MEMBER_CODE_PEPPER/);
+  });
+
+  it('leaves the save link to the API rather than building one', () => {
+    // `save_url` is a signed claim naming an object created at Google. A second
+    // construction of it in this file would be a second thing to keep in
+    // agreement with Google's signing, and it would be wrong silently.
+    const walletCard = readFileSync(new URL('../components/wallet-card.tsx', import.meta.url), 'utf8');
+
+    expect(page).not.toMatch(/save_url|saveUrl/);
+    expect(walletCard).toMatch(/href=\{state\.pass\.save_url\}/);
+    expect(walletCard).not.toMatch(/new URL\(|encodeURIComponent/);
   });
 });

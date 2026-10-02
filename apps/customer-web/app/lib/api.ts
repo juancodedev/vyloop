@@ -1,6 +1,7 @@
 // API client — real fetch() calls against the backend API gateway
 
 import { gatewayUrl } from './gateway-url';
+import { WALLET_RESPONSE_MALFORMED, type WalletPass } from './wallet';
 
 const JWT_KEY = 'vyloop_jwt';
 
@@ -301,6 +302,47 @@ export const api = {
 
   async getProfile(): Promise<CustomerProfile> {
     const result = (await apiFetch('/v1/customers/me')) as { data: CustomerProfile };
+    return result.data;
+  },
+
+  /**
+   * A Google Wallet save link for the **caller's own** pass.
+   *
+   * No `customer_id`, on purpose, for the same reason `redeemReward` has none:
+   * the server resolves the customer from the token and a parameter would be
+   * both unnecessary and a 403 waiting to happen.
+   *
+   * ## What a successful call actually costs
+   *
+   * Not a read. This is the endpoint that **creates the `LoyaltyObject` at
+   * Google** and reconciles it afterwards, so every call is a Google API
+   * request — 200 on the first visit, 409-then-patch once the customer already
+   * holds it. That is why the caller asks once per visit and never on re-render.
+   * The alternative, `GET /v1/wallet/status`, is free and answers "should the
+   * button exist" — worth reaching for if prefetching every profile view turns
+   * out to be a rate-limit problem.
+   *
+   * ## Failures are `ApiError`, and the code is the whole point
+   *
+   * `apiFetch` already carries `status` and `error.code` out of the envelope,
+   * which is what lets the caller tell a merchant's unfinished onboarding from a
+   * 500 in this deployment. Both are the same number otherwise, and rendering
+   * them identically is how a refusal turns into "you have no pass". See
+   * `walletFailureFor`.
+   */
+  async getWalletPass(): Promise<WalletPass> {
+    const result = (await apiFetch('/v1/wallet/pass')) as { data: WalletPass } | null;
+
+    if (result?.data === undefined || result.data === null) {
+      // A 200 with no `data` is not a pass, and returning `null as unknown as
+      // WalletPass` would push an undefined `save_url` into an `href`.
+      //
+      // The code comes from `wallet.ts` because a code decides a message, and
+      // `delivery.contract.test.ts` holds every code there — spelling one here
+      // would put customer-facing wording one module away from its mapping.
+      throw new ApiError(200, WALLET_RESPONSE_MALFORMED, 'The wallet response had no pass in it.');
+    }
+
     return result.data;
   },
 
