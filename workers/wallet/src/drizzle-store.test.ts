@@ -1578,8 +1578,9 @@ describe('recordPassCallback', () => {
   it('reports zero rows changed rather than reporting success having done nothing', async () => {
     // A zero here is a fact about our own data: our tracking state and Google's
     // disagree, or the row is gone. Reporting it lets the caller say so and lets
-    // the sweep converge the row later.
-    const { fake, store } = callbackStore();
+    // the sweep converge the row later. The fake is seeded with no `executeRows`,
+    // so `RETURNING` resolves to nothing — the "no row matched" case.
+    const { store } = callbackStore();
 
     await expect(
       store.recordPassCallback(
