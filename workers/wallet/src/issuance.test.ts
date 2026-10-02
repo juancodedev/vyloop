@@ -276,6 +276,19 @@ class FakeStore implements WalletStore {
     row.demoMode = demoMode;
     return 1;
   }
+
+  // Callback methods, present only to satisfy the interface. The issuance path
+  // never calls them, and `record` would turn a call into a failing assertion
+  // rather than a silent one.
+  async findTenantByClassId(): Promise<null> {
+    throw new Error('the issuance path must not resolve a tenant from a class id');
+  }
+  async claimCallbackDelivery(): Promise<boolean> {
+    throw new Error('the issuance path must not claim a callback delivery');
+  }
+  async recordPassCallback(): Promise<number> {
+    throw new Error('the issuance path must not record a callback');
+  }
 }
 
 function readyStore(overrides: Partial<WalletProgramRow> = {}): FakeStore {

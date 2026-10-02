@@ -48,6 +48,8 @@ import {
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
 import type {
+  PassCallbackClaim,
+  PassCallbackWrite,
   PassLifecycleUpdate,
   PassObservationUpdate,
   PassReconciliationUpdate,
@@ -58,6 +60,7 @@ import type {
   WalletProgramRow,
   WalletStore,
   WalletTenantBrandingRow,
+  WalletTenantByClassIdRow,
   WalletTierRow,
 } from './store';
 
@@ -704,6 +707,106 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
                updated_at = now()
          WHERE tenant_id = ${tenantId}::uuid
         RETURNING tenant_id
+      `);
+
+      return countRows(result);
+    },
+
+    /**
+     * `class_id` → `tenant_id`, and the only cross-tenant read on the callback
+     * path.
+     *
+     * ## Why the column is compared rather than derived
+     *
+     * The obvious shortcut is to parse the tenant out of `<issuerId>.tenant-<id>`
+     * with the same helper `ids.ts` uses. It is not used, and the reason is that
+     * the program row is the *authority* on which tenant owns which class — the
+     * same reason every other read in this worker prefers
+     * `tenant_wallet_programs` over a re-derivation. A class whose stored
+     * `class_id` disagrees with the formula would be resolved by the formula to a
+     * tenant that does not own it, and the callback would then write that
+     * tenant's rows. Reading the row cannot have that failure mode: a class id
+     * that is not in the table resolves to `null` and is refused.
+     *
+     * ## No session variable
+     *
+     * There is no tenant to scope to — establishing which tenant a class belongs
+     * to *is* the question — so this runs on a session with no
+     * `app.current_tenant_id`, like `listProgramTenants`. It inherits that
+     * method's documented consequence: no rows at all once tenant RLS is
+     * enabled, until these cross-tenant queries are given a bypass role.
+     *
+     * ## The parameter is a value, never concatenated
+     *
+     * Drizzle binds it. A `classId` from a request body is attacker-influenced
+     * text, and the only reason it is safe here is that it becomes a bound
+     * parameter rather than SQL.
+     */
+    async findTenantByClassId(classId: string): Promise<WalletTenantByClassIdRow | null> {
+      const rows = await db
+        .select({ tenantId: tenantWalletPrograms.tenantId })
+        .from(tenantWalletPrograms)
+        .where(eq(tenantWalletPrograms.classId, classId))
+        .limit(1);
+
+      return (rows[0] as WalletTenantByClassIdRow | undefined) ?? null;
+    },
+
+    /**
+     * `INSERT ... ON CONFLICT DO NOTHING RETURNING`, which is the dedupe.
+     *
+     * The whole guarantee is that the check and the record are one statement, so
+     * two concurrent deliveries of the same nonce cannot both observe absence.
+     * A read-then-write has a window between the two, and Google's retries land
+     * inside windows like that.
+     *
+     * `RETURNING` is what makes the answer observable: one row means this call
+     * created the record and owns the effect, zero means the unique index
+     * rejected it and the delivery is a replay. Under `Promise<void>` the caller
+     * could not tell "already seen" from "written", which is the difference
+     * between a duplicate apply and a correct no-op.
+     */
+    async claimCallbackDelivery(claim: PassCallbackClaim): Promise<boolean> {
+      const result = await db.execute(sql`
+        INSERT INTO wallet_callback_deliveries (tenant_id, nonce, event_type, received_at)
+        VALUES (${claim.tenantId}::uuid, ${claim.nonce}, ${claim.eventType}, now())
+        ON CONFLICT ON CONSTRAINT uq_wallet_callback_deliveries_tenant_nonce DO NOTHING
+        RETURNING id
+      `);
+
+      return countRows(result) > 0;
+    },
+
+    /**
+     * The callback write, with a source set the existence guard does not have.
+     *
+     * `state IN ('issued', 'inactive', 'not_saved', 'not_issued')` is every state
+     * that does not claim a terminal lifecycle, and it is the *source* set. The
+     * consequence is the one the whole feature depends on: `del` can move a row
+     * from `issued` back to `not_saved`, which `recordPassReconciliation`'s rank
+     * guard would refuse.
+     *
+     * The states that stay put are `expired` and `completed`, by omission. Google
+     * cannot un-expire or un-complete an object, so a `save` delivered late for a
+     * pass that has since expired must not resurrect it to `issued` — and this
+     * predicate is what stops that.
+     *
+     * `inactive` is in the set precisely so it *can* move to `issued`: a customer
+     * who reactivates a pass has it in their phone, and the existence path's
+     * strict monotonicity would have forbidden recording that truth.
+     */
+    async recordPassCallback(update: PassCallbackWrite, observedAt: Date): Promise<number> {
+      const state = update.eventType === 'save' ? 'issued' : 'not_saved';
+
+      const result = await db.execute(sql`
+        UPDATE customer_wallet_passes
+           SET state = ${state},
+               last_synced_at = ${observedAt}::timestamptz,
+               updated_at = now()
+         WHERE customer_id = ${update.customerId}::uuid
+           AND tenant_id = ${update.tenantId}::uuid
+           AND state IN ('not_issued', 'not_saved', 'inactive', 'issued')
+        RETURNING customer_id
       `);
 
       return countRows(result);

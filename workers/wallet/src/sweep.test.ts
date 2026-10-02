@@ -96,6 +96,7 @@ const PROVISIONING = {
   mediaBaseUrl: 'https://media.juancode.dev',
   webBaseUrl: 'https://media.juancode.dev',
   customerWebBaseUrl: 'https://vyloop-customer-web.pages.dev',
+  callbackBaseUrl: 'https://media.juancode.dev',
 };
 
 function tenantId(n: number): string {
@@ -469,6 +470,19 @@ class SweepStore implements WalletStore {
     if (!row) return 0;
     row.demoMode = demoMode;
     return 1;
+  }
+
+  // Callback methods, present only to satisfy the interface. The sweep must
+  // never call them: it reconciles by asking Google, and a callback write would
+  // be a second, differently-guarded path to the same column.
+  async findTenantByClassId(): Promise<null> {
+    throw new Error('the sweep must not resolve a tenant from a class id');
+  }
+  async claimCallbackDelivery(): Promise<boolean> {
+    throw new Error('the sweep must not claim a callback delivery');
+  }
+  async recordPassCallback(): Promise<number> {
+    throw new Error('the sweep must not record a callback');
   }
 
   async updateProgramReviewStatus(tenant: string, reviewStatus: string): Promise<void> {
