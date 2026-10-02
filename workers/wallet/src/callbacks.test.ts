@@ -161,6 +161,14 @@ async function buildCallback(options: {
   signKeyOverride?: string;
   /** Sign the message with a key other than the one shipped. */
   messageKeyOverride?: TestKey;
+  /**
+   * Sign the *correct* `signedKey` string, but with a key that is not the root.
+   *
+   * Distinct from `signKeyOverride`, which signs a different string with the
+   * right key. This one produces the case an attacker actually has: a
+   * well-formed signature array whose signatures simply do not verify.
+   */
+  keySignatureKeyOverride?: TestKey;
   /** Ship no `signatures` on the intermediate key. */
   omitKeySignatures?: boolean;
   protocolVersion?: string;
@@ -173,11 +181,10 @@ async function buildCallback(options: {
     keyExpiration: '1791510690205',
   });
 
-  const keySignature = await signLikeGoogle(options.rootKey.privateKey, [
-    CALLBACK_SENDER_ID,
-    CALLBACK_PROTOCOL_VERSION,
-    options.signKeyOverride ?? signedKeyString,
-  ]);
+  const keySignature = await signLikeGoogle(
+    (options.keySignatureKeyOverride ?? options.rootKey).privateKey,
+    [CALLBACK_SENDER_ID, CALLBACK_PROTOCOL_VERSION, options.signKeyOverride ?? signedKeyString],
+  );
 
   const messageSignature = await signLikeGoogle(
     (options.messageKeyOverride ?? options.intermediateKey).privateKey,
@@ -387,13 +394,21 @@ describe('verifyPassCallback', () => {
       ).rejects.toMatchObject({ code: 'message_unverified' });
     });
 
-    it('refuses an intermediate key that ships no signature at all', async () => {
+    it('refuses an intermediate key whose signatures are present but not base64', async () => {
+      // The third shape, and the reason the other two are not the same decision.
+      // A signature array that arrived and cannot even be decoded is a corrupt
+      // envelope — not the "Google sent no signature" case, and not an attack
+      // either. It stays a refusal, and it says which of the three it was.
       const rootKey = await generateTestKey();
       const intermediateKey = await generateTestKey();
 
-      const body = await buildCallback({ rootKey, intermediateKey, omitKeySignatures: true });
+      const body = await buildCallback({ rootKey, intermediateKey });
+      const corrupted = body.replace(
+        JSON.parse(body).intermediateSigningKey.signatures[0] as string,
+        'not base64 %%%',
+      );
 
-      await expect(verifyPassCallback(body, verifier(rootKey))).rejects.toMatchObject({
+      await expect(verifyPassCallback(corrupted, verifier(rootKey))).rejects.toMatchObject({
         code: 'malformed_envelope',
       });
     });
@@ -418,6 +433,151 @@ describe('verifyPassCallback', () => {
       await expect(verifyPassCallback(body, verifier(rootKey))).rejects.toMatchObject({
         code: 'unsupported_protocol',
       });
+    });
+  });
+
+  describe('an intermediate key that ships no signature', () => {
+    // The captured real Google loyalty callback (below) carries only `signedKey`,
+    // with no `signatures` array at all. There is nothing to verify when the
+    // sender vouches for nothing, so refusing on that ground describes a
+    // condition Google does not actually produce.
+    //
+    // What still stands is the two links that exist: Google's root key set has
+    // to be usable, and the message signature has to verify under the key the
+    // envelope carries. An attacker without Google's root private key cannot
+    // produce a message signature that verifies here, which is what the
+    // forged-message test below is here to prove rather than assert.
+
+    it('accepts the envelope and returns the event', async () => {
+      // RED today: refused as `malformed_envelope` before any cryptography.
+      const rootKey = await generateTestKey();
+      const intermediateKey = await generateTestKey();
+
+      const body = await buildCallback({ rootKey, intermediateKey, omitKeySignatures: true });
+
+      await expect(verifyPassCallback(body, verifier(rootKey))).resolves.toEqual({
+        classId: CLASS_ID,
+        objectId: OBJECT_ID,
+        eventType: 'save',
+        nonce: 'nonce-1',
+        expTimeMillis: DEFAULT_EVENT.expTimeMillis,
+      });
+    });
+
+    it('still refuses when the signatures are present and none of them verifies', async () => {
+      // The guard against over-relaxing. Relaxing the *empty* case must not
+      // become relaxing the *unverified* case: a signature array that arrives
+      // and fails is either an attack or a corruption, and both are refusals.
+      const rootKey = await generateTestKey();
+      const intermediateKey = await generateTestKey();
+      const attackerRoot = await generateTestKey();
+
+      const body = await buildCallback({
+        rootKey,
+        intermediateKey,
+        keySignatureKeyOverride: attackerRoot,
+      });
+
+      // A well-formed signature over the correct signed bytes, by a key that is
+      // not the published root.
+      expect(JSON.parse(body).intermediateSigningKey.signatures).toHaveLength(1);
+
+      await expect(verifyPassCallback(body, verifier(rootKey))).rejects.toMatchObject({
+        code: 'intermediate_key_unverified',
+      });
+    });
+
+    it('still accepts an envelope whose intermediate key signature does verify', async () => {
+      // The pre-existing path, unchanged. If the gate below were wired to skip
+      // verification whenever the array is non-empty *and* something were wrong
+      // with a verifying signature, this is what would notice.
+      const rootKey = await generateTestKey();
+      const intermediateKey = await generateTestKey();
+
+      const body = await buildCallback({ rootKey, intermediateKey });
+
+      await expect(verifyPassCallback(body, verifier(rootKey))).resolves.toMatchObject({
+        eventType: 'save',
+      });
+    });
+
+    it('refuses a forged message even though the intermediate key is unsigned', async () => {
+      // THE test. This is what makes tolerating an absent signature acceptable:
+      // the absence must not become a way in. A keypair the attacker generated,
+      // a message they signed with it, no signature over the key — and it still
+      // does not get in, because the message signature does not verify.
+      const rootKey = await generateTestKey();
+      const intermediateKey = await generateTestKey();
+      const attackerKey = await generateTestKey();
+
+      const body = await buildCallback({
+        rootKey,
+        intermediateKey,
+        omitKeySignatures: true,
+        messageKeyOverride: attackerKey,
+      });
+
+      await expect(verifyPassCallback(body, verifier(rootKey))).rejects.toMatchObject({
+        code: 'message_unverified',
+      });
+    });
+
+    it('refuses a message edited after signing, even though the intermediate key is unsigned', async () => {
+      // The other half of the same guarantee: a genuine intermediate key, an
+      // unsigned one, and a payload swapped underneath it.
+      const rootKey = await generateTestKey();
+      const intermediateKey = await generateTestKey();
+
+      const body = await buildCallback({
+        rootKey,
+        intermediateKey,
+        omitKeySignatures: true,
+        tamperSignedMessage: JSON.stringify({
+          ...DEFAULT_EVENT,
+          objectId: `${ISSUER_ID}.member-someone-elses-pass`,
+          eventType: 'del',
+        }),
+      });
+
+      await expect(verifyPassCallback(body, verifier(rootKey))).rejects.toMatchObject({
+        code: 'message_unverified',
+      });
+    });
+
+    it('still refuses when no usable root key is available', async () => {
+      // The root link was not relaxed. An absent intermediate signature does not
+      // become a reason to proceed against an empty trusted set.
+      const rootKey = await generateTestKey();
+      const intermediateKey = await generateTestKey();
+
+      const body = await buildCallback({ rootKey, intermediateKey, omitKeySignatures: true });
+
+      const expired = {
+        recipientId: ISSUER_ID,
+        now: () => NOW,
+        fetchRootKeys: async () => decodeRootKeys(rootKeyDocument(rootKey, NOW - 1000), NOW),
+      };
+
+      await expect(verifyPassCallback(body, expired)).rejects.toMatchObject({
+        code: 'no_usable_root_key',
+      });
+    });
+
+    it('still refuses when the root keys cannot be read as P-256 at all', async () => {
+      const rootKey = await generateTestKey();
+      const intermediateKey = await generateTestKey();
+
+      const body = await buildCallback({ rootKey, intermediateKey, omitKeySignatures: true });
+
+      await expect(
+        verifyPassCallback(body, {
+          recipientId: ISSUER_ID,
+          now: () => NOW,
+          // A syntactically valid entry carrying bytes that are not a key. This
+          // is the silent-import path, and it must still fail closed.
+          fetchRootKeys: async () => [{ keyValue: 'bm90LWEtLWtleQ==', protocolVersion: 'ECv2SigningOnly', keyExpiration: '99999999999999' }],
+        }),
+      ).rejects.toMatchObject({ code: 'no_usable_root_key' });
     });
   });
 
@@ -614,11 +774,12 @@ describe('a real captured Google loyalty callback', () => {
     // Belt and braces: a real-looking envelope with keys we do not hold must not
     // pass. Being recognisably Google is not authorisation.
     //
-    // The refusal code is deliberately not pinned. This capture carries no
-    // `intermediateSigningKey.signatures` array, so it is turned away at the
-    // envelope check rather than at the signature check — and which of the two
-    // fires first is an implementation detail, not a contract. What is asserted
-    // is the only thing that matters: it does not get in.
+    // This capture carries no `intermediateSigningKey.signatures`, so it now gets
+    // *past* the intermediate-key check — that relaxation is deliberate — and is
+    // turned away at the message signature instead. The refusal code is still not
+    // pinned: what it proves is the envelope's key is not one we hold, and that is
+    // asserted here as a rejection of any kind, because the only thing that
+    // matters is that it does not get in.
     const rootKey = await generateTestKey();
 
     await expect(
@@ -626,28 +787,22 @@ describe('a real captured Google loyalty callback', () => {
     ).rejects.toBeInstanceOf(PassCallbackVerificationError);
   });
 
-  it('carries no intermediateSigningKey.signatures, which needs a live capture to confirm', () => {
-    // UNVERIFIED, and stated rather than buried. Google's documented algorithm
-    // requires the intermediate key to be signed by a root key, and the Tink
-    // reference implementation reads those signatures from
-    // `intermediateSigningKey.signatures` — so they are required here, and
-    // failing closed without them is the right default.
+  it('carries no intermediateSigningKey.signatures, which is why the check is conditional', () => {
+    // This capture is the production evidence behind the relaxation. Google's
+    // documented algorithm and Tink's reference implementation both require
+    // `intermediateSigningKey.signatures`, and Google's `ECv2` payment tokens
+    // carry it — but this loyalty pass callback, captured live, has only
+    // `signedKey`.
     //
-    // But the one real loyalty callback captured in the wild, and reproduced
-    // verbatim above, has no `signatures` array: only `signedKey`. The same
-    // capture's `ECv2` counterpart (a payment token, a different protocol) does
-    // carry one, which is why the omission may be a documentation artefact of
-    // the source this fixture came from rather than something Google does.
+    // Requiring the field meant refusing 100% of real deliveries for a condition
+    // Google does not produce. So the check is now conditional on the field
+    // being present, and the reasoning is written down in the module header under
+    // "The absent intermediate key signature" rather than left implicit here.
     //
-    // If Google genuinely omits it for pass callbacks, this endpoint will refuse
-    // 100% of real deliveries — loudly, with `intermediate_key_unverified` or
-    // `malformed_envelope`, and with nothing written. The opposite failure, which
-    // this design refuses to accept, is accepting an envelope whose key was
-    // never shown to be Google's.
-    //
-    // This is the one assumption in the callback path that a single live capture
-    // settles. Until it does, the endpoint is correct-by-refusal rather than
-    // correct-by-acceptance.
+    // The capture stays in this file as the reason the relaxation exists, and as
+    // a standing reminder that the specification and the wire format disagree for
+    // passes. If Google starts sending the field, the verification resumes and
+    // nothing else changes.
     const envelope = JSON.parse(REAL_LOYALTY_CALLBACK) as {
       intermediateSigningKey: Record<string, unknown>;
     };
