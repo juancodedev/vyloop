@@ -129,6 +129,29 @@ export interface WalletBindings {
    * a staging customer web is a configuration change and not a code change.
    */
   WALLET_CUSTOMER_WEB_BASE_URL?: string | undefined;
+  /**
+   * The public origin Google's pass callbacks are POSTed to — the gateway.
+   *
+   * ## Why a fourth URL, and not a reuse of one of the three
+   *
+   * `WALLET_WEB_BASE_URL` builds `homepageUri`, which a human taps.
+   * `WALLET_MEDIA_BASE_URL` builds `programLogo`, which Google *fetches*.
+   * This one is neither: it is a URL Google **POSTs signed requests to**, and
+   * being wrong about it fails differently from both of the others.
+   *
+   * - A wrong `homepageUri` gets the class rejected at review.
+   * - A wrong `programLogo` is an empty logo.
+   * - A wrong `callbackOptions.url` means Google silently never reports that
+   *   a customer saved or deleted a pass, and `customer_wallet_passes.state`
+   *   keeps whatever the last reconcile inferred. There is no error anywhere,
+   *   because a missing callback is indistinguishable from a customer who has
+   *   not opened the app.
+   *
+   * That last one is silent, which is why it gets its own var: it is a
+   * deployment fact, and a staging callback endpoint is configuration rather
+   * than a code change.
+   */
+  WALLET_CALLBACK_BASE_URL?: string | undefined;
 }
 
 /**
@@ -139,6 +162,16 @@ export interface WalletBindings {
  * `/profile/history` exist in `apps/customer-web/app` and are served from there.
  */
 export const DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+
+/**
+ * The origin Google POSTs pass callbacks to, when `WALLET_CALLBACK_BASE_URL`
+ * says nothing.
+ *
+ * **The production gateway.** Not a preview, not a test host, not `localhost` —
+ * see `parseCallbackBaseUrl` for why a class created against the wrong origin
+ * cannot be corrected by changing it later.
+ */
+export const DEFAULT_WALLET_CALLBACK_BASE_URL = 'https://media.juancode.dev';
 
 /**
  * The gateway origin used when `WALLET_MEDIA_BASE_URL` says nothing.
@@ -230,6 +263,32 @@ export function parseWebBaseUrl(raw: string | undefined | null): string {
 export function parseCustomerWebBaseUrl(raw: string | undefined | null): string {
   const trimmed = (raw ?? '').trim();
   if (trimmed === '') return DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL;
+
+  return trimmed.replace(/\/+$/, '');
+}
+
+/**
+ * The public origin Google's pass callbacks are POSTed to.
+ *
+ * ## The default is the production gateway, and that is the load-bearing part
+ *
+ * `callbackOptions.url` is written into the class at insert, and a Google class
+ * cannot be recreated under the same id. So a class created while this pointed
+ * somewhere else is a class that POSTs there for the rest of its life — and
+ * pointing a developer's local environment at `localhost` would mint a class that
+ * silently never reports a save in production. The default is the real host.
+ *
+ * ## Why it is its own function rather than a flag on `parseWebBaseUrl`
+ *
+ * The two defaults are the same string today and the two are still separate,
+ * for the same reason `parseMediaBaseUrl` and `parseCustomerWebBaseUrl` are:
+ * they are independent consumers that are allowed to diverge, and a shared
+ * implementation would need a "which host" argument a caller can get wrong. A
+ * reader who needs to know where a callback goes reads the callback function.
+ */
+export function parseCallbackBaseUrl(raw: string | undefined | null): string {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return DEFAULT_WALLET_CALLBACK_BASE_URL;
 
   return trimmed.replace(/\/+$/, '');
 }

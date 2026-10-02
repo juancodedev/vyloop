@@ -205,6 +205,22 @@ function createFakeDb(
     const tenantParams = query.params.filter(
       (param) => typeof param === 'string' && isUuid(param),
     );
+
+    // A predicate with no tenant parameter at all scopes to nothing, so Postgres
+    // admits every row and lets the predicate's own equality do the work. That is
+    // the case `findTenantByClassId` is: it is deliberately the cross-tenant read
+    // of this worker, resolving a tenant *from* a Google class, and a fake that
+    // insisted on a tenant parameter would report it as finding nothing — a
+    // silent total failure of the callback path that looked like a passing test.
+    if (tenantParams.length === 0) {
+      const valueParams = query.params.filter((param) => typeof param === 'string');
+      state.rows =
+        valueParams.length === 0
+          ? state.rows
+          : state.rows.filter((row) => valueParams.includes(String(row.classId)));
+      return builder;
+    }
+
     state.rows = rows.filter((row) => {
       if (!tenantParams.includes(String(row[key]))) return false;
       if (alsoKey === undefined) return true;
@@ -1347,5 +1363,230 @@ describe('insertProgram', () => {
     await store.insertProgram(INSERT);
 
     expect(fake.executed[0]!.sql).toContain('ON CONFLICT (tenant_id) DO NOTHING');
+  });
+});
+
+// ============================================================================
+// Google Wallet callbacks
+//
+// Three methods, and the properties each one has to hold on its own. The nonce
+// claim and the state write are raw `db.execute` statements, so what these tests
+// check is the SQL the store actually emits — compiled by the same dialect
+// drizzle would use — plus what the method reports for the rows it changed.
+// ============================================================================
+
+describe('findTenantByClassId', () => {
+  it('resolves the tenant from the stored class id, and reads no other column', async () => {
+    const fake = createFakeDb(
+      [{ tenantId: TENANT, classId: `${TENANT}.class` }],
+      'tenantId',
+    );
+    const store = createDrizzleWalletStore(fake.db);
+
+    const found = await store.findTenantByClassId(`${TENANT}.class`);
+
+    // Asserted on the field rather than with `toEqual`, and the reason is the
+    // fake: it returns the rows it was seeded with and does not model a
+    // `.select({...})` projection, so the shape it hands back is the fixture's.
+    // Postgres would return only the selected column. What the fake *can* prove
+    // is which columns the statement reads, asserted immediately below.
+    expect(found?.tenantId).toBe(TENANT);
+    // The whole tenant-isolation boundary of the callback path is this lookup, so
+    // what it reads is asserted rather than assumed: a version that selected the
+    // whole program row would invite a caller to read `reviewStatus` from a row it
+    // reached cross-tenant.
+    expect(fake.scoped[0]!.sql).toContain('class_id');
+    expect(fake.scoped[0]!.sql).not.toContain('review_status');
+    expect(fake.scoped[0]!.sql).not.toContain('demo_mode');
+  });
+
+  it('returns null for a class no row owns, so it is refused rather than guessed', async () => {
+    // A class created by hand in the console, or one belonging to another
+    // deployment pointed at this endpoint. Refusing is the point: a class we
+    // cannot attribute to a tenant names no row we may write.
+    const fake = createFakeDb([{ tenantId: TENANT, classId: `${TENANT}.class` }], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await expect(store.findTenantByClassId('somebody-elses-class')).resolves.toBeNull();
+  });
+
+  it('binds the class id as a parameter instead of putting it in the SQL text', async () => {
+    // The class id arrives in a request body. It is safe here only because it
+    // becomes a bound value; this asserts that, since concatenating it is the
+    // failure that turns a public endpoint into an injection point.
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.findTenantByClassId(`x'; DROP TABLE tenants; --`);
+
+    expect(fake.scoped[0]!.params).toContain(`x'; DROP TABLE tenants; --`);
+    expect(fake.scoped[0]!.sql).not.toContain('DROP TABLE');
+  });
+});
+
+describe('claimCallbackDelivery', () => {
+  function fakeWithExecute() {
+    const fake = createFakeDb([], 'tenantId');
+    return { fake, store: createDrizzleWalletStore(fake.db) };
+  }
+
+  it('delegates the duplicate check to the unique index, atomically', async () => {
+    // The assertion is the clause, and it is the whole mechanism. A read-then-write
+    // would let two concurrent deliveries of one nonce both observe absence and
+    // both apply, and Google's retries are concurrent by nature. A plain INSERT
+    // would throw on the duplicate instead of reporting it, and `DO UPDATE`
+    // would return a row and re-apply — so all three are caught here.
+    const { fake, store } = fakeWithExecute();
+    fake.executeRows.push({ id: 1 });
+
+    await store.claimCallbackDelivery({ tenantId: TENANT, nonce: 'n-1', eventType: 'save' });
+
+    expect(fake.executed[0]!.sql).toContain('INSERT INTO wallet_callback_deliveries');
+    expect(fake.executed[0]!.sql).toContain('ON CONFLICT');
+    expect(fake.executed[0]!.sql).toContain('DO NOTHING');
+    // Named rather than by column list, so renaming the index is a loud failure
+    // here rather than a silent fall back to a constraint that does not exist.
+    expect(fake.executed[0]!.sql).toContain('uq_wallet_callback_deliveries_tenant_nonce');
+  });
+
+  it('binds the tenant, the nonce and the event type as values', async () => {
+    // The nonce is attacker-influenced text, so the same reasoning as the class
+    // id applies: safe only because it is a parameter.
+    const { fake, store } = fakeWithExecute();
+    fake.executeRows.push({ id: 1 });
+
+    await store.claimCallbackDelivery({
+      tenantId: TENANT,
+      nonce: `n'; DELETE FROM customer_wallet_passes; --`,
+      eventType: 'save',
+    });
+
+    expect(fake.executed[0]!.params).toContain(TENANT);
+    expect(fake.executed[0]!.params).toContain(`n'; DELETE FROM customer_wallet_passes; --`);
+    expect(fake.executed[0]!.params).toContain('save');
+    expect(fake.executed[0]!.sql).not.toContain('DELETE FROM');
+  });
+
+  it('reports ownership from RETURNING, so a replay is distinguishable from a write', async () => {
+    // One row means this call created the record and owns the effect. Zero means
+    // the index rejected it and the delivery is a replay. Under a void signature
+    // the caller could not tell those apart, and that difference is duplicate
+    // apply versus correct no-op.
+    const first = fakeWithExecute();
+    first.fake.executeRows.push({ id: 1 });
+    await expect(
+      first.store.claimCallbackDelivery({ tenantId: TENANT, nonce: 'n', eventType: 'save' }),
+    ).resolves.toBe(true);
+
+    const second = fakeWithExecute();
+    await expect(
+      second.store.claimCallbackDelivery({ tenantId: TENANT, nonce: 'n', eventType: 'save' }),
+    ).resolves.toBe(false);
+  });
+});
+
+describe('recordPassCallback', () => {
+  function callbackStore() {
+    const fake = createFakeDb([], 'tenantId');
+    return { fake, store: createDrizzleWalletStore(fake.db) };
+  }
+
+  it('writes issued for a save, because the pass is in the phone', async () => {
+    const { fake, store } = callbackStore();
+    fake.executeRows.push({ customer_id: 'c' });
+
+    await store.recordPassCallback(
+      { customerId: CUSTOMER, tenantId: TENANT, eventType: 'save' },
+      new Date('2026-09-28T12:00:00.000Z'),
+    );
+
+    expect(fake.executed[0]!.sql).toContain('UPDATE customer_wallet_passes');
+    expect(fake.executed[0]!.params).toContain('issued');
+  });
+
+  it('writes not_saved for a del, and allows the issued -> not_saved move', async () => {
+    // The transition `recordPassReconciliation`'s rank guard would refuse, and
+    // the single write the whole feature exists to perform. The source set is
+    // asserted because that is what makes it possible.
+    const { fake, store } = callbackStore();
+    fake.executeRows.push({ customer_id: 'c' });
+
+    await store.recordPassCallback(
+      { customerId: CUSTOMER, tenantId: TENANT, eventType: 'del' },
+      new Date(),
+    );
+
+    expect(fake.executed[0]!.params).toContain('not_saved');
+    const sql = fake.executed[0]!.sql;
+    expect(sql).toContain("'issued'");
+    expect(sql).toContain("'inactive'");
+    expect(sql).toContain("'not_issued'");
+    expect(sql).toContain("'not_saved'");
+  });
+
+  it('keeps the terminal states terminal, so a late save cannot resurrect an expired pass', async () => {
+    // `expired` and `completed` are absent from the source set, by omission.
+    // Google cannot un-expire or un-complete an object, and a `save` delivered
+    // late for a pass that has since expired must not make it `issued` again.
+    const { fake, store } = callbackStore();
+    fake.executeRows.push({ customer_id: 'c' });
+
+    await store.recordPassCallback(
+      { customerId: CUSTOMER, tenantId: TENANT, eventType: 'save' },
+      new Date(),
+    );
+
+    const sql = fake.executed[0]!.sql;
+    const sourceSet = /state IN \(([^)]*)\)/.exec(sql)?.[1] ?? '';
+    expect(sourceSet).not.toContain('expired');
+    expect(sourceSet).not.toContain('completed');
+  });
+
+  it('scopes the write by tenant as well as by customer', async () => {
+    // `customer_id` is the primary key, so the customer predicate already
+    // narrows to one row — and that row still carries a `tenant_id` this layer
+    // must check. A row written under the wrong tenant would otherwise be moved
+    // by a callback for another merchant's class.
+    const { fake, store } = callbackStore();
+    fake.executeRows.push({ customer_id: 'c' });
+
+    await store.recordPassCallback(
+      { customerId: CUSTOMER, tenantId: TENANT, eventType: 'del' },
+      new Date(),
+    );
+
+    const sql = fake.executed[0]!.sql;
+    expect(sql).toContain('customer_id');
+    expect(sql).toContain('tenant_id');
+    expect(fake.executed[0]!.params).toContain(TENANT);
+  });
+
+  it('stamps the observation, because a callback is a definitive answer', async () => {
+    const { fake, store } = callbackStore();
+    fake.executeRows.push({ customer_id: 'c' });
+    const observedAt = new Date('2026-09-28T12:00:00.000Z');
+
+    await store.recordPassCallback(
+      { customerId: CUSTOMER, tenantId: TENANT, eventType: 'save' },
+      observedAt,
+    );
+
+    expect(fake.executed[0]!.sql).toContain('last_synced_at');
+    expect(fake.executed[0]!.params).toContain(observedAt);
+  });
+
+  it('reports zero rows changed rather than reporting success having done nothing', async () => {
+    // A zero here is a fact about our own data: our tracking state and Google's
+    // disagree, or the row is gone. Reporting it lets the caller say so and lets
+    // the sweep converge the row later. The fake is seeded with no `executeRows`,
+    // so `RETURNING` resolves to nothing — the "no row matched" case.
+    const { store } = callbackStore();
+
+    await expect(
+      store.recordPassCallback(
+        { customerId: CUSTOMER, tenantId: TENANT, eventType: 'save' },
+        new Date(),
+      ),
+    ).resolves.toBe(0);
   });
 });

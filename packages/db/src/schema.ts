@@ -12,6 +12,7 @@ import {
   unique,
   index,
   uniqueIndex,
+  bigserial,
 } from 'drizzle-orm/pg-core';
 
 // ============================================================================
@@ -530,6 +531,85 @@ export const customerWalletPasses = pgTable('customer_wallet_passes', {
   // the cross-environment `objectId` lookup.
   index('idx_customer_wallet_passes_tenant').on(sql`${table.tenantId}`),
 ]);
+
+/**
+ * One row per Google Wallet callback delivery this system has already applied.
+ *
+ * ## Why the delivery needs a row of its own
+ *
+ * Google states that callbacks are best-effort, retried with backoff, and that
+ * *"there might be duplicate deliveries"*, recommending the `nonce` be used to
+ * deduplicate. Every other trigger in this worker is idempotent **by state** — a
+ * second balance reconcile that finds the same number writes nothing — but a
+ * callback cannot lean on that, because its two events move a pass in *opposite*
+ * directions:
+ *
+ * ```text
+ * not_saved --save--> issued --del--> not_saved
+ * ```
+ *
+ * A replayed `save` arriving after a real `del` would move the row back to
+ * `issued` and tell a merchant a customer is holding a pass they deleted. State
+ * idempotency cannot catch that, because the two deliveries are genuinely
+ * different events. Only the `nonce` distinguishes a retry from a fresh event.
+ *
+ * ## Why this is not a column on `customer_wallet_passes`
+ *
+ * It cannot be: one pass receives many callbacks over its life, so a single
+ * "last nonce" column would let the *second* delivery of a pair replay. This is
+ * a log, not a marker.
+ *
+ * ## The unique index is the whole mechanism
+ *
+ * `claimCallbackNonce` is `INSERT ... ON CONFLICT DO NOTHING RETURNING`, so
+ * "seen this nonce" and "record it" are one atomic statement. A read-then-write
+ * would let two concurrent deliveries of the same nonce both observe absence and
+ * both apply — and Google's retries are concurrent by nature.
+ */
+export const walletCallbackDeliveries = pgTable(
+  'wallet_callback_deliveries',
+  {
+    /**
+     * The surrogate key.
+     *
+     * A `bigserial` rather than a uuid because nothing ever looks a delivery up
+     * by it: the only access is the uniqueness check on `(tenant_id, nonce)`. A
+     * monotonic key keeps the index insert sequential instead of random.
+     */
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    /**
+     * Google's `nonce`, verbatim.
+     *
+     * Stored as sent and compared exactly — no normalisation, no lowercasing. A
+     * nonce this system does not recognise verbatim is a nonce it has not seen,
+     * and rewriting it before comparison would let a distinct delivery collide
+     * with a recorded one.
+     */
+    nonce: text('nonce').notNull(),
+    /** Google's `eventType`, kept for support. Never used to decide anything. */
+    eventType: text('event_type').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (table) => [
+    /**
+     * The deduplication guarantee, enforced by the database rather than by the
+     * application.
+     *
+     * Scoped per tenant rather than globally, because the class that produced
+     * the delivery belongs to exactly one tenant: two tenants' callbacks arriving
+     * in the same second are two events, and a global unique index would let one
+     * merchant's customer suppress another's.
+     */
+    unique('uq_wallet_callback_deliveries_tenant_nonce').on(table.tenantId, table.nonce),
+
+    // Pruning reads the oldest rows in insertion order, which is the table's
+    // primary-key order and so needs no sort.
+    index('idx_wallet_callback_deliveries_received').on(sql`${table.receivedAt}`),
+  ],
+);
 
 // ============================================================================
 // Compliance Domain

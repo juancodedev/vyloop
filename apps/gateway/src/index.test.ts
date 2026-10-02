@@ -1,5 +1,5 @@
 import { SignJWT } from 'jose';
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Test configuration
@@ -223,6 +223,83 @@ describe('API Gateway', () => {
     });
   });
 
+  // ==========================================================================
+  // The Google Wallet pass callback
+  //
+  // The only `/v1/*` path that reaches a worker with no gateway-injected
+  // identity. Google has no JWT for this system and no business id to send, so
+  // a token requirement would be a credential nobody could present. What
+  // authenticates the request instead is an `ECv2SigningOnly` signature the
+  // wallet worker verifies before it opens a database.
+  //
+  // These tests are about the *exemption* being exactly as narrow as that
+  // arrangement, because a 403 on this path is indistinguishable, from the
+  // outside, from a rejected signature — and would be read as the latter.
+  // ==========================================================================
+
+  describe('The Google Wallet callback exemption', () => {
+    const CALLBACK_PATH = '/v1/wallet/google/callback';
+
+    it('forwards an unsigned callback to the wallet worker instead of 401', async () => {
+      // The gateway's job stops at routing. Whether the body is authentic is the
+      // wallet worker's decision, and it makes it with a signature — so a
+      // gateway-level 401 here would be a second, weaker opinion on a question
+      // this layer cannot answer.
+      const wallet = { fetch: vi.fn().mockResolvedValue(new Response('{}', { status: 200 })) };
+
+      const res = await app.fetch(
+        new Request(`http://localhost${CALLBACK_PATH}`, {
+          method: 'POST',
+          body: JSON.stringify({ hello: 'world' }),
+        }),
+        mockEnv({ wallet } as never),
+      );
+
+      expect(res.status).toBe(200);
+      expect(wallet.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not require an X-Business-ID header, because the callback carries none', async () => {
+      // The business-id middleware normally injects or demands a tenant. A
+      // callback names a Google class, not a tenant, and the wallet worker
+      // resolves the tenant from the verified `classId` — so demanding the header
+      // here would reject every real delivery.
+      const wallet = { fetch: vi.fn().mockResolvedValue(new Response('{}', { status: 200 })) };
+
+      const res = await app.fetch(
+        new Request(`http://localhost${CALLBACK_PATH}`, {
+          method: 'POST',
+          body: '{}',
+          headers: { 'Content-Type': 'application/json' },
+        }),
+        mockEnv({ wallet } as never),
+      );
+
+      expect(res.status).toBe(200);
+    });
+
+    it('stays an exact path, so a sibling under it is not public', async () => {
+      // An exact comparison, not a prefix. A prefix would exempt
+      // `/v1/wallet/google/callback/admin` and anything else appended later, and
+      // nothing about the failure would look like an auth decision.
+      const res = await app.fetch(
+        new Request('http://localhost/v1/wallet/google/callback/admin', { method: 'POST' }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(401);
+    });
+
+    it('leaves the customer wallet routes authenticated', async () => {
+      // The narrowness assertion that matters most: the exemption covers one
+      // POST and not `/v1/wallet/*`, which serves a customer's own pass.
+      for (const path of ['/v1/wallet/status', '/v1/wallet/pass']) {
+        const res = await app.fetch(new Request(`http://localhost${path}`), mockEnv());
+        expect(res.status, path).toBe(401);
+      }
+    });
+  });
+
   describe('X-Business-ID enforcement', () => {
     it('forwards request when X-Business-ID is spoofed (auth-inject normalizes it)', async () => {
       // authInjectMiddleware runs BEFORE businessIdMiddleware and
@@ -311,6 +388,25 @@ describe('API Gateway', () => {
 
       const res = await app.fetch(
         new Request('https://api.test/v1/auth/business/signup', { method: 'POST' }),
+        mockEnv({ RATE_LIMITER: rateLimitMock() }),
+      );
+
+      expect(res.status).toBe(429);
+    });
+
+    it('throttles the Google Wallet callback, which is public and unauthenticated', async () => {
+      // The callback is exempt from auth because Google has no JWT to send, and
+      // an unauthenticated request still costs two ECDSA verifications before it
+      // is refused. Without a limit that is a public endpoint spending CPU on the
+      // attacker's behalf.
+      //
+      // The limit is deliberately generous (600) so it bounds amplification
+      // without throttling a real burst of saves from one Googlebot address. It
+      // is not the security control; the signature is.
+      requestCount = 600;
+
+      const res = await app.fetch(
+        new Request('https://api.test/v1/wallet/google/callback', { method: 'POST', body: '{}' }),
         mockEnv({ RATE_LIMITER: rateLimitMock() }),
       );
 
