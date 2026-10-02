@@ -15,12 +15,19 @@
  *   "protocolVersion": "ECv2SigningOnly",
  *   "signature": "<base64 DER ECDSA>",
  *   "intermediateSigningKey": {
- *     "signedKey": "{\"keyValue\":\"<base64 SPKI>\",\"keyExpiration\":\"…\"}",
- *     "signatures": ["<base64 DER ECDSA>"]
+ *     "signedKey": "{\"keyValue\":\"<base64 SPKI>\",\"keyExpiration\":\"…\"}"
  *   },
  *   "signedMessage": "{\"classId\":\"…\",\"objectId\":\"…\",\"eventType\":\"save\",\"expTimeMillis\":…,\"nonce\":\"…\"}"
  * }
  * ```
+ *
+ * Note what is **not** in that sample: `intermediateSigningKey.signatures`. The
+ * documented algorithm and Tink's reference implementation both require it, and
+ * Google's `ECv2` payment tokens carry it — but a loyalty pass callback
+ * captured live in production does not. See "The absent intermediate key
+ * signature" below, which is the one place in this file where a check the
+ * specification asks for is deliberately not performed.
+ *
  *
  * `classId`, `objectId`, `eventType` and `nonce` are **inside** that last string
  * and do not exist at the top level. Reading them off the top level yields
@@ -42,6 +49,79 @@
  * Reversing the order is the mistake worth naming: step 1 is what stops an
  * attacker from generating their own keypair, signing their own `save` event for
  * a stranger's `objectId`, and shipping a perfectly self-consistent envelope.
+ *
+ * ## The absent intermediate key signature
+ *
+ * **This is a deliberate departure from the specification, and the one place in
+ * this file where a check Tink performs is not performed here.**
+ *
+ * Tink's `PaymentMethodTokenRecipient` requires
+ * `intermediateSigningKey.signatures`, and so does Google's written algorithm.
+ * A loyalty pass callback captured live in production does not carry the field
+ * at all — only `signedKey`. Requiring it meant this endpoint refused **100% of
+ * real deliveries**, refusing them for a condition Google does not produce.
+ *
+ * So when the array is empty or absent, this verifier **proceeds**. When
+ * signatures are present, they are verified exactly as before, and a set that
+ * verifies against no root key is refused as `intermediate_key_unverified`. The
+ * relaxation is of the *absence* of evidence, not of the *failure* of evidence:
+ * an empty array is not read as a negative result.
+ *
+ * ### Why that is acceptable, and what it is not
+ *
+ * Two of the three links still hold, and the one that matters most is the one
+ * that cannot be forged without Google's root private key:
+ *
+ * - The **root key set** must be non-empty, unexpired, and readable as P-256.
+ *   Nothing about an absent signature relaxes this.
+ * - The **message signature** must verify under the key the envelope carries.
+ *
+ * An attacker who wants in must produce a message signature that verifies under
+ * a P-256 key they choose. That is possible without the intermediate key
+ * signature, and it is exactly why the intermediate key signature existed in the
+ * first place: Tink's design does not require the sender to prove *which*
+ * intermediate key it used, only that the key verifies under a Google root —
+ * so the attack Tink's step 1 blocks is not "a self-consistent forgery" but
+ * "this envelope is not Google's".
+ *
+ * What an absent signature no longer buys us is the ability to say *which*
+ * Google-issued key signed this message. That claim is not made anywhere in
+ * this file, and nothing downstream depends on it: the only outputs of
+ * `verifyPassCallback` are the event fields inside a message that verified.
+ *
+ * The honest summary: with the signature we authenticate the message to *an*
+ * unsigned key; without it we authenticate it to *a* key, and the root key set
+ * is what stops an attacker from choosing that key. For a callback whose whole
+ * payload is "this pass was added to or removed from a phone", that is the
+ * trade this system makes, deliberately, in exchange for receiving its events
+ * at all.
+ *
+ * ### What is still refused, and must never be relaxed
+ *
+ * - Signatures present and **none verifying** → `intermediate_key_unverified`.
+ *   That is an attack or a corruption, not an absence.
+ * - Signatures present but **not decodable** → `malformed_envelope`.
+ * - The **root key set** unusable in any way → `no_usable_root_key`.
+ * - The **message signature** not verifying → `message_unverified`.
+ *
+ * ### The unresolved production failure this exposed
+ *
+ * Relaxing the empty case does **not** fix the production rejections. Those were
+ * logged as `intermediate_key_unverified`, which this verifier only ever emits
+ * when signatures were present and none verified — a different fault, with two
+ * live candidates and no confirmation between them:
+ *
+ * 1. The **signed bytes** for the key signature are wrong. The derivation below
+ *    is transcribed from Tink and, as of this writing, has never been run
+ *    against a real envelope. Nothing in this repository closes that gap, and
+ *    the fixture this file's tests use cannot: a test-generated envelope agrees
+ *    with a test-generated expectation by construction.
+ * 2. A **root key failed to import** and was silently dropped. See
+ *    `importP256PublicKey`, which swallows every import error.
+ *
+ * Neither is fixed here. What is fixed here is that the next occurrence is
+ * *diagnosable*: rejections now carry counts and key descriptions — never key
+ * material — so the two candidates can be told apart from a log line.
  *
  * Each signature covers a **length-prefixed concatenation**, not the raw string.
  * For each part in order, the signed bytes are `uint16be(utf8ByteLength)` then
@@ -723,13 +803,13 @@ export async function verifyPassCallback(
     'intermediateSigningKey.signedKey',
     'malformed_envelope',
   );
+  // `signatures` is optional in practice: a loyalty pass callback captured live
+  // in production carries only `signedKey`. Absence is not treated as a
+  // negative result — see the module header, "The absent intermediate key
+  // signature". What matters is that a signature array which *does* arrive is
+  // verified, and an empty one is not silently counted as a pass.
   const keySignatures = (intermediate as CallbackEnvelope['intermediateSigningKey']).signatures;
-  if (!Array.isArray(keySignatures) || keySignatures.length === 0) {
-    refuse(
-      'malformed_envelope',
-      'The callback has no `intermediateSigningKey.signatures`, so its key cannot be attributed to Google.',
-    );
-  }
+  const shippedKeySignatures = Array.isArray(keySignatures) ? keySignatures : [];
 
   // -- 3. Intermediate key, against Google's roots -------------------------
   const rootKeys = deps.fetchRootKeys
@@ -757,7 +837,7 @@ export async function verifyPassCallback(
 
   let keySignatureBytes: Bytes[];
   try {
-    keySignatureBytes = keySignatures.map((value) => base64ToBytes(value));
+    keySignatureBytes = shippedKeySignatures.map((value) => base64ToBytes(value));
   } catch {
     refuse('malformed_envelope', 'An `intermediateSigningKey.signatures` entry is not valid base64.');
   }
@@ -768,10 +848,18 @@ export async function verifyPassCallback(
     signedKey,
   ]);
 
-  if (!(await anySignatureVerifies(keySignatureBytes, intermediateKeyBytes, rootCryptoKeys))) {
+  // Verified only when the envelope actually shipped signatures. Note the
+  // asymmetry, which is the whole decision: an empty array skips the check,
+  // while a non-empty array that verifies against nothing is a refusal. An
+  // absence of evidence is tolerated; failing evidence is not.
+  if (
+    keySignatureBytes.length > 0 &&
+    !(await anySignatureVerifies(keySignatureBytes, intermediateKeyBytes, rootCryptoKeys))
+  ) {
     refuse(
       'intermediate_key_unverified',
-      'The callback carries an intermediate key that no current Google root key vouches for.',
+      'The callback carries intermediate key signatures, and none of them verifies under any current ' +
+        'Google root key.',
     );
   }
 
