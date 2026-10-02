@@ -60,6 +60,24 @@ export type GatewayEnv = {
    * resolve the tenant before arming RLS.
    */
   DATABASE_URL: string;
+  /**
+   * The `apps/customer-web` origin, for the one link on `/p/{slug}`.
+   *
+   * Present for `/p/{slug}` only, and **not** interchangeable with the two hosts
+   * this worker already reaches for. `/p/*` and `/brand/*` are gateway routes;
+   * `/register` and `/profile` are `apps/customer-web` pages that this worker
+   * does not serve. So the CTA's host has to be named separately — putting the
+   * link on `media.juancode.dev` would render a page that looks correct and a
+   * link that 404s, which is the `programLogo` defect at a different URL and
+   * already cost one class review.
+   *
+   * Optional with a documented default (`parseCustomerWebBaseUrl`), because there
+   * is one correct host for this platform and a blank var is a default to apply
+   * rather than a misconfiguration to report. `wrangler.jsonc` declares
+   * `vars: {}` deliberately — a deploy `--var` replaces the whole map — so this
+   * is injected by the deploy job, not declared there.
+   */
+  WALLET_CUSTOMER_WEB_BASE_URL?: string | undefined;
   RATE_LIMITER: KVNamespace;
   /**
    * Static assets from `apps/gateway/public/`, declared by the `assets` block in

@@ -37,6 +37,26 @@
  * `JSON.stringify` is not a substitute and is not used: it escapes for a
  * JavaScript string literal, not for HTML, and `"` becoming `\"` leaves a
  * double quote live inside an attribute.
+ *
+ * ## The one link on this page, and why its host is its own variable
+ *
+ * This page was built for Google's class reviewer, and it rendered no link at
+ * all — verified live before the change: `GET /p/cafe-central` answered 200 with
+ * zero anchors. So the second link in the comensal's path
+ * (`/p/{slug}` → register) did not exist for a person.
+ *
+ * The href resolves to `WALLET_CUSTOMER_WEB_BASE_URL`, which is **not** the
+ * media host and **not** the web host. `/register` and `/profile` are pages of
+ * `apps/customer-web`; the gateway serves `/p/*` and `/brand/*` and nothing
+ * else. Pointing this link at `media.juancode.dev` produces a page that looks
+ * correct and a link that 404s, which is the `programLogo` defect at a different
+ * URL — and that one already cost a rejected class, because the host of a
+ * reviewed field is one-way: changing it puts every class carrying the old one
+ * back under review with no way back to `draft`.
+ *
+ * The value is **injected**, not defaulted inside the renderer, so a staging
+ * customer web is a configuration change and a test can prove which value was
+ * used instead of matching against a constant that happens to be right.
  */
 
 // ---------------------------------------------------------------------------
@@ -102,6 +122,65 @@ export const MERCHANT_PAGE_PREFIX = '/p/';
  * neither `.` nor `/` nor `%` is in the set.
  */
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The customer-web origin `/register` and `/profile` are served from.
+ *
+ * The same value, and the same var name, the wallet worker uses for the links on
+ * a Google pass (`workers/wallet/src/helpers.ts`,
+ * `DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL`). Reusing the name is deliberate: both
+ * consumers address the *same* app, and one host that serves those two routes is
+ * one fact rather than two that can drift.
+ *
+ * The pages.dev deployment rather than a custom domain, because those routes
+ * exist in `apps/customer-web/app` and are served from there.
+ */
+export const DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+
+/**
+ * Read the customer-web base URL, with a documented default and no trailing slash.
+ *
+ * `undefined`, `null` and blank all mean "use the default" rather than "this
+ * deployment is broken", for the reason `parseMediaBaseUrl` gives: there is one
+ * correct host for this platform, and a blank var is a default to apply rather
+ * than a misconfiguration to report.
+ *
+ * The trailing slash is stripped because the value is concatenated with
+ * `/register`, and `//register` is a different URL to the route.
+ */
+export function parseCustomerWebBaseUrl(raw: string | undefined | null): string {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL;
+
+  return trimmed.replace(/\/+$/, '');
+}
+
+/**
+ * The registration URL for one merchant, or `null` for a slug this will not vouch for.
+ *
+ * ## Why the slug is re-validated here
+ *
+ * `merchantSlugFrom` guards the slug that arrives *in the request*. This one
+ * arrives from `tenants.slug`, through the reader, and never passed through that
+ * guard. It is the one value on this page interpolated into an attribute, which
+ * is the one position where a quote is an attribute break-out rather than merely
+ * visible text — so the same shape test runs a second time, at the point of use.
+ *
+ * Returning `null` rather than escaping into the href is this file's rule for a
+ * block it has no valid data for: `renderMerchantPage` omits the call to action
+ * instead of emitting a repaired link. A link that was silently corrected is a
+ * link to somewhere the merchant did not ask for, which is worse than no link.
+ *
+ * `encodeURIComponent` is not applied on top of the pattern test. The two would
+ * be redundant — the accepted set is `[a-z0-9-]`, and percent-encoding a
+ * character outside that set is the refusal this function already returns. Two
+ * mechanisms for one rule is one more thing to keep in agreement.
+ */
+export function registerHrefFor(customerWebBaseUrl: string, slug: string): string | null {
+  if (!SLUG_PATTERN.test(slug)) return null;
+
+  return `${customerWebBaseUrl}/register?biz=${slug}`;
+}
 
 /**
  * Extract the slug from a request path, or `null` for anything else.
@@ -210,8 +289,17 @@ export const MERCHANT_PAGE_TTL_SECONDS = 900;
  * promotion gets no promotion section, not a default sentence nobody authored,
  * and a merchant with no configured programme gets their name and their logo and
  * nothing invented around them.
+ *
+ * `customerWebBaseUrl` is a parameter rather than a read from the environment so
+ * that this stays a pure function of its arguments. A renderer that closed over
+ * the environment could not be tested against a second host, and "the link points
+ * at the customer web" is precisely the claim that needs testing against more
+ * than one value.
  */
-export function renderMerchantPage(merchant: MerchantPageData): string {
+export function renderMerchantPage(
+  merchant: MerchantPageData,
+  customerWebBaseUrl: string = DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL,
+): string {
   const logoUrl = `/brand/${escapeHtml(merchant.tenantId)}.jpg`;
   const title = escapeHtml(merchant.name);
 
@@ -243,6 +331,24 @@ export function renderMerchantPage(merchant: MerchantPageData): string {
   const description =
     merchant.promoCopy ?? merchant.programName ?? merchant.name;
 
+  // The one link on the page, and the second link in the comensal's path.
+  //
+  // The merchant's name is inside it, so the CTA carries the same stored-XSS
+  // surface as the `<h1>` — one attribute closer to a break-out, which is why it
+  // goes through the same `escapeHtml` and not through a second escaper. What is
+  // *not* in it is the merchant's name: the href is built from the validated slug
+  // alone, so a merchant cannot steer where a customer's registration lands.
+  const registerHref = registerHrefFor(customerWebBaseUrl, merchant.slug);
+  const callToAction =
+    registerHref === null
+      ? ''
+      : `<section class="join">
+<h2>Sumate al club</h2>
+<p>Registrate una vez y pedí tu pase desde el teléfono.</p>
+<a class="cta" href="${escapeHtml(registerHref)}">Entrá al club de <strong>${escapeHtml(merchant.name)}</strong></a>
+</section>
+`;
+
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -257,6 +363,7 @@ export function renderMerchantPage(merchant: MerchantPageData): string {
 <h1>${title}</h1>
 ${programName}
 ${promo}
+${callToAction}
 <section>
 <h2>Cómo acumular y usar tu programa</h2>
 ${earnSentence}
@@ -322,6 +429,20 @@ interface PageRequest {
 }
 
 /**
+ * What the route needs beyond its reader.
+ *
+ * The customer-web origin arrives here rather than through `c.env` on purpose.
+ * Reading it from the context would put an untyped `unknown` cast next to the
+ * reader, and the claim this whole block exists to protect — *which host does the
+ * one link resolve to* — is only testable if the host is an explicit argument a
+ * test can set to the wrong value on purpose.
+ */
+export interface MerchantPageOptions {
+  /** Already normalised by `parseCustomerWebBaseUrl`. */
+  customerWebBaseUrl: string;
+}
+
+/**
  * `GET /p/{slug}` — one merchant's public page, as HTML.
  *
  * ## Exempt from auth and from the business-id check, by being outside `/v1/*`
@@ -342,7 +463,10 @@ interface PageRequest {
  * assert the reader was **not** called. A guard that ran after the lookup would
  * still 404, but a malformed slug would already have been handed to a query.
  */
-export function merchantPageRoute(reader: MerchantPageReader) {
+export function merchantPageRoute(
+  reader: MerchantPageReader,
+  options: MerchantPageOptions = { customerWebBaseUrl: DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL },
+) {
   return async (c: PageRequest) => {
     const slug = merchantSlugFrom(new URL(c.req.url).pathname);
     if (slug === null) {
@@ -358,7 +482,7 @@ export function merchantPageRoute(reader: MerchantPageReader) {
       });
     }
 
-    return c.html(renderMerchantPage(merchant), 200, {
+    return c.html(renderMerchantPage(merchant, options.customerWebBaseUrl), 200, {
       'Cache-Control': `public, max-age=${MERCHANT_PAGE_TTL_SECONDS}`,
       // The page interpolates merchant-authored text. `nosniff` costs nothing
       // and stops a browser from deciding the response is something executable.
