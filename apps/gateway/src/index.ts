@@ -3,6 +3,8 @@ import { cors } from 'hono/cors';
 
 import { brandRoute } from './brand';
 import { ingestor } from './ingestor';
+import { merchantPageRoute } from './merchant-page';
+import { createMerchantPageReader } from './merchant-store';
 import { authMiddleware } from './middleware/auth';
 import { authInjectMiddleware } from './middleware/auth-inject';
 import { businessIdMiddleware } from './middleware/business-id';
@@ -147,6 +149,31 @@ app.use('/v1/*', routerMiddleware);
 // prevents the pass from rendering. What protects it is that the bucket is
 // private and this is the only route to it.
 app.get('/brand/*', brandRoute());
+
+// ---------------------------------------------------------------------------
+// The public per-merchant page
+// ---------------------------------------------------------------------------
+
+// Public, unauthenticated, and outside `/v1/*` — so the auth, auth-inject,
+// business-id, rate-limit and routing middleware above never run for it. That is
+// structural rather than an exemption anyone has to maintain: those five are all
+// registered with `app.use('/v1/*', …)`, exactly as `/brand/*` is public because
+// it is not under that prefix. Google opens this URL while reviewing a loyalty
+// class with no credentials, and it has to answer with HTML in the response body.
+//
+// Registered as `/p/*`, and `merchantPageRoute` takes the pathname off
+// `c.req.url` itself rather than a `:slug` param. `/p/:slug` would also match,
+// but the router resolves a param against its own routing table, and the guard
+// that has to refuse an encoded traversal wants the one string nothing else has
+// touched.
+//
+// The reader is built per request from `c.env` rather than captured at module
+// scope: `createDb` opens a pool and an isolate is reused across requests, so a
+// pool held in module state is a different object here than in a test.
+app.get(
+  '/p/*',
+  async (c) => merchantPageRoute(createMerchantPageReader(c.env))(c),
+);
 
 // 404 handler
 // ---------------------------------------------------------------------------
