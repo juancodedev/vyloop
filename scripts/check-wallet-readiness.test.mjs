@@ -57,6 +57,16 @@ function brokenFetch(error = new Error('getaddrinfo ENOTFOUND')) {
   };
 }
 
+/**
+ * A real slug, standing in for one read from `tenants`.
+ *
+ * `homepageUri` is `/p/{slug}`, so the check has to name a merchant to have
+ * anything to fetch. It is passed in rather than written here, and `main` reads
+ * it from the database — an invented slug would 404 and report a healthy
+ * deployment as blocked.
+ */
+const SLUG = 'cafe-central';
+
 const REPO_ROOT = process.cwd();
 const REPO_SOURCES = {
   configPath: join(REPO_ROOT, 'workers/wallet/wrangler.jsonc'),
@@ -261,15 +271,17 @@ describe('resolveProgramPageOrigin', () => {
     ).toBe('https://from-source.pages.dev');
   });
 
-  it('strips a trailing slash so the route is not //program', () => {
-    // `parseWebBaseUrl` strips it for the same reason: `//program` is a different
+  it('strips a trailing slash so the route is not /p//{slug}', () => {
+    // `parseWebBaseUrl` strips it for the same reason: `/p//{slug}` is a different
     // URL to the route, and may be to Google.
     const origin = resolveProgramPageOrigin({
       override: null,
       configVar: 'https://from-config.pages.dev///',
       sourceDefault: null,
     });
-    expect(`${origin}${PROGRAM_PAGE_PATH}`).toBe('https://from-config.pages.dev/program');
+    expect(`${origin}${PROGRAM_PAGE_PATH}/${SLUG}`).toBe(
+      'https://from-config.pages.dev/p/cafe-central',
+    );
   });
 
   it('returns null when no source could be read, rather than guessing a host', () => {
@@ -280,6 +292,41 @@ describe('resolveProgramPageOrigin', () => {
 });
 
 describe('observeProgramPage', () => {
+  it('probes the per-merchant route with a real slug, not a bare prefix', async () => {
+    // The gate moved with the class. `homepageUri` is `/p/{slug}`, so probing
+    // `/p` on its own would read a 404 on a route that is working perfectly
+    // and report the deployment as blocked. The slug has to come from a real
+    // tenant, which is why this is passed in rather than invented here.
+    const fetchImpl = stubFetch(200);
+
+    const result = await observeProgramPage({
+      ...REPO_SOURCES,
+      override: 'https://gateway.example.dev',
+      slug: 'cafe-central',
+      fetchImpl,
+    });
+
+    expect(fetchImpl.calls[0].url).toBe('https://gateway.example.dev/p/cafe-central');
+    expect(result.url).toBe('https://gateway.example.dev/p/cafe-central');
+  });
+
+  it('is unknown rather than probing a route with no slug', async () => {
+    // There is no URL to check without a merchant, and inventing one would make
+    // this gate decorative in exactly the way its other tests forbid: green
+    // because nothing was asked.
+    const fetchImpl = stubFetch(200);
+
+    const result = await observeProgramPage({
+      ...REPO_SOURCES,
+      override: 'https://gateway.example.dev',
+      slug: null,
+      fetchImpl,
+    });
+
+    expect(result.known).toBe(false);
+    expect(fetchImpl.calls).toHaveLength(0);
+  });
+
   it('reads the host out of the repo instead of restating it', async () => {
     // The live files, not fixtures: the check has to track
     // `DEFAULT_WALLET_WEB_BASE_URL` in the worker's own source, so moving
@@ -290,8 +337,13 @@ describe('observeProgramPage', () => {
     const declared = /DEFAULT_WALLET_WEB_BASE_URL\s*=\s*'([^']+)'/.exec(source)?.[1];
 
     expect(declared).toBeTruthy();
-    const result = await observeProgramPage({ ...REPO_SOURCES, override: null, fetchImpl });
-    expect(result.url).toBe(`${declared}${PROGRAM_PAGE_PATH}`);
+    const result = await observeProgramPage({
+      ...REPO_SOURCES,
+      override: null,
+      slug: 'cafe-central',
+      fetchImpl,
+    });
+    expect(result.url).toBe(`${declared}${PROGRAM_PAGE_PATH}/${SLUG}`);
     expect(fetchImpl.calls).toHaveLength(1);
   });
 
@@ -310,13 +362,16 @@ describe('observeProgramPage', () => {
   it('probes the route the class actually points at', async () => {
     const fetchImpl = stubFetch(200);
     await observeProgramPage({
-      override: 'https://moved-customer.pages.dev',
+      override: 'https://moved-gateway.example.dev',
       configPath: '/nonexistent/wrangler.jsonc',
       sourcePath: '/nonexistent/helpers.ts',
+      slug: 'cafe-central',
       fetchImpl,
     });
 
-    expect(fetchImpl.calls[0].url).toBe('https://moved-customer.pages.dev/program');
+    expect(fetchImpl.calls[0].url).toBe(
+      `https://moved-gateway.example.dev${PROGRAM_PAGE_PATH}/${SLUG}`,
+    );
   });
 
   it('reports a 404 as a fact, because a fact is what blocks', async () => {
@@ -324,6 +379,7 @@ describe('observeProgramPage', () => {
       override: 'https://gone.pages.dev',
       configPath: '/nonexistent/wrangler.jsonc',
       sourcePath: '/nonexistent/helpers.ts',
+      slug: 'cafe-central',
       fetchImpl: stubFetch(404),
     });
 
@@ -337,6 +393,7 @@ describe('observeProgramPage', () => {
       override: 'https://customer.pages.dev',
       configPath: '/nonexistent/wrangler.jsonc',
       sourcePath: '/nonexistent/helpers.ts',
+      slug: 'cafe-central',
       fetchImpl: brokenFetch(),
     });
 
@@ -352,6 +409,7 @@ describe('observeProgramPage', () => {
       override: null,
       configPath: '/nonexistent/wrangler.jsonc',
       sourcePath: '/nonexistent/helpers.ts',
+      slug: 'cafe-central',
       fetchImpl,
     });
 
@@ -379,6 +437,7 @@ describe('observeProgramPage', () => {
       override: 'https://slow.pages.dev',
       configPath: '/nonexistent/wrangler.jsonc',
       sourcePath: '/nonexistent/helpers.ts',
+      slug: 'cafe-central',
       fetchImpl: hanging,
       timeoutMs: 20,
     });
@@ -404,8 +463,11 @@ describe('program-page gate', () => {
     expect(page.pass).toBe(false);
     expect(page.blocked).toContain('404');
     expect(page.blocked).toContain('https://gone.pages.dev/program');
-    expect(page.next).toContain('customer-web');
+    expect(page.next).toContain('gateway');
     expect(page.next).toContain('WALLET_WEB_BASE_URL');
+    // The host is one-way, and an operator reading this gate is exactly who
+    // would otherwise reach for the var to point at staging.
+    expect(page.next).toMatch(/back under review|no way to return it to draft/i);
   });
 
   it('fails any non-2xx, not just a 404', () => {
@@ -474,6 +536,7 @@ describe('program-page gate', () => {
       override: 'https://customer.pages.dev',
       configPath: '/nonexistent/wrangler.jsonc',
       sourcePath: '/nonexistent/helpers.ts',
+      slug: 'cafe-central',
       fetchImpl: brokenFetch(),
     });
 
