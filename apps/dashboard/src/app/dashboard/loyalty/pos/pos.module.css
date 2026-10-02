@@ -287,6 +287,16 @@
   color: var(--success);
 }
 
+.earnNote {
+  margin: 6px 0 0;
+  /* A literal, unlike the neighbouring rules: this design system defines
+     `--text-muted` but no `--text-xs`, so a var() here would silently fall
+     back to the inherited size. */
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
 .redeemRow {
   display: flex;
   flex-direction: column;
