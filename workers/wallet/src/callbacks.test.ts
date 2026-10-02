@@ -24,6 +24,7 @@ import {
   CALLBACK_SENDER_ID,
   PassCallbackVerificationError,
   decodeRootKeys,
+  formatCallbackRejection,
   passStateForEvent,
   resetRootKeyCache,
   verifyPassCallback,
@@ -171,13 +172,15 @@ async function buildCallback(options: {
   keySignatureKeyOverride?: TestKey;
   /** Ship no `signatures` on the intermediate key. */
   omitKeySignatures?: boolean;
+  /** Ship a `keyValue` inside `signedKey` that is not a P-256 public key. */
+  intermediateKeyValueOverride?: string;
   protocolVersion?: string;
 }): Promise<string> {
   const event = { ...DEFAULT_EVENT, ...(options.event ?? {}) };
   const signedMessage = JSON.stringify(event);
 
   const signedKeyString = JSON.stringify({
-    keyValue: options.intermediateKey.spkiBase64,
+    keyValue: options.intermediateKeyValueOverride ?? options.intermediateKey.spkiBase64,
     keyExpiration: '1791510690205',
   });
 
@@ -724,6 +727,281 @@ describe('decodeRootKeys', () => {
   it('refuses a document with no keys array', () => {
     expect(() => decodeRootKeys('{"nope":1}', NOW)).toThrow(PassCallbackVerificationError);
     expect(() => decodeRootKeys('not json', NOW)).toThrow(PassCallbackVerificationError);
+  });
+});
+
+describe('the rejection diagnostic', () => {
+  // The production symptom was `intermediate_key_unverified` with nothing else
+  // in the log, and it was misdiagnosed twice as a consequence: a code says what
+  // failed and never why. These tests pin the *why* — counts and key
+  // descriptions, never key material — because telling the two live candidates
+  // apart is worth more than another round of guessing.
+
+  /** Reject `body` and hand back the error, so the diagnostic can be inspected. */
+  async function rejectionOf(body: string, deps: Parameters<typeof verifyPassCallback>[1]) {
+    try {
+      await verifyPassCallback(body, deps);
+      throw new Error('expected the callback to be refused');
+    } catch (err) {
+      if (!(err instanceof PassCallbackVerificationError)) throw err;
+      return err;
+    }
+  }
+
+  it('reports how many signatures shipped, and how many roots were usable', async () => {
+    const rootKey = await generateTestKey();
+    const intermediateKey = await generateTestKey();
+    // Signed by a key that is not the root, so this reaches the key-signature
+    // check and is refused there rather than verifying cleanly.
+    const body = await buildCallback({
+      rootKey,
+      intermediateKey,
+      keySignatureKeyOverride: await generateTestKey(),
+    });
+
+    const err = await rejectionOf(body, verifier(rootKey));
+
+    expect(err.code).toBe('intermediate_key_unverified');
+    expect(err.diagnostic).toMatchObject({
+      intermediateKeySignatureCount: 1,
+      rootKeyCount: 1,
+      importedRootKeyCount: 1,
+    });
+  });
+
+  it('reports zero signatures when the intermediate key is unsigned', async () => {
+    // This is the count that would have settled the original misdiagnosis. A
+    // rejection of an unsigned envelope now says `0`, so "the sender vouched for
+    // nothing" is distinguishable from "the sender vouched and it failed".
+    const rootKey = await generateTestKey();
+    const intermediateKey = await generateTestKey();
+    const body = await buildCallback({
+      rootKey,
+      intermediateKey,
+      omitKeySignatures: true,
+      tamperSignedMessage: JSON.stringify({ ...DEFAULT_EVENT, objectId: 'forged' }),
+    });
+
+    const err = await rejectionOf(body, verifier(rootKey));
+
+    expect(err.code).toBe('message_unverified');
+    expect(err.diagnostic?.intermediateKeySignatureCount).toBe(0);
+  });
+
+  it('names the algorithm of a root key that could not be imported', async () => {
+    // The silent-import failure, made visible. `importP256PublicKey` swallows
+    // every import error, so without this a root key Google publishes that this
+    // runtime cannot read looks identical to one that verified nothing. What
+    // makes it diagnosable in a minute: the entry's algorithm is named, and it
+    // is marked as not imported.
+    const rootKey = await generateTestKey();
+    const p384 = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-384' }, true, [
+      'sign',
+      'verify',
+    ]);
+    const p384Spki = bytesToBase64(
+      new Uint8Array(await crypto.subtle.exportKey('spki', p384.publicKey)),
+    );
+
+    const intermediateKey = await generateTestKey();
+    const body = await buildCallback({
+      rootKey,
+      intermediateKey,
+      keySignatureKeyOverride: await generateTestKey(),
+    });
+
+    const err = await rejectionOf(body, {
+      recipientId: ISSUER_ID,
+      now: () => NOW,
+      fetchRootKeys: async () =>
+        decodeRootKeys(rootKeyDocument(rootKey, Date.parse('2035-01-01T00:00:00Z')), NOW).concat(
+          decodeRootKeys(
+            JSON.stringify({
+              keys: [
+                {
+                  keyValue: p384Spki,
+                  protocolVersion: CALLBACK_PROTOCOL_VERSION,
+                  keyExpiration: String(Date.parse('2035-01-01T00:00:00Z')),
+                },
+              ],
+            }),
+            NOW,
+          ),
+        ),
+    });
+
+    // The P-384 key is a real key that WebCrypto will not import as P-256: the
+    // silent-failure case, with real bytes.
+    expect(err.diagnostic).toMatchObject({ rootKeyCount: 2, importedRootKeyCount: 1 });
+    expect(err.diagnostic?.rootKeys).toEqual([
+      { algorithm: 'ECDSA P-256', imported: true },
+      { algorithm: 'ECDSA P-384', imported: false },
+    ]);
+  });
+
+  it('gives an unreadable envelope key its own code, not the unverified one', async () => {
+    // Two faults that shared a code. "The sender vouched for a key we cannot
+    // read" and "the sender vouched and it did not verify" are different bugs,
+    // and a code that means both cannot be used to count either.
+    const rootKey = await generateTestKey();
+    const intermediateKey = await generateTestKey();
+
+    const body = await buildCallback({
+      rootKey,
+      intermediateKey,
+      intermediateKeyValueOverride: 'bm90LWEtcDI1Ni1rZXk=',
+    });
+
+    const err = await rejectionOf(body, verifier(rootKey));
+
+    expect(err.code).toBe('intermediate_key_unreadable');
+    expect(err.diagnostic?.envelopeKeyAlgorithm).toBe('unreadable');
+  });
+
+  it('renders a log line that says what failed and why, and no key material', async () => {
+    // The whole point. A log line for a refusal has to answer "how many
+    // signatures, how many roots, which curve" without ever carrying a key, a
+    // signature, or the body — this is a public endpoint and the logs are read.
+    const rootKey = await generateTestKey();
+    const intermediateKey = await generateTestKey();
+    const body = await buildCallback({
+      rootKey,
+      intermediateKey,
+      keySignatureKeyOverride: await generateTestKey(),
+    });
+
+    const err = await rejectionOf(body, verifier(rootKey));
+    const line = formatCallbackRejection(err);
+
+    expect(line).toContain('intermediate_key_unverified');
+    expect(line).toContain('intermediateKeySignatureCount');
+    expect(line).toContain('ECDSA P-256');
+
+    // No key material, no signature, no body.
+    expect(line).not.toContain(rootKey.spkiBase64);
+    expect(line).not.toContain(intermediateKey.spkiBase64);
+    expect(line).not.toContain(
+      (JSON.parse(body).intermediateSigningKey.signatures as string[])[0] as string,
+    );
+    expect(line).not.toContain(JSON.parse(body).signedMessage as string);
+    expect(line).not.toContain('keyValue');
+  });
+
+  it('names an RSA root key as RSA, so a key of the wrong type is readable', async () => {
+    // If Google's published root key ever changes type, the log says so instead
+    // of refusing every callback with a count nobody can act on.
+    const rootKey = await generateTestKey();
+    const rsa = await crypto.subtle.generateKey(
+      { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+      true,
+      ['encrypt', 'decrypt'],
+    );
+    const rsaSpki = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('spki', rsa.publicKey)));
+
+    const err = await rejectionOf(
+      await buildCallback({ rootKey, intermediateKey: await generateTestKey() }),
+      {
+        recipientId: ISSUER_ID,
+        now: () => NOW,
+        fetchRootKeys: async () =>
+          decodeRootKeys(
+            JSON.stringify({
+              keys: [
+                {
+                  keyValue: rsaSpki,
+                  protocolVersion: CALLBACK_PROTOCOL_VERSION,
+                  keyExpiration: String(Date.parse('2035-01-01T00:00:00Z')),
+                },
+              ],
+            }),
+            NOW,
+          ),
+      },
+    );
+
+    expect(err.code).toBe('no_usable_root_key');
+    expect(err.diagnostic?.rootKeys).toEqual([{ algorithm: 'RSA', imported: false }]);
+  });
+
+  describe('the algorithm reader refuses to become an echo', () => {
+    // These keys are attacker-supplied, so a reader that reported what it found
+    // would be a log-injection vector as much as an information leak. Every case
+    // below is hostile input, and the property is the same: a name from the
+    // fixed vocabulary, or a fixed placeholder. Never the bytes.
+
+    /** Run one hostile `keyValue` through the root-key diagnostic path. */
+    async function describeHostile(keyValue: string) {
+      const rootKey = await generateTestKey();
+      const err = await rejectionOf(
+        await buildCallback({
+          rootKey,
+          intermediateKey: await generateTestKey(),
+          keySignatureKeyOverride: await generateTestKey(),
+        }),
+        {
+          recipientId: ISSUER_ID,
+          now: () => NOW,
+          fetchRootKeys: async () =>
+            decodeRootKeys(
+              JSON.stringify({
+                keys: [
+                  {
+                    keyValue,
+                    protocolVersion: CALLBACK_PROTOCOL_VERSION,
+                    keyExpiration: String(Date.parse('2035-01-01T00:00:00Z')),
+                  },
+                ],
+              }),
+              NOW,
+            ),
+        },
+      );
+      return err.diagnostic?.rootKeys?.[0]?.algorithm ?? 'missing';
+    }
+
+    it('reports an algorithm OID it has no name for as unknown, without echoing it', async () => {
+      const key = await generateTestKey();
+      const spki = new Uint8Array(
+        Buffer.from(key.spkiBase64, 'base64') as unknown as ArrayBuffer,
+      );
+      // Same length, different OID: 1.2.840.10045.2.9 instead of ...2.1, so the
+      // structure still parses and only the name is unknown.
+      spki[12] = 0x09;
+
+      expect(await describeHostile(bytesToBase64(spki))).toBe('unknown-algorithm');
+    });
+
+    it('reports bytes that are not a key at all as unreadable', async () => {
+      expect(await describeHostile('bm90LWEtcDI1Ni1rZXk=')).toBe('unreadable');
+      expect(await describeHostile('!!!not base64!!!')).toBe('unreadable');
+    });
+
+    it('never reaches the reader for an empty keyValue, because the filter drops it first', async () => {
+      // `decodeRootKeys` refuses empty `keyValue`s, so the honest diagnostic for
+      // one is "no root keys at all", not "a key we could not read". Pinning it
+      // here because the distinction is easy to get wrong in a log: it says
+      // Google published nothing, rather than that we failed to understand
+      // something it published.
+      expect(await describeHostile('')).toBe('missing');
+    });
+
+    it('survives a truncated SPKI instead of throwing', async () => {
+      const key = await generateTestKey();
+      const spki = new Uint8Array(Buffer.from(key.spkiBase64, 'base64') as unknown as ArrayBuffer);
+
+      // Cut at every length, so no single truncation is the interesting one.
+      // The vocabulary is fixed: a name this file knows, or one of the three
+      // placeholders. Anything else would mean attacker bytes reached the log.
+      const vocabulary = [
+        'missing',
+        'unreadable',
+        'unknown-algorithm',
+        'ECDSA unknown-curve',
+      ];
+      for (let cut = 1; cut < spki.length; cut += 7) {
+        expect(vocabulary).toContain(await describeHostile(bytesToBase64(spki.subarray(0, cut))));
+      }
+    });
   });
 });
 
