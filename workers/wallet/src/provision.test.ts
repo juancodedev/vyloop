@@ -58,6 +58,7 @@ const CLASS_ID = classIdFor(ISSUER, TENANT);
 const MEDIA_BASE_URL = 'https://media.juancode.dev';
 const WEB_BASE_URL = 'https://media.juancode.dev';
 const CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+const CALLBACK_BASE_URL = 'https://media.juancode.dev';
 const BRAND_URL = `${MEDIA_BASE_URL}/brand/${TENANT}.jpg`;
 
 /** The tenant's real slug — `tenants.slug`, read, never derived from the name. */
@@ -65,6 +66,9 @@ const SLUG = 'cafe-central';
 
 /** The gateway's per-merchant page: what `homepageUri` now points at. */
 const PROGRAM_URL = `${WEB_BASE_URL}/p/${SLUG}`;
+
+/** The endpoint Google POSTs saves and deletes to, per class. */
+const CALLBACK_URL = `${CALLBACK_BASE_URL}/v1/wallet/google/callback`;
 
 /** Next.js `app/` directory, for the "this route exists" assertion. */
 const CUSTOMER_WEB_APP = join(__dirname, '..', '..', '..', 'apps', 'customer-web', 'app');
@@ -87,6 +91,7 @@ beforeEach(() => {
     WALLET_MEDIA_BASE_URL: MEDIA_BASE_URL,
     WALLET_WEB_BASE_URL: WEB_BASE_URL,
     WALLET_CUSTOMER_WEB_BASE_URL: CUSTOMER_WEB_BASE_URL,
+    WALLET_CALLBACK_BASE_URL: CALLBACK_BASE_URL,
   };
 });
 
@@ -323,6 +328,11 @@ describe('provisionClass: a tenant with no Google class', () => {
       countryCode: 'CL',
       programLogo: { sourceUri: { uri: BRAND_URL } },
       homepageUri: { uri: PROGRAM_URL, description: 'Programa de lealtad' },
+      // The one channel that reports a save or a delete at all. Without it,
+      // `customer_wallet_passes.state` can only ever be inferred by asking Google
+      // whether an object exists, which cannot tell "never opened the app" from
+      // "deleted the pass".
+      callbackOptions: { url: CALLBACK_URL },
       // The merchant wrote no promo in this fixture, so there is no promo row.
       linksModuleData: {
         uris: [
@@ -772,6 +782,102 @@ function gatewayServesMerchantPageRoute(): boolean {
   // and a reviewer's request carries none.
   return /app\.get\(\s*['"]\/p\/\*['"]/.test(source) && !/app\.get\(\s*['"]\/v1\/p\//.test(source);
 }
+
+// ============================================================================
+// The callback URL
+//
+// This is the one field on a class that can be silently wrong. A wrong logo
+// is an empty logo, a wrong homepage is a class Google rejects at review — both
+// announce themselves. A wrong `callbackOptions.url` means Google never reports
+// that a customer saved or deleted their pass, and the pass state keeps whatever
+// the last reconcile inferred, with nothing anywhere logging an error. So the
+// URL is pinned here rather than trusted to a default.
+// ============================================================================
+
+describe('provisionClass: the callback URL Google is given', () => {
+  it('sends the real endpoint on the configured origin', async () => {
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as { callbackOptions?: { url: string } };
+    expect(payload.callbackOptions).toEqual({ url: CALLBACK_URL });
+  });
+
+  it('is the same URL for every tenant, because the class id identifies the tenant', async () => {
+    // A per-tenant callback path would turn one public route into a routing
+    // table keyed on a value from a request body, which is the cross-tenant
+    // hazard the handler works to avoid. The callback carries its own `classId`,
+    // so a single endpoint is enough — and this pins that it is one.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+    const payload = client.insertClass.mock.calls[0]![0] as { callbackOptions?: { url: string } };
+
+    expect(payload.callbackOptions?.url).not.toContain(SLUG);
+    expect(payload.callbackOptions?.url).not.toContain(TENANT);
+  });
+
+  it('defaults to the production gateway, not a test host, when the var is absent', async () => {
+    // The default is load-bearing. `callbackOptions.url` is written at insert and
+    // a Google class cannot be recreated under the same id, so a class created
+    // against a staging or local host reports to that host for its whole life —
+    // silently, because a missing callback looks exactly like a customer who has
+    // not opened the app.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client, { WALLET_CALLBACK_BASE_URL: undefined });
+
+    const payload = client.insertClass.mock.calls[0]![0] as { callbackOptions?: { url: string } };
+    const url = payload.callbackOptions?.url ?? '';
+
+    expect(url.startsWith('https://')).toBe(true);
+    expect(url).not.toMatch(/localhost|127\.0\.0\.1|example\.(com|test)|invalid-host/);
+    // And it is the gateway that actually serves the route, not a host that
+    // merely looks like production.
+    expect(new URL(url).origin).toBe('https://media.juancode.dev');
+  });
+
+  it('reads the origin from its own var, so it cannot be swapped with the homepage host', async () => {
+    // Same shape as the transposed-parsers test above, applied to the field that
+    // fails silently. A shared implementation or a transposed var would send
+    // callbacks to the media host and nothing would say so.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client, {
+      WALLET_WEB_BASE_URL: 'https://web.invalid-host.test',
+      WALLET_CALLBACK_BASE_URL: 'https://callback.invalid-host.test',
+    });
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      callbackOptions?: { url: string };
+      homepageUri: { uri: string };
+    };
+
+    expect(new URL(payload.callbackOptions?.url ?? '').origin).toBe(
+      'https://callback.invalid-host.test',
+    );
+    expect(new URL(payload.homepageUri.uri).origin).toBe('https://web.invalid-host.test');
+  });
+
+  it('is a path the gateway actually exempts from auth', async () => {
+    // The two sides of this feature name the same string, and a typo on either
+    // one produces a 403 on every real delivery with a message about missing
+    // headers — indistinguishable, from the outside, from a broken signature.
+    // So the exemption and the URL are asserted to agree.
+    const gateway = readFileSync(GATEWAY_INDEX, 'utf8');
+    const configured = new URL(CALLBACK_URL).pathname;
+
+    expect(gateway).toContain(`'${configured}'`);
+    // Mounted under `/v1/*`, which is where the auth middlewares run — so being
+    // under it is the reason the exemption is load-bearing, not a detail.
+    expect(configured.startsWith('/v1/')).toBe(true);
+  });
+});
 
 // ============================================================================
 // The order. This is the part that is easy to "simplify" into a lie.

@@ -121,6 +121,33 @@ export interface GoogleUri {
  */
 export const ISSUER_NAME_LANGUAGE = 'es-CL';
 
+/**
+ * Google's `CallbackOptions`, verbatim.
+ *
+ * ## Only `url` exists
+ *
+ * Google's `CallbackOptions` type declares two fields, and the second,
+ * `updateRequestUrl`, is marked **deprecated** in the API reference. It is not
+ * modelled: a class carrying a deprecated field is a class Google may reject at
+ * review, for a capability this system does not use.
+ *
+ * `url` is where Google POSTs when a customer saves or removes one of this
+ * class's passes. It is the only thing that makes a pass's *existence* knowable
+ * without asking: every other trigger in this worker observes an object by
+ * fetching it, and none of them learns that a customer deleted their pass at all.
+ *
+ * The URL must be HTTPS and its path must be reachable by `User-Agent:
+ * Googlebot`, per Google's `CallbackOptions` reference. Both are properties of
+ * the gateway's deployment rather than of the class, and both are why this field
+ * is assembled from a configured origin instead of derived from a tenant's slug.
+ *
+ * @see https://developers.google.com/wallet/reference/rest/v1/CallbackOptions
+ */
+export interface GoogleCallbackOptions {
+  /** HTTPS URL Google POSTs saves and deletes to. */
+  url: string;
+}
+
 export interface LoyaltyClass {
   /** `<issuerId>.tenant-<tenantId>`. */
   id: string;
@@ -151,6 +178,16 @@ export interface LoyaltyClass {
    * that 404s in a real customer's hand, so the field is absent unless supplied.
    */
   homepageUri?: GoogleUri;
+  /**
+   * Where Google POSTs save and delete events for this class's passes.
+   *
+   * Optional, and absent when the caller supplies no callback URL, for the same
+   * reason `homepageUri` is: this builder cannot know whether a deployment has a
+   * public endpoint to receive them, and inventing one would hand Google a URL
+   * that answers 404 — which is worse than sending no callbacks, because a class
+   * with a dead `callbackOptions.url` is one Google may hold against at review.
+   */
+  callbackOptions?: GoogleCallbackOptions;
   hexBackgroundColor?: string;
   /** Row label above `LoyaltyObject.accountName`. Recommended max 15. */
   accountNameLabel?: string;
@@ -196,6 +233,15 @@ export interface BuildLoyaltyClassInput {
   programLogo?: GoogleImage;
   /** Supplied, never derived: see `LoyaltyClass.homepageUri`. */
   homepageUri?: GoogleUri;
+  /**
+   * The public URL Google POSTs save and delete events to. Supplied by the
+   * caller, because only it knows this deployment's public origin — the class
+   * builder has no way to find it, and guessing is what produces a `404` Google
+   * discovers at review.
+   *
+   * Assembled by `provision.ts` as `{callbackBaseUrl}/v1/wallet/google/callback`.
+   */
+  callbackUrl?: string;
   hexBackgroundColor?: string;
   accountNameLabel?: string;
   accountIdLabel?: string;
@@ -332,6 +378,9 @@ export function buildLoyaltyClass(input: BuildLoyaltyClassInput): LoyaltyClass {
   // merchant branding in front of a real customer.
   if (input.programLogo !== undefined) loyaltyClass.programLogo = input.programLogo;
   if (input.homepageUri !== undefined) loyaltyClass.homepageUri = input.homepageUri;
+  if (input.callbackUrl !== undefined) {
+    loyaltyClass.callbackOptions = { url: input.callbackUrl };
+  }
   if (input.hexBackgroundColor !== undefined) {
     loyaltyClass.hexBackgroundColor = input.hexBackgroundColor;
   }

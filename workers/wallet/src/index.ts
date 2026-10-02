@@ -6,6 +6,7 @@ import type { AuthHeaders, WalletBindings } from './helpers';
 import {
   extractAuthHeaders,
   googleWalletClientFor,
+  parseCallbackBaseUrl,
   parseCustomerWebBaseUrl,
   parseDemoMode,
   parseMediaBaseUrl,
@@ -81,11 +82,34 @@ export type { AuthHeaders, WalletBindings } from './helpers';
 
 const app = new Hono<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders } }>();
 
+/**
+ * The one path that arrives without a gateway-injected identity.
+ *
+ * Google's callback carries a **signature** and nothing else: no JWT, no
+ * `X-Business-Id`, no `X-User-Role`. It is exempted from the header extraction
+ * below because there is no header to extract, and the signature — verified
+ * inside the route before any database work — is what stands in for a token.
+ *
+ * Named as a constant rather than written inline in the `startsWith` so the
+ * gateway, which has to exempt the same path from its own auth middleware, and
+ * this file cannot drift apart on a typo. A misspelling here would not fail
+ * loudly: it would 403 every real callback with a log line saying the headers
+ * were missing.
+ */
+export const WALLET_CALLBACK_PATH = '/v1/wallet/google/callback';
+
 // ---------------------------------------------------------------------------
 // Global middleware: auth header extraction
 // ---------------------------------------------------------------------------
 
 app.use('*', async (c, next) => {
+  // Checked before the extraction, and on the raw path, so the exemption is
+  // exactly one route rather than a prefix that could grow.
+  if (new URL(c.req.url).pathname === WALLET_CALLBACK_PATH) {
+    await next();
+    return;
+  }
+
   try {
     // Extract and validate auth headers (injected by gateway).
     extractAuthHeaders(c);
@@ -143,6 +167,8 @@ app.onError((err, c) => {
 // Public surface
 // ---------------------------------------------------------------------------
 
+export * from './callbacks';
+export * from './callback-handler';
 export * from './balance';
 export * from './class';
 export * from './drizzle-store';
@@ -342,6 +368,11 @@ export async function provisionClass(
       // are customer-web routes, and building them from the gateway origin would
       // make every link on every pass a 404.
       customerWebBaseUrl: parseCustomerWebBaseUrl(env.WALLET_CUSTOMER_WEB_BASE_URL),
+      // A fourth host, resolved to the same gateway as MEDIA and WEB. It is the
+      // one whose absence is silent, which is why it is a separate var rather
+      // than a reuse of `webBaseUrl`: see the entry on
+      // `WalletBindings.WALLET_CALLBACK_BASE_URL`.
+      callbackBaseUrl: parseCallbackBaseUrl(env.WALLET_CALLBACK_BASE_URL),
     },
     { tenantId: input.tenantId },
   );
