@@ -1,0 +1,340 @@
+# 18-Verificacion-y-Seguridad-Operativa.md
+**[DOCUMENTO]:** Vyloop Verificación y Seguridad Operativa | **[ESTADO]:** Approved | **[RESPONSABLE]:** Equipo
+
+Este documento existe porque una sesión de integración de Google Wallet terminó con tres incidentes que costaron tiempo y que **ningún test en verde detectaría**. Cada sección es una clase de error, no un incidente: el incidente es lo que pasó una vez; la clase vuelve a pasar si no queda escrita.
+
+Las tres reglas que rigen todo lo de abajo:
+
+- Una herramienta no se creyó porque imprimió algo: se creyó porque lo que imprimió se verificó contra la fuente.
+- Un paso que no se comprobó no se reportó como hecho.
+- Un secreto no sale del entorno, ni siquiera para ayudar a diagnosticarlo.
+
+---
+
+## 1. Verificar la salida de una herramienta antes de creerla
+
+### El incidente
+
+Al buscar un símbolo en el código se ejecutó:
+
+```
+rg -rln "callback" apps/gateway/src/ workers/wallet/src/
+```
+
+`rg -r` es `--replace`, no "recursive". El flag se leyó como el prefijo de "recursive" y el argumento que lo seguía se consumió como texto de reemplazo:
+
+```
+-r  es --replace, no "recursive"
+ln  es el texto de reemplazo
+```
+
+La salida imprimió cada coincidencia con `callback` sustituido por `ln`. Leyendo eso apareció un `lnOptions` en el código y se reportó como bug de producción: "el campo se llama mal, hay que renombrarlo". Casi sale un PR que "arreglaba" código sano.
+
+**El campo nunca existió.** Lo que realmente se leyó fue `callbackOptions` con el prefijo
+sustituido, y eso es exactamente lo que reproduce el comando:
+
+```bash
+$ printf 'const callbackOptions = { url: "x" };\n' > t.ts
+$ rg -rln "callbackOptions" t.ts
+const ln = { url: "x" };        # ← lo que imprimió la herramienta
+$ rg -n "callbackOptions" t.ts
+1:const callbackOptions = { url: "x" };
+```
+
+El símbolo real del repositorio es `callbackOptions`, el campo `callbackOptions.url` de la clase
+de Google Wallet (`workers/wallet/src/class.ts:190`, asignado en `:382`). Nunca hubo un
+`lnOptions`, y `git log --all -S'lnOptions'` no devuelve nada en ningún branch.
+
+### La regla
+
+**"No lo veo" y "no existe" son cosas distintas.** Antes de afirmar que algo falta en el código, hay que confirmar que el comando que lo buscado hacía lo que se cree que hacía.
+
+`rg` es recursivo por defecto y no tiene flag de recursión:
+
+```bash
+rg -n "callback" apps/gateway/src/ workers/wallet/src/   # recursivo
+rg --files apps/gateway/src/                            # solo nombres de archivo
+```
+
+Y antes de reportar un símbolo inexistente, confirmar que existió alguna vez y se perdió, en lugar de nunca haber estado:
+
+```bash
+git log --all -S'<símbolo>' --oneline    # ¿apareció o desapareció en algún commit?
+git log --all -S'<símbolo>' -p           # el diff donde cambió
+```
+
+Un `-S` con cero resultados significa "nunca estuvo en ningún branch". Eso sostiene el reporte; la salida de un `rg` mal invocado no.
+
+### El otro caso: un filtro que no matchea no falla
+
+Un `sed` o un `perl` cuyo patrón no encuentra nada **sale 0 y deja el texto entero**. No hay error, no hay código de salida distinto, no hay aviso.
+
+Pasó al intentar enmascarar una connection string:
+
+```bash
+sed -E 's#://([^:]+):[^@]+@([^@]+)@.*#     host: \2#' <<< "$DATABASE_URL"
+```
+
+El patrón espera **dos** `@`: `user:pass@host@rest`. La URL de Postgres tiene **uno**: `user:pass@host`. No matcheó, así que imprimió la línea completa, contraseña incluida.
+
+Comprobación de 10 segundos, sin secreto de por medio:
+
+```bash
+$ echo "no match here" | sed -E 's#zzz#yyy#'
+no match here          # exit 0
+```
+
+Un redact que no se aplica es peor que no redactar: no redactar deja el secreto en el archivo; un redact que falla deja el secreto en el terminal y en la conversación.
+
+**Antes de confiar en una salida filtrada, comprobá que el patrón matchea algo.** Probá contra una línea de ejemplo primero, y si la credencial es real, enmascará el original en la misma línea de comando que el comando que lo expone.
+
+---
+
+## 2. Una mutación que no se aplicó es peor que no testear
+
+### El incidente
+
+Verificar que una guarda de seguridad realmente protege algo se hace quitándola y comprobando que algún test cae. En este repositorio existen dos herramientas para eso, y ambas verifican lo mismo:
+
+- `scripts/mutate-wallet.mjs` — aplica una edición que rompe la regla, corre la suite de wallet, cuenta cuántos tests caen, y restaura el archivo.
+- `scripts/verify-guards.mjs` — lo mismo para las guardas de presentación del pase, con una condición extra.
+
+La condición extra de `verify-guards.mjs` es la que importa:
+
+> **1. La edición entró.** `git diff` se consulta después de escribir. Una mutación cuyo archivo queda byte-idéntico se reporta como `NO-OP` y **su resultado se descarta** en vez de contarse.
+>
+> **2. Un test la detectó.** Solo un test que *falla* cuenta como verificación. Una mutación que deja la suite verde es `MISSED`, lo que significa que la guarda no es load-bearing y el test que dice cubrirla es decoración.
+
+El motivo está en el propio archivo: este repositorio tiene historial de un heredoc de Python que salía 0 sin hacer nada, dejando un test verde sobre código sin cambios.
+
+### La regla
+
+**Un test verde sobre un cambio que no ocurrió es evidencia falsa.** Es peor que no testear, porque se reporta como cobertura.
+
+Antes de leer el resultado de una mutación, confirmar que entró:
+
+```bash
+git diff --stat             # ¿el archivo que modifiqué cambió?
+git diff                    # ¿cambió lo que yo creía?
+```
+
+Y la regla que se aplica a **cada guarda** que se escriba a partir de ahora:
+
+> **Se revierte, y se confirma que un test cae.** Si sigue pasando, no prueba nada y se reescribe.
+
+Un test que sigue verde después de quitar la guarda no la está probando: o la guarda no hace nada, o el test no la ejercita. No es una guarda que "parece redundante".
+
+---
+
+## 3. No filtrar secretos al log
+
+### El incidente
+
+El `sed` de la sección anterior imprimió una `DATABASE_URL` completa en la conversación. La fuente era `.dev.vars`, que contiene credenciales reales de Neon.
+
+### La regla
+
+**Nunca imprimir un secreto sin enmascarar.** Ni para diagnosticar, ni "solo para ver el host", ni parcialmente.
+
+`.dev.vars` de los workers (7 archivos: identity, customer, growth, analytics, communication,
+compliance, automation — gitignored) contiene:
+
+```
+JWT_SECRET=<hex de 64 caracteres>
+DATABASE_URL=postgresql://neondb_owner:<contraseña>@ep-...-pooler.c-4.us-east-1.aws.neon.tech/neondb?...
+```
+
+Los secrets de GitHub Actions son **write-only**: la `DATABASE_URL` de producción no se puede leer de vuelta, ni con `gh secret list` ni por la API. Esa asimetricidad es una protección. El `.dev.vars` no la tiene, y por eso es el que hay que tratar con más cuidado, no con menos.
+
+### El enmascarado correcto
+
+Una connection string de Postgres tiene **un solo** `@`. El patrón correcto:
+
+```bash
+# Muestra solo el host. Un @, y el texto ANTES del @ se descarta.
+sed -E 's#^[^:]+://[^@]+@([^/?]+).*#     host: \1#' <<< "$DATABASE_URL"
+```
+
+```
+     host: ep-divine-bonus-ai05bdy3-pooler.c-4.us-east-1.aws.neon.tech
+```
+
+Alternativa sin `sed`, cuando el secreto está en una variable de shell y se quiere evitar el shell por completo:
+
+```bash
+node -e "const u=new URL(process.argv[1]); console.log('     host:', u.host)" "$DATABASE_URL"
+```
+
+Cualquiera de las dos está bien. Lo que no está bien es un patrón que no matchea, porque no falla (sección 1).
+
+### Dónde se filtra un token por descuido
+
+**Los logs de error son el lugar donde un token se filtra.** No en el mensaje del error: en el contexto que se loguea alrededor.
+
+Nunca loguear:
+
+| Qué | Por qué |
+|---|---|
+| `Authorization` | Es el token. Si se loguea un header entero, se logueó la credencial |
+| Cookies de sesión | Mismo caso, y una cookie sirve para suplantar al navegador entero |
+| Query string de una URL | `?token=`, `?code=`, `?sig=` son tokens con otra sintaxis |
+| Body de la request | Puede contener `password`, `otp`, `cardNumber` en endpoints que no son de tarjeta todavía |
+
+Sí se loguea: el **código** de error, el `request_id`, y el nombre del recurso. `apps/gateway/src/index.ts` loguea el `request_id` de un 500 justamente para que un error sea rastreable sin filtrar nada — ese es el patrón.
+
+---
+
+## 4. Hay tres bases de datos, y solo una es producción
+
+| | Qué es | Estado |
+|---|---|---|
+| Neon `ep-divine-bonus-ai05bdy3` | La `DATABASE_URL` de los `.dev.vars` de los workers | 1 tenant, sin fila de clase de wallet |
+| Neon `polished-firefly-68401534` | **PRODUCCIÓN** | La que inyecta `deploy.yml` desde el secret `DATABASE_URL` |
+| Supabase `mysrgtsuoxhspyfhdnsp` | Proyecto migrado, ya no en uso | **Vacía, sin schema** |
+
+Comprobado contra producción el 2026-10-02: 1 tenant, 12 clientes, 4 pases, 4 filas de clase
+de wallet. En la de dev, 1 tenant y ninguna fila de clase.
+
+> *No verificado:* se dice que la base de dev no tiene la tabla `__drizzle_migrations`. No se
+> pudo comprobar — `ep-divine-bonus-ai05bdy3` es un endpoint, no un project id, y el MCP no lo
+> resuelve (ver *Cómo mirar cada una*, abajo). Si alguien puede mirarla, que lo haga y corrija
+> esta línea.
+
+Ese contraste ya produjo un falso positivo: `node scripts/check-wallet-readiness.mjs` lee
+`apps/gateway/.dev.vars`, o sea **la base de dev**, y reporta
+`[BLOCK] Google approved the pass class — This business has no pass class row`. En producción
+la fila existe. El script acierta al declarar la base que leyó en la primera línea, y por eso
+esa línea hay que leerla antes que el veredicto.
+
+### La regla
+
+**Antes de aplicar una migración, confirmar contra cuál base se está.**
+
+`.dev.vars` **no es producción**. En una sesión de integración se estuvo a punto de aplicar una migración a la base equivocada y el reporte habría dicho "listo" — la migración habría quedado aplicada donde nadie la mira, y el mismo bug habría seguido vivo en producción.
+
+La pregunta que hay que responder antes de escribir en cualquier base:
+
+```bash
+# ¿A qué host apunta? Comparar con la tabla de arriba.
+echo "$DATABASE_URL" | sed -E 's#^[^:]+://[^@]+@([^/?]+).*#host: \1#'
+```
+
+### Cómo mirar cada una
+
+El MCP de Neon funciona pasando `project_id` explícito en cada llamada:
+
+```
+project_id: polished-firefly-68401534      # producción
+```
+
+`list_projects` no sirve para esto: devuelve todos los proyectos de la organización, no solo los de Vyloop, y no resuelve una dirección de endpoint. Para el proyecto de dev hace falta el `project_id` completo, y `ep-divine-bonus-ai05bdy3` es un **endpoint**, no un project id — el MCP responde 404 a ese valor.
+
+Los secrets de GitHub son write-only: para saber a qué base apunta `DATABASE_URL` en producción hay que saberlo de antemano (esta tabla), no leerlo.
+
+---
+
+## 5. Migraciones: el ledger no es la verdad
+
+### El incidente
+
+`0007` y `0008` se mergearon. **Ningún job de CI aplica migraciones**:
+
+```bash
+$ grep db:migrate .github/workflows/
+# sin resultados
+```
+
+El job `Deploy` salió `success`. Dos rutas quedaron muertas en producción — `/p/{slug}` daba 500 y el webhook de callbacks daba 500 — y nada dijo nada, porque un deploy que despliega código contra un schema que no tiene no falla en ninguna de las dos capas.
+
+Al diagnosticar la columna `promo_copy` no existía, y apareció el problema de fondo:
+
+```
+migraciones aplicadas    4 de 8 registradas en el ledger
+0004, 0005, 0006        aplicadas pero NO registradas (entraron por drizzle-kit push)
+```
+
+Verificado contra producción el 2026-10-02: `drizzle.__drizzle_migrations` tiene **4 filas** —los
+`created_at` de `0000`, `0001`, `0002` y `0003`—, mientras que el schema real tiene
+`wallet_callback_deliveries` (`0008`) y la columna `loyalty_programs.promo_copy` (`0007`). El
+ledger no registra esas tres, ni las que están en medio. Hay **9** migraciones en el journal y
+**4** en el ledger: cinco entraron por una vía que no escribe ledger.
+
+### Por qué `drizzle-kit migrate` no es el remedio
+
+**`drizzle-kit push` no escribe el ledger.** Compara el schema contra la base y emite DDL directo. El resultado es correcto y el ledger sigue mintiendo: la próxima vez que alguien corra `drizzle-kit migrate` sobre esa base, intenta reproducir desde el principio.
+
+Y `0004` no se puede reproducir: su `CREATE TABLE "customer_wallet_passes"` no lleva `IF NOT EXISTS`, sobre una tabla que ya existe → `42P07`. Falla antes de llegar a `0007`.
+
+### La regla
+
+**Nunca `drizzle-kit migrate` contra una base con drift.**
+
+El remedio es aplicar **las sentencias del archivo puntual**, con `IF NOT EXISTS` cuando se aplican a mano:
+
+```bash
+# Leer el archivo, aplicar lo que falta, con idempencia.
+psql "$DATABASE_URL" -f packages/db/drizzle/0007_loyalty_promo_copy.sql
+# y, si la tabla ya existe:
+psql "$DATABASE_URL" -c 'CREATE TABLE IF NOT EXISTS wallet_callback_deliveries (...)'
+```
+
+Y después, **revisar que la ruta que fallaba responda**. Una migración aplicada es una hipótesis hasta que el endpoint contesta.
+
+### El gate de deploy que falta
+
+**Pendiente, no implementado.** El pipeline debería fallar si el esquema destino está atrasado respecto al journal: comparar lo que el journal declara contra lo que la base tiene, y cortar el deploy. Hoy el gate es humano y no está en ningún archivo.
+
+Está anotado como pendiente en `docs/14-Backlog.md`.
+
+---
+
+## 6. La review de Google Wallet es de ida
+
+Esta sección resume las propiedades de la API de Google que hacen la revisión irreversible. Las fuentes son las mismas que cita `docs/11-crear-tarjeta-lealtad.md`.
+
+### `reviewStatus` no vuelve a `draft`
+
+La documentación de Google: *"Once the review state is changed from `draft` it may not be changed back to `draft`."*
+
+Una clase rechazada **no se puede recrear bajo el mismo id**. El remedio es crear una clase nueva con otro sufijo y corregir el `class_id` de la fila en `tenant_wallet_programs`:
+
+```sql
+UPDATE tenant_wallet_programs
+   SET class_id = '<issuerId>.tenant-<tenantId>-v2'
+ WHERE tenant_id = '<tenantId>'::uuid;
+```
+
+Por eso un rechazo no es un contratiempo, es un retrabajo de id: la fila tiene que apuntar a algo que Google nunca va a revisar.
+
+### Un `draft` no puede crear objetos
+
+No hay pase hasta que la clase esté aprobada. Google no expone objetos de una clase en `draft`.
+
+### `homepageUri` es el motivo de rechazo más común
+
+Según `docs/11-crear-tarjeta-lealtad.md`, `homepageUri` es barato y es lo que más se rechaza. Tiene que apuntar a una página **del comercio**, en **dominio propio**, con el **nombre en el HTML servido** — no en un bundle que se carga del lado del cliente, porque el revisor de Google lee el HTML.
+
+Hoy `homepageUri` es `https://media.juancode.dev/p/{slug}`, y esa página la renderiza el gateway en el servidor (`apps/gateway/src/merchant-page.ts`), con el nombre del comercio en el `<h1>`.
+
+### Cambiar el dominio después de la aprobación es irreversible
+
+Google revisa una clase abriendo `homepageUri`. Cambiar el host devuelve **todas las clases** que apuntaban al anterior a review, y una clase revisada no vuelve a `draft`. No hay vuelta: es una re-review, no una edición de configuración. Tratar un cambio de host como una decisión de producto.
+
+El mismo razonamiento aplica a `callbackOptions.url` y a `programLogo`: una clase creada contra un host de staging postea a staging para siempre.
+
+### El grant de publicación es del ISSUER, no del comercio
+
+**Una sola aprobación para todo el emisor, no una por clase ni una por negocio.** La solicitud de acceso de publicación se hace una vez, a nivel de emisor. Una vez aprobada, las clases futuras no vuelven a esperar.
+
+Esto es lo que separa "el pase funciona en el teléfono del cliente" de "el pase se puede entregar": `WALLET_DEMO_MODE` en `true` (el default en `workers/wallet/wrangler.jsonc`) antepone el prefijo `[TEST ONLY]` al pase y Google limita la entrega a las cuentas de prueba del emisor, aunque la clase esté aprobada.
+
+---
+
+## Documentos relacionados
+
+| Documento | Qué cubre |
+|---|---|
+| `docs/11-crear-tarjeta-lealtad.md` | El procedimiento de alta de una clase de Google Wallet, con las fuentes citadas |
+| `docs/17-Developer-Onboarding.md` | Las reglas de oro del equipo y las variables por worker |
+| `docs/14-Backlog.md` | Lo que falta, incluido el gate de migraciones de la sección 5 |
+| `scripts/verify-guards.mjs` | La verificación de mutaciones de la sección 2, implementada |
