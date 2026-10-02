@@ -236,10 +236,13 @@ Estos ítems están en la visión del producto pero **no entran al PMV**. Se pri
             6 aceptados. Los 6 que pasaron demuestran que la verificación de firma funciona
             — un atacante no los habría colado — pero los 7 rechazos no tienen causa conocida.
             Un 39% de rechazo sobre tráfico real de Google es un defecto, no ruido.
-            *Pendiente además:* `wallet_callback_deliveries` está **vacía** en producción, así
-            que ninguno de los 6 escribió una fila. O los eventos llegaron antes de que `0008`
-            existiera, o el paso de escritura está fallando. Hay que averiguarlo antes de
-            confiar en que el estado de un pase refleja lo que Google dijo.
+            *No verificado:* `wallet_callback_deliveries` está **vacía** en producción (contada
+            el 2026-10-02). Si los 6 aceptados hubieran pasado por
+            `claimCallbackDelivery`, habría 6 filas. Dos explicaciones: los eventos llegaron
+            antes de que existiera la tabla `0008`, o el paso de escritura está fallando. Hay
+            que averiguarlo antes de confiar en que el estado de un pase refleja lo que Google
+            dijo — hoy no hay evidencia de que el camino completo se haya ejercitado en
+            producción.
       - [ ] **`loyaltyPoints.balance` se manda como `{"string": "0"}` y Google usa `int`.**
             Verificado en `workers/wallet/src/reconcile.ts:308`. No rompe: Google acepta el
             saldo como string y el pase renderiza bien. Pero es un tipo equivocado en el
