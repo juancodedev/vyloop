@@ -13,6 +13,7 @@ import {
   DEFAULT_LIMITS,
   DEFAULT_WINDOW,
 } from './middleware/rate-limit';
+import { ROBOTS_PATH, robotsRoute, WALLET_CALLBACK_PATH } from './robots';
 import { routerMiddleware, type GatewayEnv } from './router';
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,15 @@ app.get('/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ---------------------------------------------------------------------------
+// robots.txt
+// ---------------------------------------------------------------------------
+
+// Public and unauthenticated, like everything a crawler must reach. Served by
+// the Worker rather than straight off the assets layer so the Content-Type is
+// guaranteed and the contract is testable through `app.fetch` — see `robots.ts`.
+app.get(ROBOTS_PATH, robotsRoute());
+
 // Mount the event ingestor — public endpoint for external event sources
 app.route('/', ingestor);
 
@@ -47,6 +57,10 @@ const WEBHOOK_PREFIX = '/v1/communication/webhook';
 
 /**
  * The Google Wallet pass callback, exempted from auth for the same reason.
+ *
+ * Declared in `robots.ts` and imported above, because that file has to name the
+ * same path in `public/robots.txt` to keep it crawlable. One string, so the auth
+ * exemption and the crawler rule cannot drift apart.
  *
  * ## What the exemption does and does not remove
  *
@@ -74,8 +88,6 @@ const WEBHOOK_PREFIX = '/v1/communication/webhook';
  * *also* looks like from the outside — so the duplication is worth the risk of
  * drift, and is covered by a test that reads all three.
  */
-const WALLET_CALLBACK_PATH = '/v1/wallet/google/callback';
-
 /**
  * True for a path that arrives without a gateway-injected identity.
  *

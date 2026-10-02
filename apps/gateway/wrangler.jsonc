@@ -17,6 +17,32 @@
   // as a plain var, that `identity`, `wallet` and `growth` already receive.
   // See `apps/gateway/src/merchant-store.ts`.
   "vars": {},
+  // Static assets, and this block is load-bearing rather than decorative.
+  //
+  // `./public/` is NOT served by default. Without an `assets` block wrangler
+  // never uploads the directory, so `public/robots.txt` would exist in the repo
+  // and answer 404 in production — a crawler file that lies about being there.
+  //
+  // `run_worker_first: ["/robots.txt"]` sends exactly one path to the Worker
+  // script first, and the Worker then serves the file through the `ASSETS`
+  // binding (`src/robots.ts`). The alternative — asset-first, Worker never
+  // invoked — would be marginally cheaper and completely untestable: the
+  // robots.txt contract is that Google can GET it and get
+  // `text/plain`, and asserting that through `app.fetch` requires a real route
+  // to fetch. One extra Worker invocation for a document crawlers fetch about
+  // once a day per host is the right trade for a rule that has to be verifiable.
+  //
+  // `not_found_handling: "none"` is spelled out because it is what keeps this
+  // block from changing anything else. On an unmatched request the Worker runs,
+  // exactly as it did before assets existed, so no existing route is shadowed by
+  // the assets layer. Anyone tempted to switch this to "single-page-application"
+  // would silently swallow every unmatched gateway route into a 200.
+  "assets": {
+    "directory": "./public/",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "run_worker_first": ["/robots.txt"]
+  },
   // Brand assets. The bucket is private: this route is the only public door, so the
   // r2.dev preview URL is never what Google fetches and disabling it breaks nothing.
   "r2_buckets": [
