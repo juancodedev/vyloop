@@ -128,6 +128,7 @@ export {
   idxWhatsappTemplatesName,
   idxCustomersMemberCode,
   idxCustomerWalletPassesTenant,
+  idxWalletCallbackDeliveriesReceived,
   indexByName,
   allIndexes,
 } from './indexes';

@@ -69,8 +69,8 @@ describe('Database schema', () => {
     expect(db.idxCustomerEventsType).toBeDefined();
     expect(db.allIndexes).toBeDefined();
     expect(Array.isArray(db.allIndexes)).toBe(true);
-    // 12 pre-existing plus the two wallet indexes.
-    expect(db.allIndexes.length).toBe(14);
+    // 12 pre-existing plus the three wallet indexes.
+    expect(db.allIndexes.length).toBe(15);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -104,6 +104,7 @@ describe('Database schema', () => {
       idxWhatsappTemplatesName: 'idx_whatsapp_templates_name',
       idxCustomersMemberCode: 'uq_customers_business_member_code',
       idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
+      idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
     };
 
     for (const [binding, sqlName] of Object.entries(expectedNames)) {
