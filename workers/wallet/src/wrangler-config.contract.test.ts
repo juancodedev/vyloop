@@ -31,6 +31,7 @@ describe('wrangler.jsonc', () => {
     expect(names.sort()).toEqual([
       'GOOGLE_WALLET_ISSUER_ID',
       'WALLET_ALLOWED_ORIGINS',
+      'WALLET_CALLBACK_BASE_URL',
       'WALLET_CUSTOMER_WEB_BASE_URL',
       'WALLET_DEMO_MODE',
       'WALLET_MEDIA_BASE_URL',
@@ -100,6 +101,33 @@ describe('wrangler.jsonc', () => {
 
     expect(read('WALLET_CUSTOMER_WEB_BASE_URL')).toBeDefined();
     expect(read('WALLET_CUSTOMER_WEB_BASE_URL')).not.toBe(read('WALLET_WEB_BASE_URL'));
+  });
+
+  it('declares the callback origin separately, because it fails silently when wrong', () => {
+    // The three base URLs above fail *visibly*: a wrong media host is an empty
+    // logo, a wrong web host is a class Google rejects at review. A wrong
+    // callback host fails silently — Google simply never reports that a customer
+    // saved or deleted a pass, and `customer_wallet_passes.state` goes on
+    // reporting whatever the last reconcile inferred. Nothing anywhere errors,
+    // because a missing callback is indistinguishable from a customer who has not
+    // opened the app.
+    //
+    // So it is asserted to exist, to be a real https origin, and to be the
+    // gateway — the same host that actually serves the route. A `localhost` or
+    // `.pages.dev` value here would mint classes that report to nowhere for
+    // life, since a class cannot be recreated under the same id.
+    expect(config).toContain('"WALLET_CALLBACK_BASE_URL"');
+
+    const callbackBase = /"WALLET_CALLBACK_BASE_URL"\s*:\s*"([^"]*)"/.exec(config)?.[1];
+    expect(callbackBase).toBeDefined();
+    expect(callbackBase).toMatch(/^https:\/\/[^/\s]+\/?$/);
+    expect(callbackBase).not.toMatch(/localhost|127\.0\.0\.1|pages\.dev/);
+
+    // It is the gateway, so it must be the same origin MEDIA and WEB already
+    // point at. If it ever diverges it must be a deliberate act with its own
+    // reason, which is what this equality forces someone to confront.
+    const read = (name: string) => new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(config)?.[1];
+    expect(read('WALLET_CALLBACK_BASE_URL')).toBe(read('WALLET_WEB_BASE_URL'));
   });
 
   it('declares the origins Google requires before it will issue a save link', () => {

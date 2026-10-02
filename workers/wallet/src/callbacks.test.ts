@@ -79,7 +79,7 @@ function p1363ToDer(p1363: Uint8Array): Uint8Array {
     // when the top bit would otherwise make the INTEGER read as negative.
     let start = 0;
     while (start < value.length - 1 && value[start] === 0x00) start += 1;
-    let magnitude = value.subarray(start);
+    const magnitude = value.subarray(start);
     const needsSignByte = (magnitude[0] & 0x80) !== 0;
 
     const out = new Uint8Array(2 + magnitude.length + (needsSignByte ? 1 : 0));

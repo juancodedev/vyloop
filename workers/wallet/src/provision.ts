@@ -92,6 +92,18 @@ export interface ProvisionDeps {
    * turns every link on every pass into a 404.
    */
   customerWebBaseUrl: string;
+  /**
+   * Public origin the class's `callbackOptions.url` is built from. See
+   * `parseCallbackBaseUrl`.
+   *
+   * A **fourth** host, and the reason it is not folded into `webBaseUrl` is the
+   * one worth stating: those three consumers fail *visibly* when they are wrong
+   * (a rejected class, a 404, an empty logo), while a wrong callback URL is
+   * silent. Google simply never tells us a customer saved their pass, and
+   * `customer_wallet_passes.state` goes on reporting whatever the last reconcile
+   * inferred — with no error anywhere to say the channel was never open.
+   */
+  callbackBaseUrl: string;
 }
 
 export interface ProvisionInput {
@@ -216,7 +228,8 @@ export async function provisionTenantClass(
   deps: ProvisionDeps,
   input: ProvisionInput,
 ): Promise<ProvisionOutcome> {
-  const { store, client, issuerId, mediaBaseUrl, webBaseUrl, customerWebBaseUrl } = deps;
+  const { store, client, issuerId, mediaBaseUrl, webBaseUrl, customerWebBaseUrl, callbackBaseUrl } =
+    deps;
   const { tenantId } = input;
 
   // The cheap exit, before the expensive dependency. Re-running provisioning
@@ -317,6 +330,20 @@ export async function provisionTenantClass(
         uri: `${webBaseUrl}/p/${encodeURIComponent(branding.slug)}`,
         description: 'Programa de lealtad',
       },
+      // Where Google POSTs when a customer saves or removes one of this class's
+      // passes. Without it, `customer_wallet_passes.state` can only ever be
+      // inferred by asking Google whether an object exists — which cannot
+      // distinguish "never opened the app" from "deleted the pass", so a
+      // merchant asking why a comensal's card stopped working has no answer.
+      //
+      // **One-way, like `homepageUri`.** Set at insert, and a class cannot be
+      // recreated under the same id, so a class created pointing at the wrong
+      // host reports to that host for its whole life. It is also not
+      // tenant-specific: every class posts to the same endpoint, and the
+      // callback's own `classId` is what identifies the tenant. That is what
+      // keeps a single public route from becoming a per-tenant routing table,
+      // and it is why the URL carries no slug.
+      callbackUrl: `${callbackBaseUrl}/v1/wallet/google/callback`,
       // The merchant's own sentence, on the class. Google combines class and
       // object text modules, so this does not compete with the object's tier row
       // for its ten slots, and changing a promotion is one class patch instead
