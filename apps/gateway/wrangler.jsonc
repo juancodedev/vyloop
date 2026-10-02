@@ -3,11 +3,19 @@
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
-  // No var is declared here, and that is deliberate: `wrangler deploy --var …`
-  // *replaces* the whole `vars` map rather than merging into it, so anything
-  // declared here would be silently dropped in favour of the flags the deploy
-  // job passes. `JWT_SECRET` and `DATABASE_URL` are both injected that way, from
-  // GitHub secrets, and are never in source control.
+  // `JWT_SECRET` and `DATABASE_URL` arrive through the deploy job's `--var`
+  // flags, from GitHub secrets, and the reason for that is one word: a secret
+  // must never be in source control. It is NOT because `--var` displaces this
+  // map. `wrangler deploy --var` MERGES into `vars` rather than replacing it —
+  // `wrangler deploy --var DATABASE_URL:… --dry-run` in `workers/wallet`
+  // publishes that worker's seven declared vars alongside `DATABASE_URL`, on
+  // 4.107.0 and again on 4.147.0.
+  //
+  // So the split is by sensitivity and nothing else: anything secret is a
+  // workflow flag, anything not is declared right here, which is the same
+  // arrangement `workers/wallet/wrangler.jsonc` uses and for the same reason.
+  // `wrangler-config.contract.test.ts` is what keeps the two halves in agreement
+  // — it fails if a var is read here and declared in neither place.
   //
   // `DATABASE_URL` arrived with `/p/{slug}`, the public per-merchant page a
   // Google class review opens. It is read in the gateway rather than reached
@@ -16,7 +24,27 @@
   // would mean inventing an auth bypass. It is the same Neon connection string,
   // as a plain var, that `identity`, `wallet` and `growth` already receive.
   // See `apps/gateway/src/merchant-store.ts`.
-  "vars": {},
+  "vars": {
+    // The `apps/customer-web` origin, for the one CTA on `/p/{slug}`.
+    //
+    // `/p/*` and `/brand/*` are gateway routes; `/register` and `/profile` are
+    // `apps/customer-web` pages this worker does not serve. So this host has to
+    // be named separately from the gateway's own origin — building the CTA on
+    // `media.juancode.dev` renders a page that looks right and a link that 404s,
+    // which is the `programLogo` defect at a different URL.
+    //
+    // The pages.dev host, not a custom domain, because those two routes exist in
+    // `apps/customer-web/app` and are served from there. Optional with a
+    // documented default in `parseCustomerWebBaseUrl`, but DECLARED: a value
+    // that only exists as a fallback in code is invisible to
+    // `wrangler-config.contract.test.ts`, and a deployment whose CTA host was
+    // never configured is indistinguishable from one where it was configured
+    // correctly. It holds the same value as `DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL`
+    // in `src/merchant-page.ts`, and `wrangler-config.contract.test.ts` asserts
+    // the two agree — so a staging deployment that moves this host and leaves the
+    // constant behind fails here instead of drifting.
+    "WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev"
+  },
   // Static assets, and this block is load-bearing rather than decorative.
   //
   // `./public/` is NOT served by default. Without an `assets` block wrangler

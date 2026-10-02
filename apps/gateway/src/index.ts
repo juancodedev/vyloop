@@ -4,7 +4,7 @@ import { cors } from 'hono/cors';
 
 import { brandRoute } from './brand';
 import { ingestor } from './ingestor';
-import { merchantPageRoute } from './merchant-page';
+import { merchantPageRoute, parseCustomerWebBaseUrl } from './merchant-page';
 import { createMerchantPageReader } from './merchant-store';
 import { authMiddleware } from './middleware/auth';
 import { authInjectMiddleware } from './middleware/auth-inject';
@@ -244,9 +244,16 @@ app.get('/brand/*', brandRoute());
 // The reader is built per request from `c.env` rather than captured at module
 // scope: `createDb` opens a pool and an isolate is reused across requests, so a
 // pool held in module state is a different object here than in a test.
+//
+// The customer-web base is read per request and normalised here, so
+// `renderMerchantPage` never sees a raw configured string and the one link on
+// this page is built from a value this mount point is responsible for.
 app.get(
   '/p/*',
-  async (c) => merchantPageRoute(createMerchantPageReader(c.env))(c),
+  async (c) =>
+    merchantPageRoute(createMerchantPageReader(c.env), {
+      customerWebBaseUrl: parseCustomerWebBaseUrl(c.env.WALLET_CUSTOMER_WEB_BASE_URL),
+    })(c),
 );
 
 // 404 handler
