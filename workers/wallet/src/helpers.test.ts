@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL,
   DEFAULT_WALLET_MEDIA_BASE_URL,
   DEFAULT_WALLET_WEB_BASE_URL,
   OPERATOR_ROLE_REQUIRED,
   isCustomerRole,
   parseAllowedOrigins,
+  parseCustomerWebBaseUrl,
   parseDemoMode,
   parseMediaBaseUrl,
   parseWebBaseUrl,
@@ -157,34 +159,96 @@ describe('parseMediaBaseUrl', () => {
 });
 
 describe('parseWebBaseUrl', () => {
-  it('answers the customer web when the var says nothing, never the media host', () => {
-    // The regression this split exists to prevent. A single shared var made the
-    // media host the default homepage, and `media.juancode.dev/program` is a 404
-    // that Google finds when it opens `homepageUri` to review the class.
+  it('answers the gateway when the var says nothing, because that is where the page is', () => {
+    // `homepageUri` is `/p/{slug}`, rendered server-side by the gateway. The
+    // default moved off the customer web for that reason: a review page has to
+    // have its content in the bytes Google's reviewer receives, and the
+    // dashboard's static export serves 18 characters of text.
     for (const raw of [undefined, null, '', '   ']) {
       expect(parseWebBaseUrl(raw)).toBe(DEFAULT_WALLET_WEB_BASE_URL);
     }
-    expect(DEFAULT_WALLET_WEB_BASE_URL).toBe('https://vyloop-customer-web.pages.dev');
-    expect(DEFAULT_WALLET_WEB_BASE_URL).not.toBe(DEFAULT_WALLET_MEDIA_BASE_URL);
+    expect(DEFAULT_WALLET_WEB_BASE_URL).toBe('https://media.juancode.dev');
   });
 
   it('drops a trailing slash, which would double up in the path built from it', () => {
     // Same treatment as `parseMediaBaseUrl`, for the same reason: this base is
-    // concatenated with `/program`.
-    expect(parseWebBaseUrl('https://staging-customer.pages.dev/')).toBe(
-      'https://staging-customer.pages.dev',
+    // concatenated with `/p/{slug}`.
+    expect(parseWebBaseUrl('https://staging-gateway.example.dev/')).toBe(
+      'https://staging-gateway.example.dev',
     );
-    expect(parseWebBaseUrl('  https://staging-customer.pages.dev  ')).toBe(
-      'https://staging-customer.pages.dev',
+    expect(parseWebBaseUrl('  https://staging-gateway.example.dev  ')).toBe(
+      'https://staging-gateway.example.dev',
     );
   });
 
   it('never falls through to the media parser, whatever it is handed', () => {
     // The two parsers are the seam the bug came through, so each is asserted to
-    // answer for itself only. A shared implementation, or a parser defaulting to
-    // the other host, fails here rather than in a class Google rejects.
+    // answer for itself only: a shared implementation, or one parser falling
+    // through to the other's default, has to fail here rather than in a class
+    // Google rejects.
+    //
+    // Their *defaults* now coincide — both origins are the gateway — so
+    // inequality of defaults would assert nothing. What is asserted instead is
+    // that a value passed to one parser is never overridden by the other: a
+    // transposed pair, the swap that actually cost a class review, changes what
+    // these return.
     expect(parseWebBaseUrl('https://web.invalid-host.test')).toBe('https://web.invalid-host.test');
-    expect(parseMediaBaseUrl('https://web.invalid-host.test')).toBe('https://web.invalid-host.test');
-    expect(parseWebBaseUrl(undefined)).not.toBe(parseMediaBaseUrl(undefined));
+    expect(parseMediaBaseUrl('https://media.invalid-host.test')).toBe(
+      'https://media.invalid-host.test',
+    );
+    expect(parseWebBaseUrl('https://media.invalid-host.test')).toBe(
+      'https://media.invalid-host.test',
+    );
+    // The transitive pair: if the two implementations were merged, this holds by
+    // accident rather than by design, and so does the case above. Together they
+    // are what a merge would break.
+    expect(parseMediaBaseUrl('https://web.invalid-host.test')).toBe(
+      'https://web.invalid-host.test',
+    );
+  });
+
+  it('keeps its own identity even though its default now equals the media default', () => {
+    // The documented reason the two parsers are separate functions survives the
+    // defaults converging: they are separate *consumers* with independent
+    // histories, and either origin may have to move without the other. A merged
+    // implementation would make that impossible to express.
+    expect(DEFAULT_WALLET_WEB_BASE_URL).toBe(DEFAULT_WALLET_MEDIA_BASE_URL);
+    expect(parseWebBaseUrl).not.toBe(parseMediaBaseUrl);
+  });
+});
+
+describe('parseCustomerWebBaseUrl', () => {
+  it('answers the customer web, which is where the pass links live', () => {
+    // `/profile` and `/profile/history` are `apps/customer-web` routes. This is
+    // the origin that has to stay different from the two gateway ones: a link
+    // built from the gateway is a 404 in a customer's hand, and nothing fails
+    // loudly — the class inserts and the pass renders.
+    for (const raw of [undefined, null, '', '   ']) {
+      expect(parseCustomerWebBaseUrl(raw)).toBe(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL);
+    }
+    expect(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL).toBe('https://vyloop-customer-web.pages.dev');
+    expect(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL).not.toBe(DEFAULT_WALLET_WEB_BASE_URL);
+    expect(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL).not.toBe(DEFAULT_WALLET_MEDIA_BASE_URL);
+  });
+
+  it('drops a trailing slash, for the same reason the other two do', () => {
+    expect(parseCustomerWebBaseUrl('https://staging-customer.pages.dev/')).toBe(
+      'https://staging-customer.pages.dev',
+    );
+    expect(parseCustomerWebBaseUrl('  https://staging-customer.pages.dev  ')).toBe(
+      'https://staging-customer.pages.dev',
+    );
+  });
+
+  it('never answers a gateway host, whatever it is handed', () => {
+    // Pinned against the pair, because the failure this parser exists to prevent
+    // is the links being built from `WALLET_WEB_BASE_URL`. A pass whose
+    // `homepageUri` is right and whose links 404 still looks healthy everywhere
+    // except the customer's hand.
+    expect(parseCustomerWebBaseUrl('https://staging-customer.pages.dev')).toBe(
+      'https://staging-customer.pages.dev',
+    );
+    expect(parseCustomerWebBaseUrl(undefined)).not.toBe(parseWebBaseUrl(undefined));
+    expect(parseCustomerWebBaseUrl(undefined)).not.toBe(parseMediaBaseUrl(undefined));
   });
 });

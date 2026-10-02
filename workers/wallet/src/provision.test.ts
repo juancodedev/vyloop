@@ -20,7 +20,7 @@ vi.mock('./helpers', async (importOriginal) => {
   return { ...original, googleWalletClientFor: vi.fn() };
 });
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -46,17 +46,31 @@ const OTHER_TENANT = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const CLASS_ID = classIdFor(ISSUER, TENANT);
 
 /**
- * Two hosts, and they are not interchangeable. `media` is the gateway's brand
- * route — the only public door to the private R2 bucket. `web` is the customer
- * web, which is where the program page actually lives. See `apps/gateway/src/brand.ts`.
+ * Three origins, and they are not interchangeable.
+ *
+ * `media` and `web` are both the gateway today — one origin serving `/brand/*`
+ * and `/p/*` — and stay separate vars because they are separate consumers whose
+ * histories differ. `customerWeb` is genuinely another host: the pass's links
+ * point at `apps/customer-web` routes.
+ *
+ * See `apps/gateway/src/brand.ts` and `apps/gateway/src/merchant-page.ts`.
  */
 const MEDIA_BASE_URL = 'https://media.juancode.dev';
-const WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+const WEB_BASE_URL = 'https://media.juancode.dev';
+const CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
 const BRAND_URL = `${MEDIA_BASE_URL}/brand/${TENANT}.jpg`;
-const PROGRAM_URL = `${WEB_BASE_URL}/program`;
+
+/** The tenant's real slug — `tenants.slug`, read, never derived from the name. */
+const SLUG = 'cafe-central';
+
+/** The gateway's per-merchant page: what `homepageUri` now points at. */
+const PROGRAM_URL = `${WEB_BASE_URL}/p/${SLUG}`;
 
 /** Next.js `app/` directory, for the "this route exists" assertion. */
 const CUSTOMER_WEB_APP = join(__dirname, '..', '..', '..', 'apps', 'customer-web', 'app');
+
+/** The gateway's route table, for the "does this route exist" assertion. */
+const GATEWAY_INDEX = join(__dirname, '..', '..', '..', 'apps', 'gateway', 'src', 'index.ts');
 
 let env: Record<string, unknown>;
 
@@ -72,6 +86,7 @@ beforeEach(() => {
     WALLET_DEMO_MODE: 'true',
     WALLET_MEDIA_BASE_URL: MEDIA_BASE_URL,
     WALLET_WEB_BASE_URL: WEB_BASE_URL,
+    WALLET_CUSTOMER_WEB_BASE_URL: CUSTOMER_WEB_BASE_URL,
   };
 });
 
@@ -93,8 +108,16 @@ interface FakeStore {
   insertProgram: Mock;
 }
 
+/**
+ * The tenant's branding row.
+ *
+ * `slug` is the tenant's own — `tenants.slug` is `unique`, so two businesses
+ * named "Café Central" do not both end up at `cafe-central`. It is set here as a
+ * distinct value from the derived name precisely so a test can tell a read slug
+ * from a recomputed one.
+ */
 function brandingRow(overrides: Partial<WalletTenantBrandingRow> = {}): WalletTenantBrandingRow {
-  return { name: 'Café Central', country: 'CL', ...overrides };
+  return { name: 'Café Central', country: 'CL', slug: SLUG, ...overrides };
 }
 
 function programRow(overrides: Partial<WalletProgramRow> = {}): WalletProgramRow {
@@ -303,8 +326,8 @@ describe('provisionClass: a tenant with no Google class', () => {
       // The merchant wrote no promo in this fixture, so there is no promo row.
       linksModuleData: {
         uris: [
-          { uri: `${WEB_BASE_URL}/profile`, description: 'Ver mi perfil' },
-          { uri: `${WEB_BASE_URL}/profile/history`, description: 'Mi historial' },
+          { uri: `${CUSTOMER_WEB_BASE_URL}/profile`, description: 'Ver mi perfil' },
+          { uri: `${CUSTOMER_WEB_BASE_URL}/profile/history`, description: 'Mi historial' },
         ],
       },
     });
@@ -404,7 +427,7 @@ describe('provisionClass: a tenant with no Google class', () => {
       programLogo: { sourceUri: { uri: string } };
       homepageUri: { uri: string };
     };
-    expect(payload.homepageUri.uri).toBe('https://staging-customer.pages.dev/program');
+    expect(payload.homepageUri.uri).toBe(`https://staging-customer.pages.dev/p/${SLUG}`);
     expect(payload.programLogo.sourceUri.uri).toBe(BRAND_URL);
   });
 });
@@ -440,34 +463,44 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
     expect(payload.programLogo.sourceUri.uri).toBe(
       `https://media.invalid-host.test/brand/${TENANT}.jpg`,
     );
-    expect(payload.homepageUri.uri).toBe('https://web.invalid-host.test/program');
+    expect(payload.homepageUri.uri).toBe(`https://web.invalid-host.test/p/${SLUG}`);
   });
 
-  it('sends two different origins, which is the whole claim being defended', async () => {
-    // Stated separately so the failure message names the invariant rather than
-    // repeating two concrete URLs: a class whose logo and homepage share a host
-    // is exactly what one var was wrongly assumed to mean.
+  it('reads each origin from its own var, so the logo and the homepage cannot be swapped', async () => {
+    // Stated as "each came from its own var" rather than "the origins differ",
+    // because they no longer differ: `homepageUri` moved to the gateway, so both
+    // resolve to `media.juancode.dev`. The assertion this replaces was host
+    // inequality, and it would have passed against two *transposed parsers* —
+    // which is the swap that actually cost a class review. Asserting where each
+    // value was read from is what catches that.
     const store = fakeStore();
     const client = fakeClient();
 
-    await install(store, client);
+    await install(store, client, {
+      WALLET_MEDIA_BASE_URL: 'https://media.invalid-host.test',
+      WALLET_WEB_BASE_URL: 'https://web.invalid-host.test',
+    });
 
     const payload = client.insertClass.mock.calls[0]![0] as {
       programLogo: { sourceUri: { uri: string } };
       homepageUri: { uri: string };
+      linksModuleData: { uris: { uri: string }[] };
     };
-    const logoOrigin = new URL(payload.programLogo.sourceUri.uri).origin;
-    const homepageOrigin = new URL(payload.homepageUri.uri).origin;
 
-    expect(logoOrigin).toBe(MEDIA_BASE_URL);
-    expect(homepageOrigin).toBe(WEB_BASE_URL);
-    expect(homepageOrigin).not.toBe(logoOrigin);
+    expect(new URL(payload.programLogo.sourceUri.uri).origin).toBe(
+      'https://media.invalid-host.test',
+    );
+    expect(new URL(payload.homepageUri.uri).origin).toBe('https://web.invalid-host.test');
+    // And the links come from neither — that is the third var.
+    for (const link of payload.linksModuleData.uris) {
+      expect(new URL(link.uri).origin).toBe(CUSTOMER_WEB_BASE_URL);
+    }
   });
 
-  it('defaults the homepage to the customer web, not the media host', async () => {
-    // The regression, pinned. The previous default built `homepageUri` from
-    // `media.juancode.dev`, which answers 404 on `/program` — a class Google
-    // rejects at review rather than one a customer notices.
+  it('defaults both gateway origins to one host, because the gateway serves both routes', async () => {
+    // A fact about the deployment rather than about correctness: `/brand/*` and
+    // `/p/*` are both gateway routes. The vars stay separate because either may
+    // have to move without the other, which the previous test pins.
     const store = fakeStore();
     const client = fakeClient();
 
@@ -481,10 +514,52 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
       homepageUri: { uri: string };
     };
 
-    expect(payload.homepageUri.uri).toBe('https://vyloop-customer-web.pages.dev/program');
-    expect(payload.homepageUri.uri).not.toContain('media.juancode.dev');
+    expect(new URL(payload.programLogo.sourceUri.uri).origin).toBe(
+      new URL(payload.homepageUri.uri).origin,
+    );
+  });
+
+  it('defaults the homepage to the page that actually exists, on the gateway', async () => {
+    // The regression this replaces, and why the default changed.
+    //
+    // The previous default pointed `homepageUri` at the customer web's
+    // `/program`. The dashboard is worse still: a `next-on-pages` static export
+    // whose whole page is 9,638 bytes of which **18** are text, so a reviewer
+    // opening it reads a `<title>` and nothing else.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client, {
+      WALLET_MEDIA_BASE_URL: undefined,
+      WALLET_WEB_BASE_URL: undefined,
+      WALLET_CUSTOMER_WEB_BASE_URL: undefined,
+    });
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      homepageUri: { uri: string };
+      programLogo: { sourceUri: { uri: string } };
+    };
+
+    expect(payload.homepageUri.uri).toBe(`https://media.juancode.dev/p/${SLUG}`);
     // The logo's default is unchanged and still the gateway's brand route.
     expect(payload.programLogo.sourceUri.uri).toBe(BRAND_URL);
+  });
+
+  it('points the homepage at a route the gateway source actually serves', async () => {
+    // Asserted against the filesystem rather than against this file's own
+    // constant, for the reason the links are: a route renamed in `apps/gateway`
+    // would otherwise leave every class pointing at a 404 on the one field Google
+    // rejects over, with every unit test green.
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as { homepageUri: { uri: string } };
+    const route = new URL(payload.homepageUri.uri).pathname;
+
+    expect(route).toBe(`/p/${SLUG}`);
+    expect(gatewayServesMerchantPageRoute()).toBe(true);
   });
 
   // ==========================================================================
@@ -534,8 +609,8 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
     const uris = payload.linksModuleData.uris.map((link) => link.uri);
 
     expect(uris).toEqual([
-      `${WEB_BASE_URL}/profile`,
-      `${WEB_BASE_URL}/profile/history`,
+      `${CUSTOMER_WEB_BASE_URL}/profile`,
+      `${CUSTOMER_WEB_BASE_URL}/profile/history`,
     ]);
     // Every path is asserted against the filesystem, not against this list: a
     // route that was renamed would otherwise produce a link that 404s in the
@@ -545,10 +620,15 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
     }
   });
 
-  it('builds the links from the web host, never the media host', async () => {
-    // The media host serves `/brand/*` and nothing else, so a link built from it
-    // is a 404 in the customer's hand. The same split that cost a class review
-    // over `homepageUri`.
+  it('builds the links from the customer web, never from a gateway host', async () => {
+    // `/profile` and `/profile/history` are `apps/customer-web` routes. The
+    // gateway serves `/brand/*` and `/p/*` and neither of these, so a link built
+    // from either gateway origin is a 404 in the customer's hand — the same
+    // defect that cost a class review over `homepageUri`, at a different URL.
+    //
+    // This is the assertion that forced a third var: `WALLET_WEB_BASE_URL` and
+    // `WALLET_MEDIA_BASE_URL` are the same host, so "build the links from the web
+    // host" would have been a 404 with the tests green.
     const store = fakeStore();
     const client = fakeClient();
 
@@ -558,8 +638,30 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
       linksModuleData: { uris: { uri: string }[] };
     };
     for (const link of payload.linksModuleData.uris) {
-      expect(new URL(link.uri).origin).toBe(WEB_BASE_URL);
+      const origin = new URL(link.uri).origin;
+      expect(origin).toBe(CUSTOMER_WEB_BASE_URL);
+      expect(origin).not.toBe(MEDIA_BASE_URL);
+      expect(origin).not.toBe(WEB_BASE_URL);
     }
+  });
+
+  it('honours a configured customer-web var without moving the homepage', async () => {
+    const store = fakeStore();
+    const client = fakeClient();
+
+    await install(store, client, {
+      WALLET_CUSTOMER_WEB_BASE_URL: 'https://staging-customer.pages.dev/',
+    });
+
+    const payload = client.insertClass.mock.calls[0]![0] as {
+      homepageUri: { uri: string };
+      linksModuleData: { uris: { uri: string }[] };
+    };
+    expect(payload.linksModuleData.uris[0]!.uri).toBe(
+      'https://staging-customer.pages.dev/profile',
+    );
+    // A staging customer web must not become the customer's homepage.
+    expect(payload.homepageUri.uri).toBe(PROGRAM_URL);
   });
 
   it('offers no link that promises one thing and delivers another', async () => {
@@ -649,6 +751,26 @@ function customerWebRouteExists(pathname: string): boolean {
   const segments = pathname.split('/').filter((segment) => segment !== '');
   const directory = segments.reduce((from, segment) => join(from, segment), CUSTOMER_WEB_APP);
   return existsSync(join(directory, 'page.tsx'));
+}
+
+/**
+ * Does the gateway register the route `/p/{slug}` is built from?
+ *
+ * The same discipline as `customerWebRouteExists`, applied to the field Google
+ * rejects a class over. The gateway is a Hono worker rather than a Next.js app,
+ * so there is no directory to walk: the route is a registration in
+ * `apps/gateway/src/index.ts`, and that is what is read here.
+ *
+ * Without this, renaming `/p/*` in the gateway would leave every class pointing
+ * at a 404 and every unit test in this file green — the class inserts fine, the
+ * pass renders, and the failure shows up only in Google's review, weeks later.
+ */
+function gatewayServesMerchantPageRoute(): boolean {
+  const source = readFileSync(join(GATEWAY_INDEX), 'utf8');
+  // The registration, and the fact that it is mounted outside `/v1/*` — the
+  // second half matters because under that prefix the route would require a JWT
+  // and a reviewer's request carries none.
+  return /app\.get\(\s*['"]\/p\/\*['"]/.test(source) && !/app\.get\(\s*['"]\/v1\/p\//.test(source);
 }
 
 // ============================================================================
@@ -783,6 +905,63 @@ describe('provisionClass: it refuses rather than invents', () => {
     expect(outcome).toMatchObject({ kind: 'failed', code: 'loyalty_program_not_found' });
     expect(client.insertClass).not.toHaveBeenCalled();
     expect(store.insertProgram).not.toHaveBeenCalled();
+  });
+
+  it('reports a tenant with no slug, because there is no public page to point at', async () => {
+    // `tenants.slug` is `notNull`, so an empty string is a value a writer can
+    // produce rather than an impossible state. It builds `/p/`, which is a 404 on
+    // the one field Google rejects a class over — silently, long after this run
+    // returned `created`, and only visible in a review weeks later.
+    const store = fakeStore({ branding: brandingRow({ slug: '' }) });
+    const client = fakeClient();
+
+    const outcome = await install(store, client);
+
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'tenant_slug_missing' });
+    expect(client.insertClass).not.toHaveBeenCalled();
+    expect(store.insertProgram).not.toHaveBeenCalled();
+  });
+
+  it('treats a whitespace-only slug as no slug', async () => {
+    // The same reason `findProgramName` treats a blank name as absent: an empty
+    // `homepageUri` path is a valid-looking URL to nothing.
+    const store = fakeStore({ branding: brandingRow({ slug: '   ' }) });
+    const client = fakeClient();
+
+    const outcome = await install(store, client);
+
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'tenant_slug_missing' });
+    expect(client.insertClass).not.toHaveBeenCalled();
+  });
+
+  it(`sends the tenant's real slug, encoded, and never the name folded into one`, async () => {
+    // `homepageUri` is `{webBaseUrl}/p/{slug}`, and that page is a real route in
+    // the gateway that resolves `tenants.slug`. Two businesses named "Café
+    // Central" do not both end up at `cafe-central` — the unique index settles it
+    // — so a slug recomputed from the name at provision time is a guess, and a
+    // guess here is a 404 on the field Google reviews.
+    const store = fakeStore({ branding: brandingRow({ name: 'Café Central', slug: 'cafe-central-2' }) });
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as { homepageUri: { uri: string } };
+    expect(payload.homepageUri.uri).toBe(`${WEB_BASE_URL}/p/cafe-central-2`);
+    expect(payload.homepageUri.uri).not.toContain('Caf');
+  });
+
+  it('percent-encodes a slug rather than splicing it in raw', async () => {
+    // Defence in depth: the gateway'"'"'s guard refuses anything but `[a-z0-9-]`, so
+    // this cannot produce a working page either way. But a raw splice would put a
+    // URL in Google'"'"'s database that differs from the one the route serves, and
+    // the mismatch is only visible at review.
+    const store = fakeStore({ branding: brandingRow({ slug: 'café central' }) });
+    const client = fakeClient();
+
+    await install(store, client);
+
+    const payload = client.insertClass.mock.calls[0]![0] as { homepageUri: { uri: string } };
+    expect(payload.homepageUri.uri).toBe(`${WEB_BASE_URL}/p/caf%C3%A9%20central`);
   });
 
   it('reports a blank tenant name as a payload it refuses to build', async () => {
