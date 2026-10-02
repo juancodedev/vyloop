@@ -279,6 +279,19 @@ class FakeStore implements WalletStore {
     return 1;
   }
 
+  // Callback methods, present only to satisfy the interface. The reconciliation
+  // path must never call them, so reaching one is a hard failure rather than a
+  // quiet no-op that a test would pass on.
+  async findTenantByClassId(): Promise<null> {
+    throw new Error('reconcilePass must not resolve a tenant from a class id');
+  }
+  async claimCallbackDelivery(): Promise<boolean> {
+    throw new Error('reconcilePass must not claim a callback delivery');
+  }
+  async recordPassCallback(): Promise<number> {
+    throw new Error('reconcilePass must not record a callback');
+  }
+
   async updateProgramReviewStatus(): Promise<void> {
     this.record('updateProgramReviewStatus', TENANT);
   }
