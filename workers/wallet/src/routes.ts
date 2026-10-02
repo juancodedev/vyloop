@@ -1,6 +1,11 @@
+import { createDb } from '@vyloop/db';
 import { Hono } from 'hono';
 
 import { BalanceNotDisplayableError, balanceDisplayFailure } from './balance';
+import { applyVerifiedCallback } from './callback-handler';
+import type { VerifiedCallbackOutcome } from './callback-handler';
+import { PassCallbackVerificationError, verifyPassCallback } from './callbacks';
+import type { PassCallbackEvent } from './callbacks';
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
 import {
   GoogleWalletApiError,
@@ -75,6 +80,170 @@ const WALLET_DEMO_MODE = 'WALLET_DEMO_MODE';
  * row, a text module, or a custom layout).
  */
 const WALLET_BALANCE_NOT_DISPLAYABLE = 'WALLET_BALANCE_NOT_DISPLAYABLE';
+
+// ---------------------------------------------------------------------------
+// POST /v1/wallet/google/callback
+// ---------------------------------------------------------------------------
+
+/**
+ * The one route in this worker with no customer, no token and no tenant header.
+ *
+ * ## Why it is exempt from the auth middleware
+ *
+ * `index.ts` runs `extractAuthHeaders` on `*`, so this path is named explicitly
+ * there. The exemption is not a relaxation for convenience: the sender is Google,
+ * which has no JWT for this system and no `X-Business-Id` to send. What replaces
+ * the token is a **signature** over the message, verified before the handler
+ * touches a database — the callback carries its own proof of origin, so there is
+ * nothing for a bearer token to add.
+ *
+ * ## Where the endpoint physically lives
+ *
+ * It is reached through the **gateway**, over the `wallet` service binding, and
+ * that is a deliberate layering rather than an accident of the route map:
+ *
+ * - This worker has no `workers_dev`, no route and no custom domain. It is
+ *   unreachable from the internet by configuration, which is the right default
+ *   for a worker holding `DATABASE_URL` and Google's service-account key. Adding
+ *   a public hostname here to receive webhooks would publish that surface.
+ * - The gateway is already the only public door for the routes Google must reach
+ *   without credentials: `/brand/*` (a class's `programLogo`) and `/p/*` (the
+ *   page a reviewer opens). A callback is the third member of that family.
+ * - Keeping the logic here means the signature rules, the tenant resolution and
+ *   the state vocabulary stay in the module that owns them, and the gateway
+ *   stays a router.
+ *
+ * ## The status codes, and why each one is chosen
+ *
+ * Google retries on failure and gives up eventually, so the status *is* the
+ * instruction. This mapping is the part of the contract most worth stating:
+ *
+ * - **`200`** for applied, replayed and unknown-class. All three are final
+ *   answers, and a retry would produce exactly the same one. Answering 5xx for
+ *   a replay would make Google redeliver a message we have already applied.
+ * - **`400`** for a verification failure. The message will never become valid, so
+ *   retrying is pure cost — and a `5xx` here would be an unbounded retry loop
+ *   against a forgery.
+ * - **`500`** only when *we* failed — a database error, an unreachable key
+ *   service. That is the one case where a retry is the right instruction, and it
+ *   is deliberately the narrowest.
+ *
+ * ## What is logged
+ *
+ * The outcome's `kind`, and on rejection its failure `code`. Never the body, the
+ * signature, the nonce, or the `objectId` — which embeds `customers.global_id`.
+ * A public endpoint's logs get read by people who should not be reading customer
+ * identifiers, and the reason code is what a support question actually needs.
+ */
+router.post('/v1/wallet/google/callback', async (c) => {
+  // Read as text, exactly once, and never as JSON. The body is an
+  // `ECv2SigningOnly` envelope whose signature covers the *exact bytes* of
+  // `signedMessage`, so re-serialising it would produce a different string and
+  // the signature would stop verifying — and a `Request` body can only be read
+  // once regardless, so a second read would not return the same bytes at all.
+  let rawBody: string;
+  try {
+    rawBody = await c.req.text();
+  } catch {
+    return callbackRefusal(
+      c,
+      400,
+      'WALLET_CALLBACK_UNREADABLE',
+      'The request body could not be read, so nothing was recorded.',
+    );
+  }
+
+  // -- Verify, before any database work -----------------------------------
+  //
+  // This runs against a store with **no** tenant session, because
+  // `findTenantByClassId` is a cross-tenant read: working out which tenant a
+  // Google class belongs to *is* the question. Opening a tenant session first
+  // would admit no rows to it once the tenant RLS policies are enabled, and every
+  // callback would resolve to `unknown_class` — a silent total failure rather
+  // than an error. Same constraint `sweep.ts` documents for `listProgramTenants`.
+  const resolverStore = createDrizzleWalletStore(createDb(c.env.DATABASE_URL));
+
+  let event: PassCallbackEvent;
+  try {
+    event = await verifyPassCallback(rawBody, { recipientId: c.env.GOOGLE_WALLET_ISSUER_ID });
+  } catch (err: unknown) {
+    if (err instanceof PassCallbackVerificationError) {
+      // A reason code and nothing else. A forgery is worth noticing, and the
+      // code is what says which of the several refusals it was.
+      console.warn(`[wallet] Refused a Google Wallet callback: ${err.code}.`);
+      return callbackRefusal(
+        c,
+        400,
+        'WALLET_CALLBACK_UNVERIFIED',
+        'The callback signature could not be verified, so nothing was recorded.',
+      );
+    }
+    // The root key service was unreachable, or something genuinely unexpected.
+    // 500 is the one instruction that makes Google retry, and it is right here:
+    // the message is fine, we could not check it, and a dropped `save` is a
+    // customer who never hears they have the pass.
+    console.error('[wallet] Could not verify a Google Wallet callback:', err);
+    return callbackRefusal(
+      c,
+      500,
+      'WALLET_CALLBACK_UNAVAILABLE',
+      'The callback could not be verified, so nothing was recorded. Google will retry.',
+    );
+  }
+
+  const owner = await resolverStore.findTenantByClassId(event.classId);
+  if (owner === null) {
+    // Authentic, but naming a class this deployment has no row for. A 200: the
+    // answer is final, and a retry would produce exactly the same one.
+    console.log('[wallet] Google Wallet callback named a class this deployment does not own.');
+    return c.json({ data: { applied: false, reason: 'unknown_class' } });
+  }
+
+  // -- From here, every read and write is scoped to that one tenant --------
+  const db = await openTenantSession(c.env.DATABASE_URL, owner.tenantId);
+
+  let outcome: VerifiedCallbackOutcome;
+  try {
+    outcome = await applyVerifiedCallback(
+      { store: createDrizzleWalletStore(db), recipientId: c.env.GOOGLE_WALLET_ISSUER_ID },
+      event,
+    );
+  } catch (err: unknown) {
+    // Our failure, not Google's. 500 makes Google retry, which is correct: the
+    // message was valid and the write did not happen.
+    console.error('[wallet] Could not apply a verified Google Wallet callback:', err);
+    return callbackRefusal(
+      c,
+      500,
+      'WALLET_CALLBACK_UNAVAILABLE',
+      'The callback could not be applied. Google will retry.',
+    );
+  }
+
+  if (outcome.kind === 'skipped') {
+    // 200, and the distinction from a rejection is the point: this message was
+    // authentic, it simply has nothing left to do. Retrying changes nothing, and
+    // answering 5xx would make Google redeliver a message already handled.
+    console.log(`[wallet] Google Wallet callback verified but not applied: ${outcome.reason}.`);
+    return c.json({ data: { applied: false, reason: outcome.reason } });
+  }
+
+  // No identifier, here or above. See the route's doc comment.
+  console.log(
+    `[wallet] Google Wallet callback applied: ${outcome.eventType} set the pass to ${outcome.state}.`,
+  );
+  return c.json({ data: { applied: true, state: outcome.state } });
+});
+
+/** A refusal, in this worker's error envelope. */
+function callbackRefusal(
+  c: { json: (body: unknown, status: 400 | 500) => Response },
+  status: 400 | 500,
+  code: string,
+  message: string,
+): Response {
+  return c.json({ error: { code, message } }, status);
+}
 
 // ---------------------------------------------------------------------------
 // GET /v1/wallet/status

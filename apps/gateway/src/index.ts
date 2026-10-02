@@ -45,6 +45,66 @@ app.route('/', ingestor);
 /** Webhook paths bypass auth (Meta callbacks don't have X-User-Id etc.) */
 const WEBHOOK_PREFIX = '/v1/communication/webhook';
 
+/**
+ * The Google Wallet pass callback, exempted from auth for the same reason.
+ *
+ * ## What the exemption does and does not remove
+ *
+ * It removes the JWT requirement and the `X-Business-Id` requirement. It does
+ * **not** remove authentication: the forwarded request is authenticated by the
+ * wallet worker, which verifies an `ECv2SigningOnly` signature over the body
+ * before it opens a database. Google has no JWT for this system and no business
+ * id to send, so a token here would be a credential nobody could present.
+ *
+ * ## Why it is an exact match, not a prefix
+ *
+ * A prefix would exempt every path beneath it, so a future
+ * `/v1/wallet/google/callback/admin` would silently become public too. An exact
+ * comparison cannot grow. The same string is exported by the wallet worker
+ * (`WALLET_CALLBACK_PATH`) and asserted against this list in
+ * `index.test.ts`, so a rename on one side fails CI rather than producing a 403
+ * on every real delivery — which is the failure mode nobody would read as a
+ * routing bug.
+ *
+ * ## The three middlewares, and why the list is repeated
+ *
+ * `auth`, `authInject` and `businessId` each carry their own skip predicate, and
+ * the callback has to be in all three. A miss in any one produces a 401/403 with
+ * a message about missing headers, which is exactly what a broken signature
+ * *also* looks like from the outside — so the duplication is worth the risk of
+ * drift, and is covered by a test that reads all three.
+ */
+const WALLET_CALLBACK_PATH = '/v1/wallet/google/callback';
+
+/**
+ * True for a path that arrives without a gateway-injected identity.
+ *
+ * One predicate, called by all three middlewares, so the set of public
+ * `/v1/*` paths is stated exactly once. The previous shape repeated the same
+ * three-clause condition inline in each middleware, which is three chances to
+ * forget a clause.
+ */
+function isPublicApiPath(path: string, method: string): boolean {
+  return (
+    path.startsWith('/v1/auth/') ||
+    path.startsWith(WEBHOOK_PREFIX) ||
+    path === WALLET_CALLBACK_PATH ||
+    (method === 'PUT' && path === '/v1/customers')
+  );
+}
+
+/**
+ * Callbacks allowed per window, per client address.
+ *
+ * Deliberately generous. The threat is amplification — making this endpoint spend
+ * two ECDSA verifications per request — and the number only has to be low enough
+ * to bound that. It must *not* be low enough to break a real burst: Google
+ * retries with backoff, and a busy merchant's saves all arrive from Googlebot
+ * behind one address, so a tight limit would drop legitimate deliveries and leave
+ * a pass's state wrong with no error here to explain it.
+ */
+const WALLET_CALLBACK_LIMIT_PER_WINDOW = 600;
+
 // ---------------------------------------------------------------------------
 // Middleware chain for /v1/* routes
 // ---------------------------------------------------------------------------
@@ -55,11 +115,7 @@ app.use('/v1/*', async (c, next) => {
   const method = c.req.method;
 
   // Public routes — no JWT required
-  if (
-    path.startsWith('/v1/auth/') ||
-    path.startsWith(WEBHOOK_PREFIX) ||
-    (method === 'PUT' && path === '/v1/customers')
-  ) {
+  if (isPublicApiPath(path, method)) {
     await next();
     return;
   }
@@ -84,11 +140,7 @@ app.use('/v1/*', async (c, next) => {
   const method = c.req.method;
 
   // Skip for public routes — no JWT to inject from
-  if (
-    path.startsWith('/v1/auth/') ||
-    path.startsWith(WEBHOOK_PREFIX) ||
-    (method === 'PUT' && path === '/v1/customers')
-  ) {
+  if (isPublicApiPath(path, method)) {
     await next();
     return;
   }
@@ -100,11 +152,7 @@ app.use('/v1/*', async (c, next) => {
 app.use('/v1/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   const method = c.req.method;
-  if (
-    path.startsWith('/v1/auth/') ||
-    path.startsWith(WEBHOOK_PREFIX) ||
-    (method === 'PUT' && path === '/v1/customers')
-  ) {
+  if (isPublicApiPath(path, method)) {
     await next();
     return;
   }
@@ -129,8 +177,21 @@ app.use('/v1/*', async (c, next) => {
       // at it is a worse failure than the traffic it lets through. A signup also
       // runs that derivation, and additionally creates a tenant, so it gets a
       // number a human waiting on a form will not notice and a script will.
+      //
+      // The Google Wallet callback is the same shape for a different reason: it
+      // is unauthenticated, and an unauthenticated request still costs two ECDSA
+      // verifications before it is refused. Without a limit this is a public
+      // endpoint whose every request spends CPU on the attacker's behalf.
+      //
+      // It is set **high on purpose**. Google retries with backoff and the
+      // number is per client address, not per tenant, so a busy merchant's
+      // callbacks share a bucket with everything else behind that address; a
+      // limit tight enough to throttle a forgery campaign would also throttle a
+      // legitimate burst of saves. It is a ceiling on amplification, not a
+      // security control — the signature is.
       anonymousLimits: {
         '/v1/auth/business/signup': SIGNUP_LIMIT_PER_WINDOW,
+        '/v1/wallet/google/callback': WALLET_CALLBACK_LIMIT_PER_WINDOW,
       },
       windowSeconds: DEFAULT_WINDOW,
 

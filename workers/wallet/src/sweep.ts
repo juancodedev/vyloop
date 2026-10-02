@@ -78,6 +78,7 @@ import type { GoogleWalletClient } from './google-client';
 import type { WalletBindings } from './helpers';
 import {
   googleWalletClientFor,
+  parseCallbackBaseUrl,
   parseCustomerWebBaseUrl,
   parseDemoMode,
   parseMediaBaseUrl,
@@ -909,6 +910,13 @@ export async function runScheduledSweep(env: WalletBindings): Promise<SweepRepor
         // `apps/customer-web` routes, and building them from a gateway origin
         // makes every link on every pass a 404.
         customerWebBaseUrl: parseCustomerWebBaseUrl(env.WALLET_CUSTOMER_WEB_BASE_URL),
+        // The fourth origin, and the one that resolves to the gateway like MEDIA
+        // and WEB do. Read here because a tenant discovered by the sweep has no
+        // row to read it from — same reason as `issuerId` above. A class the
+        // sweep provisions must carry the same `callbackOptions.url` as one
+        // provisioned at signup, or the two cohorts would report to different
+        // places depending only on which code path happened to create them.
+        callbackBaseUrl: parseCallbackBaseUrl(env.WALLET_CALLBACK_BASE_URL),
       },
     },
     { demoMode },

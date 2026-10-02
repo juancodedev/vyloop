@@ -9,6 +9,7 @@ import {
   messageLog,
   whatsappTemplates,
   customerWalletPasses,
+  walletCallbackDeliveries,
 } from './schema';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ const INDEXED_TABLES: readonly PgTable[] = [
   messageLog,
   whatsappTemplates,
   customerWalletPasses,
+  walletCallbackDeliveries,
 ];
 
 /**
@@ -70,6 +72,7 @@ const INDEX_NAMES = {
   idxWhatsappTemplatesName: 'idx_whatsapp_templates_name',
   idxCustomersMemberCode: 'uq_customers_business_member_code',
   idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
+  idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
 } as const satisfies Record<string, string>;
 
 /**
@@ -105,4 +108,16 @@ export const idxWhatsappTemplatesName = indexByName(INDEX_NAMES.idxWhatsappTempl
 export const idxCustomersMemberCode = indexByName(INDEX_NAMES.idxCustomersMemberCode);
 export const idxCustomerWalletPassesTenant = indexByName(
   INDEX_NAMES.idxCustomerWalletPassesTenant,
+);
+
+/**
+ * Supports pruning old deliveries by age.
+ *
+ * Exported for the same reason as every other index here: the registry's
+ * invariant is that a declared index has a named binding, and a table added to
+ * `INDEXED_TABLES` without one would break the exact-set assertion in
+ * `index.test.ts` in a way that reads as drift rather than as an omission.
+ */
+export const idxWalletCallbackDeliveriesReceived = indexByName(
+  INDEX_NAMES.idxWalletCallbackDeliveriesReceived,
 );

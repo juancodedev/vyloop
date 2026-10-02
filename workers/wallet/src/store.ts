@@ -260,6 +260,47 @@ export interface PassObservationUpdate {
 }
 
 // ---------------------------------------------------------------------------
+// Google Wallet callbacks
+// ---------------------------------------------------------------------------
+
+/**
+ * What a tenant's program row looks like when reached **by class id**.
+ *
+ * Deliberately not `WalletProgramRow`. This is the only read in the interface
+ * that exists to answer "which tenant does this Google class belong to?", and it
+ * runs before any tenant is known — the callback carries a `classId` and nothing
+ * that names a tenant. Returning the full program row would invite a caller to
+ * read `reviewStatus` from a row it reached cross-tenant.
+ */
+export interface WalletTenantByClassIdRow {
+  /** `tenants.id`, resolved from `tenant_wallet_programs.class_id`. */
+  tenantId: string;
+}
+
+/**
+ * What one callback says, and what we will do about it.
+ *
+ * A dedicated union rather than a reuse of `PassTrackingState`: that type is
+ * `text`-backed and open, so widening it here would let a future state be
+ * written from a callback without anyone deciding what it means. This is narrow
+ * to the two existence states a callback can assert, and to the *event* that
+ * produced it.
+ */
+export type PassCallbackWrite = {
+  customerId: string;
+  tenantId: string;
+} & ({ eventType: 'save' } | { eventType: 'del' });
+
+export interface PassCallbackClaim {
+  /** `tenants.id`, resolved from the callback's `classId`. */
+  tenantId: string;
+  /** Google's `nonce`, verbatim. See the note on the column. */
+  nonce: string;
+  /** Google's `eventType`. Recorded for support; decides nothing here. */
+  eventType: string;
+}
+
+// ---------------------------------------------------------------------------
 // The interface
 // ---------------------------------------------------------------------------
 
@@ -666,4 +707,113 @@ export interface WalletStore {
    * program row from one whose switch was set.
    */
   setProgramDemoMode(tenantId: string, demoMode: boolean): Promise<number>;
+
+  // -------------------------------------------------------------------------
+  // Google Wallet callbacks
+  // -------------------------------------------------------------------------
+
+  /**
+   * Which tenant owns this Google class?
+   *
+   * ## Why the tenant has to be resolved from the class
+   *
+   * A callback's body carries a `classId` and an `objectId` and nothing else. It
+   * has no tenant, no customer id, and no credential this system minted — Google
+   * is the sender and Google does not know our primary keys. So the tenant is
+   * *derived*, from the one mapping that already exists:
+   * `tenant_wallet_programs.class_id`.
+   *
+   * ## Why this answers a question `customer_wallet_passes` cannot
+   *
+   * The pass table has no `class_id` column, and adding one would be the obvious
+   * fix and the wrong one: the class a pass belongs to is already derivable from
+   * the tenant, and a denormalised copy would be a second answer to "which class
+   * is this pass in?" able to disagree with the program row. Resolving through
+   * the program table means the callback path reads the same single source of
+   * truth every other path in this worker reads.
+   *
+   * ## `null` is a real answer
+   *
+   * A class this system has no row for: a class created by hand in the console,
+   * or one belonging to another deployment pointed at this endpoint. Both are
+   * refused, and refusing is the whole point — a class we cannot attribute to a
+   * tenant names no row we are permitted to write.
+   *
+   * ## This is a cross-tenant query
+   *
+   * There is no tenant to scope to; working out which tenants exist *is* the
+   * question. Like `listProgramTenants` and `listTenantsWithoutProgram`, it must
+   * be called on a session with **no** `app.current_tenant_id`, and it will
+   * return no rows at all once the tenant RLS policies are enabled — a gap both
+   * of those already document, and one this method inherits rather than
+   * introduces.
+   */
+  findTenantByClassId(classId: string): Promise<WalletTenantByClassIdRow | null>;
+
+  /**
+   * Record this callback delivery, and report whether it is the first time.
+   *
+   * `true` means the caller owns the effect and must carry it out. `false` means
+   * this nonce was already recorded, and the delivery is a **replay** — the
+   * caller must not write anything.
+   *
+   * ## Why one statement and not a read then a write
+   *
+   * Google's retries are concurrent by nature, and a read-then-write lets two
+   * deliveries of the same nonce both observe absence and both apply. This is
+   * `INSERT ... ON CONFLICT DO NOTHING RETURNING`, so the check and the record
+   * are the same atomic step and the unique index is the only arbiter.
+   *
+   * ## Claim before writing, never after
+   *
+   * A caller that records the nonce *after* applying the effect is not
+   * idempotent; it is merely audited. Ordering is the contract, and the route is
+   * the only place it can be enforced.
+   *
+   * ## A failure here must not be treated as "not seen"
+   *
+   * The distinction the caller must preserve: `false` is a fact (this nonce was
+   * recorded), while a thrown error is an unknown. Collapsing them would let a
+   * database blip turn every retry into a duplicate apply.
+   */
+  claimCallbackDelivery(claim: PassCallbackClaim): Promise<boolean>;
+
+  /**
+   * Apply a **confirmed** callback event to a pass row.
+   *
+   * ## Why this needs its own statement, and its own predicate
+   *
+   * `recordPassReconciliation` is rank-guarded so an existence claim is
+   * monotonic: `state IN ('not_issued', 'not_saved', 'inactive')`. That guard is
+   * right for a `404` from `getObject`, where a missing object is far more likely
+   * a propagation artifact than a customer deleting their pass.
+   *
+   * A callback is the opposite of that. It is not an absence noticed while
+   * asking; it is Google stating that an add or a remove happened. So
+   * `del` must be able to move a row from `issued` back to `not_saved`, and the
+   * existence guard would refuse exactly that write — the one write the whole
+   * feature exists to perform.
+   *
+   * Widening the reconciliation predicate instead would be worse: it would let a
+   * `getObject` 404 move a row backwards, destroying the monotonicity guarantee
+   * for the *other* caller to serve the callback path. Two callers with opposite
+   * rules need two statements, and this is the second one.
+   *
+   * ## The terminal states still hold
+   *
+   * `expired` and `completed` are absent from the source set, so a callback can
+   * never move a row off them. Google cannot un-expire or un-complete an object,
+   * and a `save` event arriving late does not make it active again.
+   *
+   * `inactive` **is** in the source set: a customer who reactivates a pass
+   * really does have it in their phone, so `inactive` → `issued` is a true
+   * transition that the existence guard would have forbidden.
+   *
+   * ## Returns rows changed
+   *
+   * Zero means our tracking state and Google's disagree, or the row is gone — the
+   * caller logs it rather than reporting a write that did not happen. See the
+   * return-value contract on `recordPassLifecycle`, which this shares.
+   */
+  recordPassCallback(update: PassCallbackWrite, observedAt: Date): Promise<number>;
 }

@@ -57,6 +57,13 @@
       "when": 1790888447666,
       "tag": "0007_loyalty_promo_copy",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790906418469,
+      "tag": "0008_loud_vector",
+      "breakpoints": true
     }
   ]
 }
