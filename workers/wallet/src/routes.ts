@@ -261,11 +261,13 @@ router.post('/v1/wallet/google/callback', async (c) => {
  *
  * ## Why this is a route and not a log line
  *
- * The failure is that the **bytes this worker signs are not the bytes Google
- * signed** — `toLengthValue` was transcribed from Tink and never run against a
- * real envelope. The existing rejection log already answers what it could: one
- * signature, one root key, imported. What it cannot answer is the shape of what
- * arrived, and that needs the body itself.
+ * The failure was that the **bytes this worker signed were not the bytes Google
+ * signed** — `toLengthValue` wrote a `uint16be` prefix where the protocol requires
+ * `uint32le`. That is fixed; see `callbacks.ts`. The route stays until a live save
+ * is observed actually persisting a pass, because no verifiable Google signature
+ * exists in this repository to prove the fix against. The rejection log already
+ * answers what it could: one signature, one root key, imported. What it cannot
+ * answer is the shape of what arrived, and that needs the body itself.
  *
  * ## What it does and does not do
  *

@@ -5,15 +5,26 @@
  *
  * Every signature here is produced by WebCrypto at test time, from key material
  * generated in the same test and never written to disk. There are no captured
- * Google keys and no recorded signatures: a fixture would pass unchanged after a
- * refactor that broke the length-prefix scheme, which is the specific bug this
- * suite exists to catch.
+ * Google keys and no recorded signatures.
  *
- * The one exception is `REAL_LOYALTY_CALLBACK`, a captured body kept verbatim
- * because it pins the **shape** Google actually sends. It cannot be verified here
- * — its signing keys are not ours — so it is used only to assert that the event
- * fields are read from `signedMessage` and nowhere else, which is the failure
- * that presents as "Google stopped sending events".
+ * That was the right instinct and the wrong implementation. A fixture would not
+ * have caught the length-prefix bug either, and for a reason worth stating
+ * plainly: **this suite signed its envelopes with the same construction the
+ * verifier rebuilds**, so envelope and expectation were wrong in exactly the same
+ * way and a green run proved nothing. It stayed green for months while production
+ * refused every real callback with `intermediate_key_unverified`.
+ *
+ * What replaced it: the restatement below now follows Google's published derivation
+ * (four bytes, little-endian) independently of `callbacks.ts`, and
+ * `callbacks.signed-bytes.test.ts` pins the encoders against literal byte
+ * strings and against the one real Google signature in the repository. Neither can
+ * move in step with the code under test.
+ *
+ * `REAL_LOYALTY_CALLBACK`, a captured body, pins the **shape** Google actually
+ * sends. It cannot be verified here — it carries no signature at all, which is
+ * asserted rather than assumed — so it is used to assert that the event fields are
+ * read from `signedMessage` and nowhere else, which is the failure that presents
+ * as "Google stopped sending events".
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';

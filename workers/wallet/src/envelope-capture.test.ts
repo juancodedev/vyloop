@@ -5,13 +5,18 @@
  *
  * Production logged `intermediate_key_unverified`, which `verifyPassCallback` can
  * only emit when a *non-empty* array of intermediate-key signatures arrives and
- * none of them verifies under any root. That eliminates every cause except one:
- * **the bytes this worker signs are not the bytes Google signed.**
+ * none of them verifies under any root. That eliminated every cause except one:
+ * **the bytes this worker signed were not the bytes Google signed.**
  *
- * `callbacks.ts` builds those bytes with Tink's `toLengthValue`, transcribed from
- * the Java sample and never run against a real envelope. The test suite cannot
- * close that gap, because a test-generated envelope agrees with a test-generated
- * expectation by construction. Only a real delivery can.
+ * That was right. `callbacks.ts` wrote the length prefix as `uint16be`; the
+ * protocol is `uint32le`. The cause is fixed; this endpoint stays because the
+ * fix is not yet confirmed against a live delivery.
+ *
+ * The lesson kept here is the one that cost the weeks: **the suite could not see
+ * it, because every signature in it was self-generated.** An envelope signed with
+ * the same construction the verifier rebuilds agrees with a wrong construction
+ * too. What these tests now contribute is a comparison that does not share code
+ * with either side — a real captured envelope, and digests pinned as literals.
  *
  * So this module describes the **shape** of a real envelope: field names, lengths,
  * protocol values, and a short fingerprint of the signed bytes. Enough to compare
@@ -53,8 +58,36 @@ function base64ToBytes(value: string): Uint8Array {
   return out;
 }
 
-/** Tink's `toLengthValue`, restated so these tests do not import the code under test. */
+/**
+ * The length-prefixed concatenation: four bytes of UTF-8 byte length,
+ * little-endian, per part. Restated from Google's specification so these tests
+ * do not import the code under test, and via `DataView` so they are not a copy
+ * of it either. See `callbacks.signed-bytes.test.ts` for pinned vectors.
+ */
 function toLengthValue(parts: readonly string[]): Uint8Array<ArrayBuffer> {
+  const encoded = parts.map((p) => new TextEncoder().encode(p));
+  const total = encoded.reduce((sum, b) => sum + 4 + b.length, 0);
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  for (const b of encoded) {
+    view.setUint32(offset, b.length, true);
+    out.set(b, offset + 4);
+    offset += 4 + b.length;
+  }
+  return out;
+}
+
+/**
+ * The `uint16be` prefix this file used to restate, kept so the digests it
+ * produced stay on the record.
+ *
+ * The capture endpoint reported `6ad0a0b2…` for the real envelope because both
+ * copies said `uint16be` and therefore agreed. Pinning the wrong answer next to
+ * the right one means a regression is a visible change of digest rather than a
+ * quiet re-agreement between two implementations that were wrong together.
+ */
+function toLengthValueUint16be(parts: readonly string[]): Uint8Array<ArrayBuffer> {
   const encoded = parts.map((p) => new TextEncoder().encode(p));
   const total = encoded.reduce((sum, b) => sum + 2 + b.length, 0);
   const out = new Uint8Array(total);
@@ -345,7 +378,9 @@ describe('captureCallbackEnvelope', () => {
         'count',
         'nonce',
       ]);
-      expect(capture.derivedSignedBytes.keySignatureInput?.byteLength).toBe(207);
+      // 15 + 15 + 171 bytes of content, three parts, plus 12 bytes of prefix.
+      // This was 207 under the `uint16be` prefix the capture used to report.
+      expect(capture.derivedSignedBytes.keySignatureInput?.byteLength).toBe(213);
     });
 
     // The redaction, recorded rather than left as a surprise for whoever runs the
@@ -395,20 +430,63 @@ describe('captureCallbackEnvelope', () => {
 
       const capture = await captureCallbackEnvelope(body, ISSUER_ID);
 
-      // Recomputed here from the envelope's own values, independently of the
-      // capture. If the two digests agree, the capture describes the same byte
-      // string the verifier builds; the operator then tests alternative
-      // derivations against this digest offline.
+      // Recomputed here from the envelope's own values with `uint32le`, which is
+      // the derivation the capture now uses. Both copies follow Google's published
+      // rule independently; the pinned-literal test below is the one that cannot
+      // move in step with either of them.
       const expected = await sha256Hex(toLengthValue([SENDER, PROTOCOL, signedKey]));
       expect(capture.derivedSignedBytes.keySignatureInput?.sha256).toBe(expected);
       expect(capture.derivedSignedBytes.keySignatureInput?.byteLength).toBe(
         toLengthValue([SENDER, PROTOCOL, signedKey]).length,
       );
 
+      // The digest the capture reported before the prefix was fixed. Kept so a
+      // regression shows up as "the digest moved back to the wrong value" rather
+      // than as two implementations quietly agreeing again.
+      const uint16be = await sha256Hex(toLengthValueUint16be([SENDER, PROTOCOL, signedKey]));
+      expect(capture.derivedSignedBytes.keySignatureInput?.sha256).not.toBe(uint16be);
+      expect(capture.derivedSignedBytes.keySignatureInput?.byteLength).not.toBe(
+        toLengthValueUint16be([SENDER, PROTOCOL, signedKey]).length,
+      );
+
       const expectedMessage = await sha256Hex(
         toLengthValue([SENDER, ISSUER_ID, PROTOCOL, SIGNED_MESSAGE]),
       );
       expect(capture.derivedSignedBytes.messageSignatureInput?.sha256).toBe(expectedMessage);
+    });
+
+    // The digests below are **literals**, not recomputed from anything in this
+    // file. `wellFormedEnvelope` mints a fresh key on every call, so its digests
+    // cannot be pinned; the real capture can, because nothing about it changes.
+    //
+    // This is the assertion that would have caught the bug. While both
+    // implementations said `uint16be`, this file's restatement and the capture's
+    // agreed by construction, and every digest assertion passed. A hex string
+    // written down from an independent computation cannot agree with a wrong
+    // implementation by accident.
+    it('fingerprints the real envelope to digests pinned as literals', async () => {
+      const capture = await captureCallbackEnvelope(REAL_LOYALTY_CALLBACK, ISSUER_ID);
+
+      // uint32le, per Google's published derivation. The message digest mixes in
+      // this file's `ISSUER_ID`, not the issuer named in the envelope — `recipientId`
+      // is a verifier parameter, which is the point of that field.
+      expect(capture.derivedSignedBytes.keySignatureInput?.sha256).toBe(
+        'ddc451398f3f80e498f5ad475adcf6ec662333cacff12146ae93021a95e0e5c3',
+      );
+      expect(capture.derivedSignedBytes.keySignatureInput?.byteLength).toBe(213);
+      expect(capture.derivedSignedBytes.messageSignatureInput?.sha256).toBe(
+        '5ea85bb3d52ad17da5fe90b34454925676c2f941cfca3ec1cb0294ecde6a60b1',
+      );
+      expect(capture.derivedSignedBytes.messageSignatureInput?.byteLength).toBe(317);
+
+      // And explicitly not the digests the `uint16be` prefix produced, which is
+      // what this endpoint reported while production was failing.
+      expect(capture.derivedSignedBytes.keySignatureInput?.sha256).not.toBe(
+        '5d349d5b7499357674d25d02a881497ff6439581efffb626e244d42d24171686',
+      );
+      expect(capture.derivedSignedBytes.messageSignatureInput?.sha256).not.toBe(
+        'b140f628f2d0ddd7efacfd19f71247e373162abe1809161d552c8b4833d67eee',
+      );
     });
 
     it('uses the envelope protocol version in the fingerprint, not the configured one', async () => {
