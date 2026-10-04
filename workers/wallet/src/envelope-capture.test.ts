@@ -96,20 +96,43 @@ function p1363ToDer(p1363: Uint8Array): Uint8Array {
   return out;
 }
 
-async function generateTestKey() {
-  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
-    'sign',
-    'verify',
-  ]);
+async function generateTestKey(alg: KeyAlgorithm = { name: 'ECDSA', namedCurve: 'P-256' }) {
+  const pair = await crypto.subtle.generateKey(alg, true, ['sign', 'verify']);
   const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey));
   return { privateKey: pair.privateKey, spkiBase64: bytesToBase64(spki) };
 }
+
+const RSA_2048: KeyAlgorithm = {
+  name: 'RSASSA-PKCS1-v1_5',
+  modulusLength: 2048,
+  publicExponent: new Uint8Array([1, 0, 1]),
+  hash: 'SHA-256',
+};
 
 async function signLikeGoogle(key: CryptoKey, parts: readonly string[]): Promise<string> {
   const raw = new Uint8Array(
     await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, toLengthValue(parts)),
   );
   return bytesToBase64(p1363ToDer(raw));
+}
+
+/**
+ * Sign with whatever the key is, so a non-ECDSA envelope can be built.
+ *
+ * Only the capture's *shape* reporting is under test, and the DER encoding is
+ * Google's ECDSA convention rather than a property of the capture. An RSA
+ * signature is emitted raw, which is what RSA actually produces — running it
+ * through `p1363ToDer` would fabricate a DER SEQUENCE over a value that is not
+ * one, and the fixture would then be lying about the very byte layout the DER
+ * edge assertions exist to read.
+ */
+async function signWith(key: CryptoKey, algorithm: KeyAlgorithm, parts: readonly string[]): Promise<string> {
+  const params: AlgorithmIdentifier | RsaPssParams | EcdsaParams =
+    algorithm.name === 'ECDSA' ? { name: 'ECDSA', hash: 'SHA-256' } : { name: algorithm.name };
+  const raw = new Uint8Array(
+    await crypto.subtle.sign(params, key, toLengthValue(parts)),
+  );
+  return algorithm.name === 'ECDSA' ? bytesToBase64(p1363ToDer(raw)) : bytesToBase64(raw);
 }
 
 const ISSUER_ID = '3388000000023206930';
@@ -126,9 +149,10 @@ const SIGNED_MESSAGE = JSON.stringify({
 });
 
 /** A complete, correctly shaped envelope, with every value also returned for leak checks. */
-async function wellFormedEnvelope() {
+async function wellFormedEnvelope(intermediateAlgorithm?: KeyAlgorithm) {
   const root = await generateTestKey();
-  const intermediate = await generateTestKey();
+  const intermediate = await generateTestKey(intermediateAlgorithm);
+  const intermediateAlg: KeyAlgorithm = intermediateAlgorithm ?? { name: 'ECDSA', namedCurve: 'P-256' };
 
   const signedKey = JSON.stringify({
     keyValue: intermediate.spkiBase64,
@@ -136,7 +160,7 @@ async function wellFormedEnvelope() {
   });
 
   const keySignature = await signLikeGoogle(root.privateKey, [SENDER, PROTOCOL, signedKey]);
-  const messageSignature = await signLikeGoogle(intermediate.privateKey, [
+  const messageSignature = await signWith(intermediate.privateKey, intermediateAlg, [
     SENDER,
     ISSUER_ID,
     PROTOCOL,
@@ -212,6 +236,21 @@ describe('captureCallbackEnvelope', () => {
       // from a good one.
       expect(key.keyValueByteLength).toBe(91);
       expect(key.algorithm).toBe('ECDSA P-256');
+    });
+
+    it('reports a non-P-256 algorithm distinctly', async () => {
+      // Guards against `algorithm: 'ECDSA P-256'` being hardcoded. With a P-256
+      // fixture a hardcoded answer and a read answer are indistinguishable, so
+      // the fixture has to disagree with the hardcoded value or the assertion
+      // means nothing — which reversal testing showed it did not.
+      const p384 = await captureCallbackEnvelope(
+        (await wellFormedEnvelope({ name: 'ECDSA', namedCurve: 'P-384' })).body,
+        ISSUER_ID,
+      );
+      const rsa = await captureCallbackEnvelope((await wellFormedEnvelope(RSA_2048)).body, ISSUER_ID);
+
+      expect(p384.intermediateSigningKey.signedKey.algorithm).toBe('ECDSA P-384');
+      expect(rsa.intermediateSigningKey.signedKey.algorithm).toBe('RSA');
     });
 
     it('reports each intermediate key signature by count, length and DER edges', async () => {
@@ -323,18 +362,20 @@ describe('captureCallbackEnvelope', () => {
       }
     });
 
-    it('never emits a string long enough to be key material', async () => {
-      const { body } = await wellFormedEnvelope();
+    it('never emits a string long enough to be key material, even for a big key', async () => {
+      // A P-256 `signedKey` is 171 characters, which is *under* the 220 bound
+      // below — so asserting only against it would let a leak of exactly that key
+      // pass. An RSA-2048 envelope is ~440 characters, which puts the bound under
+      // real pressure: emitting any slice of it trips the assertion.
+      const { body, keyValue } = await wellFormedEnvelope(RSA_2048);
+      expect(body.length).toBeGreaterThan(400);
 
       const capture = await captureCallbackEnvelope(body, ISSUER_ID);
 
-      // The longest string the capture may contain is the 200-character prefix
-      // of `signedMessage`, whose contents are event identifiers and not keys.
-      // A base64 SPKI needs 124 characters, so this bound alone cannot hold a
-      // whole public key, let alone a signature.
       for (const value of allStrings(capture)) {
         expect(value.length).toBeLessThanOrEqual(220);
       }
+      expect(JSON.stringify(capture)).not.toContain(keyValue);
     });
 
     it('keeps the prefix it does emit free of the signed key and the signatures', async () => {
