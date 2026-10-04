@@ -6,8 +6,15 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import styles from './pos.module.css';
 
 import { ApiError, api } from '@/lib/api';
+import {
+  classifyCameraError,
+  presentCameraFailure,
+  requestCameraAccess,
+  type CameraFailure,
+} from '@/lib/camera-permission';
 import { resolveLookupTarget } from '@/lib/lookup-identifier';
 import { previewPoints } from '@/lib/loyalty-points';
+import { parsePassCode } from '@/lib/pass-code';
 import { presentPass, type WirePassState } from '@/lib/pass-state';
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -99,6 +106,15 @@ export default function PosPage() {
 
   // Scanner modal
   const [showScanner, setShowScanner] = useState(false);
+  /**
+   * Why the camera is unusable, or `null` while it is working.
+   *
+   * Kept beside `showScanner` rather than inside `errorMsg` because it must NOT
+   * close the modal: the previous handler set an error and unmounted the reader
+   * in the same breath, so the one message that could have explained the failure
+   * appeared on a screen the failure had already been dismissed from.
+   */
+  const [cameraFailure, setCameraFailure] = useState<CameraFailure | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const scannerContainerId = 'qr-reader';
 
@@ -227,8 +243,29 @@ export default function PosPage() {
 
   const startScanner = useCallback(async () => {
     setShowScanner(true);
+    setCameraFailure(null);
     // Small delay so the DOM element is rendered
     await new Promise((r) => setTimeout(r, 200));
+
+    // Ask for the camera BEFORE building the scanner, because this is the call
+    // that puts the browser's permission dialog in front of the cashier while
+    // they are still looking at the button they pressed. `html5-qrcode` opens a
+    // stream of its own, but only once its loop is running, so it produced a
+    // modal with no video and no prompt -- the button looked dead.
+    //
+    // This runs inside the click handler, and it has to: a camera request
+    // outside a user gesture is refused outright, which is why an earlier
+    // attempt at this from an effect "did nothing" instead of erroring.
+    try {
+      await requestCameraAccess();
+    } catch (err) {
+      // The modal stays open and the reason stays on screen. Refusal, absent
+      // hardware and a camera another app is holding are three different
+      // problems, and the cashier is the only one who can act on which one it
+      // is -- so the handler reports and waits rather than closing.
+      setCameraFailure(classifyCameraError(err));
+      return;
+    }
 
     try {
       const scanner = new Html5Qrcode(scannerContainerId);
@@ -242,11 +279,12 @@ export default function PosPage() {
           await scanner.stop().catch(() => {});
           setShowScanner(false);
 
-          // Extract globalId from URL like /c/<uuid> or just plain uuid
-          const match = decodedText.match(/\/c\/([a-f0-9-]+)/i) || decodedText.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
-          const globalId = match ? match[1] : decodedText.trim();
-
-          if (!globalId || globalId.length < 10) {
+          // Which customer this code is for, decided in `lib/pass-code.ts`.
+          // Three formats are live -- the `/c/<id>` link printed on cards that
+          // already exist, the Google Wallet `<issuerId>.member-<id>` barcode,
+          // and a bare id -- and anything else is reported rather than guessed.
+          const parsed = parsePassCode(decodedText);
+          if (!parsed.ok) {
             setErrorMsg('No se pudo leer el código QR');
             return;
           }
@@ -255,7 +293,7 @@ export default function PosPage() {
           setErrorMsg('');
 
           try {
-            const data = await api.getCustomerByGlobalId(globalId);
+            const data = await api.getCustomerByGlobalId(parsed.globalId);
             setCustomer({
               id: data.id,
               globalId: data.globalId,
@@ -277,9 +315,10 @@ export default function PosPage() {
         },
         () => {},
       );
-    } catch {
-      setErrorMsg('Error al acceder a la cámara');
-      setShowScanner(false);
+    } catch (err) {
+      // Same rule as above: the reader is not unmounted on the way out, because
+      // the reader is where the explanation belongs.
+      setCameraFailure(classifyCameraError(err));
     }
   }, []);
 
@@ -288,6 +327,7 @@ export default function PosPage() {
       try { await scannerRef.current.stop(); } catch { /* ignore */ }
       scannerRef.current = null;
     }
+    setCameraFailure(null);
     setShowScanner(false);
   }, []);
 
@@ -371,6 +411,10 @@ export default function PosPage() {
   }, []);
 
   // ─── Render ───────────────────────────────────────────────────────
+
+  // Which camera failure this is, and what to say about it, are one decision
+  // made in `lib/camera-permission.ts`. The page only places it.
+  const cameraMessage = cameraFailure ? presentCameraFailure(cameraFailure) : null;
 
   return (
     <div className={styles.container}>
@@ -715,10 +759,35 @@ export default function PosPage() {
         <div className={styles.overlay} onClick={stopScanner}>
           <div className={styles.scannerModal} onClick={(e) => e.stopPropagation()}>
             <h3>Escanear QR</h3>
-            <p>Mostrale el código QR al cliente para identificarlo</p>
-            <div id={scannerContainerId} className={styles.scannerReader} />
+
+            {/* The failure replaces the reader instead of hiding behind it: a
+                black rectangle where the video should be tells the cashier
+                nothing, and an error shown outside this modal was the reason the
+                previous version looked like it did nothing at all. */}
+            {cameraMessage ? (
+              <>
+                <div role="alert" className={styles.lookupWarn}>
+                  <strong>{cameraMessage.title}</strong>
+                  <p style={{ margin: '6px 0 0' }}>{cameraMessage.detail}</p>
+                </div>
+                <button
+                  type="button"
+                  className={styles.scanBtn}
+                  onClick={startScanner}
+                  style={{ marginTop: 12 }}
+                >
+                  Reintentar
+                </button>
+              </>
+            ) : (
+              <>
+                <p>Mostrale el código QR al cliente para identificarlo</p>
+                <div id={scannerContainerId} className={styles.scannerReader} />
+              </>
+            )}
+
             <button type="button" className={styles.closeBtn} onClick={stopScanner}>
-              Cancelar
+              Cerrar
             </button>
           </div>
         </div>
