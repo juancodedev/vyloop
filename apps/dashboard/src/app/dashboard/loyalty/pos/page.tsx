@@ -14,6 +14,7 @@ import {
 } from '@/lib/camera-permission';
 import { resolveLookupTarget } from '@/lib/lookup-identifier';
 import { previewPoints } from '@/lib/loyalty-points';
+import { parsePassCode } from '@/lib/pass-code';
 import { presentPass, type WirePassState } from '@/lib/pass-state';
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -278,11 +279,12 @@ export default function PosPage() {
           await scanner.stop().catch(() => {});
           setShowScanner(false);
 
-          // Extract globalId from URL like /c/<uuid> or just plain uuid
-          const match = decodedText.match(/\/c\/([a-f0-9-]+)/i) || decodedText.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
-          const globalId = match ? match[1] : decodedText.trim();
-
-          if (!globalId || globalId.length < 10) {
+          // Which customer this code is for, decided in `lib/pass-code.ts`.
+          // Three formats are live -- the `/c/<id>` link printed on cards that
+          // already exist, the Google Wallet `<issuerId>.member-<id>` barcode,
+          // and a bare id -- and anything else is reported rather than guessed.
+          const parsed = parsePassCode(decodedText);
+          if (!parsed.ok) {
             setErrorMsg('No se pudo leer el código QR');
             return;
           }
@@ -291,7 +293,7 @@ export default function PosPage() {
           setErrorMsg('');
 
           try {
-            const data = await api.getCustomerByGlobalId(globalId);
+            const data = await api.getCustomerByGlobalId(parsed.globalId);
             setCustomer({
               id: data.id,
               globalId: data.globalId,
