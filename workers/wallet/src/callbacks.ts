@@ -932,11 +932,13 @@ function decodeOid(der: Uint8Array, tlv: { start: number; length: number }): str
  * Never throws. A reader that can fail the verification it observes would be a
  * second, worse parser.
  *
- * Exported for `envelope-capture.ts`, the temporary diagnostic that reports an
- * envelope's key algorithm. Exported rather than reimplemented because a second
- * DER reader in this worker is a second answer to "what key is this", and the two
- * would drift the first time the OID tables are corrected. It reads bytes and
- * returns a name, so it carries nothing reusable across the boundary.
+ * Used by this file's own verification diagnostics, which render the algorithm of
+ * both a host key and an envelope key into the refusal diagnostic, and exported so
+ * the reader can be exercised on its own. Kept as one function rather than
+ * reimplemented per caller because a second DER reader in this worker is a second
+ * answer to "what key is this", and the two would drift the first time the OID
+ * tables are corrected. It reads bytes and returns a name, so it carries nothing
+ * reusable across the boundary.
  */
 export function describeSpkiKey(spki: Uint8Array | null): string {
   if (spki === null) return 'unreadable';
