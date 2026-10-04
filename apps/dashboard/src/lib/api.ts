@@ -1,6 +1,34 @@
 // API client — real fetch() calls against the backend API gateway
 
+import { presentPass, type WirePassState } from './pass-state';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
+
+/** The three ways the counter can name the person in front of them. */
+export type LookupIdentifier = 'phone' | 'email' | 'globalId';
+
+/**
+ * One customer, as the counter needs them.
+ *
+ * `pass.state` is the stored value, untouched — see `lib/pass-state.ts` for why
+ * `not_issued` and `not_saved` must never be merged here.
+ */
+export interface LookupCustomer {
+  id: string;
+  globalId: string;
+  fullName: string;
+  phone: string;
+  email: string;
+  points: number;
+  currentTier: string | null;
+  tier: { id: string; name: string; multiplier: number } | null;
+  pass: {
+    state: WirePassState;
+    lastSyncedAt: string | null;
+    /** True when Google has never given us a definite answer. */
+    unverified: boolean;
+  };
+}
 
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -23,6 +51,42 @@ interface ApiTierRecord {
   multiplier: number;
   benefits: ApiBenefit[];
   displayOrder: number;
+}
+
+/**
+ * An API failure that still knows *which* failure it was.
+ *
+ * `apiFetch` used to throw a bare `Error` carrying only the server's prose, so a
+ * caller could not tell "this customer is not registered" (404, an invitation to
+ * register them) from "the request was malformed" (400) from "the system is
+ * broken" (500). Answering a broken system with "register this customer" sends
+ * a real person into a wrong form, so the distinction has to survive to the UI.
+ *
+ * It extends `Error` rather than replacing it: every existing `catch` reads
+ * `err.message` and none of them need to change.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  /** The server's `error.code`, or `''` when it sent none. */
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/** Raise the server's own failure, keeping its status and code. */
+function apiError(status: number, data: unknown): ApiError {
+  const error = (data as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const message =
+    typeof error?.message === 'string' && error.message !== ''
+      ? error.message
+      : `Error ${status}`;
+  return new ApiError(status, code, message);
 }
 
 export async function apiFetch(path: string, options: RequestInit = {}): Promise<unknown> {
@@ -50,7 +114,7 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
         if (retryRes.status === 204) return null;
         const retryData = await retryRes.json();
         if (!retryRes.ok) {
-          throw new Error(retryData?.error?.message || `Error ${retryRes.status}`);
+          throw apiError(retryRes.status, retryData);
         }
         return retryData;
       }
@@ -58,7 +122,7 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
       clearAuthAndRedirect();
       throw new Error('Session expired. Redirecting to login…');
     }
-    throw new Error(data?.error?.message || `Error ${res.status}`);
+    throw apiError(res.status, data);
   }
 
   return data;
@@ -441,6 +505,67 @@ export const api = {
       points: result.data.points,
       balance_after: result.data.balance_after,
       ...(result.partial ? { partial: result.partial } : {}),
+    };
+  },
+
+  /**
+   * Resolve **one** customer at the counter, by phone, email or pass id.
+   *
+   * ## Why exactly one identifier, enforced here
+   *
+   * The server refuses two identifiers, but catching it here means a confused
+   * caller gets a precise error instead of a 400, and — more importantly — that
+   * this helper cannot grow a `q` parameter later without tripping this guard.
+   * A free-text box plus `LIKE` is how "find the customer in front of me"
+   * becomes "list every customer", which is a different product surface with
+   * different privacy consequences.
+   *
+   * No `businessId` is sent: the tenant comes from the token the gateway injects.
+   */
+  async lookupCustomer(identifier: {
+    phone?: string;
+    email?: string;
+    globalId?: string;
+  }): Promise<LookupCustomer> {
+    const entries = Object.entries(identifier).filter(
+      ([, value]) => typeof value === 'string' && value.trim() !== '',
+    ) as Array<[LookupIdentifier, string]>;
+
+    if (entries.length !== 1) {
+      throw new Error(
+        'Buscá por teléfono, correo o el código del pase: exactamente un dato, no una lista.',
+      );
+    }
+
+    const [key, value] = entries[0]!;
+    const query = new URLSearchParams({ [key]: value.trim() });
+    const result = (await apiFetch(`/v1/customers/lookup?${query.toString()}`)) as {
+      data: Record<string, unknown>;
+    };
+    const d = result.data;
+
+    // `state` is carried through verbatim. It is never folded into a boolean:
+    // `not_issued` (we never checked) and `not_saved` (Google says it is not
+    // there) are opposite facts and the UI renders them differently.
+    const state = (d.pass as { state?: string | null } | undefined)?.state ?? null;
+
+    return {
+      id: d.id as string,
+      globalId: d.globalId as string,
+      fullName: d.fullName as string,
+      phone: (d.phone as string) ?? '',
+      email: (d.email as string) ?? '',
+      points: Number(d.points ?? 0),
+      currentTier: (d.currentTier as string | null) ?? null,
+      tier: (d.tier as { id: string; name: string; multiplier: number } | null) ?? null,
+      pass: {
+        state,
+        lastSyncedAt: (d.pass as { lastSyncedAt?: string | null } | undefined)
+          ?.lastSyncedAt ?? null,
+        // Derived once, here, from the same module the page renders from — so
+        // the flag cannot disagree with the words next to it.
+        unverified: presentPass(state).unverified,
+      },
     };
   },
 
