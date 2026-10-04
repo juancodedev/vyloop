@@ -90,6 +90,42 @@ const WALLET_BALANCE_NOT_DISPLAYABLE = 'WALLET_BALANCE_NOT_DISPLAYABLE';
 // ---------------------------------------------------------------------------
 
 /**
+ * The path this worker serves the callback on.
+ *
+ * ## Why a constant and not the string inline in the registration
+ *
+ * This path is agreed on by three places that cannot see each other: the route
+ * below, the `PUBLIC_PATHS` exemption in `index.ts`, and the `callbackUrl` this
+ * worker hands Google — after which no code in this repository decides where
+ * Google POSTs, and a class cannot be recreated under the same id. Only one of
+ * those three is a route, so writing it inline would leave two declarations with
+ * nothing holding them together.
+ *
+ * The failure that produces is not loud. The two halves are used by different
+ * code paths, so renaming one leaves both suites green, and what breaks is a
+ * signed webhook answered with a 404 that nobody is reading.
+ *
+ * It is declared here, in the module that registers the route, rather than in
+ * `index.ts` — `index.ts` imports this router, not the other way round, so a
+ * constant this file needs has to be declared somewhere it can import without
+ * closing an import cycle.
+ *
+ * ## The other declaration, in another package
+ *
+ * `apps/gateway/src/robots.ts` declares the same path, and it has to: the
+ * gateway is the only public door and must exempt this route from auth, key a
+ * rate limit on it, and keep it crawlable. That package does not depend on this
+ * one and must not, so the two cannot be derived from each other.
+ *
+ * `apps/gateway/src/wallet-callback-path.contract.test.ts` closes that gap by
+ * reading this file and comparing, and it reads this file rather than importing
+ * it for the same reason the gateway does not depend on this package. Do not
+ * "simplify" that test into an import: the dependency would point from the
+ * public face backwards to the service behind it, and the test would still pass.
+ */
+export const WALLET_CALLBACK_PATH = '/v1/wallet/google/callback';
+
+/**
  * The one route in this worker with no customer, no token and no tenant header.
  *
  * ## Why it is exempt from the auth middleware
@@ -139,7 +175,7 @@ const WALLET_BALANCE_NOT_DISPLAYABLE = 'WALLET_BALANCE_NOT_DISPLAYABLE';
  * A public endpoint's logs get read by people who should not be reading customer
  * identifiers, and the reason code is what a support question actually needs.
  */
-router.post('/v1/wallet/google/callback', async (c) => {
+router.post(WALLET_CALLBACK_PATH, async (c) => {
   // Read as text, exactly once, and never as JSON. The body is an
   // `ECv2SigningOnly` envelope whose signature covers the *exact bytes* of
   // `signedMessage`, so re-serialising it would produce a different string and
