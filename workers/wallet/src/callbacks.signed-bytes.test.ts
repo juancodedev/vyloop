@@ -130,13 +130,14 @@ const PINNED_SIGNATURE_KEY = {
     '8906ff1d495cd7d645267c17cbc69e5079c64b5cfc9885a806a51ccde2bf7eb0bfcca5eb3060dfd8672c4b5831d81980a35f401d17e180df0cb4549abae4b5da',
 };
 
-const fromHex = (value: string): Uint8Array => {
+/** Typed over `ArrayBuffer`, not `ArrayBufferLike`, because WebCrypto insists. */
+const fromHex = (value: string): Uint8Array<ArrayBuffer> => {
   const out = new Uint8Array(value.length / 2);
   for (let i = 0; i < out.length; i += 1) out[i] = Number.parseInt(value.slice(i * 2, i * 2 + 2), 16);
   return out;
 };
 
-function base64ToBytes(value: string): Uint8Array {
+function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   const binary = atob(value);
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
@@ -298,7 +299,7 @@ describe('derSignatureToP1363', () => {
     // about real signatures rather than about byte shuffling.
     const publicKey = await crypto.subtle.importKey(
       'spki',
-      base64ToBytes(PINNED_SIGNATURE_KEY.spkiBase64) as unknown as BufferSource,
+      base64ToBytes(PINNED_SIGNATURE_KEY.spkiBase64),
       { name: 'ECDSA', namedCurve: 'P-256' },
       false,
       ['verify'],
