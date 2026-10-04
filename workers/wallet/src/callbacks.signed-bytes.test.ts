@@ -342,6 +342,27 @@ describe('derSignatureToP1363', () => {
     );
   });
 
+  it('refuses a SEQUENCE whose declared length disagrees with the buffer', () => {
+    // Two directions, because they hide differently. A `SEQUENCE` that claims
+    // fewer bytes than it carries is a signature with something appended; one
+    // that claims more is a signature that was cut short. Either way the framing
+    // is not what a DER encoder produced, and every other guard below is reached
+    // through that framing, so this one has to catch it on its own.
+    //
+    // This guard was not load-bearing until this test existed: reverting it left
+    // the whole suite green, because every other fixture here is correctly
+    // framed and so agrees with the check.
+    const declaredShort = fromHex('3007020105020107aabbccdd');
+    const declaredLong = fromHex('3009020105020107aabb');
+
+    expect(() => derSignatureToP1363(declaredShort)).toThrowError(
+      /SEQUENCE length does not match/i,
+    );
+    expect(() => derSignatureToP1363(declaredLong)).toThrowError(
+      /SEQUENCE length does not match/i,
+    );
+  });
+
   it('refuses a trailing byte, so two byte strings cannot mean the same signature', () => {
     // The SEQUENCE declares 8 content bytes; the two INTEGERs take 6 and `aabb`
     // is left over. Declared length and buffer length agree, so this is the only
