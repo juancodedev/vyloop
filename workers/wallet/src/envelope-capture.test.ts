@@ -96,18 +96,41 @@ function p1363ToDer(p1363: Uint8Array): Uint8Array {
   return out;
 }
 
-async function generateTestKey(alg: KeyAlgorithm = { name: 'ECDSA', namedCurve: 'P-256' }) {
-  const pair = await crypto.subtle.generateKey(alg, true, ['sign', 'verify']);
-  const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey));
-  return { privateKey: pair.privateKey, spkiBase64: bytesToBase64(spki) };
-}
+/**
+ * Key shapes this file generates.
+ *
+ * A local union rather than `KeyAlgorithm`, because the DOM/worker lib type in
+ * this project does not carry `namedCurve` or `modulusLength`, so a real
+ * algorithm specification does not typecheck against it. The cast in
+ * `generateTestKey` is where that is absorbed, once.
+ */
+type TestKeyAlgorithm =
+  | { name: 'ECDSA'; namedCurve: 'P-256' | 'P-384' | 'P-521' }
+  | {
+      name: 'RSASSA-PKCS1-v1_5';
+      modulusLength: number;
+      publicExponent: Uint8Array;
+      hash: 'SHA-256';
+    };
 
-const RSA_2048: KeyAlgorithm = {
+const P256: TestKeyAlgorithm = { name: 'ECDSA', namedCurve: 'P-256' };
+
+const RSA_2048: TestKeyAlgorithm = {
   name: 'RSASSA-PKCS1-v1_5',
   modulusLength: 2048,
   publicExponent: new Uint8Array([1, 0, 1]),
   hash: 'SHA-256',
 };
+
+async function generateTestKey(alg: TestKeyAlgorithm = P256) {
+  const pair = (await crypto.subtle.generateKey(
+    alg as unknown as AlgorithmIdentifier,
+    true,
+    ['sign', 'verify'],
+  )) as CryptoKeyPair;
+  const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey));
+  return { privateKey: pair.privateKey, spkiBase64: bytesToBase64(spki) };
+}
 
 async function signLikeGoogle(key: CryptoKey, parts: readonly string[]): Promise<string> {
   const raw = new Uint8Array(
@@ -126,12 +149,17 @@ async function signLikeGoogle(key: CryptoKey, parts: readonly string[]): Promise
  * one, and the fixture would then be lying about the very byte layout the DER
  * edge assertions exist to read.
  */
-async function signWith(key: CryptoKey, algorithm: KeyAlgorithm, parts: readonly string[]): Promise<string> {
-  const params: AlgorithmIdentifier | RsaPssParams | EcdsaParams =
-    algorithm.name === 'ECDSA' ? { name: 'ECDSA', hash: 'SHA-256' } : { name: algorithm.name };
-  const raw = new Uint8Array(
-    await crypto.subtle.sign(params, key, toLengthValue(parts)),
-  );
+async function signWith(
+  key: CryptoKey,
+  algorithm: TestKeyAlgorithm,
+  parts: readonly string[],
+): Promise<string> {
+  const params = (
+    algorithm.name === 'ECDSA'
+      ? { name: 'ECDSA', hash: 'SHA-256' }
+      : { name: algorithm.name }
+  ) as AlgorithmIdentifier;
+  const raw = new Uint8Array(await crypto.subtle.sign(params, key, toLengthValue(parts)));
   return algorithm.name === 'ECDSA' ? bytesToBase64(p1363ToDer(raw)) : bytesToBase64(raw);
 }
 
@@ -149,10 +177,10 @@ const SIGNED_MESSAGE = JSON.stringify({
 });
 
 /** A complete, correctly shaped envelope, with every value also returned for leak checks. */
-async function wellFormedEnvelope(intermediateAlgorithm?: KeyAlgorithm) {
+async function wellFormedEnvelope(intermediateAlgorithm?: TestKeyAlgorithm) {
   const root = await generateTestKey();
   const intermediate = await generateTestKey(intermediateAlgorithm);
-  const intermediateAlg: KeyAlgorithm = intermediateAlgorithm ?? { name: 'ECDSA', namedCurve: 'P-256' };
+  const intermediateAlg: TestKeyAlgorithm = intermediateAlgorithm ?? P256;
 
   const signedKey = JSON.stringify({
     keyValue: intermediate.spkiBase64,
@@ -176,6 +204,36 @@ async function wellFormedEnvelope(intermediateAlgorithm?: KeyAlgorithm) {
 
   return { body, keySignature, messageSignature, signedKey, keyValue: intermediate.spkiBase64 };
 }
+
+// ---------------------------------------------------------------------------
+// A real Google delivery
+// ---------------------------------------------------------------------------
+
+/**
+ * A body captured from a live Google Wallet loyalty callback.
+ *
+ * The only artefact here that came from Google rather than from this file, and
+ * the reason the two tests that use it exist: it settles, against a real
+ * delivery, the two things the investigation suspected.
+ *
+ * **Scrubbed, not verbatim.** Both the intermediate key and the message signature
+ * have their leading `0x30` flipped to `0x5C`. The DER shape and the lengths are
+ * preserved and the material is gone, which is the right thing to do to a captured
+ * envelope before committing it — but it means this fixture cannot exercise the
+ * DER reader, and `algorithm` and `derSequence` legitimately report `unreadable`
+ * and `false` on it. `callbacks.test.ts` describes the same fixture as verbatim.
+ */
+const REAL_LOYALTY_CALLBACK = JSON.stringify({
+  signature:
+    'XEUCIQCJi26vl+ak17dsHDbZZnRZxm51duUAPiYLwOIr9rVvAAIgGUfR18gpKTq1+Msav0vPrWvC6x9dDRwWFX/b85+jE1k=',
+  intermediateSigningKey: {
+    signedKey:
+      '{"keyValue":"XFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVsEtOdPMaE+DJDzuCJaO7EJXaHor4Kyklp411iwfBa+5TmdbiEWUXzewA79H0PXjdyRMhKBY99+sh056JB75LQ==","keyExpiration":"1754778096000"}',
+  },
+  protocolVersion: 'ECv2SigningOnly',
+  signedMessage:
+    '{"classId":"1296031581681466393.LOYALTY_CLASS_dada6069-0799-44ec-a38d-c482484902e1","objectId":"1296031581681466393.LOYALTY_OBJECT_xxxxxxxxxxxxx","eventType":"save","expTimeMillis":1754114831806,"count":1,"nonce":"40a8e5af-5b7f-4ea4-b152-63d96858550e"}',
+});
 
 // ---------------------------------------------------------------------------
 
@@ -251,6 +309,58 @@ describe('captureCallbackEnvelope', () => {
 
       expect(p384.intermediateSigningKey.signedKey.algorithm).toBe('ECDSA P-384');
       expect(rsa.intermediateSigningKey.signedKey.algorithm).toBe('RSA');
+    });
+
+    // A real Google envelope, run through the capture. Present because it settles
+    // the premise the investigation started from, and that premise was wrong: the
+    // obvious suspects were a `recipientId` field and a protocol other than
+    // `ECv2SigningOnly`, and a real delivery has neither.
+    it('finds no recipientId and no other protocol field in a real envelope', async () => {
+      const capture = await captureCallbackEnvelope(REAL_LOYALTY_CALLBACK, ISSUER_ID);
+
+      // Exactly four fields, and none of them `recipientId`. It is a parameter the
+      // verifier is given, never a field Google sends — so a capture built to look
+      // for it in the envelope would report its absence forever.
+      expect(capture.topLevelKeys).toEqual([
+        'intermediateSigningKey',
+        'protocolVersion',
+        'signature',
+        'signedMessage',
+      ]);
+      expect(capture.recipientId.presentInEnvelope).toBe(false);
+
+      // And the protocol *is* `ECv2SigningOnly`, so "maybe loyalty passes use a
+      // different protocol" is not the cause either.
+      expect(capture.protocolVersion).toBe('ECv2SigningOnly');
+      expect(capture.protocolVersionIsTheConfiguredOne).toBe(true);
+
+      // The payload is JSON with the six documented fields, so the message stage
+      // could have been reached had the key signature verified.
+      expect(capture.signedMessage.isJson).toBe(true);
+      expect(capture.signedMessage.jsonKeys).toEqual([
+        'classId',
+        'objectId',
+        'eventType',
+        'expTimeMillis',
+        'count',
+        'nonce',
+      ]);
+      expect(capture.derivedSignedBytes.keySignatureInput?.byteLength).toBe(207);
+    });
+
+    // The redaction, recorded rather than left as a surprise for whoever runs the
+    // capture against this fixture next. Both the key and the signature in
+    // `REAL_LOYALTY_CALLBACK` have their leading 0x30 flipped to 0x5C — the shape
+    // is preserved, the material is gone. `callbacks.test.ts` calls the fixture
+    // "verbatim"; it is scrubbed in exactly these two places.
+    it('reports the scrubbed fixture as unreadable, not as a P-256 key', async () => {
+      const capture = await captureCallbackEnvelope(REAL_LOYALTY_CALLBACK, ISSUER_ID);
+
+      expect(capture.intermediateSigningKey.signedKey.keyValueByteLength).toBe(91);
+      expect(capture.intermediateSigningKey.signedKey.algorithm).toBe('unreadable');
+      expect(capture.messageSignature.byteLength).toBe(71);
+      expect(capture.messageSignature.derSequence).toBe(false);
+      expect(capture.messageSignature.firstByteHex).toBe('5c');
     });
 
     it('reports each intermediate key signature by count, length and DER edges', async () => {
