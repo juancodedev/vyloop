@@ -271,8 +271,9 @@ function verifier(rootKey: TestKey, now = NOW) {
  * have their leading `0x30` flipped to `0x5C`, so the DER shape survives and the
  * material does not. That is the right call for a captured envelope and it is why
  * this fixture cannot verify anything — including the DER shape, which reports
- * `unreadable` rather than ECDSA. `envelope-capture.test.ts` pins that redaction
- * explicitly so it is not rediscovered as a bug.
+ * `unreadable` rather than ECDSA. That redaction is pinned below, against
+ * `REAL_LOYALTY_CALLBACK_PROVENANCE.redaction`, so it is not rediscovered as a
+ * bug.
  *
  * ## What this fixture is not, and why that was the whole bug
  *
