@@ -75,11 +75,14 @@ const WEBHOOK_PREFIX = '/v1/communication/webhook';
  *
  * A prefix would exempt every path beneath it, so a future
  * `/v1/wallet/google/callback/admin` would silently become public too. An exact
- * comparison cannot grow. The same string is exported by the wallet worker
- * (`WALLET_CALLBACK_PATH`) and asserted against this list in
- * `envelope-capture-public.test.ts`, so a rename on one side fails CI rather
- * than producing a 403 on every real delivery — which is the failure mode nobody
- * would read as a routing bug.
+ * comparison cannot grow. `index.test.ts` holds that narrowness end to end, from
+ * outside this module, by asserting the sibling answers 401.
+ *
+ * The string is declared twice — here via `./robots`, and in the worker — because
+ * this package must not take a runtime dependency on the service behind it. The
+ * narrowing is asserted; the agreement between the two declarations is not, so a
+ * one-sided rename would 403 every real delivery with a message about missing
+ * headers, which is the failure mode nobody would read as a routing bug.
  *
  * ## The three middlewares, and why the list is repeated
  *
@@ -90,38 +93,6 @@ const WEBHOOK_PREFIX = '/v1/communication/webhook';
  * drift, and is covered by a test that reads all three.
  */
 /**
- * TEMPORARY — the envelope capture, public for the same reason.
- *
- * It has to be reachable from wherever Google POSTs, or it captures nothing. A
- * real callback carries no JWT, no `X-User-Id` and no `X-Business-Id`, so an
- * exemption added anywhere else in the chain would buy nothing.
- *
- * Mirrors `ENVELOPE_CAPTURE_PATH` from `@vyloop/wallet` rather than importing it:
- * this package does not depend on the worker, and a runtime dependency between
- * the public edge and the service behind it would be the wrong direction. The
- * risk of mirroring is drift, which produces a 401 whose message says nothing
- * about the cause, so `envelope-capture-public.test.ts` asserts the exemption and
- * `workers/wallet`'s own test asserts its route — and the path is deleted from
- * both sides together when the capture is.
- */
-export const ENVELOPE_CAPTURE_PATH = '/v1/wallet/google/envelope-capture';
-
-/**
- * Captures allowed per window, per client address.
- *
- * Separate from `WALLET_CALLBACK_LIMIT_PER_WINDOW` on purpose: they are different
- * routes with different reasons to exist, and one number for both means tightening
- * the diagnostic to stop abuse would start dropping real deliveries.
- *
- * Generous, like the callback's. A capture that throttles the investigation is
- * worse than no capture at all — the operator loses the delivery they were
- * waiting for, silently, and the envelope expires in hours rather than days. This
- * is a ceiling on amplification, not a security control: the endpoint discloses
- * nothing and grants nothing.
- */
-export const ENVELOPE_CAPTURE_LIMIT_PER_WINDOW = 300;
-
-/**
  * True for a path that arrives without a gateway-injected identity.
  *
  * One predicate, called by all three middlewares, so the set of public
@@ -129,16 +100,19 @@ export const ENVELOPE_CAPTURE_LIMIT_PER_WINDOW = 300;
  * three-clause condition inline in each middleware, which is three chances to
  * forget a clause.
  *
- * Exported so `envelope-capture-public.test.ts` can hold the narrowness of this
- * list from outside. A public-path predicate that cannot be inspected is a
- * predicate nobody can prove is still narrow.
+ * Exported so the list can be asserted directly rather than only inferred from a
+ * request. A public-path predicate that cannot be inspected is a predicate nobody
+ * can prove is still narrow. `index.test.ts` currently holds that narrowness end
+ * to end instead — it drives `app.fetch` and asserts that
+ * `/v1/wallet/google/callback/admin` and the other `/v1/wallet/*` paths answer
+ * 401 — which is the guarantee that actually matters, since it is the middleware
+ * chain rather than this function that decides.
  */
 export function isPublicApiPath(path: string, method: string): boolean {
   return (
     path.startsWith('/v1/auth/') ||
     path.startsWith(WEBHOOK_PREFIX) ||
     path === WALLET_CALLBACK_PATH ||
-    path === ENVELOPE_CAPTURE_PATH ||
     (method === 'PUT' && path === '/v1/customers')
   );
 }
@@ -242,10 +216,6 @@ app.use('/v1/*', async (c, next) => {
       anonymousLimits: {
         '/v1/auth/business/signup': SIGNUP_LIMIT_PER_WINDOW,
         '/v1/wallet/google/callback': WALLET_CALLBACK_LIMIT_PER_WINDOW,
-        // TEMPORARY. A route absent from this map is *unlimited*, so the capture
-        // needs an explicit number the moment its auth exemption lands — public
-        // by necessity is precisely the case the opt-in map exists for.
-        [ENVELOPE_CAPTURE_PATH]: ENVELOPE_CAPTURE_LIMIT_PER_WINDOW,
       },
       windowSeconds: DEFAULT_WINDOW,
 
