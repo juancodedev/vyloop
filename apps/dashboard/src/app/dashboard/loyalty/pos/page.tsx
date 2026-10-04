@@ -1,12 +1,14 @@
 'use client';
 
 import { Html5Qrcode } from 'html5-qrcode';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 
 import styles from './pos.module.css';
 
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
+import { resolveLookupTarget } from '@/lib/lookup-identifier';
 import { previewPoints } from '@/lib/loyalty-points';
+import { presentPass, type WirePassState } from '@/lib/pass-state';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -22,6 +24,15 @@ interface CartEntry {
 }
 
 type Status = 'idle' | 'identifying' | 'charging' | 'done' | 'error';
+
+/**
+ * Why a lookup failed, as far as the counter is concerned.
+ *
+ * Kept apart from `errorMsg` because the three need different things from the
+ * cashier: a miss is an invitation to register, a duplicate is an escalation,
+ * and anything else is a broken system that must not be answered with a form.
+ */
+type LookupFailure = 'not_registered' | 'ambiguous' | 'system';
 
 // ─── Menu data (realistic café prices) ──────────────────────────────
 
@@ -61,7 +72,19 @@ export default function PosPage() {
     points: number;
     currentTier: string | null;
     multiplier: number;
+    /**
+     * The pass state, when the customer was identified through the search box.
+     *
+     * Null for a QR scan: `GET /v1/customers/by-global-id` does not report pass
+     * state, so there is nothing to show and nothing to guess. Rendering a badge
+     * we did not earn is how a screen starts lying.
+     */
+    pass: { state: WirePassState; lastSyncedAt: string | null } | null;
   } | null>(null);
+
+  // Search box
+  const [lookupInput, setLookupInput] = useState('');
+  const [lookupFailure, setLookupFailure] = useState<LookupFailure | null>(null);
 
   // Redeem
   const [redeemInput, setRedeemInput] = useState('');
@@ -151,6 +174,55 @@ export default function PosPage() {
   const discount = redeemResult?.discount ?? 0;
   const total = Math.max(0, subtotal - discount);
 
+  // ─── Search box ───────────────────────────────────────────────────
+
+  const handleLookup = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    // One box, three identifiers. The resolver returns the pair together so the
+    // value cannot be sent under the wrong parameter.
+    const target = resolveLookupTarget(lookupInput);
+    if (!target) return;
+
+    setStatus('identifying');
+    setErrorMsg('');
+    setLookupFailure(null);
+
+    try {
+      const found = await api.lookupCustomer({ [target.identifier]: target.value });
+
+      setCustomer({
+        id: found.id,
+        globalId: found.globalId,
+        fullName: found.fullName,
+        points: found.points,
+        currentTier: found.currentTier,
+        multiplier: found.tier?.multiplier ?? 1,
+        pass: { state: found.pass.state, lastSyncedAt: found.pass.lastSyncedAt },
+      });
+      setRedeemInput('');
+      setRedeemResult(null);
+      setStatus('idle');
+    } catch (err) {
+      setStatus('idle');
+
+      // The three outcomes are told apart on the server's code, not on the
+      // message. "Not registered" invites a registration; a duplicate has to be
+      // escalated; anything else is a broken system, and answering that with a
+      // registration form would send a real customer into the wrong screen.
+      if (err instanceof ApiError && err.code === 'CUSTOMER_NOT_REGISTERED') {
+        setLookupFailure('not_registered');
+      } else if (err instanceof ApiError && err.status === 409) {
+        setLookupFailure('ambiguous');
+      } else {
+        setLookupFailure('system');
+        setErrorMsg(
+          err instanceof Error ? err.message : 'No se pudo consultar el cliente',
+        );
+      }
+    }
+  }, [lookupInput]);
+
   // ─── QR Scanner ───────────────────────────────────────────────────
 
   const startScanner = useCallback(async () => {
@@ -191,6 +263,9 @@ export default function PosPage() {
               points: data.points,
               currentTier: data.currentTier,
               multiplier: data.tier?.multiplier ?? 1,
+              // The QR endpoint does not report pass state. Left null rather than
+              // guessed, so no badge appears for something nobody asked Google.
+              pass: null,
             });
             setRedeemInput('');
             setRedeemResult(null);
@@ -392,23 +467,63 @@ export default function PosPage() {
             {/* ─── Customer section ─── */}
             <div className={styles.customerSection}>
               {!customer ? (
-                <button
-                  type="button"
-                  className={styles.scanBtn}
-                  onClick={startScanner}
-                  disabled={status === 'identifying'}
-                >
-                  {status === 'identifying' ? (
-                    <>
-                      <span className={styles.spinner} />
-                      Identificando…
-                    </>
-                  ) : (
-                    <>
-                      📷 Identificar Cliente
-                    </>
+                <>
+                  {/* Search first: a cashier without the QR in front of them
+                      still has to identify the person. */}
+                  <form className={styles.lookupForm} onSubmit={handleLookup}>
+                    <input
+                      type="text"
+                      className={styles.lookupInput}
+                      placeholder="Teléfono, correo o código del pase…"
+                      value={lookupInput}
+                      onChange={(e) => {
+                        setLookupInput(e.currentTarget.value);
+                        setLookupFailure(null);
+                      }}
+                      aria-label="Buscar cliente por teléfono, correo o código del pase"
+                      autoComplete="off"
+                    />
+                    <button
+                      type="submit"
+                      className={styles.lookupBtn}
+                      disabled={status === 'identifying' || lookupInput.trim() === ''}
+                    >
+                      Buscar
+                    </button>
+                  </form>
+
+                  {lookupFailure === 'not_registered' && (
+                    <p className={styles.lookupNote}>
+                      No encontramos a ningún cliente con ese dato.{' '}
+                      <a href="/dashboard/customers">Registralo desde Clientes</a>.
+                    </p>
                   )}
-                </button>
+
+                  {lookupFailure === 'ambiguous' && (
+                    <p className={styles.lookupWarn}>
+                      Hay más de un cliente con ese dato. No es algo que se pueda
+                      resolver en el mostrador: anotá el caso y escalalo.
+                    </p>
+                  )}
+
+                  <button
+                    type="button"
+                    className={styles.scanBtn}
+                    onClick={startScanner}
+                    disabled={status === 'identifying'}
+                  >
+                    {status === 'identifying' ? (
+                      <>
+                        <span className={styles.spinner} />
+                        Identificando…
+                      </>
+                    ) : (
+                      <>
+                        📷 Escanear QR
+                      </>
+                    )}
+                  </button>
+                </>
               ) : (
                 <div className={styles.customerInfo}>
                   <div className={styles.customerRow}>
@@ -425,6 +540,32 @@ export default function PosPage() {
                       )}
                     </span>
                   </div>
+
+                  {/* The pass badge, and the sentence under it that says what is
+                      actually known. Both come from `lib/pass-state.ts`: the label
+                      and the detail are one decision, and a `not_issued` row is
+                      rendered as work still to do on our side rather than as a
+                      customer who turned out to have no card. */}
+                  {customer.pass && (() => {
+                    const pass = presentPass(customer.pass.state, customer.pass.lastSyncedAt);
+                    return (
+                      <div
+                        className={styles.passBox}
+                        data-tone={pass.tone}
+                        data-unverified={pass.unverified}
+                      >
+                        <div className={styles.passHead}>
+                          <span className={styles.passLabel}>{pass.label}</span>
+                          {pass.checkedOn && (
+                            <span className={styles.passDate}>
+                              última comprobación {pass.checkedOn.slice(0, 10)}
+                            </span>
+                          )}
+                        </div>
+                        <p className={styles.passDetail}>{pass.detail}</p>
+                      </div>
+                    );
+                  })()}
 
                   {pointsToEarn > 0 && (
                     <>
