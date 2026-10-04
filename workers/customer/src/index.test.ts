@@ -45,8 +45,17 @@ const {
   const tables: Record<string, any> = {};
 
   // Every select() chain records what it was pointed at, so tests can compile
-  // the actual WHERE / ORDER BY the route produced.
-  const selectCalls: Array<{ table: any; where: any; orderBy: any }> = [];
+  // the actual WHERE / ORDER BY the route produced. `limit` is recorded too:
+  // "reads at most two rows" is a real property of a lookup that must not widen
+  // into a list, and it is otherwise invisible to the suite.
+  const selectCalls: Array<{
+    table: any;
+    where: any;
+    orderBy: any;
+    // `| undefined` rather than `?`: this project sets `exactOptionalPropertyTypes`,
+    // so an optional property may not be assigned `undefined` explicitly.
+    limit: number | undefined;
+  }> = [];
 
   /**
    * Result store, keyed by `<table>|<projection>`.
@@ -94,10 +103,16 @@ const {
         : Object.keys(projection).sort().join(',');
 
     const chain: any = {};
-    const call: { table: any; where: any; orderBy: any } = {
+    const call: {
+      table: any;
+      where: any;
+      orderBy: any;
+      limit: number | undefined;
+    } = {
       table: undefined,
       where: undefined,
       orderBy: undefined,
+      limit: undefined,
     };
     chain.from = vi.fn((table: any) => {
       call.table = table;
@@ -111,7 +126,10 @@ const {
       call.orderBy = clauses.flat();
       return chain;
     });
-    chain.limit = vi.fn(() => chain);
+    chain.limit = vi.fn((n?: number) => {
+      call.limit = n;
+      return chain;
+    });
     chain.offset = vi.fn(() => chain);
     chain.leftJoin = vi.fn(() => chain);
     chain.then = (resolve: (v: any) => any) => {
@@ -275,6 +293,17 @@ vi.mock('@vyloop/db', async () => {
     createdAt: timestamp('created_at', { withTimezone: true }),
   });
 
+  // Read by the POS lookup to answer "does this customer have the pass, and do
+  // we actually know?". `customerId` is the primary key, mirroring the real
+  // table — the lookup filters on it plus `tenantId`.
+  const customerWalletPasses = pgTable('customer_wallet_passes', {
+    customerId: uuid('customer_id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    objectId: text('object_id').notNull(),
+    state: text('state').notNull().default('not_issued'),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+  });
+
   Object.assign(tables, {
     tenants,
     loyaltyPrograms,
@@ -283,6 +312,7 @@ vi.mock('@vyloop/db', async () => {
     customerEvents,
     consents,
     pointsTransactions,
+    customerWalletPasses,
   });
 
   return {
@@ -295,6 +325,7 @@ vi.mock('@vyloop/db', async () => {
     customerEvents,
     consents,
     pointsTransactions,
+    customerWalletPasses,
   };
 });
 
@@ -1591,6 +1622,577 @@ describe('CRUD Routes', () => {
       expect(res.status).toBe(404);
       const body = await res.json() as any;
       expect(body.error.code).toBe('NOT_FOUND');
+    });
+  });
+});
+
+// ===========================================================================
+// POS lookup: GET /v1/customers/lookup
+// ===========================================================================
+//
+// The counter has one customer in front of it and a phone number, an email or a
+// scanned QR. This resolves exactly that person, with the pass state, the
+// balance and the tier.
+//
+// Three things are load-bearing in this block and each has a test that fails if
+// the guard is removed:
+//
+//   1. Tenant isolation rests on an explicit `business_id` in the WHERE clause.
+//      There is no row-level security in this database (`enableRls()` is never
+//      applied by any migration — see the note in routes.ts), so a missing
+//      filter is a cross-tenant leak with no second line of defence.
+//   2. The match is an equality against one column. A pattern match is how a
+//      lookup silently becomes the customer list this surface must not be.
+//   3. `not_issued` and `not_saved` are reported as the distinct values they
+//      are. `not_issued` is a gap in OUR knowledge; `not_saved` is a definite
+//      answer from Google. Collapsing them tells a merchant we know something
+//      we do not.
+// ===========================================================================
+
+/** Projections mirror exactly what `lookupCustomer` selects. */
+const LOOKUP_CUSTOMER_COLUMNS = {
+  id: 1,
+  globalId: 1,
+  fullName: 1,
+  phone: 1,
+  email: 1,
+  currentTierId: 1,
+};
+const LOOKUP_PASS_COLUMNS = { state: 1, lastSyncedAt: 1 };
+const LOOKUP_BALANCE_COLUMNS = { balanceAfter: 1 };
+const LOOKUP_TIER_COLUMNS = { id: 1, name: 1, multiplier: 1 };
+
+const LOOKUP_CUSTOMER = {
+  id: 'cust-lookup',
+  globalId: 'a0000000-0000-4000-8000-000000000001',
+  phone: '+56911111111',
+  email: 'ana@test.com',
+  fullName: 'Ana Ruiz',
+  currentTierId: 'tier-oro',
+};
+
+const LOOKUP_TIER = { id: 'tier-oro', name: 'Oro', multiplier: '1.50' };
+
+/**
+ * Seed the registry for a lookup.
+ *
+ * `pass: null` seeds NO row, which is the honest "this customer was never
+ * issued a save link" case — distinct from a row whose state is `not_issued`.
+ */
+function seedLookup(opts: {
+  customer?: unknown[] | null;
+  pass?: unknown[] | null;
+  balance?: number | null;
+  tier?: unknown[] | null;
+} = {}) {
+  setTableResults({
+    [key('customers', LOOKUP_CUSTOMER_COLUMNS)]:
+      opts.customer === null ? [] : (opts.customer ?? [LOOKUP_CUSTOMER]),
+    [key('customerWalletPasses', LOOKUP_PASS_COLUMNS)]:
+      opts.pass === null ? [] : (opts.pass ?? []),
+    [key('pointsTransactions', LOOKUP_BALANCE_COLUMNS)]:
+      opts.balance === null ? [] : [{ balanceAfter: opts.balance ?? 0 }],
+    [key('membershipTiers', LOOKUP_TIER_COLUMNS)]:
+      opts.tier === null ? [] : (opts.tier ?? [LOOKUP_TIER]),
+  });
+}
+
+/** `?phone=`/`?email=`/`?globalId=` with the value encoded. */
+function lookupPath(param: 'phone' | 'email' | 'globalId', value: string) {
+  return `/v1/customers/lookup?${param}=${encodeURIComponent(value)}`;
+}
+
+/** The columns only the lookup filters on; `GET /v1/customers/:id` uses none. */
+const IDENTIFIER_COLUMNS = [
+  '"customers"."phone"',
+  '"customers"."email"',
+  '"customers"."global_id"',
+];
+
+/**
+ * The compiled WHERE of the customer read the lookup issued.
+ *
+ * Requiring an identifier column is not decoration. `/v1/customers/lookup` also
+ * matches the pre-existing `/v1/customers/:id` route, with `id = "lookup"`, so a
+ * test that only asserted `business_id` would be satisfied by the profile route
+ * and would have passed before this endpoint existed at all. Asserting the
+ * identifier column is what makes the test about *this* route.
+ */
+function lookupCustomerWhere() {
+  const scoped = wheresFor('customers').filter((w) =>
+    IDENTIFIER_COLUMNS.some((col) => w.sql.includes(col)),
+  );
+  expect(scoped).toHaveLength(1);
+  return scoped[0]!;
+}
+
+describe('POS lookup (GET /v1/customers/lookup)', () => {
+  // The suite-wide reset lives inside `describe('CRUD Routes')`, so without this
+  // these tests inherit the previous one's `select` mock — which is how a lookup
+  // test ends up passing against a chain that ignores the registry.
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  // -----------------------------------------------------------------------
+  // 1. Tenant isolation — the test this whole surface hangs on
+  // -----------------------------------------------------------------------
+
+  describe('tenant isolation', () => {
+    it('scopes the customer query to the tenant in the token', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      expect(res.status).toBe(200);
+
+      const where = lookupCustomerWhere();
+      expect(where.sql).toContain('"customers"."business_id"');
+      expect(where.params).toContain('biz-1');
+    });
+
+    it('scopes the pass, balance and tier reads to the same tenant', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+
+      await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+
+      // A pass row is read by customer_id; without tenant_id a customer id from
+      // another tenant's read would be indistinguishable from this one's.
+      expect(wheresFor('customerWalletPasses')[0].sql).toContain(
+        '"customer_wallet_passes"."tenant_id"',
+      );
+      expect(wheresFor('pointsTransactions')[0].sql).toContain(
+        '"points_transactions"."business_id"',
+      );
+      expect(wheresFor('membershipTiers')[0].sql).toContain(
+        '"membership_tiers"."business_id"',
+      );
+    });
+
+    it('ignores a businessId supplied in the query string', async () => {
+      // A caller cannot redirect the lookup at another tenant. The only
+      // businessId that reaches SQL is the one the gateway put in the headers.
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+
+      await request(
+        'GET',
+        `${lookupPath('phone', LOOKUP_CUSTOMER.phone)}&businessId=biz-other`,
+      );
+
+      const params = lookupCustomerWhere().params as unknown[];
+      expect(params).toContain('biz-1');
+      expect(params).not.toContain('biz-other');
+    });
+
+    it('answers "not registered" rather than another tenant\'s customer', async () => {
+      // Behavioural half: with no row visible to this tenant, the honest answer
+      // is the same 404 a cashier sees for an unknown person — never a row.
+      mockDb.select.mockImplementation(() => {
+        const chain: any = {};
+        chain.from = vi.fn(() => chain);
+        chain.where = vi.fn(() => chain);
+        chain.orderBy = vi.fn(() => chain);
+        chain.limit = vi.fn(() => chain);
+        chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+        return chain;
+      });
+
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone), {
+        headers: { 'X-Business-Id': 'biz-other' },
+      });
+
+      expect(res.status).toBe(404);
+      const body = await res.json() as any;
+      expect(body.error.code).toBe('CUSTOMER_NOT_REGISTERED');
+      // No identity of any kind leaks on the miss path.
+      expect(JSON.stringify(body)).not.toContain('Ana');
+      expect(body.data).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 2. No list, ever
+  // -----------------------------------------------------------------------
+
+  describe('no list', () => {
+    it('requires an identifier', async () => {
+      seedLookup();
+      const res = await request('GET', '/v1/customers/lookup');
+      expect(res.status).toBe(400);
+      const body = await res.json() as any;
+      expect(body.error.code).toBe('LOOKUP_IDENTIFIER_REQUIRED');
+    });
+
+    it('refuses two identifiers at once', async () => {
+      // One person, one way of naming them. Two identifiers is either a
+      // confused client or the first step of a search that returns a list.
+      seedLookup();
+      const res = await request(
+        'GET',
+        `${lookupPath('phone', LOOKUP_CUSTOMER.phone)}&email=ana%40test.com`,
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json() as any;
+      expect(body.error.code).toBe('LOOKUP_IDENTIFIER_REQUIRED');
+    });
+
+    it('matches by equality, never by pattern', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+
+      await request('GET', lookupPath('email', LOOKUP_CUSTOMER.email));
+
+      const [where] = wheresFor('customers');
+      // A wildcard anywhere in the identifier is how `%` finds eleven people.
+      expect(where.params).not.toContain('%569%');
+      expect(where.sql).not.toMatch(/like/i);
+      // The whole identifier travels to SQL as one exact parameter.
+      expect(where.params).toContain(LOOKUP_CUSTOMER.email);
+    });
+
+    it('never narrows the match to several customers', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      expect(Array.isArray(body.data)).toBe(false);
+      expect(Array.isArray(body.data.items)).toBe(false);
+      expect(body.data.id).toBe(LOOKUP_CUSTOMER.id);
+    });
+
+    it('treats a wildcard a cashier typed as a literal, not a pattern', async () => {
+      // `%` is the whole attack: under LIKE it matches every customer in the
+      // tenant, which is the list this endpoint must not be able to produce.
+      //
+      // The suite's db mock resolves rows from a registry and never executes the
+      // WHERE, so this asserts on the statement the route built. Swapping `eq`
+      // for `ilike` is what breaks it.
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      await request('GET', lookupPath('phone', '%'));
+
+      const where = lookupCustomerWhere();
+      expect(where.sql).not.toMatch(/like/i);
+      expect(where.sql).toContain('"customers"."phone" =');
+      // The wildcard is a bound value, never concatenated into the SQL text.
+      expect(where.params).toContain('%');
+    });
+
+    it('binds the identifier as a parameter instead of splicing it into SQL', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      await request('GET', lookupPath('email', '%_@test.com'));
+
+      const where = lookupCustomerWhere();
+      expect(where.params).toContain('%_@test.com');
+      expect(where.sql).not.toContain('%');
+      expect(where.sql).not.toContain('_@');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 3. not_issued and not_saved are different facts
+  // -----------------------------------------------------------------------
+
+  describe('pass state honesty', () => {
+    it('reports not_issued as our gap, not as "has no pass"', async () => {
+      seedLookup({ pass: [{ state: 'not_issued', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      // Verbatim. The UI decides what to say; the API must not pre-judge it by
+      // collapsing the state into a boolean.
+      expect(body.data.pass.state).toBe('not_issued');
+      expect(body.data.pass.hasPass).toBeUndefined();
+    });
+
+    it('reports not_saved as Google having checked', async () => {
+      seedLookup({ pass: [{ state: 'not_saved', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      expect(body.data.pass.state).toBe('not_saved');
+      expect(body.data.pass.hasPass).toBeUndefined();
+    });
+
+    it('distinguishes no pass row at all from either state', async () => {
+      // No row means a save link was never issued — a third fact, and not the
+      // same as a row sitting at `not_issued`.
+      seedLookup({ pass: null });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      expect(body.data.pass.state).toBeNull();
+    });
+
+    it('keeps the three facts pairwise distinct across responses', async () => {
+      const seen: unknown[] = [];
+      for (const pass of [
+        null,
+        [{ state: 'not_issued', lastSyncedAt: null }],
+        [{ state: 'not_saved', lastSyncedAt: null }],
+        [{ state: 'issued', lastSyncedAt: null }],
+      ]) {
+        seedLookup({ pass });
+        const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+        seen.push(((await res.json()) as any).data.pass.state);
+      }
+
+      expect(new Set(seen).size).toBe(4);
+    });
+
+    it('carries lastSyncedAt so a stale answer is visible', async () => {
+      const syncedAt = new Date('2026-02-01T10:00:00.000Z');
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: syncedAt }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      expect(body.data.pass.lastSyncedAt).toBe(syncedAt.toISOString());
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 4. Two records for one phone is said out loud
+  // -----------------------------------------------------------------------
+
+  describe('ambiguous phone', () => {
+    it('refuses to pick one of two customers', async () => {
+      // `uq_customers_business_phone` should make this unreachable. The guard
+      // is here because a constraint can be absent on an older database, and
+      // `.limit(1)` would turn that into "we served a random person".
+      seedLookup({
+        customer: [
+          LOOKUP_CUSTOMER,
+          { ...LOOKUP_CUSTOMER, id: 'cust-other', fullName: 'Ana Ruiz Dos' },
+        ],
+      });
+
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+
+      expect(res.status).toBe(409);
+      const body = await res.json() as any;
+      expect(body.error.code).toBe('CUSTOMER_PHONE_AMBIGUOUS');
+      // A cashier cannot act on this, and the response must not hand them one
+      // of the two people to act on.
+      expect(body.data).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain('Ana Ruiz');
+      expect(JSON.stringify(body)).not.toContain('cust-other');
+    });
+
+    it('does not report ambiguity for a single match', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      expect(res.status).toBe(200);
+    });
+
+    it('reads at most two rows, so the conflict is detectable', async () => {
+      seedLookup({
+        customer: [LOOKUP_CUSTOMER, { ...LOOKUP_CUSTOMER, id: 'cust-other' }],
+      });
+      await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+
+      const [call] = callsFor('customers').filter((c) =>
+        IDENTIFIER_COLUMNS.some((col) => compile(c.where).sql.includes(col)),
+      );
+      // `.limit(1)` would make the ambiguity check unreachable: the conflict
+      // would be resolved by the database's row order, silently.
+      expect(call?.limit).toBe(2);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 5. An honest 404, distinguishable from a system error
+  // -----------------------------------------------------------------------
+
+  describe('honest 404', () => {
+    it('uses a code the UI can offer registration from', async () => {
+      seedLookup({ customer: null });
+      const res = await request('GET', lookupPath('phone', '+56999999999'));
+      expect(res.status).toBe(404);
+      const body = await res.json() as any;
+      expect(body.error.code).toBe('CUSTOMER_NOT_REGISTERED');
+      expect(typeof body.error.message).toBe('string');
+      expect(body.error.message.length).toBeGreaterThan(0);
+    });
+
+    it('is a different code from a bad request and from a refusal', async () => {
+      seedLookup({ customer: null });
+      const notFound = await (await request('GET', lookupPath('phone', '+56999999999'))).json() as any;
+      const badRequest = await (await request('GET', '/v1/customers/lookup')).json() as any;
+      const refused = await (
+        await request('GET', lookupPath('phone', '+56999999999'), {
+          headers: { 'X-User-Role': 'customer' },
+        })
+      ).json() as any;
+
+      const codes = [notFound, badRequest, refused].map((b) => b.error.code);
+      expect(new Set(codes).size).toBe(3);
+    });
+
+    it('treats a soft-deleted customer as not registered', async () => {
+      // The filter that hides soft-deleted rows is the only thing between a
+      // deleted customer and a 200 with their balance on the counter.
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+
+      const where = lookupCustomerWhere();
+      expect(where.sql).toContain('"customers"."deleted_at"');
+      expect(where.sql).toMatch(/is null/i);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 6. The QR path that already worked
+  // -----------------------------------------------------------------------
+
+  describe('QR path is untouched', () => {
+    it('still resolves a customer by globalId', async () => {
+      // No projection on this route — it selects the whole row.
+      setTableResults({
+        [key('customers')]: [LOOKUP_CUSTOMER],
+        [key('pointsTransactions', { balance_after: 1 })]: [{ balance_after: 320 }],
+        [key('membershipTiers')]: [LOOKUP_TIER],
+      });
+
+      const res = await request(
+        'GET',
+        `/v1/customers/by-global-id/${LOOKUP_CUSTOMER.globalId}`,
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body.data.id).toBe(LOOKUP_CUSTOMER.id);
+      expect(body.data.points).toBe(320);
+    });
+
+    it('still resolves a globalId through the new route too', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('globalId', LOOKUP_CUSTOMER.globalId));
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body.data.id).toBe(LOOKUP_CUSTOMER.id);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 7. No PII in the logs
+  // -----------------------------------------------------------------------
+
+  describe('no PII in logs', () => {
+    it('logs nothing identifiable on any lookup path', async () => {
+      const lines: string[] = [];
+      const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+        vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+          lines.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+        }),
+      );
+
+      const statuses: number[] = [];
+      try {
+        seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+        statuses.push(
+          (await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone))).status,
+        );
+
+        seedLookup({ customer: null });
+        statuses.push(
+          (await request('GET', lookupPath('phone', '+56999999999'))).status,
+        );
+
+        seedLookup({
+          customer: [LOOKUP_CUSTOMER, { ...LOOKUP_CUSTOMER, id: 'cust-other' }],
+        });
+        statuses.push(
+          (await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone))).status,
+        );
+
+        seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+        statuses.push(
+          (await request('GET', lookupPath('email', LOOKUP_CUSTOMER.email))).status,
+        );
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+
+      // The route really ran. Without this the assertions below also hold when
+      // no endpoint exists and every call 404s at the router, which is how a
+      // logging test passes without having exercised anything.
+      expect(statuses).toEqual([200, 404, 409, 200]);
+
+      const dump = lines.join('\n');
+      expect(dump).not.toContain(LOOKUP_CUSTOMER.phone);
+      expect(dump).not.toContain(LOOKUP_CUSTOMER.email);
+      expect(dump).not.toContain(LOOKUP_CUSTOMER.fullName);
+      expect(dump).not.toContain('+56999999999');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Roles: the counter surface, and why cashier belongs here
+  // -----------------------------------------------------------------------
+
+  describe('roles', () => {
+    it('serves a cashier', async () => {
+      // `users.role` defaults to 'cashier' (schema.ts). The person at the
+      // counter is the whole reason this endpoint exists, so a deny-list that
+      // excluded them would exclude the product.
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone), {
+        headers: { 'X-User-Role': 'cashier' },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('refuses a customer token', async () => {
+      // The customer app must not resolve other customers at the counter.
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone), {
+        headers: { 'X-User-Role': 'customer' },
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json() as any;
+      expect(body.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // The payload the counter renders
+  // -----------------------------------------------------------------------
+
+  describe('payload', () => {
+    it('carries the balance and tier the cashier needs', async () => {
+      seedLookup({
+        balance: 1250,
+        tier: [LOOKUP_TIER],
+        pass: [{ state: 'issued', lastSyncedAt: null }],
+      });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      expect(body.data.points).toBe(1250);
+      expect(body.data.currentTier).toBe('Oro');
+      expect(body.data.tier.multiplier).toBe(1.5);
+      expect(body.data.fullName).toBe('Ana Ruiz');
+    });
+
+    it('reports a null tier without failing', async () => {
+      seedLookup({
+        tier: null,
+        customer: [{ ...LOOKUP_CUSTOMER, currentTierId: null }],
+        pass: [{ state: 'issued', lastSyncedAt: null }],
+      });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      expect(res.status).toBe(200);
+      expect(body.data.tier).toBeNull();
+      expect(body.data.currentTier).toBeNull();
+    });
+
+    it('does not expose the member code', async () => {
+      // The pass accountId is derived from it; a counter lookup has no use for
+      // it and it is an identity value, so it stays out of this payload.
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      const res = await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+      const body = await res.json() as any;
+
+      expect(body.data.memberCode).toBeUndefined();
     });
   });
 });

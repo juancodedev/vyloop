@@ -1,4 +1,4 @@
-import { createDb, customers, customerEvents, consents, tenants, loyaltyPrograms, pointsTransactions, membershipTiers } from '@vyloop/db';
+import { createDb, customers, customerEvents, consents, tenants, loyaltyPrograms, pointsTransactions, membershipTiers, customerWalletPasses } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
 import { eq, and, isNull, like, or, count, desc, asc, sum, sql, type SQL } from 'drizzle-orm';
@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildCustomerRegisteredEvent } from './helpers';
+import { extractAuthHeaders, buildCustomerRegisteredEvent, requireOperatorRole } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -576,6 +576,282 @@ router.get('/v1/customers/by-global-id/:globalId', async (c) => {
       points: balanceRow?.balance_after ?? 0,
       currentTier: tier?.name ?? null,
       tier,
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POS lookup: GET /v1/customers/lookup
+// ---------------------------------------------------------------------------
+
+/** The three ways a cashier can name the person in front of them. */
+const LOOKUP_IDENTIFIERS = ['phone', 'email', 'globalId'] as const;
+type LookupIdentifier = (typeof LOOKUP_IDENTIFIERS)[number];
+
+/**
+ * Ambiguity code per identifier.
+ *
+ * Keyed by identifier rather than a single code because the cashier's next
+ * action differs: a duplicated phone is a data problem to escalate, while a
+ * duplicated email is usually the same person entered twice with different
+ * capitalisation. Telling them which one is broken saves a support call.
+ *
+ * Only the *kind* of identifier appears in the response. Never the value: this
+ * body is the one place where the answer "two people share this" would
+ * otherwise be the easiest place to leak the identifier itself.
+ */
+const LOOKUP_AMBIGUOUS_CODE: Record<LookupIdentifier, string> = {
+  phone: 'CUSTOMER_PHONE_AMBIGUOUS',
+  email: 'CUSTOMER_EMAIL_AMBIGUOUS',
+  globalId: 'CUSTOMER_GLOBAL_ID_AMBIGUOUS',
+};
+
+const LOOKUP_AMBIGUOUS_MESSAGE: Record<LookupIdentifier, string> = {
+  phone:
+    'More than one customer is registered with this phone number in this business. This is a data ' +
+    'problem, not something you can resolve at the counter — escalate it rather than charging one of them.',
+  email:
+    'More than one customer matches this email address in this business. This is a data problem, ' +
+    'not something you can resolve at the counter — escalate it rather than charging one of them.',
+  globalId:
+    'More than one customer shares this pass identifier in this business. This is a data problem, ' +
+    'not something you can resolve at the counter — escalate it rather than charging one of them.',
+};
+
+/**
+ * GET /v1/customers/lookup?phone=|email=|globalId=
+ *
+ * Resolve **one** customer for the person at the counter, with the pass state,
+ * the balance and the tier.
+ *
+ * Must be registered before `/v1/customers/:id`, or this path would be read as
+ * a customer whose id is the literal string `lookup`.
+ *
+ * ## Why there is no `q` parameter
+ *
+ * A free-text search box is the obvious design and the wrong one here. `q` plus
+ * `LIKE` is how "find the customer at the counter" quietly becomes "list the
+ * customers", and a list is a different product surface with different privacy
+ * consequences — one where every member of staff can enumerate the tenant's
+ * entire customer base, and where a mistyped digit returns someone's balance.
+ *
+ * So the caller names *which* identifier it has, and each one is matched by
+ * equality against a single column. `LIKE` appears nowhere in this route, which
+ * also means a `%` or `_` a cashier types is matched literally instead of
+ * becoming a wildcard that returns other people. The cost is that email matching
+ * is case-sensitive; that is the shape of `uq_customers_business_email`, and
+ * making it case-insensitive properly needs a functional index on `lower(email)`
+ * rather than an `ILIKE` with a wildcard hole in it.
+ *
+ * ## Why `.limit(2)`
+ *
+ * A lookup that cannot express "more than one" would have to pick. `.limit(1)`
+ * resolves a conflict by database row order, silently, and the cashier would
+ * charge whichever person happened to sort first. Reading two is the only way to
+ * *know* there is a conflict, and it still bounds the read.
+ *
+ * `uq_customers_business_phone` and `uq_customers_business_email` mean a
+ * duplicated phone or email should be impossible, which is exactly why this
+ * guard must not be the only thing standing between a broken constraint and a
+ * wrong customer at the counter: an older database without the constraint, or a
+ * constraint dropped by a migration, would otherwise be indistinguishable from a
+ * normal hit.
+ *
+ * ## Tenant isolation
+ *
+ * There is no row-level security on these tables — `enableRls()` and
+ * `createRlsPolicies()` in `packages/db/src/rls.ts` are never applied by any
+ * migration, and this worker opens no tenant session — so the `business_id`
+ * filter below is the *only* thing keeping one business from reading another's
+ * customers. It comes from the token the gateway injected and from nowhere else:
+ * a `businessId` in the query string is ignored, not honoured.
+ *
+ * ## The pass state is passed through verbatim
+ *
+ * `not_issued` and `not_saved` mean opposite things and this route does not
+ * flatten them. `not_issued` is a gap in *our* knowledge: a save link went out
+ * and no Google object was ever observed. `not_saved` is a definite answer from
+ * Google: we asked, and there is no object, so the customer has not saved the
+ * pass. `workers/wallet/src/callbacks.ts` calls `not_saved` "the most definite
+ * answer this system can ever receive".
+ *
+ * A `null` state is a third fact again — no pass row at all, meaning no save
+ * link was ever issued — so it is reported as `null` rather than as a state
+ * string. Collapsing any of the three is what would let a merchant be told a
+ * customer has no card when we simply never checked.
+ */
+router.get('/v1/customers/lookup', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  // The tenant is the token's tenant. Never a query parameter, never a body.
+  const businessId = auth.businessId;
+
+  const provided = LOOKUP_IDENTIFIERS.filter((key) => {
+    const value = c.req.query(key);
+    return typeof value === 'string' && value.trim() !== '';
+  });
+
+  // Exactly one. Zero means the caller has nothing to search by; two means it
+  // is confused about who it is asking for, and guessing which one it meant is
+  // how a lookup starts returning the wrong person.
+  if (provided.length !== 1) {
+    return c.json(
+      {
+        error: {
+          code: 'LOOKUP_IDENTIFIER_REQUIRED',
+          message:
+            'Provide exactly one of phone, email or globalId to look up a single customer. This ' +
+            'endpoint resolves one person, not a list.',
+        },
+      },
+      400,
+    );
+  }
+
+  const identifier = provided[0]!;
+  const value = c.req.query(identifier)!.trim();
+
+  // Equality on one column, always. `eq` and never `ilike`: an `ILIKE` would let
+  // a `%` in the query string widen this into a search across the tenant.
+  const match =
+    identifier === 'phone'
+      ? eq(customers.phone, value)
+      : identifier === 'email'
+        ? eq(customers.email, value)
+        : eq(customers.globalId, value);
+
+  const db = createDb(c.env.DATABASE_URL);
+
+  // `.limit(2)` — see the note above. Two is enough to detect a conflict and
+  // still bounds what a single request can pull.
+  const matches = await db
+    .select({
+      id: customers.id,
+      globalId: customers.globalId,
+      fullName: customers.fullName,
+      phone: customers.phone,
+      email: customers.email,
+      currentTierId: customers.currentTierId,
+    })
+    .from(customers)
+    .where(and(match, eq(customers.businessId, businessId), isNull(customers.deletedAt)))
+    .limit(2);
+
+  if (matches.length === 0) {
+    // A distinct code from a bad request and from a 5xx, because the UI's next
+    // action differs: this one can offer to register the person standing there.
+    return c.json(
+      {
+        error: {
+          code: 'CUSTOMER_NOT_REGISTERED',
+          message:
+            'No customer is registered under that identifier in this business. You can register them now.',
+        },
+      },
+      404,
+    );
+  }
+
+  if (matches.length > 1) {
+    // Said out loud, never resolved by picking. No identity of either candidate
+    // appears here: the cashier cannot act on this, and handing them one of the
+    // two to act on is the failure this branch exists to prevent.
+    return c.json(
+      {
+        error: {
+          code: LOOKUP_AMBIGUOUS_CODE[identifier],
+          message: LOOKUP_AMBIGUOUS_MESSAGE[identifier],
+        },
+      },
+      409,
+    );
+  }
+
+  const customer = matches[0]!;
+
+  // Pass state, scoped to the same tenant as the customer read above. A pass row
+  // is keyed by customer_id alone, so without `tenant_id` a stale or wrong id
+  // would be indistinguishable from this customer's own row.
+  const [pass] = await db
+    .select({
+      state: customerWalletPasses.state,
+      lastSyncedAt: customerWalletPasses.lastSyncedAt,
+    })
+    .from(customerWalletPasses)
+    .where(
+      and(
+        eq(customerWalletPasses.customerId, customer.id),
+        eq(customerWalletPasses.tenantId, businessId),
+      ),
+    )
+    .limit(1);
+
+  // Balance: the most recent transaction's `balance_after`, never a sum of the
+  // deltas. `business_id` is redundant given the customer id is a primary key,
+  // and is here anyway so a wrong customer id cannot read another tenant's ledger.
+  const [balanceRow] = await db
+    .select({ balanceAfter: pointsTransactions.balanceAfter })
+    .from(pointsTransactions)
+    .where(
+      and(
+        eq(pointsTransactions.customerId, customer.id),
+        eq(pointsTransactions.businessId, businessId),
+      ),
+    )
+    .orderBy(desc(pointsTransactions.createdAt))
+    .limit(1);
+
+  let tier: { id: string; name: string; multiplier: number } | null = null;
+  if (customer.currentTierId) {
+    const [tierRow] = await db
+      .select({
+        id: membershipTiers.id,
+        name: membershipTiers.name,
+        multiplier: membershipTiers.multiplier,
+      })
+      .from(membershipTiers)
+      .where(
+        and(
+          eq(membershipTiers.id, customer.currentTierId),
+          eq(membershipTiers.businessId, businessId),
+        ),
+      )
+      .limit(1);
+
+    // Tiers are tenant-scoped rows, so a tier id pointing at another business is
+    // a data problem — reported as "no tier" rather than as their tier name.
+    if (tierRow) {
+      tier = {
+        id: tierRow.id,
+        name: tierRow.name,
+        multiplier: Number(tierRow.multiplier),
+      };
+    }
+  }
+
+  return c.json({
+    data: {
+      id: customer.id,
+      globalId: customer.globalId,
+      fullName: customer.fullName,
+      phone: customer.phone,
+      email: customer.email,
+      points: balanceRow?.balanceAfter ?? 0,
+      currentTier: tier?.name ?? null,
+      tier,
+      // Verbatim state plus the moment we last had a definite answer from Google.
+      // The counter needs to be able to say "we checked on Tuesday", which is
+      // what separates a real answer from a month-old cached one.
+      pass: {
+        state: pass?.state ?? null,
+        lastSyncedAt: pass?.lastSyncedAt ? pass.lastSyncedAt.toISOString() : null,
+      },
+      // No `memberCode`: it is the pass `accountId` and an identity value with
+      // no use at a counter, so it stays out of this payload on purpose.
     },
   });
 });

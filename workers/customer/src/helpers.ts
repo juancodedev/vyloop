@@ -47,6 +47,56 @@ export function extractAuthHeaders(c: Context): AuthHeaders {
 }
 
 // ---------------------------------------------------------------------------
+// Operator guard
+// ---------------------------------------------------------------------------
+
+const CUSTOMER_ROLE = 'customer';
+
+/** Stable, specific code. Callers branch on this rather than parsing prose. */
+export const OPERATOR_ROLE_REQUIRED = 'OPERATOR_ROLE_REQUIRED';
+
+export type OperatorRoleGuard =
+  | { ok: true }
+  | { ok: false; status: 403; code: string; message: string };
+
+/**
+ * Refuse the customer app's token on a route that serves the merchant's staff.
+ *
+ * ## Why this is a deny-list and not an allow-list
+ *
+ * It denies exactly one role, `customer`, and lets everything else through. That
+ * looks permissive and is deliberate: `users.role` defaults to `'cashier'`
+ * (`packages/db/src/schema.ts`), and the cashier is the person this endpoint
+ * exists for. An allow-list would have to enumerate every staff role the product
+ * will ever grow, and the day it missed one the POS would break for the staff
+ * member standing in front of the customer rather than fail closed somewhere
+ * harmless.
+ *
+ * The same guard in `workers/wallet/src/helpers.ts` protects Google's program
+ * record. It is duplicated rather than imported because two workers sharing a
+ * helper is how one of them ends up changing behaviour the other depends on.
+ *
+ * What this does *not* claim to be: an authorization decision. It answers "is
+ * this the customer app or staff?", and the answer to "which staff?" is the
+ * dashboard's problem, not this worker's. The surface is deliberately small —
+ * one customer at a time, never a list — which is what makes the permissive
+ * role acceptable here.
+ */
+export function requireOperatorRole(auth: AuthHeaders): OperatorRoleGuard {
+  if (auth.userRole === CUSTOMER_ROLE) {
+    return {
+      ok: false,
+      status: 403,
+      code: OPERATOR_ROLE_REQUIRED,
+      message:
+        'This endpoint is for the business staff at the counter. Your own profile is at GET /v1/customers/me.',
+    };
+  }
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // Event construction
 // ---------------------------------------------------------------------------
 
