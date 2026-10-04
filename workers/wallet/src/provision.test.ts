@@ -76,6 +76,28 @@ const CUSTOMER_WEB_APP = join(__dirname, '..', '..', '..', 'apps', 'customer-web
 /** The gateway's route table, for the "does this route exist" assertion. */
 const GATEWAY_INDEX = join(__dirname, '..', '..', '..', 'apps', 'gateway', 'src', 'index.ts');
 
+/** The gateway's robots module, which is where it declares the callback path. */
+const GATEWAY_ROBOTS = join(__dirname, '..', '..', '..', 'apps', 'gateway', 'src', 'robots.ts');
+
+/**
+ * The callback path as the **gateway** declares it, read by name.
+ *
+ * Read from `robots.ts` rather than matched inside `index.ts` because the
+ * gateway now states this path exactly once: `index.ts` keys both the auth
+ * exemption and the anonymous rate limit on the constant instead of repeating the
+ * string, which is the whole point of the constant. What this test exists to hold
+ * is that the URL handed to Google is the path the gateway declares — so it reads
+ * the declaration, wherever the package chooses to put it, instead of depending
+ * on a literal appearing somewhere specific.
+ *
+ * `apps/gateway/src/wallet-callback-path.contract.test.ts` is the mirror of this
+ * assertion, running from the other side.
+ */
+function gatewayDeclaredCallbackPath(): string | undefined {
+  const source = readFileSync(GATEWAY_ROBOTS, 'utf8');
+  return /export const WALLET_CALLBACK_PATH = '([^']*)'/.exec(source)?.[1];
+}
+
 let env: Record<string, unknown>;
 
 beforeEach(() => {
@@ -868,11 +890,12 @@ describe('provisionClass: the callback URL Google is given', () => {
     // The two sides of this feature name the same string, and a typo on either
     // one produces a 403 on every real delivery with a message about missing
     // headers — indistinguishable, from the outside, from a broken signature.
-    // So the exemption and the URL are asserted to agree.
-    const gateway = readFileSync(GATEWAY_INDEX, 'utf8');
+    // So the gateway's declaration and the URL Google is given are asserted to
+    // agree. `gatewayDeclaredCallbackPath` reads the gateway's own source, since
+    // this package does not depend on it.
     const configured = new URL(CALLBACK_URL).pathname;
 
-    expect(gateway).toContain(`'${configured}'`);
+    expect(gatewayDeclaredCallbackPath()).toBe(configured);
     // Mounted under `/v1/*`, which is where the auth middlewares run — so being
     // under it is the reason the exemption is load-bearing, not a detail.
     expect(configured.startsWith('/v1/')).toBe(true);

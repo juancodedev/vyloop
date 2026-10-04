@@ -16,7 +16,7 @@ import { provisionTenantClass } from './provision';
 import type { ProvisionOutcome } from './provision';
 import { reconcilePass } from './reconcile';
 import type { ReconcileOutcome } from './reconcile';
-import router from './routes';
+import router, { WALLET_CALLBACK_PATH } from './routes';
 import { runScheduledSweep } from './sweep';
 
 /**
@@ -90,13 +90,18 @@ const app = new Hono<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders 
  * below because there is no header to extract, and the signature — verified
  * inside the route before any database work — is what stands in for a token.
  *
- * Named as a constant rather than written inline in the `startsWith` so the
- * gateway, which has to exempt the same path from its own auth middleware, and
- * this file cannot drift apart on a typo. A misspelling here would not fail
- * loudly: it would 403 every real callback with a log line saying the headers
- * were missing.
+ * Re-exported from `routes.ts` rather than declared here, because the router is
+ * the module that registers the route and the exemption has to name whatever it
+ * registered. Two declarations in one package would be the same bug this file
+ * guards against across packages, one layer up: both copies would sit in green
+ * suites while the exemption and the route described different paths, and the
+ * result would be a 403 on a real delivery saying the headers were missing.
+ *
+ * A misspelling in either place still would not fail loudly, which is why the
+ * gateway's copy of this path is compared against `routes.ts` by
+ * `apps/gateway/src/wallet-callback-path.contract.test.ts`.
  */
-export const WALLET_CALLBACK_PATH = '/v1/wallet/google/callback';
+export { WALLET_CALLBACK_PATH };
 
 /**
  * The set of paths that arrive without a gateway-injected identity.
