@@ -2,12 +2,15 @@
  * TEMPORARY — a diagnostic that describes the shape of a Google Wallet callback
  * envelope, so `intermediate_key_unverified` can finally be explained.
  *
- * ## The fault this exists for
+ * **Still here on purpose, even though the cause is now known.** See "Why it is
+ * not deleted yet" below.
+ *
+ * ## The fault this existed for, and what it turned out to be
  *
  * `verifyPassCallback` refuses with `intermediate_key_unverified` when the
  * envelope ships intermediate-key signatures and none of them verifies under any
  * current Google root key. Production logged exactly that. Measured against the
- * real verifier, every other candidate is already eliminated by that code:
+ * real verifier, every other candidate is eliminated by that code:
  *
  * - The root key imports (`importedRootKeyCount: 1`, algorithm ECDSA P-256), so
  *   the silent-import path is out.
@@ -19,12 +22,19 @@
  *   with `unsupported_protocol`. A log line saying `intermediate_key_unverified`
  *   is itself proof that the envelope declared `ECv2SigningOnly`.
  *
- * What is left is one thing: **the bytes this worker signs are not the bytes
- * Google signed.** `callbacks.ts` builds them with Tink's `toLengthValue`,
- * transcribed from Google's Java sample and never run against a real envelope.
- * No test in this repository can close that gap, because a test-generated
- * envelope agrees with a test-generated expectation by construction — the two
- * would have to be wrong in exactly the same way.
+ * What was left turned out to be real: **the bytes this worker signed were not the
+ * bytes Google signed.** `callbacks.ts` wrote the length prefix as `uint16be`;
+ * the protocol is `uint32le`. That is fixed — see `callbacks.ts`, "The bug this
+ * file shipped with".
+ *
+ * ## Why it is not deleted yet
+ *
+ * The fix is not confirmed in production. No verifiable Google signature exists
+ * in this repository, so the derivation is pinned to Google's published spec and
+ * to the one real Google signature in the capture — not to an envelope this
+ * verifier accepted end to end. Until a live save is observed actually persisting
+ * a pass, this endpoint is the only instrument that can say what a real delivery
+ * looks like. Delete it once that is confirmed, and not before.
  *
  * ## What this returns, and why each field earns its place
  *
@@ -279,7 +289,8 @@ export interface EnvelopeCapture {
 // ---------------------------------------------------------------------------
 
 /**
- * Tink's `toLengthValue`: `uint16be(byteLength)` then the UTF-8 bytes, per part.
+ * The length-prefixed concatenation: each part's **UTF-8 byte length as a
+ * 32-bit little-endian integer**, then its UTF-8 bytes.
  *
  * ## Why this is a second implementation and not an import
  *
@@ -288,22 +299,37 @@ export interface EnvelopeCapture {
  * the digest would agree with a wrong implementation by construction and the
  * comparison would prove nothing. The two have to be able to disagree, so this is
  * written out again rather than shared.
+ *
+ * ## Why it is restated from the specification, not from `callbacks.ts`
+ *
+ * This copy used to say `uint16be`, which is what `callbacks.ts` said — the two
+ * agreeing with each other was the whole reason the bug went unnoticed, since
+ * this file's test asserted the digest agreed with this copy and so agreed with
+ * whatever `callbacks.ts` did. Both now follow Google's published derivation
+ * ("the byte length of each component is 4 bytes in little-endian format")
+ * independently, so if either drifts the digests stop matching and
+ * `envelope-capture.test.ts` fails.
+ *
+ * @see https://developers.google.com/pay/api/web/guides/resources/payment-data-cryptography
  */
 function toLengthValue(parts: readonly string[]): Bytes {
+  const LENGTH_PREFIX_BYTES = 4;
   let total = 0;
   const encoded = parts.map((part) => {
     const bytes = new TextEncoder().encode(part);
-    total += 2 + bytes.length;
+    total += LENGTH_PREFIX_BYTES + bytes.length;
     return bytes;
   });
 
   const out = new Uint8Array(total);
   let offset = 0;
   for (const bytes of encoded) {
-    out[offset] = (bytes.length >> 8) & 0xff;
-    out[offset + 1] = bytes.length & 0xff;
-    out.set(bytes, offset + 2);
-    offset += 2 + bytes.length;
+    out[offset] = bytes.length & 0xff;
+    out[offset + 1] = (bytes.length >>> 8) & 0xff;
+    out[offset + 2] = (bytes.length >>> 16) & 0xff;
+    out[offset + 3] = (bytes.length >>> 24) & 0xff;
+    out.set(bytes, offset + LENGTH_PREFIX_BYTES);
+    offset += LENGTH_PREFIX_BYTES + bytes.length;
   }
   return out;
 }
