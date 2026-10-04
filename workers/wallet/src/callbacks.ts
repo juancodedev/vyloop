@@ -476,11 +476,16 @@ function base64ToBytes(value: string): Bytes {
  * message they belong to; without it, an envelope signed for a different issuer
  * would verify here.
  *
- * Two bytes of length is not a limitation to work around but a fact about the
- * format: it matches Google's own verifier exactly, and a three-byte prefix would
- * simply never verify.
+ * ## Exported, and why that is the point
+ *
+ * The tests import this function rather than restating it. A restatement is
+ * circular in exactly the way this function's bug lived: if the test file
+ * carries its own copy of the prefix rule, the copy and the production code can
+ * be wrong in the same way and every test still passes. That is not a
+ * hypothetical — it is what happened here for months. See
+ * `callbacks.signed-bytes.test.ts`, whose vectors are literal byte strings.
  */
-function toLengthValue(parts: readonly string[]): Bytes {
+export function toLengthValue(parts: readonly string[]): Bytes {
   let total = 0;
   const encoded = parts.map((part) => {
     const bytes = utf8(part);
@@ -525,8 +530,14 @@ function toLengthValue(parts: readonly string[]): Bytes {
  * a long-form length, an `R` or `S` wider than 32 bytes. A message this parser
  * rejects is refused by the verifier too, so a strict parser cannot cause a
  * false rejection of a signature Google actually produced.
+ *
+ * ## Exported, for the same reason as `toLengthValue`
+ *
+ * The known-answer tests call this parser directly instead of reaching it
+ * through a test-generated signature, which by construction is always one this
+ * parser can read. See `callbacks.signed-bytes.test.ts`.
  */
-function derSignatureToP1363(der: Uint8Array): Bytes {
+export function derSignatureToP1363(der: Uint8Array): Bytes {
   const P256_FIELD_BYTES = 32;
 
   // Sequence header, short form only. A long-form length here would mean a
