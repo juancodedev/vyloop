@@ -79,10 +79,13 @@ const WEBHOOK_PREFIX = '/v1/communication/webhook';
  * outside this module, by asserting the sibling answers 401.
  *
  * The string is declared twice — here via `./robots`, and in the worker — because
- * this package must not take a runtime dependency on the service behind it. The
- * narrowing is asserted; the agreement between the two declarations is not, so a
- * one-sided rename would 403 every real delivery with a message about missing
- * headers, which is the failure mode nobody would read as a routing bug.
+ * this package must not take a runtime dependency on the service behind it. That
+ * dependency direction is the right one for a public face, so the agreement is
+ * asserted by reading the worker's source instead of importing it:
+ * `wallet-callback-path.contract.test.ts` compares the two and fails in either
+ * direction. Before that file existed the narrowing was asserted and the agreement
+ * was not, so a one-sided rename 403'd every real delivery with a message about
+ * missing headers — the failure mode nobody would read as a routing bug.
  *
  * ## The three middlewares, and why the list is repeated
  *
@@ -102,11 +105,12 @@ const WEBHOOK_PREFIX = '/v1/communication/webhook';
  *
  * Exported so the list can be asserted directly rather than only inferred from a
  * request. A public-path predicate that cannot be inspected is a predicate nobody
- * can prove is still narrow. `index.test.ts` currently holds that narrowness end
- * to end instead — it drives `app.fetch` and asserts that
- * `/v1/wallet/google/callback/admin` and the other `/v1/wallet/*` paths answer
- * 401 — which is the guarantee that actually matters, since it is the middleware
- * chain rather than this function that decides.
+ * can prove is still narrow. Two files hold that narrowness: `index.test.ts`
+ * drives `app.fetch` and asserts that `/v1/wallet/google/callback/admin` and the
+ * other `/v1/wallet/*` paths answer 401, and
+ * `wallet-callback-path.contract.test.ts` asserts it off the predicate directly
+ * and end to end. The middleware chain, not this function, is what decides — but
+ * a predicate that cannot be inspected cannot be argued about either.
  */
 export function isPublicApiPath(path: string, method: string): boolean {
   return (
@@ -215,7 +219,7 @@ app.use('/v1/*', async (c, next) => {
       // security control — the signature is.
       anonymousLimits: {
         '/v1/auth/business/signup': SIGNUP_LIMIT_PER_WINDOW,
-        '/v1/wallet/google/callback': WALLET_CALLBACK_LIMIT_PER_WINDOW,
+        [WALLET_CALLBACK_PATH]: WALLET_CALLBACK_LIMIT_PER_WINDOW,
       },
       windowSeconds: DEFAULT_WINDOW,
 
