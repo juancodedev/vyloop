@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
-import { ENVELOPE_CAPTURE_PATH } from './envelope-capture';
 import type { AuthHeaders, WalletBindings } from './helpers';
 import {
   extractAuthHeaders,
@@ -100,21 +99,15 @@ const app = new Hono<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders 
 export const WALLET_CALLBACK_PATH = '/v1/wallet/google/callback';
 
 /**
- * TEMPORARY — the envelope capture, public for the same reason.
+ * The set of paths that arrive without a gateway-injected identity.
  *
- * It has to be reachable from wherever Google POSTs, or it captures nothing, and
- * a real callback arrives with no JWT, no `X-Business-Id` and no `X-User-Role`:
- * exactly the shape the exemption above exists for.
- *
- * A second entry in a list that documents itself as exactly one route is a real
- * cost, and it is why `ENVELOPE_CAPTURE_PATH` is named in one place and asserted
- * from both sides: the exemption is worthless if the route and this name drift
- * apart, and the symptom of that drift is a 401 that says nothing about the cause.
- * Deleting the route means deleting this line, and
- * `envelope-capture-route.test.ts` fails once `ENVELOPE_CAPTURE_SUPERSEDED_BY` is
- * set so the pair cannot be forgotten.
+ * One entry, because there is one such route. It was two while the temporary
+ * envelope capture existed, and it is worth naming what that second entry cost:
+ * a public exemption is a hole cut in the auth middleware, so every entry has to
+ * be justified by a route that still exists. A stale name here does not fail
+ * loudly — it 403s a route that is gone, or leaves a live route authenticated.
  */
-const PUBLIC_PATHS: ReadonlySet<string> = new Set([WALLET_CALLBACK_PATH, ENVELOPE_CAPTURE_PATH]);
+const PUBLIC_PATHS: ReadonlySet<string> = new Set([WALLET_CALLBACK_PATH]);
 
 // ---------------------------------------------------------------------------
 // Global middleware: auth header extraction
@@ -190,7 +183,6 @@ export * from './callback-handler';
 export * from './balance';
 export * from './class';
 export * from './drizzle-store';
-export * from './envelope-capture';
 export * from './google-client';
 export * from './helpers';
 export * from './ids';
