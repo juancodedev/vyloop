@@ -215,6 +215,114 @@
   padding: 16px 20px;
 }
 
+/* ── Search box ── */
+
+.lookupForm {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.lookupInput {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface, #fff);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md, 8px);
+}
+
+.lookupInput:focus {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -1px;
+}
+
+.lookupBtn {
+  padding: 10px 16px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  font-family: inherit;
+  color: var(--text-inverse);
+  background: var(--brand-500);
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+}
+
+.lookupBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lookupNote,
+.lookupWarn {
+  margin: 0 0 10px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.lookupNote {
+  color: var(--text-secondary);
+}
+
+.lookupWarn {
+  color: var(--warning-700, #b45309);
+}
+
+/* ── Pass badge ── */
+
+.passBox {
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-left-width: 3px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface, #fff);
+}
+
+.passBox[data-tone='ok'] {
+  border-left-color: var(--success-500, #16a34a);
+}
+
+.passBox[data-tone='warn'] {
+  border-left-color: var(--warning-500, #f59e0b);
+}
+
+/* An unverified state is styled as *our* pending work, deliberately the same
+   neutral grey as the surface. Colouring it like a failure would tell the
+   cashier the customer did something wrong when the gap is ours. */
+.passBox[data-tone='unknown'] {
+  border-left-color: var(--border-strong, #9ca3af);
+  border-left-style: dashed;
+}
+
+.passHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.passLabel {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+
+.passDate {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.passDetail {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 .scanBtn {
   display: flex;
   align-items: center;
