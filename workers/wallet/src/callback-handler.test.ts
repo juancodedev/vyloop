@@ -172,16 +172,22 @@ class FakeStore implements WalletStore {
 // Signed envelopes
 // ---------------------------------------------------------------------------
 
+/**
+ * The protocol's length-prefixed concatenation: four bytes of UTF-8 byte length,
+ * little-endian, per part. Restated from Google's specification rather than
+ * imported, and via `DataView` rather than shifts, so it is not a copy of the
+ * code it exercises. See `callbacks.signed-bytes.test.ts` for pinned vectors.
+ */
 function toLengthValue(parts: readonly string[]): Uint8Array<ArrayBuffer> {
   const encoded = parts.map((part) => new TextEncoder().encode(part));
-  const total = encoded.reduce((sum, bytes) => sum + 2 + bytes.length, 0);
+  const total = encoded.reduce((sum, bytes) => sum + 4 + bytes.length, 0);
   const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
   let offset = 0;
   for (const bytes of encoded) {
-    out[offset] = (bytes.length >> 8) & 0xff;
-    out[offset + 1] = bytes.length & 0xff;
-    out.set(bytes, offset + 2);
-    offset += 2 + bytes.length;
+    view.setUint32(offset, bytes.length, true);
+    out.set(bytes, offset + 4);
+    offset += 4 + bytes.length;
   }
   return out;
 }
