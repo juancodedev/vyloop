@@ -12,6 +12,13 @@ import {
 import type { PassCallbackEvent } from './callbacks';
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
 import {
+  ENVELOPE_CAPTURE_PATH,
+  ENVELOPE_CAPTURE_REVIEW_BY,
+  ENVELOPE_CAPTURE_SUPERSEDED_BY,
+  ENVELOPE_CAPTURE_TICKET,
+  captureCallbackEnvelope,
+} from './envelope-capture';
+import {
   GoogleWalletApiError,
   GoogleWalletAuthError,
   googleReviewStatusFor,
@@ -238,6 +245,113 @@ router.post('/v1/wallet/google/callback', async (c) => {
     `[wallet] Google Wallet callback applied: ${outcome.eventType} set the pass to ${outcome.state}.`,
   );
   return c.json({ data: { applied: true, state: outcome.state } });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/wallet/google/envelope-capture — TEMPORARY, DELETE AFTER THE FIX
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/wallet/google/envelope-capture
+ *
+ * **TEMPORARY DIAGNOSTIC. Delete this route once `ENVELOPE_CAPTURE_SUPERSEDED_BY`
+ * is set.** It exists only because production refuses real callbacks with
+ * `intermediate_key_unverified` and the cause cannot be found from a log line.
+ * See `envelope-capture.ts` for the full reasoning and the deletion criteria.
+ *
+ * ## Why this is a route and not a log line
+ *
+ * The failure is that the **bytes this worker signs are not the bytes Google
+ * signed** — `toLengthValue` was transcribed from Tink and never run against a
+ * real envelope. The existing rejection log already answers what it could: one
+ * signature, one root key, imported. What it cannot answer is the shape of what
+ * arrived, and that needs the body itself.
+ *
+ * ## What it does and does not do
+ *
+ * Describes the envelope and returns it. It **does not verify anything**, does not
+ * write to the database, does not call Google, and emits no key byte, signature
+ * byte or personal data — only field names, lengths, protocol values and SHA-256
+ * fingerprints of the signed bytes. The operator holds the raw envelope locally,
+ * so the report's job is to make the comparison possible, not to move bytes.
+ *
+ * The report is logged as well as returned: the return value is for a `curl`, the
+ * log line is for a delivery that happens while nobody is watching, which is the
+ * normal case for a callback.
+ *
+ * ## The public surface, and why it is accepted
+ *
+ * This is **unauthenticated and public**, deliberately, because it has to be
+ * reachable from wherever Google POSTs or it captures nothing. That is a real cost
+ * and it is worth stating plainly rather than waving at:
+ *
+ * - **It reads nothing and stores nothing.** No database, no Google call, no
+ *   filesystem. The worst a request can do is spend a JSON parse and two SHA-256
+ *   digests, which is bounded by `MAX_BODY_BYTES` and refused above it.
+ * - **It cannot become an oracle.** It answers no question about any secret: the
+ *   only inputs are the requester's own body and this worker's own public issuer
+ *   id. Google's key service is not consulted, so no signature can be replayed
+ *   against it, and the endpoint emits nothing reusable.
+ * - **What it does publish is already public.** The envelope's field names and its
+ *   protocol version are in Google's own documentation. The interesting part — the
+ *   intermediate key and the signatures — is reported only as lengths, edge bytes
+ *   and digests.
+ * - **Log injection is the real residual risk**, and it is bounded rather than
+ *   trusted: the one field an attacker controls at length, `signedMessage`'s
+ *   prefix, is capped, and field names are capped and counted. Nothing
+ *   attacker-controlled is ever used as a log key or a lookup.
+ * - **Amplification is bounded at the gateway.** An explicit anonymous rate limit
+ *   is declared for this path, because the repo's limiter leaves routes absent
+ *   from `anonymousLimits` unlimited and this one is public by necessity.
+ *
+ * What it is *not* is a security control, and it is not asked to be one. It grants
+ * no access, discloses no material, and changes no state: deleting it costs the
+ * investigation a few days and nothing else.
+ *
+ * ## Errors
+ *
+ * Always 200 with a report. This endpoint is sent to observe what arrives,
+ * including when what arrives is broken, so a body it cannot parse is reported as
+ * a finding (`parsed: false`) rather than turned into a 4xx — throwing away the
+ * evidence is the one outcome that cannot be recovered from. `captureCallbackEnvelope`
+ * is total, so there is nothing left to fail.
+ */
+router.post(ENVELOPE_CAPTURE_PATH, async (c) => {
+  // Text, exactly once, and never parsed here: the whole point is to describe
+  // what arrived, so re-serialising or pre-validating it would destroy the
+  // evidence. The capture does its own parsing and reports on it.
+  let rawBody: string;
+  try {
+    rawBody = await c.req.text();
+  } catch {
+    return c.json(
+      {
+        ticket: ENVELOPE_CAPTURE_TICKET,
+        reviewBy: ENVELOPE_CAPTURE_REVIEW_BY,
+        supersededBy: ENVELOPE_CAPTURE_SUPERSEDED_BY,
+        capture: null,
+        notes: ['The request body could not be read.'],
+      },
+      400,
+    );
+  }
+
+  const capture = await captureCallbackEnvelope(rawBody, c.env.GOOGLE_WALLET_ISSUER_ID);
+
+  // The log line, because a real delivery usually happens with nobody watching.
+  // Digests, lengths and names only — see the module header.
+  console.warn(
+    `[wallet] ENVELOPE CAPTURE (${ENVELOPE_CAPTURE_TICKET}, delete after ${ENVELOPE_CAPTURE_REVIEW_BY}): ` +
+      JSON.stringify(capture),
+  );
+
+  return c.json({
+    // In the body as well, so a reader never has to know a log line exists.
+    ticket: ENVELOPE_CAPTURE_TICKET,
+    reviewBy: ENVELOPE_CAPTURE_REVIEW_BY,
+    supersededBy: ENVELOPE_CAPTURE_SUPERSEDED_BY,
+    capture,
+  });
 });
 
 /** A refusal, in this worker's error envelope. */
