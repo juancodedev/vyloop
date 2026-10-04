@@ -104,34 +104,38 @@
  * - The **root key set** unusable in any way → `no_usable_root_key`.
  * - The **message signature** not verifying → `message_unverified`.
  *
- * ### The unresolved production failure this exposed
+* ### The unresolved production failure this exposed
  *
- * Relaxing the empty case does **not** fix the production rejections. Those were
- * logged as `intermediate_key_unverified`, which this verifier only ever emits
- * when signatures were present and none verified — a different fault, with two
- * live candidates and no confirmation between them:
- *
- * 1. The **signed bytes** for the key signature are wrong. The derivation below
- *    is transcribed from Tink and, as of this writing, has never been run
- *    against a real envelope. Nothing in this repository closes that gap, and
- *    the fixture this file's tests use cannot: a test-generated envelope agrees
- *    with a test-generated expectation by construction.
- * 2. A **root key failed to import** and was silently dropped. See
- *    `importP256PublicKey`, which swallows every import error.
- *
- * Neither is fixed here. What is fixed here is that the next occurrence is
- * *diagnosable*: rejections now carry counts and key descriptions — never key
- * material — so the two candidates can be told apart from a log line.
- *
+ * Relaxing the empty case did **not** fix the production rejections, which were
+* logged as `intermediate_key_unverified` — a code this verifier only emits when
+* signatures were present and none verified. That pointed at two live candidates
+* with no confirmation between them: the signed bytes (transcribed from Tink and,
+* as of that writing, never run against a real envelope) and a root key that
+* failed to import and was silently dropped by `importP256PublicKey`.
+*
+* **Both questions are now answered.** The root key was fine — the production
+* diagnostics reported `importedRootKeyCount: 1` before the fix, and the second
+* candidate is also refuted by the error code itself, since the DER parses
+* cleanly and `anySignatureVerifies` has no `try`/`catch`. The signed bytes were
+* the fault: a `uint16be` prefix where the protocol requires `uint32le`. The
+* diagnosis, the evidence, and the tests that now hold the line are under "The
+* bug this file shipped with" below.
+*
+* What that episode is worth keeping is the diagnostic: rejections carry counts
+* and key descriptions — never key material — so the next occurrence is
+* *diagnosable* from a log line rather than a guess. That part did its job.
+*
  * Each signature covers a **length-prefixed concatenation**, not the raw string.
- * For each part in order, the signed bytes are `uint16be(utf8ByteLength)` then
- * the UTF-8 bytes — Tink's `toLengthValue`. This is the same domain-separation
- * scheme Google Pay's encryption uses, and getting it wrong yields a
- * verification failure that looks identical to a forged message. It is
- * implemented and unit-tested here rather than described.
+ * For each part in order, the signed bytes are the part's **UTF-8 byte length as
+ * a 32-bit little-endian integer**, then the UTF-8 bytes:
  *
- * - Key signature: `toLengthValue("GooglePayPasses", "ECv2SigningOnly", signedKey)`
- * - Message signature: `toLengthValue("GooglePayPasses", <ISSUER_ID>, "ECv2SigningOnly", signedMessage)`
+ * - Key signature: `("GooglePayPasses", "ECv2SigningOnly", signedKey)`
+ * - Message signature: `("GooglePayPasses", <ISSUER_ID>, "ECv2SigningOnly", signedMessage)`
+ *
+ * This is the same domain-separation scheme Google Pay's encryption uses, and
+ * getting it wrong yields a verification failure that looks identical to a forged
+ * message. It is implemented, and pinned to literal byte vectors in
+ * `callbacks.signed-bytes.test.ts`.
  *
  * The message signature includes the **issuer id**, so a callback is bound to
  * the issuer it was issued for: a valid envelope from another issuer account does
@@ -148,6 +152,37 @@
  * the failure mode this file exists to prevent: a callback endpoint that accepts
  * forgeries has worse properties than one that rejects everything.
  *
+ * ## The bug this file shipped with, and how the gap closed
+ *
+ * The first version of that transcription wrote the length prefix as
+ * **`uint16be`**. The protocol is `uint32le`. Production refused every real
+ * callback with `intermediate_key_unverified` for weeks and no test failed,
+ * because every signature in the suite was produced by WebCrypto from a key
+ * generated in the same test file — so the envelope and the expectation were
+ * wrong in exactly the same way, and a self-consistent test cannot see that.
+ *
+ * The candidate list this file used to carry had two entries, and the second one
+ * — a root key that failed to import and was silently dropped — was already
+ * ruled out by the production diagnostics before the fix landed
+ * (`importedRootKeyCount: 1`). What is left was the signed bytes, and the DER
+ * had parsed cleanly: `anySignatureVerifies` has no `try`/`catch`, so a parse
+ * failure would have surfaced as `message_unverified`, not
+ * `intermediate_key_unverified`.
+ *
+ * Three things changed so the gap cannot reopen silently:
+ *
+ * 1. `toLengthValue` and `derSignatureToP1363` are exported, so their tests call
+ *    them instead of restating them.
+ * 2. `callbacks.signed-bytes.test.ts` pins both against **literal byte strings**,
+ *    including vectors chosen because `uint16be` and `uint32le` disagree on them
+ *    (a 128-byte part, a 256-byte part) and a **real Google signature** from the
+ *    live capture in `callbacks.test.ts`.
+ * 3. That capture's provenance is asserted, including that it carries no
+ *    signature at all. **No verifiable Google signature exists in this
+ *    repository**, which is the honest reason the bug survived: it is still
+ *    inferred from the specification plus Google's own published signature, not
+ *    from an envelope this verifier accepted end to end.
+ *
  * ## The DER detail, which is not optional
  *
  * Google emits **DER**-encoded ECDSA signatures (Tink's verifier is configured
@@ -161,7 +196,20 @@
  * rather than relying on leniency is what makes this correct on every runtime
  * rather than on the one the tests happen to run.
  *
+ * ### How strict the parser may safely be
+ *
+ * The parser refuses a long-form length, and that is only safe because of a
+ * bound. A P-256 ECDSA signature is `30 <len> 02 <lr> <r> 02 <ls> <s>`: six
+ * bytes of framing plus two integers, each at most 33 bytes (a 32-byte field
+ * whose top bit is set arrives with a `0x00` sign byte; anything wider is not a
+ * P-256 value). So the largest possible DER is `6 + 33 + 33 = 72` bytes, and the
+ * long form only starts at 127. The 33-byte `INTEGER` is the common case rather
+ * than the pathological one — about half of all real signatures need the sign
+ * byte — and the real Google signature pinned in `callbacks.signed-bytes.test.ts`
+ * is one of them.
+ *
  * @see https://developers.google.com/wallet/retail/loyalty-cards/use-cases/use-callbacks-for-saves-and-deletions
+ * @see https://developers.google.com/pay/api/web/guides/resources/payment-data-cryptography
  */
 
 // ---------------------------------------------------------------------------
@@ -439,6 +487,15 @@ function utf8(text: string): Bytes {
 }
 
 /**
+ * Bytes of length prefix before each part's bytes.
+ *
+ * Named because it is a protocol constant rather than an implementation detail:
+ * it changes the size of every signed string, and both signed-bytes sizes are
+ * pinned in `callbacks.signed-bytes.test.ts` so changing it fails there first.
+ */
+const LENGTH_PREFIX_BYTES = 4;
+
+/**
  * Base64 → bytes.
  *
  * `atob` yields a latin1 string, so each code unit is one byte. `atob` rather
@@ -462,39 +519,76 @@ function base64ToBytes(value: string): Bytes {
 }
 
 /**
- * Tink's `toLengthValue`: the length-prefixed concatenation that is actually
- * signed.
+ * The length-prefixed concatenation that is actually signed.
  *
- * For each part, in order: `uint16be(byteLength)` followed by the UTF-8 bytes.
+ * For each part, in order: the part's **UTF-8 byte length as a 32-bit
+ * little-endian integer**, then the UTF-8 bytes.
  *
- * The prefix is what makes the encoding injective. Without it, the parts
+ * ## The prefix is four bytes, little-endian — and that is load-bearing
+ *
+ * Google's payment-data cryptography guide gives this derivation for both
+ * signed strings this module builds and states the prefix width and byte order
+ * outright: "The byte length of each component is 4 bytes in little-endian
+ * format."
+ *
+ * This function used to write a **two-byte big-endian** prefix, transcribed
+ * from Tink and never run against an envelope Google had signed. It refused
+ * every real callback with `intermediate_key_unverified` for weeks, and no test
+ * caught it, because every signature in the suite was produced by WebCrypto from
+ * a key generated in the same test file: the envelope and the expectation were
+ * wrong in the same way, which is the one arrangement a self-consistent test
+ * cannot see. See `callbacks.signed-bytes.test.ts`, which pins the vectors as
+ * literal bytes, and `REAL_LOYALTY_CALLBACK`'s provenance record in
+ * `callbacks.test.ts`, which is the standing statement that no verifiable Google
+ * signature exists in this repository.
+ *
+ * @see https://developers.google.com/pay/api/web/guides/resources/payment-data-cryptography
+ *
+ * ## Why the prefix exists at all
+ *
+ * It is what makes the encoding injective. Without it, the parts `("ab", "c")`
+ * and `("a", "bc")` — or, closer to the real thing,
  * `("GooglePayPasses", "ECv2SigningOnly", "ab")` and
- * `("GooglePayPassesE", "Cv2SigningOnly", "ab")` — or far more simply
- * `("ab", "c")` and `("a", "bc")` — would produce identical signed bytes, so a
- * signature over one could be replayed as a signature over the other. Google
- * relies on this to bind `senderId`, `recipientId` and `protocolVersion` to the
- * message they belong to; without it, an envelope signed for a different issuer
- * would verify here.
+ * `("GooglePayPassesE", "Cv2SigningOnly", "ab")` — would produce identical signed
+ * bytes, so a signature over one could be replayed as a signature over the other.
+ * Google relies on this to bind `senderId`, `recipientId` and `protocolVersion`
+ * to the message they belong to; without it, an envelope signed for a different
+ * issuer would verify here.
  *
- * Two bytes of length is not a limitation to work around but a fact about the
- * format: it matches Google's own verifier exactly, and a three-byte prefix would
- * simply never verify.
+ * ## The width is not a limit to work around
+ *
+ * Four bytes is a fact about the format, and a part longer than `2^32 - 1`
+ * bytes cannot arrive: the largest input is one `signedMessage`, bounded by the
+ * request body limit. A five-byte prefix would simply never verify.
+ *
+ * ## Exported, and why that is the point
+ *
+ * The tests import this function rather than restating it. A restatement is
+ * circular in exactly the way this function's bug lived: if the test file
+ * carries its own copy of the prefix rule, the copy and the production code can
+ * be wrong in the same way and every test still passes. That is not
+ * hypothetical — it is what happened here for months. See
+ * `callbacks.signed-bytes.test.ts`, whose vectors are literal byte strings.
  */
-function toLengthValue(parts: readonly string[]): Bytes {
+export function toLengthValue(parts: readonly string[]): Bytes {
   let total = 0;
   const encoded = parts.map((part) => {
     const bytes = utf8(part);
-    total += 2 + bytes.length;
+    total += LENGTH_PREFIX_BYTES + bytes.length;
     return bytes;
   });
 
   const out = new Uint8Array(total);
   let offset = 0;
   for (const bytes of encoded) {
-    out[offset] = (bytes.length >> 8) & 0xff;
-    out[offset + 1] = bytes.length & 0xff;
-    out.set(bytes, offset + 2);
-    offset += 2 + bytes.length;
+    // Little-endian: the significant byte comes first. A part of 15 bytes is
+    // `0f 00 00 00` and a part of 128 is `80 00 00 00`.
+    out[offset] = bytes.length & 0xff;
+    out[offset + 1] = (bytes.length >>> 8) & 0xff;
+    out[offset + 2] = (bytes.length >>> 16) & 0xff;
+    out[offset + 3] = (bytes.length >>> 24) & 0xff;
+    out.set(bytes, offset + LENGTH_PREFIX_BYTES);
+    offset += LENGTH_PREFIX_BYTES + bytes.length;
   }
   return out;
 }
@@ -525,8 +619,14 @@ function toLengthValue(parts: readonly string[]): Bytes {
  * a long-form length, an `R` or `S` wider than 32 bytes. A message this parser
  * rejects is refused by the verifier too, so a strict parser cannot cause a
  * false rejection of a signature Google actually produced.
+ *
+ * ## Exported, for the same reason as `toLengthValue`
+ *
+ * The known-answer tests call this parser directly instead of reaching it
+ * through a test-generated signature, which by construction is always one this
+ * parser can read. See `callbacks.signed-bytes.test.ts`.
  */
-function derSignatureToP1363(der: Uint8Array): Bytes {
+export function derSignatureToP1363(der: Uint8Array): Bytes {
   const P256_FIELD_BYTES = 32;
 
   // Sequence header, short form only. A long-form length here would mean a

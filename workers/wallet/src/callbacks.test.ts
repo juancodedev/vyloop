@@ -5,15 +5,26 @@
  *
  * Every signature here is produced by WebCrypto at test time, from key material
  * generated in the same test and never written to disk. There are no captured
- * Google keys and no recorded signatures: a fixture would pass unchanged after a
- * refactor that broke the length-prefix scheme, which is the specific bug this
- * suite exists to catch.
+ * Google keys and no recorded signatures.
  *
- * The one exception is `REAL_LOYALTY_CALLBACK`, a captured body kept verbatim
- * because it pins the **shape** Google actually sends. It cannot be verified here
- * — its signing keys are not ours — so it is used only to assert that the event
- * fields are read from `signedMessage` and nowhere else, which is the failure
- * that presents as "Google stopped sending events".
+ * That was the right instinct and the wrong implementation. A fixture would not
+ * have caught the length-prefix bug either, and for a reason worth stating
+ * plainly: **this suite signed its envelopes with the same construction the
+ * verifier rebuilds**, so envelope and expectation were wrong in exactly the same
+ * way and a green run proved nothing. It stayed green for months while production
+ * refused every real callback with `intermediate_key_unverified`.
+ *
+ * What replaced it: the restatement below now follows Google's published derivation
+ * (four bytes, little-endian) independently of `callbacks.ts`, and
+ * `callbacks.signed-bytes.test.ts` pins the encoders against literal byte
+ * strings and against the one real Google signature in the repository. Neither can
+ * move in step with the code under test.
+ *
+ * `REAL_LOYALTY_CALLBACK`, a captured body, pins the **shape** Google actually
+ * sends. It cannot be verified here — it carries no signature at all, which is
+ * asserted rather than assumed — so it is used to assert that the event fields are
+ * read from `signedMessage` and nowhere else, which is the failure that presents
+ * as "Google stopped sending events".
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -57,18 +68,32 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Tink's `toLengthValue`. Restated here so the tests do not import the code under test. */
+/**
+ * The protocol's length-prefixed concatenation, restated from Google's
+ * specification rather than imported.
+ *
+ * Two rules, and both are easy to get wrong in a way that agrees with itself:
+ *
+ * - The prefix is the part's length in **UTF-8 bytes**, not in characters.
+ * - The prefix is **four bytes, little-endian**. `uint16be` — which this file
+ *   used to use, agreeing with the code under test — is a different format, and
+ *   an envelope built that way has never verified against a signature Google
+ *   produced. See `callbacks.signed-bytes.test.ts` for the pinned vectors.
+ *
+ * `DataView.setUint32(.., true)` rather than shifts and masks, so this is a
+ * different mechanism from `callbacks.ts` and not a transcription of it.
+ */
 function toLengthValue(parts: readonly string[]): Uint8Array<ArrayBuffer> {
   const encoded = parts.map((part) => new TextEncoder().encode(part));
-  const total = encoded.reduce((sum, bytes) => sum + 2 + bytes.length, 0);
+  const total = encoded.reduce((sum, bytes) => sum + 4 + bytes.length, 0);
 
   const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
   let offset = 0;
   for (const bytes of encoded) {
-    out[offset] = (bytes.length >> 8) & 0xff;
-    out[offset + 1] = bytes.length & 0xff;
-    out.set(bytes, offset + 2);
-    offset += 2 + bytes.length;
+    view.setUint32(offset, bytes.length, true);
+    out.set(bytes, offset + 4);
+    offset += 4 + bytes.length;
   }
   return out;
 }
@@ -248,6 +273,20 @@ function verifier(rootKey: TestKey, now = NOW) {
  * this fixture cannot verify anything — including the DER shape, which reports
  * `unreadable` rather than ECDSA. `envelope-capture.test.ts` pins that redaction
  * explicitly so it is not rediscovered as a bug.
+ *
+ * ## What this fixture is not, and why that was the whole bug
+ *
+ * **It carries no signature.** No `intermediateSigningKey.signatures`, and the one
+ * `signature` it does carry is Google's bytes with a single byte overwritten. So
+ * there has never been a verifiable Google signature in this repository. Every
+ * signature this verifier has ever been exercised against was produced by
+ * WebCrypto from a key generated in the same test file — which is precisely the
+ * condition under which a wrong signed-bytes construction cannot be detected: the
+ * envelope and the expectation are wrong in exactly the same way.
+ *
+ * That is why `toLengthValue` shipped a two-byte big-endian prefix for months
+ * while every test passed. It is stated here, and asserted below, so the next
+ * reader learns it from the fixture rather than from this paragraph.
  */
 const REAL_LOYALTY_CALLBACK = JSON.stringify({
   signature:
@@ -260,6 +299,27 @@ const REAL_LOYALTY_CALLBACK = JSON.stringify({
   signedMessage:
     '{"classId":"1296031581681466393.LOYALTY_CLASS_dada6069-0799-44ec-a38d-c482484902e1","objectId":"1296031581681466393.LOYALTY_OBJECT_xxxxxxxxxxxxx","eventType":"save","expTimeMillis":1754114831806,"count":1,"nonce":"40a8e5af-5b7f-4ea4-b152-63d96858550e"}',
 });
+
+/**
+ * What is knowable about the capture, as data.
+ *
+ * Kept next to the body rather than in the paragraph above so a future change to
+ * the fixture has to update the claim. Every field here is asserted in
+ * "the provenance of the capture fixture", which fails if the fixture stops
+ * matching this description.
+ */
+const REAL_LOYALTY_CALLBACK_PROVENANCE = {
+  /** `signedKey.keyExpiration`, milliseconds since epoch, as Google sends it. */
+  keyExpirationMillis: 1_754_778_096_000,
+  /** Bytes of the redacted `keyValue`, which is what a 91-byte SPKI looks like. */
+  keyValueByteLength: 91,
+  /** Bytes of the redacted `signature`: a real 71-byte P-256 DER. */
+  messageSignatureByteLength: 71,
+  /** The byte the redaction overwrote, and what it replaced. */
+  redaction: { from: 0x30, to: 0x5c, appliedTo: ['keyValue', 'signature'] },
+  /** No verifiable Google signature exists in this repository. */
+  carriesVerifiableGoogleSignature: false,
+} as const;
 
 // ---------------------------------------------------------------------------
 
@@ -1092,6 +1152,71 @@ describe('a real captured Google loyalty callback', () => {
       intermediateSigningKey: Record<string, unknown>;
     };
 
+    expect(envelope.intermediateSigningKey.signatures).toBeUndefined();
+  });
+});
+
+describe('the provenance of the capture fixture', () => {
+  /**
+   * The claim under test is uncomfortable, so it is asserted rather than
+   * asserted-in-prose: **this repository has never verified a signature Google
+   * produced.** Every signature it has verified was made by WebCrypto from a key
+   * generated in the same test file, which is why a wrong signed-bytes
+   * construction could sit here for months behind a fully green suite.
+   *
+   * The three assertions below are the facts that make the claim true. If someone
+   * later commits a real, verifiable Google signature — which is the obvious way
+   * to finally close this gap properly — the third one fails, which is the signal
+   * to delete this block and the `carriesVerifiableGoogleSignature` field with it.
+   */
+  it('is scrubbed in exactly the two places the provenance record claims', () => {
+    const envelope = JSON.parse(REAL_LOYALTY_CALLBACK) as {
+      signature: string;
+      intermediateSigningKey: { signedKey: string };
+    };
+    const keyValue = String(
+      (JSON.parse(envelope.intermediateSigningKey.signedKey) as { keyValue: string }).keyValue,
+    );
+    const decode = (b64: string): Uint8Array => {
+      const out = new Uint8Array(atob(b64).length);
+      for (let i = 0; i < out.length; i += 1) out[i] = atob(b64).charCodeAt(i);
+      return out;
+    };
+
+    // 0x5c, not 0x30: a DER SEQUENCE marker would begin each of these, so this
+    // is the redaction and not a coincidental shape.
+    expect(decode(envelope.signature)[0]).toBe(REAL_LOYALTY_CALLBACK_PROVENANCE.redaction.to);
+    expect(decode(keyValue)[0]).toBe(REAL_LOYALTY_CALLBACK_PROVENANCE.redaction.to);
+
+    // The lengths Google actually produced survive, which is what makes the
+    // signature usable as a DER fixture even though it cannot be verified.
+    expect(decode(envelope.signature)).toHaveLength(
+      REAL_LOYALTY_CALLBACK_PROVENANCE.messageSignatureByteLength,
+    );
+    expect(decode(keyValue)).toHaveLength(REAL_LOYALTY_CALLBACK_PROVENANCE.keyValueByteLength);
+  });
+
+  it('records the intermediate key expiry Google sent, which is the only field it verifies', () => {
+    const envelope = JSON.parse(REAL_LOYALTY_CALLBACK) as {
+      intermediateSigningKey: { signedKey: string };
+    };
+    const { keyExpiration } = JSON.parse(envelope.intermediateSigningKey.signedKey) as {
+      keyExpiration: string;
+    };
+
+    // A quoted string of milliseconds, as Google sends it. The value itself is
+    // long past — this capture is from 2025 — so it is pinned for shape, not for
+    // freshness.
+    expect(keyExpiration).toBe(String(REAL_LOYALTY_CALLBACK_PROVENANCE.keyExpirationMillis));
+    expect(keyExpiration).toMatch(/^\d{13}$/);
+  });
+
+  it('carries no signature that could be verified, which is why the suite cannot self-check', () => {
+    const envelope = JSON.parse(REAL_LOYALTY_CALLBACK) as {
+      intermediateSigningKey: { signatures?: unknown };
+    };
+
+    expect(REAL_LOYALTY_CALLBACK_PROVENANCE.carriesVerifiableGoogleSignature).toBe(false);
     expect(envelope.intermediateSigningKey.signatures).toBeUndefined();
   });
 });
