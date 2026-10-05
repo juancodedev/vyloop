@@ -39,6 +39,9 @@ function pass(overrides: Record<string, unknown> = {}) {
     member_code: 'K7M2QX',
     balance_points: 1200,
     points_currency: 'puntos',
+    // A first visit: nothing existed, so the object was created by this request.
+    already_existed: false,
+    pass_state: 'issued',
     ...overrides,
   };
 }
@@ -157,6 +160,78 @@ describe('the wallet card hands over the link the API gave it', () => {
     await screen.findByRole('link', { name: /google wallet/i });
 
     expect(screen.getByText('K7M2QX')).toBeTruthy();
+  });
+});
+
+/**
+ * The worker hands back a pass that already exists without creating one, and the
+ * response is otherwise indistinguishable from a new issuance: same link, same
+ * fields, same 200. That difference is the only thing stopping the page from
+ * telling someone who already had the card that it was just created for them.
+ */
+describe('the wallet card tells a returning customer apart from a new one', () => {
+  it('does not claim a fresh card was just added when the pass already existed', async () => {
+    mocks.getWalletPass.mockResolvedValue(pass({ already_existed: true, pass_state: 'issued' }));
+
+    render(<WalletCard />);
+
+    await screen.findByRole('link', { name: /google wallet/i });
+
+    // "Agregala una vez" is the phrase that lies to a returning customer.
+    expect(document.body.textContent).not.toMatch(/agreg[áa]la una vez/i);
+  });
+
+  it('says the card is already theirs when the pass exists and was saved', async () => {
+    mocks.getWalletPass.mockResolvedValue(pass({ already_existed: true, pass_state: 'issued' }));
+
+    render(<WalletCard />);
+
+    const note = await screen.findByText(/ya (est[áa]|la ten[eé]s)/i);
+
+    expect(note.textContent).toMatch(/google wallet/i);
+  });
+
+  it('offers to bring a deactivated card back rather than acting as if it were new', async () => {
+    // `inactive` is the same pass with the customer's finger off the switch, so
+    // the honest copy is about re-adding, not about a first add.
+    mocks.getWalletPass.mockResolvedValue(pass({ already_existed: true, pass_state: 'inactive' }));
+
+    render(<WalletCard />);
+
+    await screen.findByRole('link', { name: /google wallet/i });
+
+    expect(document.body.textContent).toMatch(/volver a agregar|volver a sumar/i);
+    expect(document.body.textContent).not.toMatch(/agreg[áa]la una vez/i);
+  });
+
+  it('still reads as a first add when the customer never saved the pass', async () => {
+    // `not_saved` means Google was asked and has no object. The card is genuinely
+    // not in their phone, so claiming otherwise is the same lie in the other
+    // direction — and `already_existed` alone cannot tell the two apart.
+    mocks.getWalletPass.mockResolvedValue(pass({ already_existed: true, pass_state: 'not_saved' }));
+
+    render(<WalletCard />);
+
+    await screen.findByRole('link', { name: /google wallet/i });
+
+    expect(document.body.textContent).toMatch(/agreg[áa]la una vez/i);
+  });
+
+  it('still shows the link either way, because a returning customer may want it', async () => {
+    // The flag changes the sentence, never the affordance: a customer who deleted
+    // the pass needs the link back, and one whose balance went stale gets it
+    // refreshed by opening it.
+    for (const pass_state of ['issued', 'inactive', 'not_saved']) {
+      mocks.getWalletPass.mockResolvedValue(pass({ already_existed: true, pass_state }));
+
+      const { unmount } = render(<WalletCard />);
+
+      const link = await screen.findByRole('link', { name: /google wallet/i });
+
+      expect(link.getAttribute('href'), pass_state).toBe(SAVE_URL);
+
+      unmount();
+    }
   });
 });
 
