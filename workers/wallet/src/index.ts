@@ -1,3 +1,4 @@
+import { createDb } from '@vyloop/db';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
@@ -12,6 +13,11 @@ import {
   parseMediaBaseUrl,
   parseWebBaseUrl,
 } from './helpers';
+import {
+  applyInactivityDeactivation,
+  planInactivityDeactivation,
+} from './inactivity';
+import type { InactivityApplyReport, InactivityPlan } from './inactivity';
 import { provisionTenantClass } from './provision';
 import type { ProvisionOutcome } from './provision';
 import { reconcilePass } from './reconcile';
@@ -197,8 +203,99 @@ export * from './member-code';
 export * from './object';
 export * from './provision';
 export * from './reconcile';
+export * from './inactivity';
 export * from './store';
 export * from './sweep';
+
+// ---------------------------------------------------------------------------
+// The inactivity rule's entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for `deactivateInactivePasses`. The field is a flag; see the warning
+ * on it.
+ */
+export interface DeactivateInactivePassesOptions {
+  /**
+   * Decide without acting.
+   *
+   * **Defaults to `true`.** The safe default is the one that cannot move a
+   * customer's card, and a caller that wants writes has to say so out loud. A
+   * default of `false` would mean a mistyped call site — or a future one that
+   * omits the argument — deactivates passes in bulk on real phones, and the first
+   * execution of this rule is exactly the run nobody wants to be accidental.
+   *
+   * The flag is a convenience, not the safety mechanism. The safety mechanism is
+   * that `planInactivityDeactivation` has no `GoogleWalletClient` in its
+   * dependencies, so the dry run has no way to reach Google at all; and
+   * `NULL`/`0` meaning "off" in `tenant_wallet_programs.pass_inactivity_months`,
+   * so an unconfigured tenant is never a candidate for anything.
+   */
+  dryRun?: boolean;
+}
+
+/**
+ * Deactivate a tenant's passes after X months without activity. Or just say how
+ * many that would be.
+ *
+ * ## Why this is its own entry point, and not part of `runScheduledSweep`
+ *
+ * Because `runScheduledSweep` refuses to run in demo mode, and it refuses before
+ * it opens a database. That refusal is correct for a job whose whole purpose is
+ * to write to Google from a timer with no publishing access behind it. Appending
+ * this rule to that call would give the rule the same refusal, and the rule would
+ * **never run in any environment** — not in demo, and not in production either,
+ * because a rule that only exists inside a refusing function is a rule that does
+ * not exist.
+ *
+ * So this is a separate exported method, dispatched from `workers/automation`
+ * beside the sweep. Same account, same cron slot, same bindings and secrets over
+ * the same service binding, and an independent fate.
+ *
+ * ## Why the default export carries it too
+ *
+ * The convention `workers/automation` sets: exported by name *and* on the default
+ * object, because the RPC surface and Cloudflare's runtime read whichever they
+ * find and a method exported one way only is a method that silently never runs.
+ *
+ * ## Why no tenant session is opened
+ *
+ * Same reason as the sweep, for the same reason: this enumerates tenants, and
+ * `openTenantSession` would set `app.current_tenant_id` and hide every other
+ * tenant's rows from itself. Every statement below is tenant-scoped in its own
+ * `WHERE`, which is where this repository's isolation actually lives — see the
+ * note at the top of `drizzle-store.ts`, where RLS is a second line of defence
+ * rather than the only one.
+ *
+ * ## Errors
+ *
+ * Never throws. Every failure is a typed outcome in the report, for the same
+ * reason `runScheduledSweep` does not: a scheduled handler that throws has the
+ * whole invocation retried, which would re-deactivate and re-notify. And the
+ * arithmetic that could throw — `inactivityCutoff` rejecting a nonsense window —
+ * is guarded before it is reached: `inactivityWindowFor` returns `null` for a
+ * window below one month, so a bad row is a tenant that is skipped, not a run
+ * that dies.
+ */
+export async function deactivateInactivePasses(
+  env: WalletBindings,
+  options: DeactivateInactivePassesOptions = {},
+): Promise<InactivityApplyReport | InactivityPlan> {
+  const dryRun = options.dryRun ?? true;
+
+  const db = createDb(env.DATABASE_URL);
+  const store = createDrizzleWalletStore(db);
+
+  if (dryRun) {
+    return planInactivityDeactivation({ store });
+  }
+
+  return applyInactivityDeactivation({
+    store,
+    client: googleWalletClientFor(env),
+    demoMode: parseDemoMode(env.WALLET_DEMO_MODE),
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Scheduled trigger
@@ -394,4 +491,10 @@ export async function provisionClass(
   );
 }
 
-export default { fetch: app.fetch.bind(app), scheduled, reconcileCustomer, provisionClass };
+export default {
+  fetch: app.fetch.bind(app),
+  scheduled,
+  reconcileCustomer,
+  provisionClass,
+  deactivateInactivePasses,
+};
