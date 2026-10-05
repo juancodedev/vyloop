@@ -2,10 +2,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { PgDialect, getTableConfig } from 'drizzle-orm/pg-core';
 import PgQueryModule from 'pg-query-emscripten';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { allIndexes } from './indexes';
+import { allIndexes, indexByName } from './indexes';
+import { loyaltyPrograms, pointsTransactions, tenantWalletPrograms } from './schema';
 
 // ---------------------------------------------------------------------------
 // A migration that only fails when it is applied is a migration nobody can
@@ -213,5 +215,146 @@ describe(`${BACKLOG_MIGRATION} closes the schema backlog`, () => {
     expect(sql).not.toMatch(/ENABLE ROW LEVEL SECURITY/i);
     expect(sql).not.toMatch(/CREATE POLICY/i);
     expect(sql).not.toMatch(/FORCE ROW LEVEL SECURITY/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The pass-inactivity window's migration
+// ---------------------------------------------------------------------------
+
+const INACTIVITY_MIGRATION = '0009_worried_onslaught.sql';
+
+describe(`${INACTIVITY_MIGRATION} adds the pass inactivity window`, () => {
+  const sql = readMigration(INACTIVITY_MIGRATION);
+
+  it('is a single column addition and nothing else', () => {
+    // One migration, one statement, one column. If this file ever grows a second
+    // statement the review that approved it no longer covers what will run, and
+    // the whole point of leaving it on disk unapplied is that a person applies it
+    // having read it.
+    const statements = codeStatements(sql);
+    expect(statements).toEqual([
+      'ALTER TABLE "tenant_wallet_programs" ADD COLUMN "pass_inactivity_months" integer;',
+    ]);
+  });
+
+  it('adds the column nullable, with no default', () => {
+    // The load-bearing property of the whole feature, asserted on the SQL rather
+    // than only on the Drizzle definition — because the SQL is what a person runs.
+    //
+    // `NULL` is what an unconfigured tenant has, and it means "the rule is off".
+    // A `NOT NULL` would have made the migration fail on every existing row that
+    // does not have a value yet. A `DEFAULT 6` would have made it succeed and
+    // then, on the first run of the rule, moved every existing tenant's customers'
+    // cards into Google's "Expired passes" section — opt-out by default, which is
+    // not opt-in.
+    expect(sql).not.toMatch(/pass_inactivity_months[^;]*NOT NULL/i);
+    expect(sql).not.toMatch(/pass_inactivity_months[^;]*DEFAULT/i);
+    expect(sql).not.toMatch(/pass_inactivity_months[^;]*PRIMARY KEY/i);
+  });
+
+  it('adds no index, so the index registry stays exact', () => {
+    // The rule's only query is answered by the existing
+    // `idx_points_balance (business_id, customer_id, created_at DESC)`, whose
+    // leading columns are the two equality predicates of that query. A second
+    // index would be a second thing to keep correct and to prove is still the
+    // right one; see `idxPointsBalance` below for the test that guards the shape
+    // the query depends on.
+    expect(sql).not.toMatch(/CREATE (?:UNIQUE )?INDEX/i);
+  });
+
+  it('does not touch points_expiry_days', () => {
+    // `loyalty_programs.points_expiry_days` is a different rule with a similar
+    // name: it is about how long a *balance* survives, in days, and it is about
+    // points going up. This one is about how long a *customer* is away, in
+    // calendar months, and a redemption is activity for it. Repurposing the
+    // existing column would silently reinterpret a value a merchant may already
+    // have set for a different purpose and get their customers' cards muted
+    // instead. Pinned here so the decision cannot be quietly undone.
+    // On the DDL, not on the prose: this file explains at length why the existing
+    // column was not reused, and a comment that names it is the point.
+    // \ strips comment lines for exactly this reason — see the
+    // helper's own comment and the 0004 ordering assertions below.
+    const ddl = codeStatements(sql).join('\n');
+    expect(ddl).not.toMatch(/points_expiry_days/i);
+    expect(ddl).not.toMatch(/loyalty_programs/i);
+  });
+});
+
+describe('the pass inactivity window in the schema', () => {
+  it('is declared on tenantWalletPrograms, not on loyaltyPrograms', () => {
+    // It is a wallet behaviour switch, and `demo_mode` next to it is the
+    // precedent: per-tenant policy about what the wallet worker may do to a
+    // merchant's passes belongs with the merchant's wallet program row.
+    const columns = getTableConfig(tenantWalletPrograms).columns.map((c) => c.name);
+    expect(columns).toContain('pass_inactivity_months');
+
+    const growthColumns = getTableConfig(loyaltyPrograms).columns.map((c) => c.name);
+    expect(growthColumns).not.toContain('pass_inactivity_months');
+    // And the column it must never be confused with is still there, still
+    // separate, and still untouched.
+    expect(growthColumns).toContain('points_expiry_days');
+  });
+
+  it('is nullable with no default in the Drizzle definition', () => {
+    // The same two properties as on the SQL, asserted at the layer a code change
+    // would touch. A `.notNull()` or a `.default(...)` added here would silently
+    // re-arm the feature the migration deliberately leaves off.
+    const column = getTableConfig(tenantWalletPrograms).columns.find(
+      (c) => c.name === 'pass_inactivity_months',
+    );
+
+    expect(column).toBeDefined();
+    expect(column!.notNull).toBe(false);
+    expect(column!.hasDefault).toBe(false);
+    // `integer`, so a fractional month cannot be written through the type either.
+    expect(column!.getSQLType()).toBe('integer');
+  });
+});
+
+describe('idx_points_balance, the index the inactivity query depends on', () => {
+  it('leads with the two equality predicates and orders created_at descending', () => {
+    // `findInactivePassCandidates` asks, once per pass, for the newest ledger row
+    // belonging to `(business_id, customer_id)`. That is this index's column list
+    // exactly, and the `DESC` is what makes the newest row the first entry the
+    // planner reaches — so a customer with recent activity is refuted by the very
+    // first index entry instead of by a scan.
+    //
+    // This assertion exists so that a future change to the index turns into a
+    // failing test here rather than into a full scan on a rule that decides which
+    // real customers get their cards muted. The order is load-bearing: Postgres
+    // will not use a `(business_id, customer_id)` index for a `max(created_at)`
+    // lookup as cheaply when the timestamp is ascending and unconstrained.
+    const index = indexByName('idx_points_balance');
+    const dialect = new PgDialect();
+
+    // Rendered through the real dialect rather than read off the builder, so the
+    // assertion is on the SQL a planner sees and not on Drizzle's internal shape.
+    const rendered = index.config.columns.map((column) => {
+      const query = dialect.sqlToQuery(column as never);
+      return { text: query.sql, descending: /\bdesc\b/i.test(query.sql) };
+    });
+
+    // Three columns, in this order, on this table. The table is asserted rather
+    // than assumed: an index moved onto another table would still have the right
+    // column names and would answer nothing.
+    expect(rendered.map((c) => c.text)).toEqual([
+      '"points_transactions"."business_id"',
+      '"points_transactions"."customer_id"',
+      '"points_transactions"."created_at" DESC',
+    ]);
+    // The timestamp is the only descending column, and it is last — which is what
+    // makes "the newest row for this customer" the first entry the planner reaches.
+    expect(rendered.filter((c) => c.descending).map((c) => c.text)).toEqual([
+      '"points_transactions"."created_at" DESC',
+    ]);
+  });
+
+  it('is still the only index on points_transactions', () => {
+    // One statement per candidate, one index probe per pass. A second index on
+    // the same table for the same query would mean two plans and no way to tell
+    // which one a given deployment chose.
+    const indexes = getTableConfig(pointsTransactions).indexes.map((i) => i.config.name);
+    expect(indexes).toEqual(['idx_points_balance']);
   });
 });
