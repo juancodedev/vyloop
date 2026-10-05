@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "migrations": [
+    {
+      "tag": "0006_users_email_unique",
+      "when": 1790888420391,
+      "hash": "65cd3da97283513a5a39e2ac3192103c4fa61eae3b1b1c38760e2b65b1c60bc3",
+      "evidence": [
+        {
+          "kind": "index",
+          "name": "uq_users_email"
+        }
+      ]
+    }
+  ]
+}
