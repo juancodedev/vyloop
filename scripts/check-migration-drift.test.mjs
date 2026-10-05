@@ -962,14 +962,34 @@ describe('the committed baseline', () => {
     expect(baseline.migrations.length).toBeGreaterThan(0);
   });
 
-  it('only claims migrations the development schema really had', () => {
-    // 0004 is the interesting one: applied by hand, incompletely. Its unique
-    // constraint is absent, so it must not be in the baseline, and this is the
-    // assertion that says so.
+  it('claims exactly the migrations production was verified to have applied', () => {
+    // This baseline used to be derived from the development schema, and it could
+    // only account for 0006 — production was reported to hold 0004-0008 unregistered
+    // and only development had ever been inspected. It is now derived from
+    // production itself, so the assertion changed shape: not "0004 is refused"
+    // but "exactly these five, and nothing else".
+    //
+    // The invariant is the same strength: every tag here had its objects found in
+    // the live catalog, and a sixth would mean an entry nobody inspected. 0000-0003
+    // are registered in the journal, so they are not out of band and must stay out.
     const tags = baseline.migrations.map((entry) => entry.tag);
-    expect(tags).not.toContain('0004_chubby_crystal');
-    expect(tags).toContain('0006_users_email_unique');
-    expect(tags).not.toContain('0008_loud_vector');
+    expect(tags).toEqual([
+      '0004_chubby_crystal',
+      '0005_wallet_demo_mode',
+      '0006_users_email_unique',
+      '0007_loyalty_promo_copy',
+      '0008_loud_vector',
+    ]);
+    expect(baseline.migrations.filter((e) => e.tag.startsWith('0000')).length).toBe(0);
+  });
+
+  it('pins an object per migration, so no entry is a bare claim', () => {
+    // 0004 is 26 objects, 0008 is four, 0005/0006/0007 are one each. A tag with no
+    // evidence would be exactly the "escribamos a mano" the baseline exists to
+    // refuse.
+    for (const entry of baseline.migrations) {
+      expect(entry.evidence.length, `${entry.tag} claims no objects`).toBeGreaterThan(0);
+    }
   });
 
   it('is rejected by the gate if the schema it claims is not really there', () => {
@@ -988,7 +1008,10 @@ describe('the committed baseline', () => {
       baseline,
     });
     expect(gate.ok).toBe(false);
-    expect(gate.unsatisfied.map((e) => e.tag)).toEqual(['0006_users_email_unique']);
+    // Every one of the five, not just the one this used to claim. The guard got
+    // stronger when the baseline got real: a single absent object is now enough,
+    // and there are five claims to be absent from.
+    expect(gate.unsatisfied.map((e) => e.tag)).toEqual(baseline.migrations.map((e) => e.tag));
   });
 
   it('is rejected by the gate if the journal no longer needs it', () => {
@@ -1005,84 +1028,69 @@ describe('the committed baseline', () => {
     expect(gate.staleBaseline.length).toBeGreaterThan(0);
   });
 
-  it('does NOT clear the documented production state — this is the disclosure', () => {
-    // Production reportedly has 0004-0008 applied without being registered. The
-    // committed baseline only accounts for 0006, because only 0006 was ever
-    // inspected. So the gate names the four it cannot vouch for, and the fix is
-    // `node scripts/check-migration-drift.mjs --write-baseline --apply` run
-    // against production.
+  it('clears the verified production state — the disclosure this replaces', () => {
+    // This test used to assert the opposite, and that inversion is the point.
+    //
+    // It read: production holds 0004-0008 unregistered, the committed baseline only
+    // accounted for 0006, so the gate names four it cannot vouch for. The first CI
+    // against production was therefore expected to fail, and it did — the deploy
+    // after #173 was blocked at `migration-drift` with every publish skipped.
+    //
+    // What resolved it was not a change of heart. 0004 turned out to be applied
+    // 25 objects out of 26 — `uq_customer_wallet_passes_tenant_object` was missing —
+    // that index was created, and the baseline was re-derived from production
+    // itself. 0004 then had all 26 and belonged in it.
+    //
+    // So the honest assertion now is that the committed baseline does clear the
+    // verified state — and, below, that it stops clearing the moment production
+    // diverges from one single object it claims.
     const gate = runGate({
       migrations,
       observation: seen(PRODUCTION_REGISTERED, factsFor(baseline.migrations)),
       baseline,
     });
-    expect(gate.ok).toBe(false);
-    expect(gate.forward.map((m) => m.tag)).toEqual([
-      '0004_chubby_crystal',
-      '0005_wallet_demo_mode',
-      '0007_loyalty_promo_copy',
-      '0008_loud_vector',
-    ]);
+    expect(gate.forward).toEqual([]);
+    expect(gate.reverse).toEqual([]);
+    expect(gate.unsatisfied).toEqual([]);
+    expect(gate.staleBaseline).toEqual([]);
+    expect(gate.ok).toBe(true);
+    expect(gate.exitCode).toBe(0);
   });
 
-  describe('simulated: a baseline covering the documented production drift', () => {
-    // Built here rather than committed, because it describes a database that
-    // cannot be reached from this repository. It is a simulation of the intended
-    // end state, and the verdict below is hand-written.
-    const simulated = {
-      version: 1,
-      migrations: migrations
-        .slice(4)
-        .map(entryFor)
-        .sort((a, b) => a.when - b.when),
-    };
+  it('stops clearing the moment production is missing one claimed object', () => {
+    // The anti-rubber-stamp guard, now per-object rather than all-or-nothing. The
+    // whole value of a baseline derived from production evaporates if it also
+    // passes when production is not what the baseline says it is — so one absent
+    // object out of 0004's 26 must be enough to block.
+    for (const entry of baseline.migrations) {
+      for (const claimed of entry.evidence) {
+        const facts = factsFor(baseline.migrations);
+        facts[FACT_SET[claimed.kind]].delete(claimed.name);
 
-    it('covers exactly the five migrations production is reported to have applied', () => {
-      expect(simulated.migrations.map((e) => e.tag)).toEqual([
-        '0004_chubby_crystal',
-        '0005_wallet_demo_mode',
-        '0006_users_email_unique',
-        '0007_loyalty_promo_copy',
-        '0008_loud_vector',
-      ]);
-    });
+        const gate = runGate({
+          migrations,
+          observation: seen(PRODUCTION_REGISTERED, facts),
+          baseline,
+        });
+        expect(gate.ok, `${claimed.name} missing but the gate still passed`).toBe(false);
+        expect(gate.unsatisfied.map((e) => e.tag)).toContain(entry.tag);
+      }
+    }
+  });
 
-    it('is itself a valid baseline', () => {
-      expect(validateBaseline(simulated, migrations).errors).toEqual([]);
-    });
-
-    it('would clear the gate against the documented production shape', () => {
-      const gate = runGate({
-        migrations,
-        observation: seen(PRODUCTION_REGISTERED, factsFor(simulated.migrations)),
-        baseline: simulated,
-      });
-      expect(gate.forward).toEqual([]);
-      expect(gate.reverse).toEqual([]);
-      expect(gate.unsatisfied).toEqual([]);
-      expect(gate.staleBaseline).toEqual([]);
-      expect(gate.ok).toBe(true);
-      expect(gate.exitCode).toBe(0);
-    });
-
-    it('would still fail if production did not actually have those objects', () => {
-      // The simulation must not become a rubber stamp either: the same baseline
-      // against a schema without them is a failure.
-      const gate = runGate({
-        migrations,
-        observation: seen(PRODUCTION_REGISTERED, {
-          tables: new Set(),
-          columns: new Set(),
-          indexes: new Set(),
-          constraints: new Set(),
-        }),
-        baseline: simulated,
-      });
-      expect(gate.ok).toBe(false);
-    });
-
+  describe('the committed baseline is deterministic and self-consistent', () => {
+    // This block used to build a hand-made baseline for the state production was
+    // *reported* to have, because that state could not be reached from this
+    // repository. It is now the committed baseline, derived from production
+    // itself, so the shape of the assertions is the same and the simulated copy is
+    // gone — keeping it would have left two descriptions of the same database, one
+    // of them fiction, for a future reader to choose between.
     it('is serialised identically on every run', () => {
-      expect(serializeBaseline(simulated)).toBe(serializeBaseline(structuredClone(simulated)));
+      expect(serializeBaseline(baseline)).toBe(serializeBaseline(structuredClone(baseline)));
+    });
+
+    it('validates against the repository migrations', () => {
+      expect(validateBaseline(baseline, migrations).errors).toEqual([]);
     });
   });
 });
