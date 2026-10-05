@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '../lib/api';
-import { walletFailureFor, type WalletFailure, type WalletPass } from '../lib/wallet';
+import {
+  walletFailureFor,
+  walletPassCopyFor,
+  type WalletFailure,
+  type WalletPass,
+  type WalletPassCopy,
+} from '../lib/wallet';
 
 import { ClubError, ClubStatus } from './club-status';
 
@@ -51,9 +57,19 @@ import { ClubError, ClubStatus } from './club-status';
  * a decorative glyph on one button. The label carries the meaning on its own.
  */
 
+/**
+ * The three states the card can be in.
+ *
+ * `answered` carries the copy alongside the pass rather than deriving it during
+ * render, and that is not tidiness: a `copy` computed in the component body is a
+ * second variable the `state.kind === 'answered'` branch cannot narrow, so the
+ * render has to either guard twice or cast. Deciding the wording where the state
+ * is decided makes the branch carry it, which is the same reason `refused` holds
+ * a finished `WalletFailure` rather than an error.
+ */
 type WalletState =
   | { kind: 'asking' }
-  | { kind: 'answered'; pass: WalletPass }
+  | { kind: 'answered'; pass: WalletPass; copy: WalletPassCopy }
   | { kind: 'refused'; failure: WalletFailure };
 
 /**
@@ -86,7 +102,9 @@ export function WalletCard() {
     api
       .getWalletPass()
       .then((pass) => {
-        if (live) setState({ kind: 'answered', pass });
+        // Total, so there is no path here that answers without a sentence to
+        // render. Which sentence is the decision `lib/wallet.ts` owns.
+        if (live) setState({ kind: 'answered', pass, copy: walletPassCopyFor(pass) });
       })
       .catch((error: unknown) => {
         if (live) setState({ kind: 'refused', failure: describeFailure(error) });
@@ -134,16 +152,24 @@ export function WalletCard() {
 
       {state.kind === 'answered' ? (
         <div className="club-wallet__ready">
-          <p className="club-wallet__note">
-            Tu tarjeta vive en Google Wallet. Agregala una vez y después usala en el local junto con tu
-            código de socio.
-          </p>
+          {/*
+            The wording comes from `lib/wallet.ts` and not from here, for the
+            same reason the refusal copy does: the worker hands back a pass that
+            already exists with an otherwise identical response, so this card is
+            rendering for two genuinely different situations — a card just
+            created and a card that has been in the customer's phone for a year —
+            and only `already_existed` plus `pass_state` can tell them apart.
+            Choosing between "Agregala una vez" and "esta tarjeta ya está" is a
+            decision about a real person's wallet, and a decision that has to be
+            testable across every state rather than read off one branch of JSX.
+          */}
+          <p className="club-wallet__note">{state.copy.note}</p>
 
           {/* Google's own save link, verbatim. It is a signed claim naming an
               object we created at Google; rebuilding or decorating it here would
               produce a link that looks right and is dead at the counter. */}
           <a className="btn btn--primary" href={state.pass.save_url}>
-            Agregar a Google Wallet
+            {state.copy.label}
           </a>
 
           {/*

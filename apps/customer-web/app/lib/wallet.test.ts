@@ -21,8 +21,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { WALLET_RESPONSE_MALFORMED, walletFailureFor } from './wallet';
-import type { WalletFailure } from './wallet';
+import { WALLET_RESPONSE_MALFORMED, walletFailureFor, walletPassCopyFor } from './wallet';
+import type { WalletFailure, WalletPass, WalletPassState } from './wallet';
 
 /**
  * Every code `GET /v1/wallet/pass` can answer with.
@@ -37,6 +37,7 @@ const CASES: ReadonlyArray<{ code: string; status: number }> = [
   { code: 'WALLET_CLASS_ID_MISMATCH', status: 409 },
   { code: 'WALLET_PASS_NOT_CREATABLE', status: 409 },
   { code: 'WALLET_BALANCE_NOT_DISPLAYABLE', status: 409 },
+  { code: 'WALLET_PASS_TERMINAL', status: 409 },
   { code: 'LOYALTY_PROGRAM_NOT_CONFIGURED', status: 409 },
   { code: 'WALLET_NOT_CONFIGURED', status: 500 },
   { code: 'WALLET_DEMO_MODE', status: 409 },
@@ -221,7 +222,7 @@ describe('the specific refusals worth naming', () => {
     expect(failure.message).toMatch(/tu cuenta est[áa] bien/i);
   });
 
-  it('falls back to naming us for a status it does not recognise', () => {
+it('falls back to naming us for a status it does not recognise', () => {
     // Including a status with no code at all: a fetch that never reached the
     // gateway. The copy still must not blame the account.
     for (const { code, status } of [
@@ -235,4 +236,166 @@ describe('the specific refusals worth naming', () => {
       expect(`${failure.title} ${failure.message}`).toMatch(/tu cuenta (y tus puntos )?est[áa]n? bien/i);
     }
   });
+
+  it('says a terminal pass is finished, rather than that it is missing', () => {
+    // The one refusal that is about the customer's own card, so it is the one
+    // where the difference between "finished" and "not there yet" is the whole
+    // message. Saying it is missing sends someone looking in their phone for a
+    // card that is there and will never work again; saying it is finished tells
+    // them what actually happened, and names the business as the one who acts.
+    const failure = walletFailureFor('WALLET_PASS_TERMINAL', 409);
+
+    expect(failure.title).toMatch(/no se puede volver a usar|no se puede reutilizar/i);
+    expect(failure.message).toMatch(/comercio/i);
+    expect(`${failure.title} ${failure.message}`).not.toMatch(/agreg[áa] la (tarjeta|pase)/i);
+  });
+
+  it('lands an unrecognised pass state on the "our side" copy, on purpose', () => {
+    // `WALLET_PASS_STATE_UNKNOWN` is a real code the worker sends, with no entry
+    // here — deliberately, and this is what holds that decision in place.
+    //
+    // The worker refuses rather than minting when `customer_wallet_passes.state`
+    // holds a value no code has reasoned about, and it says so with a 500. That
+    // is *our* fault and *our* fix, so the honest thing a phone can show is the
+    // generic "hubo un problema de nuestro lado" copy with its retry. Writing
+    // bespoke copy here would have to guess whether the customer holds a working
+    // card, which is precisely the state nobody in this system knows.
+    const failure = walletFailureFor('WALLET_PASS_STATE_UNKNOWN', 500);
+
+    expect(`${failure.title} ${failure.message}`).toBe(render('WALLET_SOMETHING_NEW', 409));
+    expect(failure.message).toMatch(/tu cuenta (y tus puntos )?est[áa]n? bien/i);
+  });
 });
+
+// ============================================================================
+// The wording for a pass that came back
+//
+// The same argument as the section above, applied to the other direction: the
+// worker reuses a pass that already exists, and the response is otherwise
+// identical, so the page has to be able to tell a card it just created from one
+// that has been in the customer's phone for a year. Getting that wrong does not
+// throw — it says "Agregala una vez" to somebody who did it a year ago.
+// ============================================================================
+
+/**
+ * Every state a pass can arrive in, crossed with both values of the flag.
+ *
+ * `expired` and `completed` cannot reach a 200 — the route refuses a terminal
+ * pass rather than returning one — and a value this build has never heard of
+ * cannot be ruled out either, since the wire is untyped and the packages share no
+ * types. Both are walked, because a branch that is dead in production is still a
+ * branch that can be written wrong.
+ */
+const PASS_STATES: ReadonlyArray<string> = [
+  ...(['not_issued', 'not_saved', 'issued', 'inactive', 'expired', 'completed'] satisfies
+    WalletPassState[]),
+  'archived',
+];
+
+function returnedPass(already_existed: boolean, pass_state: string): WalletPass {
+  return {
+    save_url: 'https://pay.google.com/gp/v/save/ABC',
+    object_id: '3388.member-3f8a',
+    class_id: '3388.tenant-1',
+    member_code: 'K7M2QX',
+    balance_points: 1200,
+    points_currency: 'puntos',
+    already_existed,
+    // Cast on purpose: the string set above deliberately includes a value the
+    // union does not declare, and the behaviour for that value is under test.
+    pass_state: pass_state as WalletPassState,
+  };
+}
+
+describe('the wording for a returned pass never claims a card the customer lacks', () => {
+  /**
+   * Where we actually have evidence the card is on the customer's phone.
+   *
+   * `issued` means Google has the object and the customer saved it. `inactive`
+   * means the same card with their finger off the switch — still on their phone,
+   * still the same object. Nothing else qualifies, and `not_saved` is what makes
+   * this a decision rather than a default: we asked Google and it has no object,
+   * so "you already have it" would be the same lie pointed the other way.
+   */
+  function knowsTheCardIsThere(already_existed: boolean, pass_state: string): boolean {
+    return already_existed && (pass_state === 'issued' || pass_state === 'inactive');
+  }
+
+  it('falls back to the first-add sentence everywhere except those two states', () => {
+    // The load-bearing property, stated in the negative because that is the way
+    // it gets broken: a branch added for a state nobody reasoned about that
+    // reaches for the reassuring sentence. `walletPassCopyFor` returns one shared
+    // constant for everything it has no specific wording for, so "did it fall
+    // back" is a fact about the mapping rather than a guess about the prose.
+    for (const already_existed of [false, true]) {
+      for (const pass_state of PASS_STATES) {
+        const copy = walletPassCopyFor(returnedPass(already_existed, pass_state));
+        const saysFirstAdd = /agreg[áa]la una vez/i.test(copy.note);
+
+        expect(saysFirstAdd, `${already_existed}/${pass_state}`).toBe(
+          !knowsTheCardIsThere(already_existed, pass_state),
+        );
+      }
+    }
+  });
+
+  it('and says the card is there in exactly those two states', () => {
+    // The other direction, so the previous test cannot be satisfied by a mapping
+    // that never mentions the card at all. The claim is permitted *and* made:
+    // a returning customer is the one who most needs to be told their card
+    // exists, and it is the one thing this field exists to let the page say.
+    for (const already_existed of [false, true]) {
+      for (const pass_state of PASS_STATES) {
+        const copy = walletPassCopyFor(returnedPass(already_existed, pass_state));
+
+        expect(/en tu google wallet/i.test(copy.note), `${already_existed}/${pass_state}`).toBe(
+          knowsTheCardIsThere(already_existed, pass_state),
+        );
+      }
+    }
+  });
+
+  it('never blames the customer on any branch, as the refusals do not either', () => {
+    for (const already_existed of [false, true]) {
+      for (const pass_state of PASS_STATES) {
+        const copy = walletPassCopyFor(returnedPass(already_existed, pass_state));
+        const text = `${copy.note} ${copy.label}`;
+
+        for (const blame of CUSTOMER_BLAMING) {
+          expect(text, `${blame.source} @ ${already_existed}/${pass_state}`).not.toMatch(blame);
+        }
+      }
+    }
+  });
+
+  it('never promises a card, and never promises one will arrive', () => {
+    for (const already_existed of [false, true]) {
+      for (const pass_state of PASS_STATES) {
+        const text = walletPassCopyFor(returnedPass(already_existed, pass_state)).note;
+
+        expect(text, `${already_existed}/${pass_state}`).not.toMatch(
+          /pr[óo]ximamente|m[áa]s pronto|coming soon|en breve/i,
+        );
+        expect(text, `${already_existed}/${pass_state}`).not.toMatch(/[\r\n]/);
+      }
+    }
+  });
+
+  it('always leaves a link the customer can follow, whatever it says', () => {
+    // The flag changes the sentence, never the affordance. A customer who deleted
+    // the pass needs the link back, and one whose balance went stale has it
+    // refreshed by opening it.
+    const labels = new Set(
+      PASS_STATES.flatMap((pass_state) =>
+        [false, true].map((already_existed) =>
+          walletPassCopyFor(returnedPass(already_existed, pass_state)).label,
+        ),
+      ),
+    );
+
+    for (const label of labels) {
+      expect(label).toMatch(/google wallet/i);
+    }
+  });
+});
+

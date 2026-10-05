@@ -39,6 +39,29 @@
  */
 
 /**
+ * `customer_wallet_passes.state`, as `GET /v1/wallet/pass` and
+ * `GET /v1/wallet/status` both report it.
+ *
+ * Narrow, and the wire is untyped: nothing stops the worker from adding a
+ * seventh value, and this union cannot be checked against it because the two
+ * packages do not share types. So the copy below is written so that a value this
+ * union does not know falls to the first-add wording — the branch that claims
+ * least — rather than to a claim about a card that may not be in a phone.
+ *
+ * `expired` and `completed` are listed for the vocabulary's sake. The route
+ * refuses a terminal pass rather than returning one, so they cannot arrive on a
+ * 200; they are what makes the list the schema's six states rather than the four
+ * a 200 can carry.
+ */
+export type WalletPassState =
+  | 'not_issued'
+  | 'not_saved'
+  | 'issued'
+  | 'inactive'
+  | 'expired'
+  | 'completed';
+
+/**
  * The `data` body of `GET /v1/wallet/pass`.
  *
  * Field names are the wire names: the handler answers a bare object literal with
@@ -54,6 +77,47 @@ export interface WalletPass {
   member_code: string;
   balance_points: number;
   points_currency: string;
+
+  /**
+   * Whether **this request** created the pass, as opposed to handing back one
+   * that already existed.
+   *
+   * ## Why this field has to exist
+   *
+   * The worker stopped minting on every visit: a customer who already has a pass
+   * is handed a freshly signed link for the object their row already records, and
+   * nothing is created at Google. That is the right behaviour and it made the
+   * response indistinguishable from a new issuance — same link, same fields, same
+   * `200`.
+   *
+   * So the page cannot tell the two apart from anything else in this body.
+   * `object_id` is identical by design: making it the same is what makes a
+   * repeated request idempotent. And `save_url` differs only in its `iat` claim,
+   * so comparing two of them tells you a request happened, not what it did.
+   *
+   * Without this field the page says "Agregala una vez" to a customer whose card
+   * has been in their phone for a year, which is a small lie that a merchant
+   * support question is built on top of.
+   */
+  already_existed: boolean;
+
+  /**
+   * `customer_wallet_passes.state` after the request, under the same vocabulary
+   * `GET /v1/wallet/status` reports.
+   *
+   * ## Why `already_existed` is not enough on its own
+   *
+   * Because the three reused states need three different sentences. A pass in
+   * `issued` is in the customer's phone and this page may say so. A pass in
+   * `not_saved` is genuinely not there — we asked Google and it has no object — so
+   * saying "you already have it" would be the same lie pointed the other way. A
+   * pass in `inactive` is the same card with the customer's finger off the
+   * switch.
+   *
+   * One boolean over those three would force a choice between lying to a
+   * returning customer and lying to a first-time one.
+   */
+  pass_state: WalletPassState;
 }
 
 /** One refusal, rendered. Both halves are customer-facing copy. */
@@ -173,6 +237,30 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
       'presentación.',
   },
 
+  /**
+   * The pass reached a state Google does not undo, so it cannot be reissued.
+   *
+   * A different audience from every other branch and a different remedy. This one
+   * is about **the customer's own card**, and the thing to be said plainly is
+   * that the card is finished rather than that the card is missing: the first
+   * would send them looking for something in their phone, the second would tell
+   * them to add a card Google is not going to accept. Both are ways of being
+   * wrong about a real person's wallet.
+   *
+   * So: what happened, that their account and points are untouched, and that the
+   * business is the one who can resolve it. Not a promise that a new one is
+   * coming — this worker refuses to mint over a terminal pass precisely because
+   * Google cannot bring it back, and copy that implied otherwise would be the
+   * retired "ya va a estar" mistake in new words.
+   */
+  WALLET_PASS_TERMINAL: {
+    title: 'Esta tarjeta ya no se puede volver a usar',
+    message:
+      'Google ya no permite reutilizar esta tarjeta porque su vigencia terminó. Tu cuenta y tus ' +
+      'puntos están bien y los podés seguir usando en el local. Contale al comercio para que lo ' +
+      'resuelvan.',
+  },
+
   /** A Google class with no programme to name a points currency in. */
   LOYALTY_PROGRAM_NOT_CONFIGURED: {
     title: 'Este comercio todavía no configuró su programa',
@@ -253,4 +341,80 @@ export function walletFailureFor(code: string, status: number): WalletFailure {
   return known === undefined
     ? { code: code || 'NO_RESPONSE', status, ...OURS }
     : { code, status, ...known };
+}
+
+// ---------------------------------------------------------------------------
+// A pass that came back — not a refusal
+// ---------------------------------------------------------------------------
+
+/** What the card says about a pass the API returned. Both halves are customer-facing. */
+export interface WalletPassCopy {
+  /** The sentence above the button. */
+  note: string;
+  /** The button's own label. */
+  label: string;
+}
+
+/**
+ * The one wording every state of a returned pass shares.
+ *
+ * Stated once so a copy change cannot land in one branch and miss the others, and
+ * so the branches below are readable as differences rather than as three
+ * paragraphs that happen to agree.
+ */
+const FIRST_ADD: WalletPassCopy = {
+  note:
+    'Tu tarjeta vive en Google Wallet. Agregala una vez y después usala en el local junto con tu ' +
+    'código de socio.',
+  label: 'Agregar a Google Wallet',
+};
+
+/**
+ * The sentence for a pass that was already there.
+ *
+ * ## Why this is a function and not three branches inside the component
+ *
+ * For the same reason `walletFailureFor` is a module: the property worth holding
+ * is not any one string, it is that no branch claims a card the customer does not
+ * have. A renderer picks the branch; the wording is data, so a test can walk
+ * every state and assert the property across all of them at once. A component
+ * cannot do that without a DOM.
+ *
+ * ## The three cases, and what each is allowed to say
+ *
+ * - `already_existed: false` — this request created the pass. The plain
+ *   first-add wording is the truth here.
+ * - `issued` — Google has the object and the customer saved it, so the card
+ *   really is on their phone. Saying so is the whole point of returning the
+ *   field; the alternative is telling someone to add a card they added a year
+ *   ago. The button stays, because the useful cases remain: they deleted it, or
+ *   they are moving to a new phone.
+ * - `inactive` — the same card, switched off. Not a new card and not a missing
+ *   one, so the wording is about putting the existing one back.
+ * - `not_saved`, `not_issued`, and any value this build does not know — we have
+ *   no evidence the card is on their phone, so the least-claiming branch is the
+ *   correct one. `not_saved` is the case that makes this a decision rather than a
+ *   default: we asked Google and it has no object, so claiming they already have
+ *   it would be the same lie pointed the other way.
+ */
+export function walletPassCopyFor(pass: WalletPass): WalletPassCopy {
+  if (pass.already_existed && pass.pass_state === 'issued') {
+    return {
+      note:
+        'Esta tarjeta ya está en tu Google Wallet. Usala en el local junto con tu código de socio; ' +
+        'si la borraste, podés agregarla de nuevo.',
+      label: 'Volver a agregar a Google Wallet',
+    };
+  }
+
+  if (pass.already_existed && pass.pass_state === 'inactive') {
+    return {
+      note:
+        'Esta tarjeta está desactivada en tu Google Wallet. Volvé a agregarla para usarla en el ' +
+        'local junto con tu código de socio.',
+      label: 'Volver a agregar a Google Wallet',
+    };
+  }
+
+  return FIRST_ADD;
 }
