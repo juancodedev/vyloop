@@ -408,10 +408,36 @@ function deployedSecretNames() {
   }
 }
 
+/**
+ * `DATABASE_URL` from the local dev file, or `null` when there is no local dev file.
+ *
+ * The third read in this file that could crash on a missing file, and the only one
+ * that did. `.dev.vars` is gitignored — correctly, it holds secrets — so on CI it
+ * does not exist, and `process.env.DATABASE_URL ?? readFileSync(...)` fell straight
+ * into the read and threw `ENOENT` on every deploy.
+ *
+ * The consequence was worse than a failed step: `main` exits non-zero on a `BLOCK`,
+ * so the throw made this report exit 1 while it had printed nothing, and the
+ * `continue-on-error: true` on the workflow step swallowed the stack trace instead
+ * of a report. The step had never once produced a report in CI.
+ *
+ * `null` is the honest answer here, and the caller already handles it: this script's
+ * contract is to report `unknown` rather than guess when it cannot see a fact. The
+ * same shape as `tryReadConfigVar` and `sourceDefaultWebBaseUrl` above, and it takes
+ * the path as an argument for the same reason they do: a helper that can only be
+ * called with one path cannot be tested for the case that matters.
+ */
+export function readDevVarsDatabaseUrl(devVarsPath) {
+  try {
+    return /^DATABASE_URL=(.*)$/m.exec(readFileSync(devVarsPath, 'utf8'))?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function databaseFacts() {
   const url =
-    process.env.DATABASE_URL ??
-    (/^DATABASE_URL=(.*)$/m.exec(readFileSync('apps/gateway/.dev.vars', 'utf8')) || [])[1];
+    process.env.DATABASE_URL ?? readDevVarsDatabaseUrl('apps/gateway/.dev.vars');
   if (!url) return { known: false, migrationApplied: false, reviewStatus: null, slug: null };
 
   try {
