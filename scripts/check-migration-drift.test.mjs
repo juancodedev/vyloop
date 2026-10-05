@@ -955,41 +955,71 @@ describe('the committed baseline', () => {
     expect(serializeBaseline(baseline)).toBe(committed);
   });
 
-  it('is not empty', () => {
-    // A gate satisfiable by an empty baseline is not a gate. Development has an
-    // out-of-band migration, so an empty file here means someone deleted the
-    // evidence rather than that there was none.
-    expect(baseline.migrations.length).toBeGreaterThan(0);
+  it('is empty only because the journal now covers every migration', () => {
+    // This file was not always empty. It listed 0004-0008 as applied out of band,
+    // which was true then: they had been applied by hand and the journal had four
+    // entries from 0000-0003. Applying 0009 inserted a journal row whose
+    // `created_at` is 0009's `when`, and because drizzle's watermark is a scalar
+    // (`order by created_at desc limit 1`), that one row moved the mark past all
+    // of them. Nothing is out of band any more, so there is nothing to compensate
+    // and the honest file has zero entries.
+    //
+    // Which means the old "a gate satisfiable by an empty baseline is not a gate"
+    // guard cannot be stated as a length on this file. Emptiness here is a fact
+    // about production, not a property this repository can assert, and hardcoding
+    // `toBeGreaterThan(0)` would only survive until the next migration.
+    //
+    // The guard itself survives, and the test below it is where it now lives: an
+    // empty baseline must still leave the gate fully capable of failing.
+    expect(baseline.migrations).toEqual([]);
   });
 
-  it('claims exactly the migrations production was verified to have applied', () => {
-    // This baseline used to be derived from the development schema, and it could
-    // only account for 0006 — production was reported to hold 0004-0008 unregistered
-    // and only development had ever been inspected. It is now derived from
-    // production itself, so the assertion changed shape: not "0004 is refused"
-    // but "exactly these five, and nothing else".
-    //
-    // The invariant is the same strength: every tag here had its objects found in
-    // the live catalog, and a sixth would mean an entry nobody inspected. 0000-0003
-    // are registered in the journal, so they are not out of band and must stay out.
-    const tags = baseline.migrations.map((entry) => entry.tag);
-    expect(tags).toEqual([
-      '0004_chubby_crystal',
-      '0005_wallet_demo_mode',
-      '0006_users_email_unique',
-      '0007_loyalty_promo_copy',
-      '0008_loud_vector',
-    ]);
-    expect(baseline.migrations.filter((e) => e.tag.startsWith('0000')).length).toBe(0);
+  it('an empty baseline still fails the gate on real drift', () => {
+    // The guard that `is not empty` used to be a proxy for, stated directly. The
+    // committed baseline is empty and the journal is complete, so the gate passes;
+    // the moment a migration the journal does not cover appears, it must fail, and
+    // with the baseline contributing nothing to hide it.
+    const completeJournal = migrations.map((m, i) => ({
+      id: i + 1,
+      hash: m.hash,
+      created_at: m.when,
+    }));
+
+    const clean = runGate({
+      migrations,
+      observation: seen(completeJournal, factsFor(baseline.migrations)),
+      baseline,
+    });
+    expect(clean.ok).toBe(true);
+    expect(clean.forward).toEqual([]);
+
+    // One migration short of the journal: forward drift, and the empty baseline
+    // cannot excuse it.
+    const oneShort = completeJournal.slice(0, -1);
+    const drifted = runGate({
+      migrations,
+      observation: seen(oneShort, factsFor(baseline.migrations)),
+      baseline,
+    });
+    expect(drifted.ok).toBe(false);
+    expect(drifted.forward.map((m) => m.tag)).toEqual([migrations[migrations.length - 1].tag]);
+    expect(drifted.forward).not.toEqual([]);
   });
 
   it('pins an object per migration, so no entry is a bare claim', () => {
-    // 0004 is 26 objects, 0008 is four, 0005/0006/0007 are one each. A tag with no
-    // evidence would be exactly the "escribamos a mano" the baseline exists to
-    // refuse.
-    for (const entry of baseline.migrations) {
-      expect(entry.evidence.length, `${entry.tag} claims no objects`).toBeGreaterThan(0);
+    // Written against a built baseline rather than the committed one. The committed
+    // file is empty, so a loop over `baseline.migrations` would assert nothing at all
+    // and report green for the wrong reason — which is how a guard stops being one.
+    // The invariant is about the generator, not about what production happens to
+    // need right now.
+    for (const migration of migrations) {
+      const entry = entryFor(migration);
+      expect(entry.evidence.length, `${migration.tag} claims no objects`).toBeGreaterThan(0);
     }
+    // And the validator refuses a bare claim, so an empty-evidence entry cannot
+    // reach the file even if someone writes one by hand.
+    const bare = { version: 1, migrations: [{ ...entryFor(migrations[4]), evidence: [] }] };
+    expect(validateBaseline(bare, migrations).errors.length).toBeGreaterThan(0);
   });
 
   it('is rejected by the gate if the schema it claims is not really there', () => {
@@ -1015,17 +1045,23 @@ describe('the committed baseline', () => {
   });
 
   it('is rejected by the gate if the journal no longer needs it', () => {
-    // Everything recorded. A baseline still claiming a migration is missing from
-    // the table is stale, and must fail rather than sit there as a permanent
-    // exemption.
+    // Everything recorded, and a baseline that still claims one of them. A stale
+    // entry must fail rather than sit there as a permanent exemption.
+    //
+    // Also written against a built baseline: the committed one is empty, so running
+    // this against it would prove nothing about the stale path.
+    const claimed = migrations.slice(4).map(entryFor).sort((a, b) => a.when - b.when);
+    const stale = { version: 1, migrations: claimed };
     const all = migrations.map((m, i) => ({ id: i + 1, hash: m.hash, created_at: m.when }));
     const gate = runGate({
       migrations,
-      observation: seen(all, factsFor(baseline.migrations)),
-      baseline,
+      observation: seen(all, factsFor(claimed)),
+      baseline: stale,
     });
     expect(gate.ok).toBe(false);
     expect(gate.staleBaseline.length).toBeGreaterThan(0);
+    // `staleBaselineEntries` returns tags, not entries.
+    expect([...gate.staleBaseline].sort()).toEqual(claimed.map((e) => e.tag).sort());
   });
 
   it('clears the verified production state — the disclosure this replaces', () => {
