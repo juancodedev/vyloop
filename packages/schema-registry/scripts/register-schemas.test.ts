@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 // Mock the schema registry module so we can verify calls without side effects
 const registerSchemaMock = vi.fn();
-vi.mock('../src/index', () => ({
+vi.mock('../src/index.ts', () => ({
   registerSchema: registerSchemaMock,
   customerRegisteredSchema: {
     $id: 'https://schema.vyloop.app/events/CustomerRegistered/v1.0.0',
