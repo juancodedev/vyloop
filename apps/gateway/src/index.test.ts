@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { SignJWT } from 'jose';
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
@@ -111,6 +114,26 @@ function mockEnv(overrides: Record<string, unknown> = {}) {
     },
     ...overrides,
   };
+}
+
+/**
+ * The KV binding names `wrangler.jsonc` actually publishes.
+ *
+ * Read out of the config rather than taken from `mockEnv` so this file can build
+ * an environment shaped like a real deployment's. A hand-written mock binding is
+ * green whether or not the config publishes it, which is exactly the shape of the
+ * bug: the binding was missing from the config and every test that supplied it by
+ * hand still passed.
+ *
+ * Scoped to the `kv_namespaces` array and read as flat `{ … }` objects, because
+ * both halves of a naive whole-file read are wrong in this file — every value is
+ * an `https://` URL, and the comments discuss routes containing braces.
+ */
+function declaredKvBindings(): string[] {
+  const source = readFileSync(join(__dirname, '..', 'wrangler.jsonc'), 'utf8');
+  const block = /"kv_namespaces"\s*:\s*\[([\s\S]*?)\n {2}\]/.exec(source)?.[1] ?? '';
+
+  return [...block.matchAll(/"binding"\s*:\s*"([^"]+)"/g)].map((match) => match[1]);
 }
 
 // ---------------------------------------------------------------------------
@@ -558,6 +581,68 @@ describe('API Gateway', () => {
       expect(res.status).toBe(404);
       const body = (await res.json()) as { error?: { code?: string } };
       expect(body.error?.code).toBe('EVENT_TYPE_UNKNOWN');
+    });
+
+    it('reaches a SCHEMA_REGISTRY that is not undefined, because the deployment declares one', async () => {
+      // The route's own dependency, end to end.
+      //
+      // `mockEnv` always carries a `SCHEMA_REGISTRY`, so every other test in this
+      // file is green whether or not `wrangler.jsonc` publishes the binding — which
+      // is precisely how an undeclared binding reached production as a 500 on every
+      // `POST /v1/events/:type`: `kv.get()` on `undefined`, throwing before any
+      // lookup. So the environment here is built from what the config actually
+      // declares. Remove the binding from `wrangler.jsonc` and this answers 500
+      // again, which is the point.
+      const schemaRegistry = {
+        get: vi.fn(async () =>
+          JSON.stringify({
+            $schema: 'http://json-schema.org/draft-07/schema#',
+            type: 'object',
+            required: ['header', 'payload'],
+            properties: {
+              header: { type: 'object' },
+              payload: { type: 'object' },
+            },
+          }),
+        ),
+        put: vi.fn(async () => {}),
+        delete: vi.fn(async () => {}),
+      };
+
+      const declared = declaredKvBindings();
+
+      expect(declared, 'wrangler.jsonc publishes no KV binding at all').not.toEqual([]);
+      expect(declared, 'the deployment does not declare SCHEMA_REGISTRY').toContain(
+        'SCHEMA_REGISTRY',
+      );
+
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            header: {
+              event_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+              event_type: 'test_event',
+              event_version: '1.0.0',
+              business_id: '12345678-1234-1234-1234-123456789abc',
+              timestamp: '2026-07-02T12:00:00Z',
+            },
+            payload: { message: 'Hello from test!' },
+          }),
+        }),
+        mockEnv({
+          // `undefined` rather than the hand-written mock when the config does not
+          // declare it, so the route sees exactly what a deployment would hand it.
+          SCHEMA_REGISTRY: declared.includes('SCHEMA_REGISTRY') ? schemaRegistry : undefined,
+        }) as never,
+      );
+
+      // The read happened against the namespace the route was handed — asserted
+      // on the call, not on the status, because a 500 could in principle arrive
+      // from somewhere else and this is the claim that the binding was resolved.
+      expect(schemaRegistry.get).toHaveBeenCalledWith('test_event:latest');
+      expect(res.status).toBe(202);
     });
   });
 
