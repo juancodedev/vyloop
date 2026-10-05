@@ -133,6 +133,116 @@ jobs:
   # loudly, and before anything is deployed. That is the correct direction to
   # fail in, and the fix is granting that scope on this same token rather than
   # minting a narrower second one.
+  # Refuse to deploy code against a schema this repository has not verified.
+  #
+  # ## Why it is a job and not a step inside one of the deploys
+  #
+  # Four jobs publish: `deploy-workers`, `deploy-gateway`, `deploy-dashboard`,
+  # `deploy-customer-web`. A step inside any one of them runs *after* that job
+  # has already published, so a failing check would leave a deployed worker and a
+  # red build — which is how the current state survived: nothing ran
+  # `drizzle-kit migrate` on any deploy, `drizzle.__drizzle_migrations` in
+  # production records four of nine migrations, and every deploy was green
+  # throughout. A gate that can only report after the fact is a postmortem.
+  #
+  # It is not a step inside `deploy-workers` either: that is a matrix of eight,
+  # so the check would run eight times, and a failure would block one leg rather
+  # than all four deploys. Four `needs:` entries make the invariant explicit —
+  # nothing is published against an unverified schema.
+  #
+  # ## Why it runs before the deploys
+  #
+  # Same argument as `register-schemas` directly above, and for a stronger
+  # reason. A registry left empty is a namespace that fills in on the next
+  # deploy. A schema left behind is code that is already serving requests
+  # against columns that do not exist. Failing after the deploy would mean
+  # publishing the broken version and *then* finding out, which is strictly
+  # worse than the previous version continuing to serve with a red build.
+  #
+  # ## Why it is allowed to block
+  #
+  # No `continue-on-error`, unlike the wallet readiness report above. That one
+  # asks an informational question about an external service — does the public
+  # program page answer — and nothing happens automatically on the answer, so
+  # blocking every deploy for it would cost more than it caught. This step is not
+  # a report. Its whole claim is "the target schema matches the code being
+  # published", and a deploy that proceeds without that confirmation is the exact
+  # failure this exists to prevent. A green build that never checked is what let
+  # production drift for nine migrations unnoticed.
+  #
+  # ## Why it fails closed on an unreachable database
+  #
+  # `runGate` has no third state: "I could not verify" is a failure, not a pass.
+  # This is the deliberate opposite of the readiness report, which degrades to
+  # `unknown` because it reports about an external service and its question is
+  # informative. A safety interlock that can answer "I could not tell" passes
+  # whenever the network has a bad minute, which is to say it passes whenever it
+  # is most convenient to pass. The reasoning is in the script's header, next to
+  # the code, because it is counterintuitive enough that someone will eventually
+  # try to soften it.
+  #
+  # ## Credentials
+  #
+  # The existing `secrets.DATABASE_URL`, reused rather than a second secret. The
+  # workers hold it anyway, so minting another would add a thing to provision and
+  # rotate without removing the write credential from CI — the marginal benefit
+  # is small and the operational cost is real.
+  #
+  # The gate only issues SELECTs, and it puts the session itself in read-only
+  # mode (`SET default_transaction_read_only = on`, verified with `SHOW` and the
+  # connection dropped if the server does not honour it), so PostgreSQL refuses
+  # writes for this script rather than trusting it not to make them. Verified
+  # against the development database: both `CREATE TABLE` and an `INSERT` into
+  # `drizzle.__drizzle_migrations` are rejected with "cannot execute ... in a
+  # read-only transaction".
+  #
+  # That is enforced by the *script*, though, not by the credential. A dedicated
+  # read-only Postgres role would make it independent of the script, and is the
+  # right hardening; it is not a prerequisite because the secret is already
+  # scoped to this one workflow and the session guard is server-enforced.
+  migration-drift:
+    needs: [quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Required: `pg` is resolved relative to `packages/db/package.json`, so the
+      # workspace has to be installed even though nothing is built.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The committed baseline has to be the one inspection produced.
+      #
+      # This is what stops the baseline being grown by hand to make the gate pass:
+      # adding an entry requires the migration to actually be applied to the
+      # target database, because this step re-derives the baseline from the live
+      # catalog and diffs it byte for byte. A hand-written entry that the schema
+      # does not support makes this step fail, and the failure names the command
+      # that fixes it.
+      #
+      # Deliberately a separate step from the gate below. They answer different
+      # questions — "is the baseline honest?" and "does the schema match the
+      # code?" — and collapsing them would mean a stale baseline was reported as
+      # schema drift, which sends someone to run migrations they do not need.
+      - name: Verify the committed baseline matches the target schema
+        run: pnpm db:drift:baseline
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Migration drift gate
+        run: pnpm db:drift
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
   register-schemas:
     needs: [quality]
     runs-on: ubuntu-latest
@@ -173,7 +283,7 @@ jobs:
       # this file to drift.
 
   deploy-workers:
-    needs: [quality, register-schemas]
+    needs: [quality, register-schemas, migration-drift]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -245,7 +355,7 @@ jobs:
   # before this is published" is a claim about *this* job and belongs in its
   # dependency list where it can be read.
   deploy-gateway:
-    needs: [quality, deploy-workers, register-schemas]
+    needs: [quality, deploy-workers, register-schemas, migration-drift]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -280,7 +390,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
   deploy-dashboard:
-    needs: quality
+    needs: [quality, migration-drift]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -314,7 +424,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
   deploy-customer-web:
-    needs: quality
+    needs: [quality, migration-drift]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
