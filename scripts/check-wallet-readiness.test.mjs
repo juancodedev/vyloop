@@ -4,7 +4,8 @@
 //
 // Development tool test: kept beside the script it covers, outside `src`, so it
 // is neither linted nor typechecked as product code.
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -16,6 +17,7 @@ import {
   PROGRAM_PAGE_PATH,
   PROGRAM_PAGE_TIMEOUT_MS,
   REQUIRED_SECRETS,
+  readDevVarsDatabaseUrl,
   resolveProgramPageOrigin,
   verdict,
 } from './check-wallet-readiness.mjs';
@@ -216,12 +218,51 @@ describe('formatReport', () => {
   });
 });
 
-describe('missingSecrets', () => {
-  it('reports only what is absent', () => {
-    expect(missingSecrets(REQUIRED_SECRETS)).toEqual([]);
-    expect(missingSecrets([])).toEqual(REQUIRED_SECRETS);
+  describe('missingSecrets', () => {
+    it('reports only what is absent', () => {
+      expect(missingSecrets(REQUIRED_SECRETS)).toEqual([]);
+      expect(missingSecrets([])).toEqual(REQUIRED_SECRETS);
+    });
   });
-});
+
+  describe('readDevVarsDatabaseUrl', () => {
+    // This guard exists because the report threw instead of degrading. In CI
+    // `.dev.vars` is gitignored and absent, `process.env.DATABASE_URL` was unset,
+    // and `??` fell into an unguarded `readFileSync` — `ENOENT` on every deploy.
+    // `main` exits non-zero on a `BLOCK`, so that throw exited 1 having printed
+    // nothing, and the workflow's `continue-on-error` hid the stack trace in place
+    // of a report. The step had never once produced a report.
+    const TMP = mkdtempSync(join(tmpdir(), 'readiness-'));
+    const fixture = join(TMP, 'with-url');
+    const noUrl = join(TMP, 'without-url');
+    const emptyFile = join(TMP, 'empty');
+    writeFileSync(fixture, 'DATABASE_URL=postgres://fixture\nOTHER=ignored\n');
+    writeFileSync(noUrl, 'OTHER=ignored\n');
+    writeFileSync(emptyFile, '');
+
+    it('is null, not a throw, when there is no local dev file', () => {
+      expect(readDevVarsDatabaseUrl(join(TMP, 'absent'))).toBeNull();
+    });
+
+    it('does not throw for a path that cannot be a file', () => {
+      // Not the same as absent: a directory, and a name containing a NUL. Both used
+      // to reach `readFileSync` unguarded.
+      expect(() => readDevVarsDatabaseUrl(TMP)).not.toThrow();
+      expect(() => readDevVarsDatabaseUrl('\0invalid')).not.toThrow();
+    });
+
+    it('reads the url out of the file when the file is there', () => {
+      // The other direction, so the guard is not satisfiable by always returning
+      // null — which would silence the check rather than make it honest.
+      expect(readDevVarsDatabaseUrl(fixture)).toBe('postgres://fixture');
+    });
+
+    it('is null when the file exists but carries no url', () => {
+      expect(readDevVarsDatabaseUrl(noUrl)).toBeNull();
+      expect(readDevVarsDatabaseUrl(emptyFile)).toBeNull();
+    });
+  });
+
 
 describe('resolveProgramPageOrigin', () => {
   it('follows the deployed var instead of the source default', () => {

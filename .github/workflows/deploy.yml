@@ -47,8 +47,27 @@ jobs:
       #
       # The report is in the log either way, and a `BLOCK` on the program page is
       # the finding worth reading. `continue-on-error` is here rather than relied
-      # on by accident: the script sets no exit code today, and that should not
-      # be what decides whether this gate can ever block.
+      # on by accident.
+      #
+      # It stays non-blocking because the report asks a question about an external
+      # service, and a 404 on the program page does not break the wallet — Google
+      # rejects the class it reviews, days later, and that is where it should be
+      # fixed. Blocking here would hold every wallet deploy for something outside
+      # the wallet, and the tempting fix would be to delete the step.
+      #
+      # `main` does exit non-zero on a `BLOCK`, so this gate *could* block. An
+      # earlier version of this comment claimed the script set no exit code at all,
+      # and that claim was wrong — it was wrong because of a bug, not by design:
+      # the report read `apps/gateway/.dev.vars` unguarded, that file is gitignored,
+      # and CI has never had it, so every deploy threw `ENOENT`, exited 1 having
+      # printed nothing, and `continue-on-error` hid the stack trace where a report
+      # should have been. The step had never once produced a report in CI.
+      #
+      # Read today it degrades to `unknown` instead, which is the contract the
+      # script states for itself: it reports `unknown` rather than guessing when it
+      # cannot see a fact. On a runner with no database it will mostly say unknown —
+      # the checks that still report are the ones that need neither a database nor
+      # a Cloudflare token.
       - name: Wallet readiness report
         run: pnpm wallet:readiness
         continue-on-error: true
