@@ -8,6 +8,15 @@ import { Hono } from 'hono';
 // ---------------------------------------------------------------------------
 
 export interface IngestorEnv {
+  /**
+   * The event schema registry.
+   *
+   * Declared in `wrangler.jsonc` since the binding was found missing in
+   * production. The namespace is populated by the `register-schemas` deploy job,
+   * not by this Worker: an empty registry is a valid state for KV to be in and an
+   * invalid state for this route to answer from, so nothing at startup may be
+   * relied on to have filled it.
+   */
   SCHEMA_REGISTRY: KVNamespace;
   EVENT_QUEUE: Queue;
   // For hosted event types that need specific queues
@@ -30,6 +39,21 @@ const ingestor = new Hono<{ Bindings: IngestorEnv }>();
  * - 202 Accepted — event validated and published
  * - 400 SCHEMA_INVALID — payload does not match schema
  * - 404 EVENT_TYPE_UNKNOWN — no schema registered for this event type
+ *
+ * ## The registry this reads, and what an empty one looks like
+ *
+ * `SCHEMA_REGISTRY` is declared in `wrangler.jsonc` and points at the same
+ * namespace `workers/{customer,growth,communication,automation}` bind — the
+ * namespace id is a fact five configs have to agree on, held by
+ * `schema-registry-namespace.contract.test.ts` and pinned by value in
+ * `wrangler-config.contract.test.ts`.
+ *
+ * It used to be undeclared, and that produced a 500 on *every* event type,
+ * registered or not, because the failure was a `kv.get()` on `undefined` before
+ * any lookup happened. A declared-but-empty registry produces the 404 above
+ * instead, which is a better failure and still a broken route — so the deploy
+ * job populates the namespace before this Worker is published. See
+ * `.github/workflows/deploy.yml` and `packages/schema-registry/scripts/`.
  */
 ingestor.post('/v1/events/:type', async (c) => {
   const eventType = c.req.param('type');

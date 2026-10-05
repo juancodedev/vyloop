@@ -83,6 +83,34 @@
     {
       "binding": "RATE_LIMITER",
       "id": "c2d6e3da0e96495697b3caa2c4270e87"
+    },
+    // The event schema registry, read at `POST /v1/events/{type}` in
+    // `src/ingestor.ts` — a mounted route, and for a caller with a valid JWT
+    // the only way to publish an event.
+    //
+    // This binding was absent, and the absence was invisible: `wrangler deploy`
+    // publishes a Worker whose `c.env.SCHEMA_REGISTRY` is `undefined`, the
+    // `kv.get()` throws, and every event POST answers 500. Not a 404 for one
+    // unknown type — a 500 for every type including real ones, because the
+    // failure happens before any lookup.
+    //
+    // The id is the same namespace `workers/{customer,growth,communication,
+    // automation}` bind, confirmed against the Cloudflare API as an existing
+    // namespace titled `vyloop-schema-registry`. It is deliberately NOT a
+    // plausible-looking guess: a wrong-but-valid id resolves against an empty
+    // namespace instead of throwing, and the route then reports
+    // EVENT_TYPE_UNKNOWN for event types the system defines — a correct-looking
+    // answer that is wrong, while the four workers keep working. Two truths
+    // about one namespace is the failure mode
+    // `src/schema-registry.contract.test.ts` exists to prevent.
+    //
+    // Declaring it is only half of the fix. A declared binding against an empty
+    // registry answers 404 instead of 500, which is a better failure and still a
+    // broken route, so the deploy job populates the namespace before this Worker
+    // is published. See `.github/workflows/deploy.yml`.
+    {
+      "binding": "SCHEMA_REGISTRY",
+      "id": "732ccde5b0944db082d07667aba8104b"
     }
   ],
   "queues": {
