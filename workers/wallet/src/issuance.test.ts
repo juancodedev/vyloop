@@ -265,6 +265,15 @@ class FakeStore implements WalletStore {
     return [];
   }
 
+  /**
+   * The pass-inactivity rule's query. Unreachable from this suite: the rule has its
+   * own module and its own fake store, and a fake that quietly answered it would
+   * let a caller reach it without any test noticing.
+   */
+  async findInactivePassCandidates(): Promise<never> {
+    throw new Error('findInactivePassCandidates is not used by this test suite.');
+  }
+
   async updateProgramReviewStatus(tenantId: string, reviewStatus: string): Promise<void> {
     this.record('updateProgramReviewStatus', tenantId);
     const row = this.programs[tenantId];

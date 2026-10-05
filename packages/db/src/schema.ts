@@ -486,6 +486,61 @@ export const tenantWalletPrograms = pgTable('tenant_wallet_programs', {
     // value is `env || db`, so a deployment can refuse every mint regardless of
     // what any row says.
     demoMode: boolean('demo_mode').notNull().default(true),
+
+    // Months of customer inactivity after which this tenant's Google Wallet
+    // passes are deactivated automatically.
+    //
+    // ## `NULL` is the default *because there is no default*
+    //
+    // The column is nullable with **no** default value, and `NULL` means the
+    // rule is off. That is the whole safety argument for this feature, so it is
+    // worth being explicit about what the alternatives would have done. A
+    // `DEFAULT 6` would put every existing tenant — and every tenant created by
+    // the next migration — into a state where the first run of the rule moves
+    // their customers' cards into the "Expired passes" section of real phones.
+    // Nobody asked for that, and it cannot be undone from here: the only route
+    // back is the customer re-adding the card. The rule is therefore opt-in, and
+    // opt-in has to be spelled as "a human wrote a number" or it is not opt-in.
+    //
+    // The first run of an opted-in rule is still a mass state change, which is
+    // why `workers/wallet/src/inactivity.ts` can decide without acting and
+    // reports the count it would touch before anything is written.
+    //
+    // ## Why this is not `loyalty_programs.points_expiry_days`
+    //
+    // That column exists, is nullable, and is unread. It is a different rule
+    // wearing a similar name, and reusing it would import its semantics silently:
+    //
+    //   - **Unit.** It is days. This window is calendar months. Months are
+    //     relative to a date (`2026-03-31` minus one month is `2026-02-28`) and
+    //     days are not, so a days column cannot express a months window without
+    //     a lossy conversion or a unit lie in the column name.
+    //   - **Activity.** Points expiry answers "how long do *points* survive".
+    //     This rule answers "how long has this *customer* been away". Redemption
+    //     is activity here (`points_transactions.points` is signed, so spending
+    //     is a negative row) and is emphatically not a points-earning event; a
+    //     column whose name is about points carries the assumption that it is
+    //     about points going up.
+    //   - **Effect.** Points expiry touches the ledger. This touches Google's
+    //     object state and our tracking row.
+    //   - **Who reads it.** `pointsExpiryDays` is deliberately not surfaced to
+    //     the customer app (see `workers/customer/src/routes.ts`). A merchant
+    //     who set it to 180 to mean "points die after half a year" would get
+    //     their customers' *cards* muted instead, which is the exact
+    //     mute-too-much incident this column's nullability exists to prevent.
+    //
+    // ## It lives here rather than on `loyalty_programs`
+    //
+    // This is a wallet behaviour switch, and `demo_mode` next to it is the
+    // precedent: a per-tenant decision about what this worker is allowed to do
+    // to a merchant's passes belongs with the merchant's wallet program row,
+    // where the wallet worker already keeps the rest of that policy.
+    //
+    // A value of `0` or less is treated as "off" by the reader, because a
+    // `NULL`-only guard would let a hand-edited `0` deactivate every pass in the
+    // tenant on the next run.
+    passInactivityMonths: integer('pass_inactivity_months'),
+
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),

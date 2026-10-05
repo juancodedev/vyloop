@@ -69,8 +69,34 @@ export interface WalletProgramRow {
    * direction: absent means "do not claim this pass works for the public".
    */
   demoMode?: boolean;
+  /**
+   * `tenant_wallet_programs.pass_inactivity_months`. Months of customer
+   * inactivity after which this tenant's passes are deactivated automatically.
+   *
+   * Optional on the type for the same reason `demoMode` is: a row written before
+   * the column existed, or read by a query that has not been updated, must not
+   * read as "this tenant wants their cards muted". `null` and `undefined` both
+   * mean the rule is off, and so does a value of `0` or less — see
+   * `inactivity.ts`, where that is enforced rather than assumed.
+   */
+  passInactivityMonths?: number | null;
   /** `tenant_wallet_programs.last_synced_at`. Nullable. */
   lastSyncedAt: Date | null;
+}
+
+/**
+ * One pass this tenant's inactivity rule would deactivate.
+ *
+ * `lastActivityAt` is `null` for a customer who has never had a ledger movement,
+ * in which case the clock that decides is their enrolment date — see
+ * `isInactiveSince`. Carrying it rather than a pre-computed verdict is what lets
+ * the report show *why* a pass was chosen.
+ */
+export interface InactivityCandidateRow {
+  customerId: string;
+  objectId: string;
+  /** Latest `points_transactions.created_at` for this customer, or `null`. */
+  lastActivityAt: Date | null;
 }
 
 /** The slice of `membership_tiers` the pass needs. */
@@ -690,6 +716,39 @@ export interface WalletStore {
    * a time.
    */
   findPassesByObjectIds(objectIds: string[], tenantId: string): Promise<WalletPassRow[]>;
+
+  /**
+   * The passes in **one tenant** that no ledger movement inside `cutoff` covers.
+   *
+   * ## The one query this rule is allowed to ask
+   *
+   * Everything the pass-inactivity rule decides comes from here. It is a single
+   * statement per tenant, it reads nothing at Google, and it is the reason the
+   * rule's "decide" half can run in an environment with no Google access at all.
+   *
+   * ## Why the tenant is a parameter and not a filter the caller applies
+   *
+   * Because the window is per tenant. A tenant configured for three months and
+   * one configured for twenty-four produce different `cutoff` values, so a shared
+   * threshold computed once and applied across tenants would be a mute of exactly
+   * the kind this feature exists to prevent: one merchant's setting silently
+   * deciding another merchant's customers. `tenantId` is in the `WHERE` and again
+   * in the ledger subquery.
+   *
+   * ## The bound is not decoration
+   *
+   * `limit` is a hard cap the implementation must honour. A tenant with a large
+   * pass table would otherwise have one unbounded statement per run, and the
+   * report could not say how much it had not reached. Truncation is reported as
+   * `truncated` rather than silently applied, because a report that says "400
+   * deactivated" when 4,000 were due is a report nobody can act on.
+   */
+  findInactivePassCandidates(input: {
+    tenantId: string;
+    /** Activity at or after this instant is inside the window, so the pass is not a candidate. */
+    cutoff: Date;
+    limit: number;
+  }): Promise<InactivityCandidateRow[]>;
 
   /** Write a freshly observed review status and sync timestamp. */
   updateProgramReviewStatus(tenantId: string, reviewStatus: string, syncedAt: Date): Promise<void>;
