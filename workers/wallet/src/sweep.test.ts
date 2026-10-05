@@ -464,6 +464,18 @@ class SweepStore implements WalletStore {
     return objectIds.map((id) => rows.get(id)).filter((row): row is WalletPassRow => row !== undefined);
   }
 
+  /**
+   * The pass-inactivity rule's query, deliberately unreachable here.
+   *
+   * This store models a sweep, and the inactivity rule is a separate module with a
+   * separate entry point precisely because hanging it off this one would inherit the
+   * sweep's demo-mode refusal. A fake that answered the query anyway would let that
+   * coupling back in without a single test failing.
+   */
+  async findInactivePassCandidates(): Promise<never> {
+    throw new Error('findInactivePassCandidates is not reachable from the sweep.');
+  }
+
   async setProgramDemoMode(tenant: string, demoMode: boolean): Promise<number> {
     this.record('setProgramDemoMode', tenant);
     const row = this.programs[tenant];

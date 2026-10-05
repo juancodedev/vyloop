@@ -51,6 +51,9 @@ vi.mock('@vyloop/db', async () => {
       issuerId: text('issuer_id').notNull(),
       classId: text('class_id').notNull(),
       reviewStatus: text('review_status').notNull(),
+      // Nullable, no default — the shape that makes "this tenant has not asked for
+      // the inactivity rule" the default state of every existing row.
+      passInactivityMonths: integer('pass_inactivity_months'),
       lastSyncedAt: timestamp('last_synced_at'),
     }),
     loyaltyPrograms: pgTable('loyalty_programs', {
@@ -92,6 +95,7 @@ const TENANT = '90d5ad58-bc5c-46a3-b82a-9cebb47e00b1';
 const OTHER_TENANT = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const CUSTOMER = 'd185c973-c976-46b5-b3bf-06185739a941';
 const OTHER_CUSTOMER = 'b3f1c0d2-5e6a-4a7b-9c8d-1e2f3a4b5c6d';
+const OBJECT_ID = '3388000000023206930.member-c8b61954-1b6d-4dfa-9954-b7c936a9e648';
 
 const dialect = new PgDialect();
 
@@ -1588,5 +1592,183 @@ describe('recordPassCallback', () => {
         new Date(),
       ),
     ).resolves.toBe(0);
+  });
+});
+
+// ============================================================================
+// The pass inactivity candidate query
+//
+// A raw `db.execute` statement, so what is checked here is the SQL the store
+// actually emits. This is the deliberate mirror of `isInactiveSince` in
+// `inactivity.ts`, which is where the boundary rule itself is tested
+// behaviourally against real code. The two must agree and neither can prove the
+// other, so both are asserted:
+//
+//   - `inactivity.test.ts`  — the decision, with the boundary and the enrolment
+//                             fallback, against the real exported function.
+//   - this block            — that the SQL carries the same four conditions.
+//
+// A divergence between them shows up as a failing assertion in one of the two
+// places rather than as a customer whose card is muted by a query nobody read.
+// ============================================================================
+
+describe('findInactivePassCandidates', () => {
+  function candidatesWith(rows: Row[] = []) {
+    const fake = createFakeDb(rows, 'tenantId');
+    return { fake, store: createDrizzleWalletStore(fake.db) };
+  }
+
+  const CUTOFF = new Date('2026-07-05T06:00:00.000Z');
+
+  it('scopes to one tenant, and takes it as a parameter', async () => {
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 10 });
+
+    expect(fake.executed[0]!.sql).toContain('p.tenant_id =');
+    expect(fake.executed[0]!.params).toContain(TENANT);
+    // The ledger subquery is scoped too. A rule that read another tenant's ledger
+    // would report a merchant's customers as active on the strength of somebody
+    // else's spending, which is a mute too few — the mirror image of the incident
+    // this rule is built to prevent.
+    expect(fake.executed[0]!.sql).toContain('tx.business_id =');
+    expect(fake.executed[0]!.sql).toContain('tx.customer_id =');
+  });
+
+  it('only considers passes we believe Google holds and that are not already done', async () => {
+    // `not_issued` and `not_saved` have no object to patch. `inactive` is this
+    // rule's own output, so including it would re-deactivate on every run.
+    // `expired` and `completed` are Google's terminal states and this rule does
+    // not get a vote on them.
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 10 });
+
+    expect(fake.executed[0]!.sql).toContain("p.state = 'issued'");
+    const statement = fake.executed[0]!.sql;
+    for (const absent of [
+      'not_issued',
+      'not_saved',
+      'inactive',
+      'expired',
+      'completed',
+    ]) {
+      expect(statement).not.toContain(`'${absent}'`);
+    }
+  });
+
+  it('compares the activity clock strictly against the cutoff', async () => {
+    // `<`, not `<=`. A transaction landing exactly on the cutoff is inside the
+    // window, so the customer is not a candidate. This is `isInactiveSince`'s
+    // comparison; see `inactivity.test.ts` for the boundary cases themselves.
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 10 });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toMatch(/COALESCE\([^)]*last_activity[^)]*\)\s*</s);
+    expect(statement).not.toMatch(/COALESCE\([^)]*last_activity[^)]*\)\s*<=/s);
+  });
+
+  it("falls back to the customer's enrolment, so a new signup is not a candidate", async () => {
+    // Without this, a customer who enrolled last week and has never transacted has
+    // no clock at all, and the first run of the rule mutes every new signup. The
+    // join to `customers` is what supplies the clock.
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 10 });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toMatch(/COALESCE\(/);
+    expect(statement).toContain('c.created_at');
+    expect(statement).toMatch(/JOIN customers c/);
+    // `LEFT`, so the customer with no ledger rows is kept in the result rather
+    // than dropped — they are the case the COALESCE exists for.
+    expect(statement).toMatch(/LEFT JOIN LATERAL/);
+  });
+
+  it('takes the newest ledger row per customer', async () => {
+    // `max(created_at)` over the customer's own rows, which `idx_points_balance
+    // (business_id, customer_id, created_at DESC)` answers from its leading two
+    // columns. Written once, as a lateral, because the predicate needs the same
+    // value the projection returns.
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 10 });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toContain('max(tx.created_at)');
+    expect(statement).toContain('points_transactions tx');
+    // One occurrence: a subquery repeated in the predicate would be two
+    // expressions that have to agree, and this is the one that decides.
+    expect(statement.match(/max\(tx\.created_at\)/g)).toHaveLength(1);
+  });
+
+  it('honours the bound, so one run cannot read an unbounded number of rows', async () => {
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 7 });
+
+    expect(fake.executed[0]!.sql).toMatch(/LIMIT/);
+    expect(fake.executed[0]!.params).toContain(7);
+  });
+
+  it('clamps a nonsense bound rather than trusting the caller', async () => {
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 0 });
+    expect(fake.executed[0]!.params).toContain(1);
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 10 ** 9 });
+    expect(fake.executed[1]!.params).toContain(2000);
+  });
+
+  it('reports a customer who never transacted as null, not as undefined', async () => {
+    // Normalised at the boundary so the rule and the report do not each need their
+    // own null check, and so "never transacted" is one value rather than two.
+    const fake = createFakeDb([], 'tenantId');
+    fake.db.execute = vi.fn((chunk: unknown) => {
+      fake.executed.push(dialect.sqlToQuery(chunk as never));
+      return Promise.resolve({
+        rows: [{ customer_id: CUSTOMER, object_id: OBJECT_ID, last_activity_at: null }],
+      });
+    });
+    const store = createDrizzleWalletStore(fake.db);
+
+    const rows = await store.findInactivePassCandidates({
+      tenantId: TENANT,
+      cutoff: CUTOFF,
+      limit: 10,
+    });
+
+    expect(rows).toEqual([{ customerId: CUSTOMER, objectId: OBJECT_ID, lastActivityAt: null }]);
+  });
+
+  it('returns a Date for a customer who has transacted', async () => {
+    // The asymmetry matters: `lastActivityAt` decides which clock the rule used,
+    // and a string where a `Date` was promised would make `isInactiveSince` compare
+    // `undefined` and answer `false` for every customer.
+    const fake = createFakeDb([], 'tenantId');
+    fake.db.execute = vi.fn(() =>
+      Promise.resolve({
+        rows: [
+          {
+            customer_id: CUSTOMER,
+            object_id: OBJECT_ID,
+            last_activity_at: '2026-06-27T06:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    const store = createDrizzleWalletStore(fake.db);
+
+    const rows = await store.findInactivePassCandidates({
+      tenantId: TENANT,
+      cutoff: CUTOFF,
+      limit: 10,
+    });
+
+    expect(rows[0]!.lastActivityAt).toBeInstanceOf(Date);
+    expect(rows[0]!.lastActivityAt!.toISOString()).toBe('2026-06-27T06:00:00.000Z');
   });
 });
