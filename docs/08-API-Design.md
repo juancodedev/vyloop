@@ -187,10 +187,28 @@ Cuando el tenant no tiene fila de programa, `review_status`, `google_review_stat
     "class_id": "...",
     "member_code": "...",
     "balance_points": 0,
-    "points_currency": "puntos"
+    "points_currency": "puntos",
+    "already_existed": false,
+    "pass_state": "issued"
   }
 }
 ```
+
+**Emisión idempotente.** Antes de mintear, la ruta consulta `customer_wallet_passes` para el cliente del token y decide por estado:
+
+| Estado previo | Qué hace la ruta | `already_existed` |
+|---|---|---|
+| `issued` | Firma un link nuevo para el `object_id` registrado. No llama a Google, no inserta, no parchea, no reconcilia | `true` |
+| `not_saved` | Igual. Es un hueco de nuestro conocimiento, no un estado del cliente: preguntamos a Google y no hay objeto | `true` |
+| `inactive` | Igual. Es el mismo pase, desactivado por el cliente | `true` |
+| `not_issued` | Mintea. La fila no dice si el objeto existe en Google —la deja `recordPass` tanto si el insert following funcionó como si no— y la única forma de averiguarlo es preguntar | `false` |
+| `expired` / `completed` | **No mintea.** Son terminales y Google no puede deshacerlos, así que un insert nuevo no reviviría este pase: sería un segundo objeto para el mismo cliente. Responde `409 WALLET_PASS_TERMINAL` | — |
+| Sin fila | Mintea, inserta, y parchea en 409 si Google ya lo tenía | `false` |
+| Valor no reconocido | **No mintea.** Falla cerrado con `500 WALLET_PASS_STATE_UNKNOWN`, porque la columna es `text` sin `check` y el schema pide que los lectores fallen cerrados | — |
+
+El `save_url` se firma al vuelo en cada caso y nunca se guarda, así que devolver un pase existente no cuesta una llamada a Google. El camino 409 → patch sigue existiendo para la carrera real: dos requests que leen "sin fila" antes de que ninguna escriba son invisibles entre sí, y el 409 es la única señal. Dejó de ser el mecanismo principal, no el mecanismo.
+
+`already_existed` dice si **este request** creó el pase. `pass_state` es `customer_wallet_passes.state` después del request, con el mismo vocabulario que ya reporta `GET /v1/wallet/status`. Los dos campos son necesarios y no se contradicen: `already_existed: false, pass_state: "issued"` es una primera visita que sí creó el objeto, y `already_existed: true, pass_state: "not_saved"` es una fila que existe pero que el cliente todavía no guardó en el teléfono. `object_id` es idéntico en ambos caminos a propósito —eso es lo que hace idempotente la segunda petición—, así que sin esos dos campos un cliente no puede distinguir "la acabo de crear" de "ya la tenías".
 
 `POST /v1/wallet/program/sync`:
 
@@ -226,6 +244,8 @@ Cuando el tenant no tiene fila de programa, `review_status`, `google_review_stat
 | `WALLET_CLASS_NOT_APPROVED` | 409 | La clase del tenant no está aprobada |
 | `WALLET_CLASS_ID_MISMATCH` | 409 | El `class_id` almacenado no corresponde al `issuer_id` del tenant |
 | `LOYALTY_PROGRAM_NOT_CONFIGURED` | 409 | Hay clase de Google pero no hay programa de lealtad, así que el pase no tiene moneda de puntos |
+| `WALLET_PASS_TERMINAL` | 409 | El pase está en `expired` o `completed`. Google no puede volver atrás de esos estados, así que no se emite un pase nuevo por encima |
+| `WALLET_PASS_STATE_UNKNOWN` | 500 | `customer_wallet_passes.state` tiene un valor que este build no reconoce. Falla cerrado en vez de emitir sobre un estado que nadie revisó |
 | `WALLET_BALANCE_NOT_DISPLAYABLE` | 409 | El saldo supera los 9,999,999 puntos que un pase puede mostrar; es una condición de producto, no una falla del despliegue |
 | `WALLET_NOT_CONFIGURED` | 500 | `WALLET_ALLOWED_ORIGINS` vacío, o no se pudo obtener un member code |
 
@@ -242,6 +262,8 @@ Cuando el tenant no tiene fila de programa, `review_status`, `google_review_stat
 Además, el worker responde `NOT_FOUND` 404 para rutas bajo `/v1/wallet` que no existen, y `ERROR` o `INTERNAL_ERROR` 500 desde el manejador global de errores.
 
 **Nota sobre la reconciliación:** en `GET /v1/wallet/pass`, la reconciliación con Google ocurre después de firmar el link y es un efecto secundario que no puede fallar la petición. Toda falla de Google se registra y se ignora, y la respuesta 200 con link se entrega igual. Un cliente que toca un botón y recibe un error porque la API de Google está teniendo un mal momento no vuelve a tocarlo.
+
+La reconciliación corre solo en el camino que emite. Cuando el pase ya existe no se le pide nada a Google: el saldo de un pase guardado lo mantiene `sweep.ts` en cada barrido programado, que incluye a los clientes que nunca abren la app.
 
 ---
 
