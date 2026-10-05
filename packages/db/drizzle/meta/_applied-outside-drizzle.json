@@ -2,6 +2,128 @@
   "version": 1,
   "migrations": [
     {
+      "tag": "0004_chubby_crystal",
+      "when": 1790630375373,
+      "hash": "58c7ac3d20bc953552bd0986aafed470945b8b2db6ff6e80c3de944501853c7f",
+      "evidence": [
+        {
+          "kind": "table",
+          "name": "customer_wallet_passes"
+        },
+        {
+          "kind": "constraint",
+          "name": "uq_customer_wallet_passes_tenant_object"
+        },
+        {
+          "kind": "table",
+          "name": "message_log"
+        },
+        {
+          "kind": "table",
+          "name": "tenant_wallet_programs"
+        },
+        {
+          "kind": "table",
+          "name": "whatsapp_templates"
+        },
+        {
+          "kind": "column",
+          "name": "customers.member_code"
+        },
+        {
+          "kind": "constraint",
+          "name": "customer_wallet_passes_customer_id_customers_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "customer_wallet_passes_tenant_id_tenants_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "message_log_business_id_tenants_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "message_log_customer_id_customers_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "tenant_wallet_programs_tenant_id_tenants_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "whatsapp_templates_business_id_tenants_id_fk"
+        },
+        {
+          "kind": "index",
+          "name": "idx_customer_wallet_passes_tenant"
+        },
+        {
+          "kind": "index",
+          "name": "idx_message_log_customer"
+        },
+        {
+          "kind": "index",
+          "name": "idx_message_log_status"
+        },
+        {
+          "kind": "index",
+          "name": "idx_whatsapp_templates_name"
+        },
+        {
+          "kind": "index",
+          "name": "idx_customer_events_customer"
+        },
+        {
+          "kind": "index",
+          "name": "idx_customer_events_type"
+        },
+        {
+          "kind": "index",
+          "name": "idx_customers_phone"
+        },
+        {
+          "kind": "index",
+          "name": "idx_customers_last_visit"
+        },
+        {
+          "kind": "index",
+          "name": "idx_customers_metadata"
+        },
+        {
+          "kind": "index",
+          "name": "uq_customers_business_member_code"
+        },
+        {
+          "kind": "index",
+          "name": "idx_points_balance"
+        },
+        {
+          "kind": "index",
+          "name": "idx_reward_grants_customer"
+        },
+        {
+          "kind": "index",
+          "name": "idx_rewards_category"
+        },
+        {
+          "kind": "index",
+          "name": "idx_rewards_auto_grant"
+        }
+      ]
+    },
+    {
+      "tag": "0005_wallet_demo_mode",
+      "when": 1790724905190,
+      "hash": "86f919d0a5b536f4761ecc6e8d063be268377b16b3ea81cef28936d83d77ee9b",
+      "evidence": [
+        {
+          "kind": "column",
+          "name": "tenant_wallet_programs.demo_mode"
+        }
+      ]
+    },
+    {
       "tag": "0006_users_email_unique",
       "when": 1790888420391,
       "hash": "65cd3da97283513a5a39e2ac3192103c4fa61eae3b1b1c38760e2b65b1c60bc3",
@@ -9,6 +131,40 @@
         {
           "kind": "index",
           "name": "uq_users_email"
+        }
+      ]
+    },
+    {
+      "tag": "0007_loyalty_promo_copy",
+      "when": 1790888447666,
+      "hash": "7691bfd81295d320ade0c467b3335c82cfc202995be6e6fb5ee229d8aea1570b",
+      "evidence": [
+        {
+          "kind": "column",
+          "name": "loyalty_programs.promo_copy"
+        }
+      ]
+    },
+    {
+      "tag": "0008_loud_vector",
+      "when": 1790906418469,
+      "hash": "0855da7800356058a031af81b45b8487b68d1245bc341ea1ffe341303a979ae2",
+      "evidence": [
+        {
+          "kind": "table",
+          "name": "wallet_callback_deliveries"
+        },
+        {
+          "kind": "constraint",
+          "name": "uq_wallet_callback_deliveries_tenant_nonce"
+        },
+        {
+          "kind": "constraint",
+          "name": "wallet_callback_deliveries_tenant_id_tenants_id_fk"
+        },
+        {
+          "kind": "index",
+          "name": "idx_wallet_callback_deliveries_received"
         }
       ]
     }
