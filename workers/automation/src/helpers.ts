@@ -19,12 +19,26 @@ export interface AuthHeaders {
  * The wallet worker's RPC surface, as this worker calls it.
  *
  * A plain `Fetcher` models only `fetch` and `connect`, so the target's exported
- * `scheduled` function — which is the entire point of this binding — needs its
- * own shape. Declaring it here also documents what the wallet must keep
- * exporting: rename `scheduled` there and this stops typechecking.
+ * functions — which are the entire point of this binding — need their own shape.
+ * Declaring them here also documents what the wallet must keep exporting: rename
+ * `scheduled` there and this stops typechecking.
  */
 export interface WalletWorker {
   scheduled(controller: unknown): Promise<void>;
+  /**
+   * The pass-inactivity rule's own entry point.
+   *
+   * A separate method rather than something inside `scheduled`, and the reason is
+   * not tidiness. `runScheduledSweep` refuses to run in demo mode before it opens
+   * a database, because it is a background writer with no Google publishing
+   * access behind it. An inactivity rule hung off that call would inherit the
+   * refusal and never run in any environment. Calling a different method means
+   * the two rules have independent fates, while sharing this one cron slot.
+   *
+   * `dryRun` defaults to `true` on the wallet side, so a binding that passes
+   * nothing gets a report and not a mass state change over real phones.
+   */
+  deactivateInactivePasses(options?: { dryRun?: boolean }): Promise<unknown>;
 }
 
 export interface Bindings {
