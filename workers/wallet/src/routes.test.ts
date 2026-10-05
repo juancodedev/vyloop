@@ -642,7 +642,11 @@ describe('GET /v1/wallet/pass', () => {
   it('records the pass row as not_issued', async () => {
     await GET('/v1/wallet/pass');
 
-    const insert = statements.find((s) => s.includes('customer_wallet_passes'));
+    // Matched on the verb, not on the table name. The route now also *reads*
+    // `customer_wallet_passes` — once before minting and once to report the state
+    // the request left behind — and `.includes('customer_wallet_passes')` would
+    // have matched that SELECT first and asserted against the wrong statement.
+    const insert = statements.find((s) => s.includes('INSERT INTO customer_wallet_passes'));
     expect(insert).toContain("'not_issued'");
   });
 
@@ -1156,6 +1160,238 @@ describe('GET /v1/wallet/pass: creating the object at Google', () => {
   });
 });
 
+// ============================================================================
+// Idempotent issuance
+//
+// The save link is signed on the fly and never stored, so a pass that already
+// exists can be handed back without a Google call and without a write. What
+// makes that possible is one read that used to happen only on `/status`.
+// ============================================================================
+
+describe('GET /v1/wallet/pass: an existing pass is reused, never minted again', () => {
+  /** What `recordPass` leaves behind, for a state this test wants to start from. */
+  function existingPass(state: string, objectId = `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`) {
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: TENANT,
+        objectId,
+        state,
+        lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+      },
+    ];
+  }
+
+  /** Everything this worker would write to the pass table, and nothing it reads. */
+  function passWrites(): string[] {
+    return statements.filter(
+      (sql) => /customer_wallet_passes/i.test(sql) && /\b(INSERT|UPDATE|DELETE)\b/i.test(sql),
+    );
+  }
+
+  it('hands back a link for an `issued` pass and never asks Google to create it', async () => {
+    existingPass('issued');
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    // The assertion that matters. A test which only checked the 200 and the link
+    // would pass against the old code, which minted on every single visit and
+    // only survived on the 409 fallback.
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toEqual([]);
+    // And nothing else either: a repeat visit has no reason to spend a Google
+    // write, and `sweep.ts` is what keeps a saved pass's balance current for the
+    // customers who never open the app.
+    expect(googleCalls).toEqual([]);
+
+    const body = (await res.json()) as { data: { save_url: string } };
+    expect(body.data.save_url.startsWith(SAVE_TO_WALLET_URL_PREFIX)).toBe(true);
+  });
+
+  it('returns the object id the row recorded, not one derived again', async () => {
+    // Seeded diverging from the derivation on purpose. The two agree in
+    // production, so a fixture that matches would let a freshly derived id pass
+    // for the recorded one and assert nothing.
+    existingPass('issued', `${ISSUER}.member-legacy-customer`);
+
+    const res = await GET('/v1/wallet/pass');
+
+    const body = (await res.json()) as { data: { object_id: string } };
+    expect(body.data.object_id).toBe(`${ISSUER}.member-legacy-customer`);
+    // Not the derived one.
+    expect(body.data.object_id).not.toBe(objectIdFor(ISSUER, CUSTOMER_GLOBAL_ID));
+  });
+
+  it('is idempotent: two requests, one object id, and the second writes nothing', async () => {
+    const first = await GET('/v1/wallet/pass');
+    const firstBody = (await first.json()) as { data: { object_id: string } };
+
+    googleCalls.length = 0;
+    statements.length = 0;
+
+    const second = await GET('/v1/wallet/pass');
+    const secondBody = (await second.json()) as { data: { object_id: string } };
+
+    expect(secondBody.data.object_id).toBe(firstBody.data.object_id);
+    // Google was written to exactly once across the two visits, by the first.
+    expect(googleCalls).toEqual([]);
+    // And the second wrote nothing: not the tracking row, not the object, not the
+    // customer's member code. Idempotence that still writes is not idempotence.
+    expect(passWrites()).toEqual([]);
+    expect(statements.filter((sql) => /UPDATE customers/i.test(sql))).toEqual([]);
+  });
+
+  it('reports `already_existed` on the reused pass and not on the fresh one', async () => {
+    existingPass('issued');
+
+    const reused = (await (await GET('/v1/wallet/pass')).json()) as {
+      data: { already_existed: boolean; pass_state: string };
+    };
+
+    expect(reused.data.already_existed).toBe(true);
+    expect(reused.data.pass_state).toBe('issued');
+
+    // The other half, so the flag is a fact about this request rather than a
+    // constant the route happens to always send.
+    passRows = [];
+    googleCalls.length = 0;
+    objectExistsAtGoogle = false;
+
+    const fresh = (await (await GET('/v1/wallet/pass')).json()) as {
+      data: { already_existed: boolean; pass_state: string };
+    };
+
+    expect(fresh.data.already_existed).toBe(false);
+    expect(fresh.data.pass_state).toBe('issued');
+  });
+
+  it('reuses a `not_saved` pass, because that is a gap in our knowledge and not a customer state', async () => {
+    // `not_saved` is written only when Google was asked and answered that it has
+    // no object — a statement about what we know, not about the customer. Minting
+    // over it would create a second object for one customer on the strength of a
+    // gap, and the save token creates the object when the customer taps anyway.
+    existingPass('not_saved');
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toEqual([]);
+    const body = (await res.json()) as { data: { already_existed: boolean } };
+    expect(body.data.already_existed).toBe(true);
+  });
+
+  it('reuses an `inactive` pass, because a deactivated pass is still that pass', async () => {
+    // The customer switched it off; it is not a second card waiting to be made,
+    // and `store.ts` documents `inactive → issued` as a real transition when they
+    // switch it back on.
+    existingPass('inactive');
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toEqual([]);
+    const body = (await res.json()) as { data: { pass_state: string } };
+    expect(body.data.pass_state).toBe('inactive');
+  });
+
+  it('refuses a terminal `expired` pass instead of minting a replacement', async () => {
+    // Google cannot un-expire an object, so a new insert would be a second card
+    // for one customer. Minting silently here is the one thing that must not
+    // happen, and the refusal has to be visible rather than a fresh link.
+    existingPass('expired');
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toEqual([]);
+    const json = (await res.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe('WALLET_PASS_TERMINAL');
+    expect(json.error.message).toMatch(/expired/i);
+  });
+
+  it('refuses a terminal `completed` pass the same way', async () => {
+    existingPass('completed');
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    expect(googleCalls).toEqual([]);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('WALLET_PASS_TERMINAL');
+  });
+
+  it('fails closed on a state it does not recognise, rather than minting over it', async () => {
+    // `state` is `text` with no `check` constraint, on purpose, and the schema
+    // says readers must fail closed. An `else` that minted would turn a value
+    // nobody reasoned about into a duplicate card at the counter.
+    existingPass('archived');
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(500);
+    expect(googleCalls).toEqual([]);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('WALLET_PASS_STATE_UNKNOWN');
+  });
+
+  it('does not let another business\'s pass row short-circuit this issuance', async () => {
+    // The multi-tenant case. `customer_wallet_passes.customer_id` is the primary
+    // key, so a row always carries a `tenant_id` this request has no business
+    // acting on — reusing it would hand this tenant a link naming another
+    // tenant's object, and skipping the insert would leave its own object missing.
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: OTHER_TENANT,
+        objectId: `${ISSUER}.member-theirs`,
+        state: 'issued',
+        lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+      },
+    ];
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { object_id: string; already_existed: boolean } };
+    expect(body.data.already_existed).toBe(false);
+    expect(body.data.object_id).toBe(objectIdFor(ISSUER, CUSTOMER_GLOBAL_ID));
+    // Ours was created, because ours is the one this tenant is allowed to mint.
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(1);
+  });
+
+  it('leaves the first-visit behaviour intact: mint, insert, reconcile', async () => {
+    // The no-regression guard. Everything this change adds is a branch *before*
+    // the old path, so the old path has to be asserted unchanged rather than
+    // assumed to be.
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(1);
+    expect(passRows[0]!.state).toBe('issued');
+    const body = (await res.json()) as { data: { object_id: string; member_code: string } };
+    expect(body.data.object_id).toBe(objectIdFor(ISSUER, CUSTOMER_GLOBAL_ID));
+    expect(body.data.member_code).toMatch(/^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{6}$/);
+  });
+
+  it('still patches on a 409 from a genuine concurrent race', async () => {
+    // The fallback is not dead code: two requests that both read "no row" before
+    // either writes it are invisible to each other, and Google's 409 is the only
+    // signal that the object is already there. It stopped being the *mechanism*,
+    // not the mechanism being *there*.
+    passRows = [];
+    objectExistsAtGoogle = true;
+    remoteObject = objectAtGoogle('96942');
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(1);
+    const patch = googleCalls.find((call) => call.method === 'patchObject');
+    expect(patch).toBeDefined();
+    expect(patch!.args[0]).toBe(objectIdFor(ISSUER, CUSTOMER_GLOBAL_ID));
+  });
+});
+
 describe('GET /v1/wallet/pass: reconciling the saved pass', () => {
   it('asks Google about the object it just issued a link for', async () => {
     await GET('/v1/wallet/pass');
@@ -1200,22 +1436,25 @@ describe('GET /v1/wallet/pass: reconciling the saved pass', () => {
     expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
   });
 
-  it('writes Google once across two visits, because the create carries the balance', async () => {
+  it('writes Google once across two visits, because the second finds the pass already issued', async () => {
     // Idempotency as the customer experiences it: open the app twice without
     // earning or spending anything, and Google is written to once.
     //
-    // This used to assert one reconciliation patch. The first visit now *creates*
-    // the object carrying the ledger's own balance, so there is nothing left for a
-    // reconciliation patch to correct — the create is the write. The second visit
-    // is refused a duplicate and falls back to a patch, so Google is still touched
-    // exactly once, and no second copy of the card is created.
+    // This used to assert one reconciliation patch after a second `insertObject`
+    // that Google refused with a 409. That was true and it was the symptom of the
+    // defect: a returning customer paid a Google write on every profile visit, and
+    // the write only failed at all because Google's refusal was then undone by a
+    // patch. The second visit is now answered from the tracking row, so it makes
+    // no Google call at all — and the 409 fallback has a dedicated test of its
+    // own for the race it actually exists to catch.
     await GET('/v1/wallet/pass');
+    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(1);
     expect(googleCalls.filter((call) => call.method === 'patchObject')).toEqual([]);
 
+    googleCalls.length = 0;
     await GET('/v1/wallet/pass');
 
-    expect(googleCalls.filter((call) => call.method === 'insertObject')).toHaveLength(2);
-    expect(googleCalls.filter((call) => call.method === 'patchObject')).toHaveLength(1);
+    expect(googleCalls).toEqual([]);
   });
 
   it('no longer reports `not_saved` from a missing object, because issuing creates one', async () => {

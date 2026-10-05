@@ -29,9 +29,11 @@ import {
   LoyaltyProgramNotConfiguredError,
   MemberCodeUnavailableError,
   classReadinessFor,
+  dispositionForExistingPass,
   issuePass,
+  linkForExistingPass,
   reasonCodeFor,
- TIER_HEADER_UNAVAILABLE } from './issuance';
+  TIER_HEADER_UNAVAILABLE } from './issuance';
 import { reconcilePass } from './reconcile';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +86,38 @@ const WALLET_DEMO_MODE = 'WALLET_DEMO_MODE';
  * row, a text module, or a custom layout).
  */
 const WALLET_BALANCE_NOT_DISPLAYABLE = 'WALLET_BALANCE_NOT_DISPLAYABLE';
+
+/**
+ * The customer's pass reached a state Google will not undo.
+ *
+ * `customer_wallet_passes.state` is terminal in `expired` and `completed`, and
+ * Google cannot un-expire or un-complete an object. So the route refuses instead
+ * of minting, because a new insert would not revive this pass: `object_id` is
+ * derived from `customers.global_id`, which does not change, so it would be the
+ * *same* id being refused — and if it were not, it would be a second card for one
+ * customer. Either way the honest answer is a refusal that names the state, not a
+ * fresh link that would fail at the customer's phone.
+ *
+ * 409 and not 500: the prerequisite is known and understood, and nothing about it
+ * is broken. What is true is that this pass cannot be reissued, which is a fact
+ * about the customer's own pass rather than about the deployment — and saying so
+ * is the whole point, because the alternative is a link that does not work.
+ */
+const WALLET_PASS_TERMINAL = 'WALLET_PASS_TERMINAL';
+
+/**
+ * `customer_wallet_passes.state` holds a value this build does not recognise.
+ *
+ * 500, and deliberately a code of its own rather than a fold into the generic
+ * failure. The column is `text` with no `check` constraint precisely so that a
+ * future value is a **code** change and readers fail closed until someone decides
+ * what it means — see the column's comment in `packages/db/src/schema.ts`. An
+ * `else` that minted here would turn a value nobody reasoned about into a
+ * duplicate card at a counter, which is the one failure this whole branch
+ * exists to prevent. Failing closed is the documented contract, so the response
+ * says it happened rather than hiding behind `WALLET_NOT_CONFIGURED`.
+ */
+const WALLET_PASS_STATE_UNKNOWN = 'WALLET_PASS_STATE_UNKNOWN';
 
 // ---------------------------------------------------------------------------
 // POST /v1/wallet/google/callback
@@ -429,14 +463,32 @@ function reasonCodeForReason(reason: string): string {
  * id to check wrongly.
  *
  * Status codes:
- * - 200 — a link. The pass is built, the member code is stored, the tracking
- *   row is recorded, and the pass is reconciled against Google.
+ * - 200 — a link. On a first visit the pass is built, the member code is stored,
+ *   the tracking row is recorded, the object is created at Google and reconciled
+ *   against it. On a returning visit the link is re-signed for the object the
+ *   customer's own tracking row records, and nothing is written or asked of
+ *   Google — see `dispositionForExistingPass` for the six states and why each one
+ *   lands where it does.
  * - 401 — no auth headers (`UNAUTHORIZED`, from the app-level middleware).
  * - 403 — the token has no customer row in this business.
  * - 409 — the tenant's class is unusable, the tenant has no loyalty program to
- *   name a currency, the deployment is in Demo Mode, or the balance is above
- *   what a pass can display. The code says which.
- * - 500 — this deployment is missing a value it cannot invent.
+ *   name a currency, the deployment is in Demo Mode, the balance is above what a
+ *   pass can display, the pass is in a terminal state, or Google refused to
+ *   create the object. The code says which.
+ * - 500 — this deployment is missing a value it cannot invent, or the customer's
+ *   pass row holds a state this build does not recognise.
+ *
+ * ## Why the response says whether the pass already existed
+ *
+ * Because a reused pass and a freshly minted one are otherwise the same answer:
+ * same link, same fields, same 200. `object_id` is identical by design — that is
+ * what makes a repeated request idempotent — so a client that cannot read
+ * `already_existed` and `pass_state` will tell a customer whose card has been in
+ * their phone for a year that it was just added for them. Both fields are needed
+ * and they do not contradict each other: `already_existed: false` with
+ * `pass_state: "issued"` is a first visit that did create the object, and
+ * `already_existed: true` with `pass_state: "not_saved"` is a row that exists
+ * and that the customer still has not put in their phone.
  *
  * ## Why a Google call on this route does not threaten the 200
  *
@@ -525,146 +577,251 @@ router.get('/v1/wallet/pass', async (c) => {
     return c.json({ error: { code: reasonCodeFor(readiness.reason), message: readiness.message } }, 409);
   }
 
-  try {
-    const issued = await issuePass(
-      {
-        store,
-        pepper: c.env.MEMBER_CODE_PEPPER,
-        serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
-        privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
-        origins,
-      },
-      {
-        tenantId,
-        customerId: customer.id,
-        customerGlobalId: customer.globalId,
-        customerFullName: customer.fullName,
-        storedMemberCode: customer.memberCode,
-        issuerId: readiness.issuerId,
-        classId: readiness.classId,
-      },
+  // -- What this customer already has --------------------------------------
+  //
+  // The read that was missing. Without it this route minted on every single
+  // visit, which meant every visit of a returning customer produced a Google 409,
+  // and every 409 that could not be patched came back as
+  // `WALLET_PASS_NOT_CREATABLE` — a symptom of never having looked.
+  //
+  // It is placed here, after the readiness gate and before anything is written,
+  // so a tenant whose class cannot back a pass still costs no extra query, and so
+  // a refused request has touched no more than a read.
+  const existing = await store.findPass(customer.id, tenantId);
+  const disposition = dispositionForExistingPass(existing, tenantId);
+
+  if (disposition.kind === 'terminal') {
+    // Refused, loudly, and without a Google call. Minting over a terminal pass is
+    // the one outcome that must not happen quietly — see the code's own comment.
+    console.warn(
+      `[wallet] Refusing to issue: pass ${disposition.objectId} for customer ${customer.id} in ` +
+        `tenant ${tenantId} is in terminal state "${disposition.state}".`,
     );
+    return c.json(
+      {
+        error: {
+          code: WALLET_PASS_TERMINAL,
+          message:
+            `This pass is in the state "${disposition.state}" at Google Wallet, and Google does not ` +
+            'allow a pass to leave that state, so a new one cannot be issued for it. Your account and ' +
+            'your points are unaffected and you can keep using them at the counter. Please tell the ' +
+            'business, who can resolve this for you.',
+        },
+      },
+      409,
+    );
+  }
 
-    // `issued.loyaltyObject.id` is asserted against the derived id inside
-    // `issuePass`, and this reuses the same object, so there is no third
-    // derivation anywhere in the request.
-    const client = googleWalletClientFor(c.env);
+  if (disposition.kind === 'unknown') {
+    // Failing closed, and saying why. An unrecognised `state` is a code change
+    // someone has not made yet, not a reason to create a second card.
+    console.error(
+      `[wallet] Pass ${disposition.objectId} for customer ${customer.id} in tenant ${tenantId} is ` +
+        `in unrecognised state ${JSON.stringify(disposition.state)}. Refusing rather than issuing ` +
+        'a pass on a state no code in this worker has reasoned about.',
+    );
+    return c.json(
+      {
+        error: {
+          code: WALLET_PASS_STATE_UNKNOWN,
+          message:
+            'This pass is recorded in a state this system does not recognise, so it will not issue ' +
+            'one on the strength of a state nobody has reviewed. Your account and your points are ' +
+            'unaffected.',
+        },
+      },
+      500,
+    );
+  }
 
-    // Create the object at Google. Nothing before this line had talked to
-    // Google about this pass.
+  try {
+    const issueDeps = {
+      store,
+      pepper: c.env.MEMBER_CODE_PEPPER,
+      serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
+      privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
+      origins,
+    };
+    const issueInput = {
+      tenantId,
+      customerId: customer.id,
+      customerGlobalId: customer.globalId,
+      customerFullName: customer.fullName,
+      storedMemberCode: customer.memberCode,
+      issuerId: readiness.issuerId,
+      classId: readiness.classId,
+    };
+
+    // Two paths, and they differ only in what they do *after* the object and the
+    // link exist. The member code, the ledger balance and the class are read the
+    // same way on both, so a re-issued link can never carry a number frozen at
+    // some earlier visit.
+    const issued =
+      disposition.kind === 'reuse'
+        ? await linkForExistingPass(issueDeps, {
+            ...issueInput,
+            // The recorded id, not a fresh derivation. See `store.ts`.
+            existingObjectId: disposition.objectId,
+          })
+        : await issuePass(issueDeps, issueInput);
+
+    // Everything below creates or updates something at Google, so it only runs
+    // when this request actually has to issue. A customer who already has a pass
+    // gets a freshly signed link for the object their row records and nothing
+    // else: no client, no insert, no patch, no reconciliation read.
     //
-    // ## Why this failure is not swallowed, unlike the one below it
+    // ## Why the reconciliation is skipped along with the insert
     //
-    // A save link is a signed claim naming an object id. If no object exists
-    // under that id, the link is well-formed and useless: Google answers the
-    // customer's tap with "an error occurred, contact the issuer", and our own
-    // endpoints reported 200 the whole time. That is exactly what happened for
-    // as long as this call did not exist, and it is why the failure mode was
-    // invisible for so long.
-    //
-    // Reconciling a balance and creating a pass are not the same kind of
-    // failure, and the swallow below is right for the first and wrong for this
-    // one. A stale balance is a cosmetic problem a later sync fixes; a missing
-    // object is a promise we cannot keep.
-    try {
-      await client.insertObject(issued.loyaltyObject);
-      console.log(`[wallet] Created pass object ${issued.objectId} at Google.`);
-    } catch (err: unknown) {
-      if (err instanceof GoogleWalletApiError && err.status === 409) {
-        // The customer already holds this pass. Creating is not an option, and
-        // patching is both correct and what keeps a returning customer from
-        // being handed a link to a second copy of the same card.
-        try {
-          await client.patchObject(issued.objectId, issued.loyaltyObject);
-          console.log(
-            `[wallet] Pass object ${issued.objectId} already existed at Google; patched it instead.`,
-          );
-        } catch (patchErr: unknown) {
-          // Wrapped because this runs inside a `catch`: an exception thrown here
-          // would leave the inner handler and reach the route's outer one, which
-          // answers a bare 500. The customer would be told the server is broken
-          // when the truth is that Google refused the update, which is the same
-          // answer the branch above gives.
-          const detail =
-            patchErr instanceof GoogleWalletApiError || patchErr instanceof GoogleWalletAuthError
-              ? patchErr.message
-              : 'the update failed for a reason this worker does not classify';
-          console.error(`[wallet] Could not patch pass object ${issued.objectId}:`, patchErr);
+    // Because the cost of skipping it is a pass whose balance is one visit stale,
+    // and `sweep.ts` already reconciles every due pass on a schedule — including
+    // for the customers who never open the app, who are the majority. Paying a
+    // Google write on every profile visit to save the sweep one read is the wrong
+    // trade, and the insert is what makes it possible at all: the 409 that used to
+    // arrive here for every returning customer is what ended in
+    // `WALLET_PASS_NOT_CREATABLE`.
+    if (disposition.kind === 'mint') {
+      // Constructed inside the branch rather than above it. The client is only
+      // ever used to reach Google, so building one for a request that will not
+      // is a credential-bearing object created for nothing.
+      const client = googleWalletClientFor(c.env);
+
+      // Create the object at Google. Nothing before this line had talked to
+      // Google about this pass.
+      //
+      // ## Why this failure is not swallowed, unlike the one below it
+      //
+      // A save link is a signed claim naming an object id. If no object exists
+      // under that id, the link is well-formed and useless: Google answers the
+      // customer's tap with "an error occurred, contact the issuer", and our own
+      // endpoints reported 200 the whole time. That is exactly what happened for
+      // as long as this call did not exist, and it is why the failure mode was
+      // invisible for so long.
+      //
+      // Reconciling a balance and creating a pass are not the same kind of
+      // failure, and the swallow below is right for the first and wrong for this
+      // one. A stale balance is a cosmetic problem a later sync fixes; a missing
+      // object is a promise we cannot keep.
+      try {
+        await client.insertObject(issued.loyaltyObject);
+        console.log(`[wallet] Created pass object ${issued.objectId} at Google.`);
+      } catch (err: unknown) {
+        if (err instanceof GoogleWalletApiError && err.status === 409) {
+          // Two requests that both read "no row" before either wrote it are
+          // invisible to each other, and Google's 409 is the only signal that the
+          // object is already there. This is no longer the mechanism a returning
+          // customer goes through — the pass row is — but it is still the only
+          // thing that catches the race, so it stays.
+          try {
+            await client.patchObject(issued.objectId, issued.loyaltyObject);
+            console.log(
+              `[wallet] Pass object ${issued.objectId} already existed at Google; patched it instead.`,
+            );
+          } catch (patchErr: unknown) {
+            // Wrapped because this runs inside a `catch`: an exception thrown here
+            // would leave the inner handler and reach the route's outer one, which
+            // answers a bare 500. The customer would be told the server is broken
+            // when the truth is that Google refused the update, which is the same
+            // answer the branch above gives.
+            const detail =
+              patchErr instanceof GoogleWalletApiError || patchErr instanceof GoogleWalletAuthError
+                ? patchErr.message
+                : 'the update failed for a reason this worker does not classify';
+            console.error(`[wallet] Could not patch pass object ${issued.objectId}:`, patchErr);
+            return c.json(
+              {
+                error: {
+                  code: 'WALLET_PASS_NOT_CREATABLE',
+                  message:
+                    'This pass already exists at Google and could not be updated, so no link can be ' +
+                    `produced. Google reported: ${detail}`,
+                },
+              },
+              409,
+            );
+          }
+        } else {
+          // No cause is asserted here. The previous version of this message told
+          // the caller that the class must be approved before an object can be
+          // created, which was a guess dressed as a diagnosis: the same branch is
+          // also where a failed token exchange lands, because
+          // `mintAccessToken` raises `GoogleWalletAuthError` and not
+          // `GoogleWalletApiError`. A message that names a cause it has not
+          // checked sends the reader to fix the wrong thing.
+          const reason =
+            err instanceof GoogleWalletApiError || err instanceof GoogleWalletAuthError
+              ? err.message
+              : 'the Google Wallet client failed for a reason this worker does not classify';
+          console.error(`[wallet] Could not create pass object ${issued.objectId}:`, err);
+          // 409, not 502 and not 200. The object is not there, so there is no
+          // working link to produce, and handing one back anyway is what made this
+          // failure invisible for so long.
           return c.json(
             {
               error: {
                 code: 'WALLET_PASS_NOT_CREATABLE',
                 message:
-                  'This pass already exists at Google and could not be updated, so no link can be ' +
-                  `produced. Google reported: ${detail}`,
+                  'Google Wallet could not create this pass, so no working link can be produced. ' +
+                  `Google reported: ${reason}`,
               },
             },
             409,
           );
         }
-      } else {
-        // No cause is asserted here. The previous version of this message told
-        // the caller that the class must be approved before an object can be
-        // created, which was a guess dressed as a diagnosis: the same branch is
-        // also where a failed token exchange lands, because
-        // `mintAccessToken` raises `GoogleWalletAuthError` and not
-        // `GoogleWalletApiError`. A message that names a cause it has not
-        // checked sends the reader to fix the wrong thing.
-        const reason =
-          err instanceof GoogleWalletApiError || err instanceof GoogleWalletAuthError
-            ? err.message
-            : 'the Google Wallet client failed for a reason this worker does not classify';
-        console.error(`[wallet] Could not create pass object ${issued.objectId}:`, err);
-        // 409, not 502 and not 200. The object is not there, so there is no
-        // working link to produce, and handing one back anyway is what made this
-        // failure invisible for so long.
-        return c.json(
-          {
-            error: {
-              code: 'WALLET_PASS_NOT_CREATABLE',
-              message:
-                'Google Wallet could not create this pass, so no working link can be produced. ' +
-                `Google reported: ${reason}`,
-            },
-          },
-          409,
+      }
+
+      try {
+        const outcome = await reconcilePass(
+          { store, client, demoMode: envDemoMode },
+          { tenantId, customerId: customer.id },
+        );
+
+        if (outcome.kind === 'patched') {
+          console.log(
+            `[wallet] Reconciled pass ${outcome.objectId} to balance ${outcome.balancePoints} for ` +
+              `customer ${customer.id} in tenant ${tenantId}.`,
+          );
+        } else if (outcome.kind === 'not_saved') {
+          // The ordinary answer on a first visit: a link was issued, Google has no
+          // object, so the customer has not saved it yet. Worth logging because it
+          // is the state that was previously indistinguishable from "we never
+          // checked", and a merchant asking why a pass is not in a customer's phone
+          // is answered by this line.
+          console.log(
+            `[wallet] Checked Google for pass ${outcome.objectId} and found no object: customer ` +
+              `${customer.id} has not saved it yet.`,
+          );
+        }
+      } catch (err: unknown) {
+        // Swallowed on purpose, and the reason is in the route's own doc comment:
+        // a 200 with a link is a contract that holds. A customer who taps a button
+        // and gets an error because Google's API is having a bad minute will not
+        // tap it again, and a pass that is one app visit stale is much better than
+        // no pass at all. The next reconciliation converges it.
+        console.error(
+          '[wallet] Pass reconciliation failed; the pass link was still returned:',
+          err,
         );
       }
-    }
-
-    try {
-      const outcome = await reconcilePass(
-        { store, client, demoMode: envDemoMode },
-        { tenantId, customerId: customer.id },
-      );
-
-      if (outcome.kind === 'patched') {
-        console.log(
-          `[wallet] Reconciled pass ${outcome.objectId} to balance ${outcome.balancePoints} for ` +
-            `customer ${customer.id} in tenant ${tenantId}.`,
-        );
-      } else if (outcome.kind === 'not_saved') {
-        // The ordinary answer on a first visit: a link was issued, Google has no
-        // object, so the customer has not saved it yet. Worth logging because it
-        // is the state that was previously indistinguishable from "we never
-        // checked", and a merchant asking why a pass is not in a customer's phone
-        // is answered by this line.
-        console.log(
-          `[wallet] Checked Google for pass ${outcome.objectId} and found no object: customer ` +
-            `${customer.id} has not saved it yet.`,
-        );
-      }
-    } catch (err: unknown) {
-      // Swallowed on purpose, and the reason is in the route's own doc comment:
-      // a 200 with a link is a contract that holds. A customer who taps a button
-      // and gets an error because Google's API is having a bad minute will not
-      // tap it again, and a pass that is one app visit stale is much better than
-      // no pass at all. The next reconciliation converges it.
-      console.error(
-        '[wallet] Pass reconciliation failed; the pass link was still returned:',
-        err,
+    } else {
+      // Logged, because "the customer opened the app and Google was never told
+      // anything" is the question this branch answers and it is worth having the
+      // answer in the logs. Never the object id, which embeds `global_id` — the
+      // rule the callback route documents.
+      console.log(
+        `[wallet] Reused the existing pass in state "${disposition.state}" for customer ` +
+          `${customer.id} in tenant ${tenantId}; no pass object was created.`,
       );
     }
+
+    // What the row says now. On the reused path that is the state it was read in,
+    // and nothing has moved it. On the minted path it is whatever the
+    // reconciliation managed to learn, so it is read back rather than predicted —
+    // a second answer derived from an outcome enum would be a second thing to keep
+    // in agreement with the store.
+    const passState =
+      disposition.kind === 'reuse'
+        ? disposition.state
+        : ((await store.findPass(customer.id, tenantId))?.state ?? 'not_issued');
 
     return c.json({
       data: {
@@ -674,6 +831,20 @@ router.get('/v1/wallet/pass', async (c) => {
         member_code: issued.memberCode,
         balance_points: issued.balancePoints,
         points_currency: issued.pointsCurrency,
+        // Whether **this request** created the pass, as opposed to handing back
+        // one that already existed. The response is otherwise identical on both
+        // paths — same link, same fields, same 200 — so without this a client
+        // cannot tell a customer whose card was just created from one whose card
+        // has been in their phone for a year, and the page says "Agregala una vez"
+        // to both. It is also the honest answer to "what did this call do?", which
+        // `not_saved` and `pass_state` below cannot give on their own.
+        already_existed: disposition.kind === 'reuse',
+        // `customer_wallet_passes.state` after this request, under the same
+        // vocabulary `GET /v1/wallet/status` already reports. Carried here because
+        // `already_existed` alone does not separate the three reused states: a pass
+        // in `not_saved` genuinely is not in the customer's phone, and telling them
+        // it is would be the same lie in the other direction.
+        pass_state: passState,
       },
     });
   } catch (err: unknown) {
