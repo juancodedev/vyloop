@@ -24,7 +24,24 @@ Objetivo: infraestructura base corriendo en producción. Sin esta fase, nada má
       de hoy descansa en filtros explícitos de `business_id` en los handlers de ruta.
       Siguiente paso: habilitar RLS por tabla, empezando por las de wallet, y recién después
       asumir que el filtro de la ruta es una defensa secundaria y no la única.
-- [ ] Configurar Schema Registry en Cloudflare Workers KV con esquemas de eventos iniciales
+- [x] Configurar Schema Registry en Cloudflare Workers KV con esquemas de eventos iniciales
+        — *Hecho, y el registry ahora se puebla solo.* El binding `SCHEMA_REGISTRY` faltaba en
+        `apps/gateway/wrangler.jsonc` mientras `ingestor.ts` lo leía en `POST /v1/events/{type}`,
+        una ruta pública montada: **toda llamada devolvía 500**, porque `kv.get()` recibía
+        `undefined`. Corregido con el id real (`732ccde5b0944db082d07667aba8104b`, el mismo que
+        declaran cuatro workers), verificado contra la API de Cloudflare cuyo title es
+        `vyloop-schema-registry`.
+
+        Y el namespace **estaba vacío**: los cinco schemas devolvían `key not found`, y **ningún
+        workflow invocaba el script de registro**. Eso era el bug real —arreglar solo el binding
+        llevaba el 500 a un 404 y el problema volvía después de cualquier reset—, así que el
+        registro es ahora **un paso idempotente del deploy**, antes de los cuatro publishes. En
+        producción hay **10 llaves** y se re-pueblan solas.
+
+        > Lo que sigue pendiente es otro: los nombres del registry son `CustomerRegistered`,
+        > `PointsAssigned`, …, y `docs/07`, `docs/08` y `openspec/specs/event-ingestor` describen
+        > `POST /v1/events/purchase` y `/v1/events/custom`. Después de este fix la ruta responde
+        > **404** y no 500 — sigue rota, pero por otra razón. Y nada en el producto la consume.
 
 ### Identity y autenticación
 - [ ] Implementar IAM (Identity & Access Management) multi-tenant
@@ -35,7 +52,10 @@ Objetivo: infraestructura base corriendo en producción. Sin esta fase, nada má
 
 ### Bus de eventos
 - [ ] Configurar Cloudflare Queues como bus de eventos base
-- [ ] Implementar Event Ingestor con validación de Schema Registry
+- [x] Implementar Event Ingestor con validación de Schema Registry
+        — *La validación funciona; el binding faltaba y el registry estaba vacío.* Ambos
+        resueltos, ver arriba. Pendiente el desajuste de nombres de evento y decidir si esta ruta
+        entra en producción o se retira: hoy **nada en el producto la llama**.
 - [ ] Worker de prueba: publicar `TestEvent` y consumirlo desde un Worker suscriptor
 
 ---
@@ -231,31 +251,52 @@ Estos ítems están en la visión del producto pero **no entran al PMV**. Se pri
             tarjetas: no hay ninguna vista que liste los pases de los clientes de un negocio,
             ni que permita reemitir o revocar uno. Sin esto el merchant tiene la mitad
             operador del producto y no la otra.
-      - [ ] **Los 7 rechazos (HTTP 400) sobre 18 callbacks reales no están explicados.**
-            Google entregó 18 callbacks contra la clase de producción: 7 rechazados con 400,
-            6 aceptados. Los 6 que pasaron demuestran que la verificación de firma funciona
-            — un atacante no los habría colado — pero los 7 rechazos no tienen causa conocida.
-            Un 39% de rechazo sobre tráfico real de Google es un defecto, no ruido.
-            *No verificado:* `wallet_callback_deliveries` está **vacía** en producción (contada
-            el 2026-10-02). Si los 6 aceptados hubieran pasado por
-            `claimCallbackDelivery`, habría 6 filas. Dos explicaciones: los eventos llegaron
-            antes de que existiera la tabla `0008`, o el paso de escritura está fallando. Hay
-            que averiguarlo antes de confiar en que el estado de un pase refleja lo que Google
-            dijo — hoy no hay evidencia de que el camino completo se haya ejercitado en
-            producción.
+      - [x] **Los 7 rechazos (HTTP 400) sobre 18 callbacks reales — RESUELTO.**
+            **Causa:** la construcción de los bytes firmados usaba un prefijo de longitud de
+            **2 bytes big-endian**, y el protocolo `ECv2SigningOnly` exige **4 bytes
+            little-endian**. La doc de Google, textual: *"The byte length of each component is
+            4 bytes in little-endian format."* Un `u16be` sobre ese campo no puede verificar
+            contra una firma de Google — el webhook no tenía un caso raro, **no tenía ningún
+            caso**.
+
+            El error era `intermediate_key_unverified`, y el diagnóstico agregado lo acotó
+            entero: la raíz importaba bien (`imported: true`), la firma venía (1), y
+            `anySignatureVerifies` no tiene `try/catch`, así que un fallo de parseo DER habría
+            salido como `message_unverified`. **La única variable que quedaba era la
+            construcción de los bytes.**
+
+            Corregido y **verificado en producción**: una entrega real devolvió `HTTP 200` y
+            `save set the pass to issued`, y el pase aparece en el teléfono.
+
+            Sobre la evidencia que este ítem pedía: `wallet_callback_deliveries` **tenía 0 filas**
+            el 2026-10-02 y tiene **7** ahora. Los 6 callbacks aceptados nunca llegaron a
+            escribir, y la tabla vacía era el síntoma, no un misterio aparte.
       - [ ] **`loyaltyPoints.balance` se manda como `{"string": "0"}` y Google usa `int`.**
             Verificado en `workers/wallet/src/reconcile.ts:308`. No rompe: Google acepta el
             saldo como string y el pase renderiza bien. Pero es un tipo equivocado en el
             contrato, y el día que Google lo valide estrictamente deja de funcionar sin aviso.
-      - [ ] **El gate de migraciones en el deploy.**
-            **Ningún job de CI aplica migraciones** — `grep db:migrate .github/workflows/` da
-            cero — y el deploy sale `success` aunque el schema destino esté atrasado. Ya costó
-            dos rutas muertas en producción (`/p/{slug}` y el callback de Google, por columnas
-            de `0007` y `0008` sin aplicar) sin que nada lo dijera.
-            Verificado: `drizzle.__drizzle_migrations` tiene 4 filas (los hashes de `0000` a
-            `0003`) mientras el schema real ya tiene `0007` y `0008`. **El ledger miente** —
-            `drizzle-kit push` no lo escribe — así que el gate tiene que comparar el schema
-            contra el journal, no confiar en el ledger.
+      - [x] **El gate de migraciones en el deploy — RESUELTO.**
+            Ahora hay un job `migration-drift` **bloqueante**, del que dependen los cuatro
+            deploys: un schema sin verificar ya no sale.
+
+            Compara el schema real contra el journal con **la misma semántica que
+            `drizzle-kit migrate`**, que no es un recorrido sino un escalar:
+            `select … order by created_at desc limit 1` comparado contra el `when` de cada
+            migración. Dos detalles que costaron trabajo y no conviene olvidar:
+            `id` es `SERIAL PRIMARY KEY` — **arranca en 1 y no es el `idx` del journal**, así que
+            comparar por id daría una respuesta segura y equivocada — y `hash` se escribe pero
+            **nunca se lee** en la decisión, así que el drift inverso se keyea por hash.
+
+            El gate **falla cerrado ante base inalcanzable**, a diferencia del readiness report,
+            que degrada a `unknown`: un interlock no puede decir "no pude saber" y pasar. Su sesión
+            es **read-only de verdad** (`default_transaction_read_only = on`, verificado
+            rechazando `CREATE TABLE` e `INSERT`), no read-only por promesa.
+
+            Para que el primer CI no naciera rojo, el drift que ya existía se compensó con un
+            **baseline derivado de evidencia** —cada entrada pinea el hash y los objetos de
+            schema que el `.sql` real declara, así que no se puede escribir a mano—. Con `0009`
+            aplicado el journal cubrió todo y el baseline quedó vacío.
+
             Detalle: [`18-Verificacion-y-Seguridad-Operativa.md`](18-Verificacion-y-Seguridad-Operativa.md) §5.
       - [ ] **El hueco de `request_id` en todos los workers.**
             `workers/*/src/index.ts` tienen un `console.error` pelado en el catch final
