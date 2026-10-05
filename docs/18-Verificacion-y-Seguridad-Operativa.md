@@ -188,23 +188,65 @@ Sí se loguea: el **código** de error, el `request_id`, y el nombre del recurso
 
 | | Qué es | Estado |
 |---|---|---|
-| Neon `ep-divine-bonus-ai05bdy3` | La `DATABASE_URL` de los `.dev.vars` de los workers | 1 tenant, sin fila de clase de wallet |
-| Neon `polished-firefly-68401534` | **PRODUCCIÓN** | La que inyecta `deploy.yml` desde el secret `DATABASE_URL` |
+| Neon `ep-divine-bonus-ai05bdy3` | La `DATABASE_URL` de los `.dev.vars` de los workers | **DEV.** 10 clientes, sin pases, sin clases de wallet |
+| Neon `ep-shiny-paper-aibbf0hk` | **PRODUCCIÓN** | La que inyecta `deploy.yml` desde el secret `DATABASE_URL` |
 | Supabase `mysrgtsuoxhspyfhdnsp` | Proyecto migrado, ya no en uso | **Vacía, sin schema** |
 
-Comprobado contra producción el 2026-10-02: 1 tenant, 12 clientes, 4 pases, 4 filas de clase
-de wallet. En la de dev, 1 tenant y ninguna fila de clase.
+Comprobado contra producción el 2026-10-05: **5 tenants, 13 clientes, 5 pases, 5 filas de clase
+de wallet, 7 entregas de callback registradas.**
 
-> *No verificado:* se dice que la base de dev no tiene la tabla `__drizzle_migrations`. No se
-> pudo comprobar — `ep-divine-bonus-ai05bdy3` es un endpoint, no un project id, y el MCP no lo
-> resuelve (ver *Cómo mirar cada una*, abajo). Si alguien puede mirarla, que lo haga y corrija
-> esta línea.
+### Cómo se identificó producción, y por qué este documento se equivocaba antes
+
+La versión anterior de esta tabla nombraba `polished-firefly-68401534` como producción. **No lo
+es**, y el error fue de método, no de dato: ese nombre es un **project id**, no un endpoint, y
+nunca se comprobó contra un servidor.
+
+La forma correcta de responder la pregunta es leer el binding del worker **desplegado**. El
+`DATABASE_URL` de los workers se inyecta con `--var`, o sea que es un binding `plain_text` y no
+un secret — se lee desde Cloudflare:
+
+```bash
+npx wrangler versions list --name wallet --json | head -1     # version id
+npx wrangler versions view <id> --name wallet --json           # .resources.bindings[]
+```
+
+> No imprimas el valor del binding en un transcript. Extraé solo el host.
+
+El discovery comparó datos, no nombres. `ep-divine-bonus` tiene **0 pases y 0 clases de wallet**,
+mientras que la fila de este documento decía que dev tenía 1 tenant "sin fila de clase" — la
+coincidencia de la que.Peor todavía: el callback de Google verificado en producción el mismo día
+escribe en la base del worker desplegado, y ese pase no estaba en `ep-divine-bonus`.
+
+**Un nombre de proyecto no es una dirección de servidor.** Comprobá el dato.
+
+### La tabla de migraciones ya no tiene drift
+
+Cuando este documento se escribió, `drizzle-kit migrate` contra producción estaba **prohibido**
+porque 0004–0006 se habían aplicado sin registrarse. **Eso cambió** y el riesgo cambió con ello:
+
+```
+0009  aplicado y registrado  →  el watermark quedó por encima de 0004–0009
+                              →  no queda nada fuera del journal
+                              →  el baseline de migraciones quedó vacío
+```
+
+El baseline (`packages/db/drizzle/meta/_applied-outside-drizzle.json`) compensaba lo que el
+journal no cubría. Con el journal completo no hay nada que compensar, y **`drizzle-kit migrate`
+volvió a ser una operación normal** en este repo.
+
+**Pero sigue sin ser la forma de aplicar una migración acá**, por una razón que no cambió:
+`deploy.yml` no aplica migraciones y el gate de drift corre antes de publicar. El flujo correcto
+sigue siendo aplicar a mano, revisando, y después re-derivar el baseline.
+
+> *Nota sobre el drift:* el watermark de drizzle es **un escalar** — `order by created_at desc
+> limit 1` — no un recorrido de entradas. Por eso una sola fila insertada mueve el mark por encima
+> de todo lo anterior. Es lo que hace que un `INSERT` mal fechado pueda "registrar" migraciones que
+> nunca se aplicaron.
 
 Ese contraste ya produjo un falso positivo: `node scripts/check-wallet-readiness.mjs` lee
-`apps/gateway/.dev.vars`, o sea **la base de dev**, y reporta
-`[BLOCK] Google approved the pass class — This business has no pass class row`. En producción
-la fila existe. El script acierta al declarar la base que leyó en la primera línea, y por eso
-esa línea hay que leerla antes que el veredicto.
+`apps/gateway/.dev.vars`, o sea **la base de dev**, y reporta sobre ella. En producción la fila de
+clase de wallet existe. El script acierta al declarar la base que leyó en la primera línea, y por
+eso esa línea hay que leerla antes que el veredicto.
 
 ### La regla
 
