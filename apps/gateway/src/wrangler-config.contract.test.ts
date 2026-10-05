@@ -15,6 +15,16 @@ const workflow = readFileSync(
 );
 
 /**
+ * This file's own source.
+ *
+ * Read for one assertion only: that the exemption list is still declared as a
+ * typed map. A declaration cannot be observed at runtime once it is gone — the
+ * drift assertion keeps passing either way — so the guard has to look at the
+ * text that declares it.
+ */
+const rawTestSource = readFileSync(__filename, 'utf8');
+
+/**
  * Parse the JSONC config.
  *
  * String-aware on purpose, because the two things a naive stripper gets wrong
@@ -67,21 +77,50 @@ function parseJsonc(source: string): Record<string, unknown> {
 const config = parseJsonc(rawConfig);
 
 /**
+ * The production `SCHEMA_REGISTRY` namespace, `vyloop-schema-registry`.
+ *
+ * Declared by `workers/{customer,growth,communication,automation}` and confirmed
+ * against the Cloudflare API as an existing namespace under that title. Every
+ * consumer must resolve to this one: a second namespace would leave the gateway
+ * reading an empty registry and answering 404 for event types the other four
+ * workers serve normally.
+ */
+const SCHEMA_REGISTRY_NAMESPACE_ID = '732ccde5b0944db082d07667aba8104b';
+
+/**
  * Read by a test in this file and genuinely absent from both the config and the
  * deploy job. Every entry is a bug someone has already found and not yet fixed;
  * deleting one without declaring the binding turns a visible failure back into
  * the silent one this file exists to prevent, which is why the exemption is a
  * named list with a reason rather than a filter on the shape of the name.
+ *
+ * Currently empty, and the emptiness is the point rather than an accident: the
+ * one entry it held was `SCHEMA_REGISTRY`, which is now declared. The list
+ * outlives its entry on purpose. The next drift someone finds has to be written
+ * here with a reason attached, and a reader who finds an empty object with the
+ * comment above it has to decide whether that means "nothing is broken" or
+ * "someone deleted the evidence" — which is the question this list exists to
+ * force. `the exemption list survives its last entry` below asserts it.
  */
-const KNOWN_UNDECLARED: Record<string, string> = {
-  SCHEMA_REGISTRY:
-    'Read at POST /v1/events/:type in `ingestor.ts`, a mounted public route, and ' +
-    'declared in neither `apps/gateway/wrangler.jsonc` nor the deploy job, so the ' +
-    'read is `undefined` in production. Declared in `workers/customer` and ' +
-    '`workers/communication`, which is almost certainly where this was missed. ' +
-    'Unfixed: it needs the namespace id, and a guessed id fails closed against ' +
-    'the real registry rather than resolving it.',
-};
+const KNOWN_UNDECLARED: Record<string, string> = {};
+
+/**
+ * The bindings read at runtime that nothing declares and nothing exempts.
+ *
+ * Split out from the assertion below so the exemption mechanism itself can be
+ * exercised. A guard that only ever runs against the real list cannot tell an
+ * exemption that works from one that has quietly stopped being consulted: with
+ * the list empty, dropping the `in KNOWN_UNDECLARED` clause from the filter
+ * would change nothing observable here, and the next person to add an entry
+ * would get a list that does not exempt anything while every test stayed green.
+ */
+export function undeclaredBindings(
+  read: string[],
+  reachable: Set<string>,
+  exempt: Record<string, string> = KNOWN_UNDECLARED,
+): string[] {
+  return read.filter((name) => !reachable.has(name) && !(name in exempt));
+}
 
 function declaredVars(): string[] {
   const vars = config['vars'] as Record<string, string> | undefined;
@@ -168,12 +207,76 @@ describe('gateway wrangler.jsonc', () => {
     // than an outage, so it is left to the assertions below rather than folded
     // into this one, which would make a real drift harder to read.
     const reachable = new Set([...declaredVars(), ...declaredBindings(), ...injectedVars()]);
-    const undeclared = readBindings().filter(
-      (name) => !reachable.has(name) && !(name in KNOWN_UNDECLARED),
-    );
+    const undeclared = undeclaredBindings(readBindings(), reachable);
 
     expect(readBindings().length).toBeGreaterThan(0);
     expect(undeclared).toEqual([]);
+  });
+
+  it('declares SCHEMA_REGISTRY with the id the four workers already use', () => {
+    // By value. `schema-registry-namespace.contract.test.ts` is the cross-file
+    // guard; this is the literal.
+    //
+    // BY VALUE, and that is the whole reason this assertion exists separately
+    // from the drift guard above.
+    //
+    // The drift guard only asks whether *a* `SCHEMA_REGISTRY` is published. A
+    // wrong-but-well-formed namespace id satisfies it completely, and then the
+    // gateway resolves against an empty namespace instead of throwing: every
+    // `POST /v1/events/:type` answers **404 EVENT_TYPE_UNKNOWN** for event types
+    // the system defines, while four workers keep reading the real registry and
+    // keep working. That is worse than the 500 this replaced, because it looks
+    // like a correct answer — the route is reporting, in its own words, that
+    // `CustomerRegistered` does not exist.
+    //
+    // The value is a literal rather than a read from a worker config on purpose.
+    // Reading it from `workers/customer/wrangler.jsonc` would make this test
+    // agree with a mistake: if all five files drifted together, a cross-read
+    // stays green and production gets two truths. `schema-registry-namespace
+    // .contract.test.ts` guards the cross-file agreement; this one pins the
+    // value itself, so agreement plus this literal means the id is real and not
+    // merely consistent.
+    //
+    // The id is not a guess and is not derived from anything in this repository.
+    // It is the namespace four configs already declare, confirmed against the
+    // Cloudflare API as an existing namespace titled `vyloop-schema-registry`.
+    // The exemption that used to sit above said a guessed id "fails closed
+    // against the real registry rather than resolving it" — that reason died
+    // when the id stopped being a guess.
+    const namespaces = (config['kv_namespaces'] as Array<Record<string, unknown>>) ?? [];
+    const binding = namespaces.find((entry) => entry['binding'] === 'SCHEMA_REGISTRY');
+
+    expect(binding, 'SCHEMA_REGISTRY is not declared in apps/gateway/wrangler.jsonc').toBeDefined();
+    expect(binding?.['id']).toBe(SCHEMA_REGISTRY_NAMESPACE_ID);
+  });
+
+  it('keeps the exemption list as a list, because deleting it hides every future drift', () => {
+    // Two halves, and both have to hold.
+    //
+    // First: the list still exists as a declared, typed, reason-carrying map.
+    // Deleting the object is the one edit that turns this whole file from a
+    // guard into a comment — the drift assertion would still pass, because with
+    // no exemptions every binding has to be declared, and the next person to
+    // find a missing binding would have nowhere to record that it is known.
+    // Asserted on the source text because a deleted declaration cannot be
+    // observed at runtime: an `import` of it would not compile, which is a
+    // failure of a different tool than the one meant to catch it.
+    expect(KNOWN_UNDECLARED).toBeTypeOf('object');
+    expect(rawTestSource).toContain('KNOWN_UNDECLARED: Record<string, string>');
+
+    // Second: the exemption still *works*. A filter that ignores the list is
+    // indistinguishable from an empty one while the list is empty, so this
+    // exercises the mechanism with a synthetic entry rather than trusting the
+    // empty case. Without it, dropping `in KNOWN_UNDECLARED` from the filter
+    // would be invisible here and the next entry would be added to a list that
+    // exempts nothing.
+    const read = ['A_BINDING_NOBODY_DECLARED'];
+    const reachable = new Set<string>();
+
+    expect(undeclaredBindings(read, reachable)).toEqual(read);
+    expect(undeclaredBindings(read, reachable, { A_BINDING_NOBODY_DECLARED: 'a reason' })).toEqual(
+      [],
+    );
   });
 
   it('does not exempt a binding that has since been declared', () => {
