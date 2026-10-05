@@ -14,7 +14,9 @@
     "test": "pnpm -r test",
     "format": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
     "format:fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
-    "wallet:readiness": "node scripts/check-wallet-readiness.mjs"
+    "wallet:readiness": "node scripts/check-wallet-readiness.mjs",
+    "db:drift": "node scripts/check-migration-drift.mjs",
+    "db:drift:baseline": "node scripts/check-migration-drift.mjs --check-baseline"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
