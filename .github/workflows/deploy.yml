@@ -53,8 +53,108 @@ jobs:
         run: pnpm wallet:readiness
         continue-on-error: true
 
+  # Populate the event schema registry, before anything that reads it is published.
+  #
+  # ## Why this is a job and not a step inside `deploy-gateway`
+  #
+  # The registry is shared state: `gateway`, `customer`, `growth`, `communication`
+  # and `automation` all bind the same `SCHEMA_REGISTRY` namespace, and
+  # `workers/customer` calls `validate` on a live route. A step inside the gateway
+  # job would run *after* the worker matrix, so the first deploy following this
+  # change would publish workers against the empty namespace they already read
+  # today. Both deploy jobs therefore depend on this one, and the invariant is
+  # "no Worker is ever published against an empty registry" rather than "the
+  # gateway is published against a populated one".
+  #
+  # ## Why it runs BEFORE the deploys, not after
+  #
+  # Two reasons, and the second is the one that decides it.
+  #
+  # 1. There is a window either way, and only one of the two windows is a correct
+  #    answer. Publishing first leaves a gap in which the freshly deployed gateway
+  #    answers `404 EVENT_TYPE_UNKNOWN` for every real event type, because
+  #    `getSchema` returns `null` against an empty namespace. Populating first
+  #    means the first request the new gateway ever serves already has its
+  #    schemas. (KV is eventually consistent — up to 60s between locations — so a
+  #    brief window of 404s remains possible on the very first deploy. It is
+  #    bounded and self-healing; the alternative window is the permanent one that
+  #    is being closed here.)
+  # 2. Failure has to be able to stop the deploy. After the deploy, a failed
+  #    registration leaves a published gateway reading an empty registry and a
+  #    green build — which is precisely how this bug survived a deploy already:
+  #    nothing failed, so nothing was investigated. Before the deploy, a failure
+  #    means the previous version keeps serving and CI is red.
+  #
+  # ## Why the failure is allowed to block
+  #
+  # No `continue-on-error`, unlike the wallet readiness report two jobs up. That
+  # report answers a question about an external service and failing it would
+  # block every deploy for something outside the deploy. This step IS the deploy:
+  # a registry that silently stays empty reproduces the defect this job exists
+  # to fix, and the whole design premise is that an empty registry must never
+  # again be indistinguishable from a successful one.
+  #
+  # ## Why the payload is generated rather than committed
+  #
+  # `packages/schema-registry/src/index.ts` is the source of truth for the
+  # schemas. A committed snapshot would be a second copy that drifts silently and
+  # produces a registry that looks populated and validates nothing. The script
+  # calls the same `registerAllSchemas` a Worker would call, so the keys
+  # published are the keys `validate` reads.
+  #
+  # ## Credentials
+  #
+  # The existing `CLOUDFLARE_API_TOKEN`, reused rather than a second token. It
+  # already authenticates every `wrangler deploy` in this workflow, so there is
+  # one secret to rotate and one blast radius to reason about.
+  #
+  # It does need one capability the deploys may not currently exercise: writing
+  # to Workers KV (`Account / Workers KV Storage / Edit`). A token scoped only to
+  # `Workers Scripts` will fail here with a permission error naming the scope —
+  # loudly, and before anything is deployed. That is the correct direction to
+  # fail in, and the fix is granting that scope on this same token rather than
+  # minting a narrower second one.
+  register-schemas:
+    needs: [quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Required, not incidental: the payload script imports the schema registry
+      # source, which imports `ajv`.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Publish the event schemas to SCHEMA_REGISTRY
+        run: |
+          node --experimental-strip-types \
+            packages/schema-registry/scripts/publish-registry-payload.ts \
+            "${RUNNER_TEMP}/schema-registry.json"
+          npx --yes wrangler kv bulk put "${RUNNER_TEMP}/schema-registry.json" \
+            --binding SCHEMA_REGISTRY \
+            --config apps/gateway/wrangler.jsonc \
+            --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      # `--remote` above is load-bearing and not the default: without it wrangler
+      # writes to a local store, prints `Success!`, and leaves production just as
+      # empty as before. `--binding` plus `--config` rather than
+      # `--namespace-id` so the namespace this job writes to is read from the same
+      # config that publishes the binding — there is no second copy of the id in
+      # this file to drift.
+
   deploy-workers:
-    needs: quality
+    needs: [quality, register-schemas]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -119,8 +219,14 @@ jobs:
   # before wallet finished, which is exactly the failure this job exists to stop:
   # a matrix cannot express "deploy last". So gateway deploys on its own, after
   # every binding it names is guaranteed to exist.
+  #
+  # `register-schemas` is listed explicitly rather than relied on transitively
+  # through `deploy-workers`. The gateway is the Worker that reads
+  # `SCHEMA_REGISTRY` on a mounted public route, so "the registry is populated
+  # before this is published" is a claim about *this* job and belongs in its
+  # dependency list where it can be read.
   deploy-gateway:
-    needs: [quality, deploy-workers]
+    needs: [quality, deploy-workers, register-schemas]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
