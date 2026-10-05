@@ -6,8 +6,10 @@ import {
   LoyaltyProgramNotConfiguredError,
   MemberCodeUnavailableError,
   classReadinessFor,
+  dispositionForExistingPass,
   ensureMemberCode,
   issuePass,
+  linkForExistingPass,
   reasonCodeFor,
 } from './issuance';
 import type { IssuePassDeps } from './issuance';
@@ -730,5 +732,233 @@ describe('issuePass', () => {
     // asserted in jwt.test.ts; this is only that the route path produces one.
     const token = issued.saveUrl.slice(SAVE_TO_WALLET_URL_PREFIX.length);
     expect(token.split('.')).toHaveLength(3);
+  });
+});
+
+// ============================================================================
+// Idempotent issuance — what an existing pass row means for this request
+//
+// The save link is signed on the fly and never stored, so returning a pass that
+// already exists costs one signature and no write. The only question this suite
+// answers is the one a tracking row makes necessary: what does *this* state say
+// about whether the object exists at Google.
+// ============================================================================
+
+describe('dispositionForExistingPass', () => {
+  function passRow(overrides: Partial<WalletPassRow> = {}): WalletPassRow {
+    return {
+      customerId: CUSTOMER_ID,
+      tenantId: TENANT,
+      objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+      state: 'issued',
+      lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('mints when the customer has no pass row at all', () => {
+    // The ordinary first visit. Nothing exists, so there is nothing to reuse.
+    expect(dispositionForExistingPass(null, TENANT)).toEqual({ kind: 'mint' });
+  });
+
+  it('reuses an `issued` pass instead of minting a second one', () => {
+    // The whole feature. Google has the object and the customer holds it, so
+    // inserting again can only ever be a 409 that has to be undone by a patch.
+    const disposition = dispositionForExistingPass(passRow({ state: 'issued' }), TENANT);
+
+    expect(disposition.kind).toBe('reuse');
+  });
+
+  it('reuses a `not_saved` pass, because that is a gap in our knowledge', () => {
+    // The schema comment separates these two on purpose: `not_issued` is a state
+    // the customer is in, `not_saved` is a gap in what *we* know, written only
+    // when Google was asked and answered that it has no object. Reading it as
+    // "this customer has no pass" would tell a merchant a falsehood, and acting
+    // on it by minting again would create a second object for one customer.
+    // Google creates the object from the save token when the customer taps, so
+    // the link is still the answer.
+    const disposition = dispositionForExistingPass(passRow({ state: 'not_saved' }), TENANT);
+
+    expect(disposition.kind).toBe('reuse');
+  });
+
+  it('reuses an `inactive` pass, because it is the same pass, deactivated', () => {
+    // A customer who switched a pass off still holds that pass: `inactive` is
+    // how Google's platform records it, and `store.ts` documents `inactive →
+    // issued` as a real transition when they switch it back on. Minting over it
+    // would be a second card for one customer.
+    const disposition = dispositionForExistingPass(passRow({ state: 'inactive' }), TENANT);
+
+    expect(disposition.kind).toBe('reuse');
+  });
+
+  it('mints for `not_issued`, because we have never learned whether the object exists', () => {
+    // The delicate one. `not_issued` is what `recordPass` leaves behind, and it
+    // is left behind whether or not the insert that followed it succeeded — so a
+    // `not_issued` row is compatible with the object existing at Google and with
+    // it not existing. The only way to learn is to ask Google, which is what the
+    // mint path does, and its 409 fallback already handles "it was there after
+    // all". Short-circuiting here would hand back a link to an object nobody has
+    // confirmed exists, which is the exact failure the insert was added to stop.
+    const disposition = dispositionForExistingPass(passRow({ state: 'not_issued' }), TENANT);
+
+    expect(disposition.kind).toBe('mint');
+  });
+
+  it('refuses an `expired` pass rather than minting a replacement over it', () => {
+    // Terminal. Google cannot un-expire an object, so a freshly inserted one
+    // would be a *different* object for the same customer: two cards at the
+    // counter, and the support question "why does this customer have two"
+    // unanswerable. Silently minting here is the one thing that must not happen.
+    const disposition = dispositionForExistingPass(passRow({ state: 'expired' }), TENANT);
+
+    expect(disposition.kind).toBe('terminal');
+  });
+
+  it('refuses a `completed` pass for the same reason', () => {
+    const disposition = dispositionForExistingPass(passRow({ state: 'completed' }), TENANT);
+
+    expect(disposition.kind).toBe('terminal');
+  });
+
+  it('fails closed on a state this build has never heard of', () => {
+    // The `state` column is `text` with no `check` constraint, and the schema says
+    // so on purpose: readers must fail closed rather than let the database refuse
+    // the value. An `else` that mints would turn a typo into a duplicate card.
+    const disposition = dispositionForExistingPass(passRow({ state: 'archived' }), TENANT);
+
+    expect(disposition.kind).toBe('unknown');
+  });
+
+  it('does not reuse a row that belongs to another tenant', () => {
+    // `findPass` already filters by tenant — `customer_id` is the primary key, so
+    // the predicate narrows to one row and that row's `tenant_id` still has to be
+    // checked. This is the second, independent half: the disposition is a pure
+    // function over a row, so a row from anywhere must not become a reuse. A
+    // reuse would hand this tenant a signed link naming another tenant's object.
+    const disposition = dispositionForExistingPass(
+      passRow({ tenantId: OTHER_TENANT, objectId: `${ISSUER}.member-theirs` }),
+      TENANT,
+    );
+
+    expect(disposition.kind).toBe('mint');
+  });
+
+  it('carries the recorded object id through, so the row stays the record', () => {
+    // `store.ts` says the row is the record of what was actually issued, and
+    // that reconciliation acts on the stored id rather than one derived again.
+    // That reasoning belongs here too: if the two ever diverge, the id Google
+    // holds is the recorded one.
+    const disposition = dispositionForExistingPass(
+      passRow({ objectId: `${ISSUER}.member-legacy-customer` }),
+      TENANT,
+    );
+
+    expect(disposition).toEqual({
+      kind: 'reuse',
+      state: 'issued',
+      objectId: `${ISSUER}.member-legacy-customer`,
+    });
+  });
+});
+
+describe('linkForExistingPass', () => {
+  function existingInput(
+    overrides: Partial<Parameters<typeof linkForExistingPass>[1]> = {},
+  ) {
+    return {
+      ...passInput(),
+      existingObjectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+      ...overrides,
+    };
+  }
+
+  it('signs a link for the object id the row recorded', async () => {
+    const store = readyStore();
+
+    const issued = await linkForExistingPass(deps(store), existingInput());
+
+    expect(issued.objectId).toBe(`${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`);
+    expect(issued.saveUrl.startsWith(SAVE_TO_WALLET_URL_PREFIX)).toBe(true);
+  });
+
+  it('signs the recorded id even when it disagrees with the derivation', async () => {
+    // The derivation is stable today, so a fixture that diverges is the only way
+    // this assertion can tell "returned the recorded id" apart from "returned a
+    // freshly derived one" — and the two are the whole point of the row existing.
+    const store = readyStore();
+
+    const issued = await linkForExistingPass(
+      deps(store),
+      existingInput({ existingObjectId: `${ISSUER}.member-legacy-customer` }),
+    );
+
+    expect(issued.objectId).toBe(`${ISSUER}.member-legacy-customer`);
+    // The signed object names it too, so the token resolves to the same pass the
+    // row records rather than to an id only the response mentions.
+    expect(issued.loyaltyObject.id).toBe(`${ISSUER}.member-legacy-customer`);
+  });
+
+  it('records nothing, because the row that says this pass exists already says so', async () => {
+    // `recordPass` would be a write for no change on a row that is past
+    // `not_issued`: its conflict branch only updates `object_id` while the pass
+    // has never been issued. Idempotence includes not writing.
+    const store = readyStore();
+
+    await linkForExistingPass(deps(store), existingInput());
+
+    expect(store.recorded).toHaveLength(0);
+  });
+
+  it('carries the ledger balance and the stored member code into the token', async () => {
+    // A pass whose number is frozen at some earlier visit is the defect
+    // reconciliation exists to fix, so a re-issued link must not carry a stale
+    // one either.
+    const store = readyStore();
+    store.balances[`${TENANT}:${CUSTOMER_ID}`] = 4242;
+
+    const issued = await linkForExistingPass(deps(store), existingInput());
+
+    expect(issued.balancePoints).toBe(4242);
+    expect(issued.loyaltyObject.loyaltyPoints.balance.string).toBe('4242');
+    expect(issued.loyaltyObject.accountId).toBe(issued.memberCode);
+  });
+
+  it('builds the object as `issued`, which is what Google will hold after the tap', async () => {
+    // The token carries the object as it will be once Google applies it, not as
+    // our tracking column reads. `objectStateFor` cannot even express
+    // `not_saved`, and an `INACTIVE` token would hand the customer a card that
+    // cannot be used at the counter.
+    const store = readyStore();
+
+    const issued = await linkForExistingPass(deps(store), existingInput());
+
+    expect(issued.loyaltyObject.state).toBe('ACTIVE');
+  });
+
+  it('refuses a balance that cannot be rendered, rather than linking a dead card', async () => {
+    const store = readyStore();
+    store.balances[`${TENANT}:${CUSTOMER_ID}`] = BALANCE_DISPLAY_MAX + 1;
+
+    await expect(linkForExistingPass(deps(store), existingInput())).rejects.toThrow(
+      /cannot be rendered/i,
+    );
+  });
+
+  it('refuses a tenant with no points currency, on this path too', async () => {
+    const store = new FakeStore({ [TENANT]: [customerRow()] }, { [TENANT]: programRow() });
+    store.findPointsCurrency = async () => null;
+
+    await expect(linkForExistingPass(deps(store), existingInput())).rejects.toBeInstanceOf(
+      LoyaltyProgramNotConfiguredError,
+    );
+  });
+
+  it('only ever touches the tenant it was given', async () => {
+    const store = readyStore();
+
+    await linkForExistingPass(deps(store), existingInput());
+
+    expect(store.tenantsTouched()).toEqual([TENANT]);
   });
 });
