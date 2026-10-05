@@ -48,6 +48,7 @@ import {
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
 import type {
+  InactivityCandidateRow,
   PassCallbackClaim,
   PassCallbackWrite,
   PassLifecycleUpdate,
@@ -125,6 +126,11 @@ const PROGRAM_COLUMNS = {
   // would read as `undefined` and be treated as demo mode, which would look like
   // the switch silently not working.
   demoMode: tenantWalletPrograms.demoMode,
+  // The inactivity window. Selected here for the same reason `demoMode` is: a
+  // projection that omitted it would read as `undefined`, which this rule reads
+  // as "off" — so omitting it would make every tenant look unconfigured and the
+  // rule would appear to do nothing forever.
+  passInactivityMonths: tenantWalletPrograms.passInactivityMonths,
   lastSyncedAt: tenantWalletPrograms.lastSyncedAt,
 };
 
@@ -682,6 +688,103 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
         );
 
       return (rows as WalletPassRow[]) ?? [];
+    },
+
+    /**
+     * The passes whose customer has not touched the ledger inside `cutoff`.
+     *
+     * ## The conditions, and why each one is here
+     *
+     * Four predicates, and dropping any of them is a specific failure:
+     *
+     *   1. `p.tenant_id = <tenantId>`. The crossing defence, same as every other
+     *      statement in this file. The window is per tenant, so this is also what
+     *      keeps one merchant's three months from deciding another merchant's
+     *      twenty-four.
+     *   2. `p.state = 'issued'`. Only a pass we believe Google holds, and only
+     *      one that is not already in the target state. `not_issued` and
+     *      `not_saved` have no object to patch and `patchObject` would 404;
+     *      `inactive` is already done, so including it would re-deactivate on
+     *      every run; `expired` and `completed` are Google's own terminal states
+     *      and this rule does not get a vote on them. It also makes the rule
+     *      idempotent for free.
+     *   3. `COALESCE(t.last_activity_at, c.created_at) < <cutoff>`. **Strict.**
+     *      A transaction landing exactly on the cutoff is activity, so the
+     *      customer is not a candidate — see `isInactiveSince`, which this
+     *      mirrors and which is where that boundary is actually tested. The
+     *      `COALESCE` is the part that is easy to omit: without it a customer who
+     *      has *never* transacted has no clock at all, and a
+     *      `COALESCE(...)` that fell back to `now()` or to `NULL` would make
+     *      every newly enrolled customer a candidate on day one.
+     *   4. `LIMIT`, honoured rather than ignored. See the interface.
+     *
+     * ## Why the ledger read is a `LEFT JOIN LATERAL`
+     *
+     * `max(tx.created_at)` over the customer's own transactions. Written as a
+     * lateral rather than as a correlated subquery in the `WHERE` because the
+     * predicate needs the same value the projection returns: repeating the
+     * subquery twice would be two expressions that have to agree, and they are
+     * the one thing in this rule that decides whether a customer's card moves.
+     *
+     * The lateral is `LEFT JOIN ... ON true` on an aggregate, which always
+     * produces exactly one row and therefore never drops a pass from the result —
+     * the `LEFT` is what preserves the no-transactions customer.
+     *
+     * ## The index this uses, and why no new one was added
+     *
+     * `idx_points_balance (business_id, customer_id, created_at DESC)`. Both
+     * equality predicates are its leading columns, and the `DESC` means the
+     * newest transaction for that customer is the first entry the planner reaches,
+     * so `max()` is satisfied by the first row it walks to. A customer with
+     * recent activity is refuted immediately; a genuinely idle one walks the
+     * customer's whole history, which is the rare case and the small one.
+     *
+     * The driving side is `customer_wallet_passes` narrowed by
+     * `idx_customer_wallet_passes_tenant`, then one index probe per pass. That
+     * is proportional to the size of the tenant, which is the size of the work,
+     * and it runs once a day for tenants that asked for it and never for tenants
+     * that did not.
+     */
+    async findInactivePassCandidates(input: {
+      tenantId: string;
+      cutoff: Date;
+      limit: number;
+    }): Promise<InactivityCandidateRow[]> {
+      const limit = Math.min(2000, Math.max(1, Math.trunc(input.limit)));
+
+      const result = await db.execute(sql`
+        SELECT p.customer_id,
+               p.object_id,
+               last_activity.last_activity_at
+          FROM customer_wallet_passes p
+          JOIN customers c
+            ON c.id = p.customer_id
+          LEFT JOIN LATERAL (
+            SELECT max(tx.created_at) AS last_activity_at
+              FROM points_transactions tx
+             WHERE tx.business_id = p.tenant_id
+               AND tx.customer_id = p.customer_id
+          ) last_activity ON true
+         WHERE p.tenant_id = ${input.tenantId}::uuid
+           AND p.state = 'issued'
+           AND COALESCE(last_activity.last_activity_at, c.created_at) < ${input.cutoff}::timestamptz
+         ORDER BY p.customer_id
+         LIMIT ${limit}
+      `);
+
+      const rows = (result as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+
+      return rows.map((row) => ({
+        customerId: String(row.customer_id),
+        objectId: String(row.object_id),
+        // `null` rather than `undefined` when the customer has never transacted.
+        // The two are handled the same way by the rule, and normalising here
+        // means the report can print it without a null check of its own.
+        lastActivityAt:
+          row.last_activity_at === null || row.last_activity_at === undefined
+            ? null
+            : new Date(row.last_activity_at as string),
+      }));
     },
 
 

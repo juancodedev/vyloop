@@ -1044,17 +1044,53 @@ describe('the committed baseline', () => {
     // So the honest assertion now is that the committed baseline does clear the
     // verified state — and, below, that it stops clearing the moment production
     // diverges from one single object it claims.
+
+    // What the migrator would still run, minus what the baseline has verified as
+    // already present. Computed with the gate's own primitive rather than by
+    // hand, so this expectation cannot disagree with the thing it is checking —
+    // and rather than by hard-coding a tag, so the next migration does not make
+    // this test fail for a reason that has nothing to do with the baseline.
+    const baselined = new Set(baseline.migrations.map((entry) => entry.tag));
+    const pending = migrationsMigratorWouldApply(migrations, PRODUCTION_REGISTERED)
+      .filter((m) => !baselined.has(m.tag))
+      .map((m) => m.tag);
+
     const gate = runGate({
       migrations,
       observation: seen(PRODUCTION_REGISTERED, factsFor(baseline.migrations)),
       baseline,
     });
-    expect(gate.forward).toEqual([]);
+
+    // Precisely the pending set — a tighter assertion than the `[]` it replaced,
+    // because it names which migration is outstanding instead of only counting.
+    //
+    // This is non-empty on purpose. 0009 (`pass_inactivity_months`) was added and
+    // deliberately left unapplied: `drizzle-kit migrate` against production is
+    // forbidden in this repository, so a person applies it by hand after review.
+    // Until they do, the gate is *supposed* to fail with "1 unregistered
+    // migration(s)" — that is the signal that a hand is needed. When 0009 is
+    // applied and the baseline is re-derived from production, `pending` empties
+    // and this assertion returns to `[]` on its own.
+    expect(gate.forward.map((m) => m.tag).slice().sort()).toEqual(pending.slice().sort());
+
+    // The property this test was written for, and the one the `[]` used to carry
+    // by implication: **nothing the baseline claims is reported as outstanding.**
+    // If a baselined migration ever shows up in `forward`, the baseline has stopped
+    // doing its job, and that is the regression worth failing on.
+    expect(gate.forward.filter((m) => baselined.has(m.tag))).toEqual([]);
+
+    // Everything else the baseline vouches for still clears.
     expect(gate.reverse).toEqual([]);
     expect(gate.unsatisfied).toEqual([]);
     expect(gate.staleBaseline).toEqual([]);
-    expect(gate.ok).toBe(true);
-    expect(gate.exitCode).toBe(0);
+
+    // And the gate's verdict follows the pending set, with the reason spelled out
+    // so a blocked deploy says *why* rather than just failing.
+    expect(gate.ok).toBe(pending.length === 0);
+    expect(gate.exitCode).toBe(pending.length === 0 ? 0 : 1);
+    if (pending.length > 0) {
+      expect(gate.blockedReason).toContain(`${pending.length} unregistered migration(s)`);
+    }
   });
 
   it('stops clearing the moment production is missing one claimed object', () => {

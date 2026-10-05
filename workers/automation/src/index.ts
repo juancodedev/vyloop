@@ -108,6 +108,7 @@ async function scheduled(_controller: unknown, env: Bindings): Promise<void> {
   await handleBirthdayCron(env);
   await handleInactivityCron(env);
   await dispatchWalletSweep(env);
+  await dispatchPassInactivity(env);
 }
 
 /**
@@ -123,6 +124,50 @@ async function dispatchWalletSweep(env: Bindings): Promise<void> {
   } catch (error) {
     console.error(
       '[automation] Wallet reconciliation sweep did not run:',
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/**
+ * Calls the wallet's pass-inactivity rule over the same service binding.
+ *
+ * ## Why `dryRun: false` is written here, and only here
+ *
+ * This is the single production call site of a rule whose first execution moves
+ * real customers' cards into Google's "Expired passes" section. So the writing is
+ * stated at the one place that is allowed to state it, and the wallet's own
+ * default is `dryRun: true` — a binding that passed nothing, or a future caller
+ * that forgot, gets a report instead.
+ *
+ * ## Why it is a separate call, after the sweep
+ *
+ * Two reasons, and the second is the load-bearing one.
+ *
+ * The sweep reads `customer_wallet_passes.last_synced_at` to decide what is due,
+ * and `findInactivePassCandidates` reads `state` and the ledger. Running the
+ * inactivity rule first would leave a pass this run deactivated before the sweep
+ * ever looked at it, so the sweep would not get to reconcile it — and a pass
+ * Google holds as `INACTIVE` with a balance that has since moved is a pass whose
+ * number is wrong in a way only a re-add fixes.
+ *
+ * More importantly: the sweep refuses to run in demo mode, and the inactivity
+ * rule is deliberately able to decide in demo mode. Calling it through
+ * `env.WALLET.scheduled` would put it behind that refusal and it would never run.
+ * A separate method is what keeps its fate independent.
+ *
+ * ## Never throws, for the same reason the sweep dispatch does not
+ *
+ * A cron invocation that throws is retried in full by the platform, which would
+ * re-run the birthday and inactivity marketing jobs above and can re-send
+ * customer notifications. Those have already done their work by this point.
+ */
+async function dispatchPassInactivity(env: Bindings): Promise<void> {
+  try {
+    await env.WALLET.deactivateInactivePasses({ dryRun: false });
+  } catch (error) {
+    console.error(
+      '[automation] Wallet pass-inactivity deactivation did not run:',
       error instanceof Error ? error.message : error,
     );
   }
