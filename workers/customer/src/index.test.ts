@@ -1004,11 +1004,21 @@ expect(res.status).toBe(201);
         });
 
         mockDb.insert.mockImplementationOnce(() => {
-          const violation: any = new Error('duplicate key value violates unique constraint');
-          violation.code = '23505';
-          violation.constraint_name = 'uq_customers_business_email';
+          // The shape `@neondatabase/serverless` actually produces, captured by
+          // running the failing insert against production: the code arrives on
+          // `cause`, and the constraint name is on `cause.constraint` — there is no
+          // `constraint_name` key at all. A fixture that invented `constraint_name`
+          // would have kept this test green against a classifier that could never
+          // match a real violation.
+          const cause: any = new Error('duplicate key value violates unique constraint');
+          cause.code = '23505';
+          cause.constraint = 'uq_customers_business_email';
+          cause.detail = 'Key (business_id, email)=(...) already exists.';
+          const failure: any = new Error('Failed query: insert into "customers" ...');
+          failure.code = undefined;
+          failure.cause = cause;
           return {
-            values: vi.fn(() => ({ returning: vi.fn(() => Promise.reject(violation)) })),
+            values: vi.fn(() => ({ returning: vi.fn(() => Promise.reject(failure)) })),
           };
         });
 
@@ -1032,6 +1042,65 @@ expect(res.status).toBe(201);
 
         // Nothing was published: no customer exists to describe.
         expect(mockPublish).not.toHaveBeenCalled();
+      });
+
+      /**
+       * The branch a returning customer lands in.
+       *
+       * The upsert looks the customer up by phone, so registering again with a
+       * phone already on file takes the update branch — which writes to the same
+       * unique index and had no classification at all. The first-time registration
+       * of the same email answered 409 while the second one answered 500, and which
+       * one you got depended on nothing the customer could see or control.
+       */
+      it('classifies a duplicate email on repeat registration too', async () => {
+        mockDb.select.mockImplementationOnce(() => {
+          const chain: any = {};
+          chain.from = vi.fn(() => chain);
+          chain.where = vi.fn(() => chain);
+          chain.limit = vi.fn(() => chain);
+          chain.offset = vi.fn(() => chain);
+          chain.orderBy = vi.fn(() => chain);
+          chain.leftJoin = vi.fn(() => chain);
+          chain.then = (resolve: (v: any) => any) =>
+            Promise.resolve([
+              {
+                id: 'existing-id',
+                globalId: 'existing-global-id',
+                businessId: 'biz-1',
+                phone: '+56912345678',
+                fullName: 'Alice Smith',
+                email: null,
+                birthDate: null,
+              },
+            ]).then(resolve);
+          return chain;
+        });
+
+        mockDb.update.mockImplementationOnce(() => {
+          const cause: any = new Error('duplicate key value violates unique constraint');
+          cause.code = '23505';
+          cause.constraint = 'uq_customers_business_email';
+          const failure: any = new Error('Failed query: update "customers" ...');
+          failure.cause = cause;
+          const chain: any = {};
+          chain.set = vi.fn(() => chain);
+          chain.where = vi.fn(() => chain);
+          chain.returning = vi.fn(() => Promise.reject(failure));
+          return chain;
+        });
+
+        const res = await request('PUT', '/v1/customers', {
+          body: {
+            fullName: 'Alice Smith',
+            phone: '+56912345678',
+            email: 'taken@example.com',
+          },
+        });
+
+        expect(res.status).toBe(409);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.EMAIL_TAKEN);
       });
 
       /**
