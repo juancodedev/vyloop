@@ -122,18 +122,74 @@ describe('the form on the refusal screen', () => {
     expect(sent.message).toBe(MESSAGE);
   });
 
-  it('never writes the free text into the DOM', async () => {
-    // Asserted after a real send, so the form has actually held the text at the
-    // moment the assertion runs. A `data-support-message` or a hidden mirror
-    // input would be found here.
+  it('keeps the free text in the textarea and nowhere else', async () => {
+    // ## What the invariant actually is
+    //
+    // The obvious claim — "the message never reaches the DOM" — is **false**, and
+    // the suite caught it. A `<textarea>`'s content *is* its DOM: React renders
+    // the value as the element's text child, every browser puts it there, and no
+    // implementation can hold typed text in a textarea without it being in the
+    // document. Asserting the impossible produced a test that passed against an
+    // implementation leaking the whole message into a `data-support-message`, for
+    // the reason that a successful send unmounts the form before the assertion
+    // reads it.
+    //
+    // So the real property, which is the one worth having:
+    //
+    //   the message appears in the document **only as the textarea's own value**,
+    //   and in no attribute, no URL, and no other element.
+    //
+    // That is exactly where someone who typed it expects to find it, it is
+    // reachable by nobody but the person who wrote it, and it leaves when the form
+    // does.
     const { container } = render(<SupportForm failure={REFUSAL} siteKey={SITE_KEY} />);
 
+    /** True if any element in the tree carries the message in an attribute. */
+    const leakedIntoAnAttribute = (): boolean => {
+      for (const element of container.querySelectorAll('*')) {
+        for (const name of element.getAttributeNames()) {
+          if ((element.getAttribute(name) ?? '').includes(MESSAGE)) return true;
+        }
+      }
+      return false;
+    };
+
     fireEvent.change(screen.getByLabelText(/mensaje/i), { target: { value: MESSAGE } });
+
+    // 1. It is in the textarea, which is the point of a textarea.
+    expect(container.querySelector('textarea')?.textContent).toContain(MESSAGE);
+
+    // 2. It is in no attribute of any element — not `data-*`, not `value`, not
+    //    `placeholder`, not a title. This is the check that catches the leak the
+    //    first version of this test missed.
+    expect(leakedIntoAnAttribute()).toBe(false);
+
+    // 3. Not in the URL, where it would outlive the request in history and in
+    //    every proxy log on the way.
+    expect(window.location.href).not.toContain(MESSAGE);
+
+    // 4. Not mirrored into a second input — the honeypot exists, and a naive
+    //    implementation that keeps the text somewhere readable would use it.
+    expect(container.querySelector('input[name="company_website"]')?.getAttribute('value')).not.toContain(
+      MESSAGE,
+    );
+
+    // 5. After a **failure** the form stays mounted, on purpose, so a paragraph
+    //    typed on a phone is not retyped. The text is therefore still in the
+    //    textarea — and still in nothing else.
+    refuse();
     fireEvent.click(screen.getByRole('button', { name: /enviar/i }));
+    await screen.findByText(/no llegó tu mensaje/i);
 
-    await waitFor(() => expect(mocks.sendSupportMessage).toHaveBeenCalled());
+    expect(container.querySelector('textarea')?.textContent).toContain(MESSAGE);
+    expect(leakedIntoAnAttribute()).toBe(false);
 
-    expect(container.innerHTML).not.toContain(MESSAGE);
+    // 6. A success replaces the form, and the message leaves with it — so the
+    //    confirmation on screen carries no trace of what was written.
+    mocks.sendSupportMessage.mockResolvedValue({ status: 'accepted', request_id: 'req-1' });
+    fireEvent.click(screen.getByRole('button', { name: /enviar/i }));
+    await screen.findByText(/recibimos/i);
+
     expect(document.body.innerHTML).not.toContain(MESSAGE);
   });
 
