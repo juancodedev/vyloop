@@ -1,5 +1,7 @@
 // API client — real fetch() calls against the backend API gateway
 
+import { CUSTOMER_PATCHABLE_FIELDS, type CustomerPatch } from '@vyloop/types';
+
 import { presentPass, type WirePassState } from './pass-state';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
@@ -331,6 +333,49 @@ export const api = {
   async getCustomers(search?: string): Promise<Customer[]> {
     const result = await getCustomersWithPoints(search, 1, 100);
     return result.items;
+  },
+
+  /**
+   * Save an edit to one customer.
+   *
+   * ## Why the body is the patch, verbatim
+   *
+   * This method did not exist while `PATCH /v1/customers/:id` did, which is how
+   * the endpoint sat there spreading whatever it was given into an UPDATE for as
+   * long as it existed. With the route now refusing everything outside
+   * `CUSTOMER_PATCHABLE_FIELDS`, a client that added a field of its own would
+   * make every save fail; one that renamed a field would make every save succeed
+   * and change nothing.
+   *
+   * So this adds nothing and fills in nothing. The keys it sends are exactly the
+   * keys it was handed, `lib/customer-edit.ts` is what decides those, and no
+   * tenant field appears: the tenant is the token the gateway injected.
+   */
+  async updateCustomer(id: string, patch: CustomerPatch): Promise<CustomerDetail> {
+    // The type says this cannot happen and a caller will find a way. Dropping a
+    // disallowed key quietly is the failure this whole change is about, so it is
+    // refused here, at the boundary, where the mistake is still legible.
+    const forbidden = Object.keys(patch).filter(
+      (field) => !(CUSTOMER_PATCHABLE_FIELDS as readonly string[]).includes(field),
+    );
+    if (forbidden.length > 0) {
+      throw new ApiError(
+        0,
+        'CLIENT_CONTRACT_VIOLATION',
+        `Este cliente no puede enviar: ${forbidden.join(', ')}. Editable: ${CUSTOMER_PATCHABLE_FIELDS.join(', ')}.`,
+      );
+    }
+
+    await apiFetch(`/v1/customers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+
+    // The route answers with the updated row, which is a `customers` row and not
+    // the 360° profile `getCustomer` assembles. Re-read so the screen shows one
+    // shape rather than two, and so the balance and tier on screen cannot drift
+    // from what a second reader would see.
+    return this.getCustomer(id);
   },
 
   async getLoyaltyConfig(): Promise<LoyaltyConfig> {
