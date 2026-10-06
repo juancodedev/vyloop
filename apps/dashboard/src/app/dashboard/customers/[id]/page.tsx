@@ -6,6 +6,12 @@ import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
 import { api, type CustomerDetail } from '@/lib/api';
+import {
+  buildCustomerPatch,
+  draftFromCustomer,
+  patchErrorFor,
+  type CustomerDraft,
+} from '@/lib/customer-edit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,6 +44,31 @@ function tierColor(tierName: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// The edit form
+// ---------------------------------------------------------------------------
+
+/**
+ * Labels and input types for the four editable fields.
+ *
+ * Rendered from one table rather than four hand-written inputs so the form
+ * cannot grow a field the server refuses: the allowlist in `@vyloop/types` is
+ * the single source, and a key with no entry here would fail loudly rather than
+ * render an input the operator can fill in and have rejected on save.
+ */
+const EDITABLE_FIELDS = [
+  { key: 'fullName', label: 'Nombre', type: 'text', autoComplete: 'name' },
+  { key: 'phone', label: 'Teléfono', type: 'tel', autoComplete: 'tel' },
+  { key: 'email', label: 'Correo', type: 'email', autoComplete: 'email' },
+  { key: 'birthDate', label: 'Fecha de nacimiento', type: 'date', autoComplete: 'bday' },
+] as const satisfies ReadonlyArray<{
+  key: keyof CustomerDraft;
+  label: string;
+  type: string;
+  autoComplete: string;
+}>;
+
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -59,9 +90,71 @@ export default function CustomerDetailPage() {
   const [modalError, setModalError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: string; message: string } | null>(null);
 
+  // --- Edit state -----------------------------------------------------------
+  //
+  // `customer` is the server's answer and is the ONLY thing any read-only
+  // surface renders from. It moves when the server says so and never before:
+  // an edit applied optimistically and never rolled back leaves a merchant
+  // looking at a phone number that was rejected, and nothing on screen says so.
+  //
+  // `draft` is separate, and holding it is not a claim about anything. It is the
+  // operator's unsaved typing; it survives a refusal, because making them retype
+  // a value the server just rejected is the other half of the same bug.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<CustomerDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<{ field: string | null; message: string } | null>(null);
+
   function showToast(type: string, message: string) {
     setToast({ type, message });
     setTimeout(() => setToast(null), 3500);
+  }
+
+  function handleOpenEditor() {
+    if (!customer) return;
+    setDraft(draftFromCustomer(customer));
+    setSaveError(null);
+    setEditing(true);
+  }
+
+  function handleCancelEdit() {
+    // Discards the draft on purpose: the operator chose to leave, and the card
+    // above is already showing the server's values.
+    setDraft(null);
+    setSaveError(null);
+    setEditing(false);
+  }
+
+  async function handleSaveEdit() {
+    if (!customer || !draft) return;
+
+    // Compared against the server's copy, never against the draft as it was when
+    // the editor opened, so a field the server refused last time is not resent
+    // unchanged and rejected again.
+    const patch = buildCustomerPatch(draftFromCustomer(customer), draft);
+
+    if (Object.keys(patch).length === 0) {
+      setSaveError({ field: null, message: 'No hay cambios que guardar.' });
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.updateCustomer(customer.id, patch);
+      const cust = await api.getCustomer(customer.id);
+      // The server has answered. Now, and only now, does the card move.
+      setCustomer(cust);
+      setDraft(null);
+      setEditing(false);
+      showToast('success', 'Datos actualizados');
+    } catch (err) {
+      // The draft stays exactly as typed. `customer` is untouched, so every
+      // read-only surface still shows what the server actually holds.
+      setSaveError(patchErrorFor(err));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function handleOpenModal() {
@@ -189,6 +282,13 @@ export default function CustomerDetailPage() {
 
   const tierBaseColor = tierColor(tierName);
 
+  // Derived with the same function the save uses, so the marker cannot disagree
+  // with what would actually be sent.
+  const hasUnsavedChanges =
+    editing && draft !== null
+      ? Object.keys(buildCustomerPatch(draftFromCustomer(customer), draft)).length > 0
+      : false;
+
   // Build unified timeline: merge events + transactions, sort newest first
   const HIDDEN_EVENT_TYPES = ['customer.profile_viewed', 'profile_viewed', 'qr_displayed', 'customer.qr_displayed'];
 
@@ -309,10 +409,96 @@ export default function CustomerDetailPage() {
           </div>
         </div>
 
-        <button className="btn btn-primary" onClick={handleOpenModal} style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>
-          Registrar Venta
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', alignSelf: 'flex-start' }}>
+          <button className="btn btn-secondary" onClick={handleOpenEditor}>
+            Editar datos
+          </button>
+          <button className="btn btn-primary" onClick={handleOpenModal}>
+            Registrar Venta
+          </button>
+        </div>
       </div>
+
+      {/* ---------- Edit form ---------- */}
+      {/*
+        On this page and not inline in the customers table, because that table
+        re-fetches on every keystroke of its search box (`customers/page.tsx`
+        runs the effect on `[search]`). An inline editor there is rewritten by a
+        refetch that cannot tell "the operator is typing in this cell" from "the
+        operator is filtering", and the fix for that would be to stop the search
+        being live — a product change nobody asked for. This page loads one
+        customer and refreshes only on an explicit action.
+      */}
+      {editing && draft && (
+        <div className="card" style={{ marginTop: '1.5rem' }}>
+          <h2 className="card-title">Editar datos del cliente</h2>
+
+          <p className="text-sm text-muted" style={{ marginBottom: '1rem' }}>
+            Sólo se pueden cambiar el nombre, el teléfono, el correo y la fecha de nacimiento.
+            El resto de los datos los calcula el sistema.
+          </p>
+
+          {hasUnsavedChanges && (
+            <p className="text-sm" style={{ color: '#b45309', marginBottom: '1rem' }}>
+              Cambios sin guardar
+            </p>
+          )}
+
+          {saveError?.field === null && (
+            <p style={{ color: '#ef4444', fontSize: '0.875rem', marginBottom: '1rem' }}>
+              {saveError.message}
+            </p>
+          )}
+
+          <div className="form-group">
+            {EDITABLE_FIELDS.map((field) => (
+              // The wrapper carries `data-field` so a refusal can be rendered
+              // beside the input it is about: "the email is taken" next to the
+              // phone box sends the operator to change the wrong thing.
+              <div key={field.key} data-field={field.key} style={{ marginBottom: '1rem' }}>
+                <label htmlFor={`edit-${field.key}`}>{field.label}</label>
+                <input
+                  id={`edit-${field.key}`}
+                  type={field.type}
+                  className="form-control"
+                  autoComplete={field.autoComplete}
+                  value={draft[field.key]}
+                  disabled={saving}
+                  onChange={(e) =>
+                    setDraft({ ...draft, [field.key]: e.currentTarget.value })
+                  }
+                />
+                {saveError?.field === field.key && (
+                  <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                    {saveError.message}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Read-only, and deliberately not inputs. */}
+          <dl className="text-sm text-muted" style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '0.35rem 1rem', marginBottom: '1.25rem' }}>
+            <dt>ID de cliente</dt>
+            <dd style={{ margin: 0, fontFamily: 'monospace' }}>{customer.id}</dd>
+            <dt>Nivel</dt>
+            <dd style={{ margin: 0 }}>{tierName}</dd>
+            <dt>Puntos</dt>
+            <dd style={{ margin: 0 }}>{customer.points.toLocaleString()}</dd>
+            <dt>Miembro desde</dt>
+            <dd style={{ margin: 0 }}>{customer.createdAt}</dd>
+          </dl>
+
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button className="btn btn-secondary" onClick={handleCancelEdit} disabled={saving}>
+              Cancelar
+            </button>
+            <button className="btn btn-primary" onClick={handleSaveEdit} disabled={saving}>
+              {saving ? 'Guardando…' : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ---------- Recent Activity ---------- */}
       <div className="card" style={{ marginTop: '1.5rem' }}>
