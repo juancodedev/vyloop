@@ -43,8 +43,41 @@
     // in `src/merchant-page.ts`, and `wrangler-config.contract.test.ts` asserts
     // the two agree — so a staging deployment that moves this host and leaves the
     // constant behind fails here instead of drifting.
-    "WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev"
+    "WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev",
+    // The inbox a human reads for the support form on the card screen.
+    // `POST /v1/support`, in `src/support.ts`.
+    //
+    // DECLARED rather than left to a default in code, and the reason is the same
+    // one the var above gives: a value that only exists as a fallback is
+    // invisible to `wrangler-config.contract.test.ts`, so a deployment whose
+    // support channel pointed nowhere would be indistinguishable from one where it
+    // was configured correctly. This route reads it, and with it absent it answers
+    // 503 and sends nothing — a real, observable failure rather than a silent
+    // default. Test: `support.test.ts`, "refuses to send when the recipient is not
+    // configured".
+    //
+    // Not a secret, so it is declared here rather than passed as a `--var` flag —
+    // the split the header of this file describes.
+    "SUPPORT_EMAIL_TO": "jmunoz@juancode.dev"
   },
+  // `RESEND_API_KEY`, `SUPPORT_EMAIL_FROM` and `TURNSTILE_SECRET_KEY` are NOT
+  // declared here, and their absence is the honest state of this deployment.
+  //
+  // `RESEND_API_KEY` and `TURNSTILE_SECRET_KEY` are secrets and arrive through the
+  // deploy job's `--var` flags, like `JWT_SECRET` and `DATABASE_URL`.
+  //
+  // `SUPPORT_EMAIL_FROM` is a Resend domain that has to be *verified* in the
+  // Resend console, and no verified domain exists for this project yet. Declaring
+  // a plausible-looking one would satisfy the drift guard and every behavioural
+  // test while making Resend reject every send with a 422 — a configuration that
+  // looks deployed and delivers nothing. It is therefore a workflow flag like the
+  // two secrets, with the same fail-closed consequence: absent means 503 and no
+  // mail.
+  //
+  // `TURNSTILE_SITE_KEY` is not read by this worker. The widget belongs to the
+  // browser, so it is a build-time variable of `apps/customer-web`
+  // (`NEXT_PUBLIC_TURNSTILE_SITE_KEY`), and this route only ever sees the token
+  // the widget produced.
   // Static assets, and this block is load-bearing rather than decorative.
   //
   // `./public/` is NOT served by default. Without an `assets` block wrangler
