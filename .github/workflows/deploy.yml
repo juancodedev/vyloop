@@ -464,11 +464,25 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `NEXT_PUBLIC_TURNSTILE_SITE_KEY` is the build-time half of the support
+      # channel's bot protection (`POST /v1/support` in `apps/gateway`). Empty until
+      # a Turnstile widget is created for this project, and the form renders its
+      # "not available" state without it rather than rendering a widget that cannot
+      # work — so leaving this unset is a visible, non-functional channel rather than
+      # an unprotected one. It is a public key by design: Cloudflare's site keys are
+      # meant to be readable in the page source, and only the matching secret (passed
+      # to the gateway above as `TURNSTILE_SECRET_KEY`) authorises a send.
+      #
+      # `TURNSTILE_SECRET_KEY` is deliberately NOT defaulted to one of Cloudflare's
+      # published testing keys. Those exist so an integration can be written before a
+      # widget exists, which makes one of them the single most likely way this route
+      # ends up accepting every bot in production with every test green.
       - name: Build with @cloudflare/next-on-pages
         run: pnpm pages:build
         working-directory: apps/customer-web
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL || 'https://gateway.cl-jmunoz.workers.dev' }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ secrets.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
 
       - name: Deploy customer-web to Cloudflare Pages
         run: >-
