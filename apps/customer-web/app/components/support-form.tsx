@@ -9,6 +9,8 @@ import {
   SUPPORT_LIMITS,
   SUPPORT_SITE_KEY,
   buildSupportPayload,
+  readChallengeToken,
+  resetChallenge,
   resolveSiteKey,
 } from '../lib/support';
 
@@ -101,7 +103,6 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
   // The honeypot is uncontrolled on purpose: a bot filling it produces no React
   // state change, and a controlled field would have nowhere to put the value.
   const trap = useRef<HTMLInputElement | null>(null);
-  const token = useRef('');
 
   // The prop is resolved through the same normaliser as the environment value, so
   // a blank prop is as absent as a blank var. `SITE_KEY` is the production answer.
@@ -126,6 +127,14 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
 
     setState({ kind: 'sending' });
 
+    // Read at submit time, not held in state.
+    //
+    // The token used to come from a `useRef` that nothing ever wrote, so
+    // `token.current` was `''` on every submission and the gateway answered 403 to
+    // every customer who tried to reach us. The widget rendered, the form looked
+    // correct, and the channel had never succeeded once.
+    const challengeToken = readChallengeToken();
+
     try {
       await api.sendSupportMessage(
         buildSupportPayload({
@@ -133,7 +142,7 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
           status: failure.status,
           message,
           website: trap.current?.value ?? '',
-          token: token.current,
+          token: challengeToken,
         }),
       );
 
@@ -153,6 +162,20 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
           : 'No pudimos enviar el mensaje. Probá otra vez.';
 
       setState({ kind: 'failed', message: text });
+
+      // Reset the widget, or the retry is impossible.
+      //
+      // Turnstile tokens are single-use, and Cloudflare documents `600*` — the
+      // generic bot-behaviour family, which is what a network hiccup, an adblocker
+      // or a VPN produces as easily as an actual bot — as **retryable**. That is
+      // only true if the widget is reset: without it the next submit re-sends the
+      // same spent token and the gateway refuses it again, so one unlucky moment
+      // locks a customer out of the only channel they have.
+      //
+      // Done after the message is preserved above, never instead of it: the
+      // paragraph stays, and the only thing asked of the person is one more tap on
+      // the challenge.
+      resetChallenge();
     }
   }, [failure.code, failure.status, message, tooLong, tooShort]);
 
