@@ -22,10 +22,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WalletCard } from './wallet-card';
 
-const mocks = vi.hoisted(() => ({ getWalletPass: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getWalletPass: vi.fn(), sendSupportMessage: vi.fn() }));
 
 vi.mock('../lib/api', () => ({
-  api: { getWalletPass: mocks.getWalletPass },
+  api: { getWalletPass: mocks.getWalletPass, sendSupportMessage: mocks.sendSupportMessage },
 }));
 
 const SAVE_URL = 'https://pay.google.com/gp/v/save/ABC123?jwt.encoded.here';
@@ -669,5 +669,77 @@ describe('the refusal stays readable by a support reader', () => {
       'data-wallet-status',
       'data-wallet-remedy',
     ]);
+  });
+});
+describe('the card offers a way to write on a refusal', () => {
+  // The reason this exists. PR #180 replaced the retry button with a sentence on
+  // the seven refusals where re-asking cannot help, and the comment in this file
+  // said the app had no support channel — which left the person reading it with
+  // nowhere to go, and in the motivating case no account to go with.
+  //
+  // `SupportForm` is exercised on its own in `support-form.behavior.test.tsx`.
+  // What is asserted here is only the placement: on the refusal, and nowhere else.
+
+  it('renders it when the pass is refused', async () => {
+    // Without a Turnstile widget — which is this project's real state — the form
+    // shows its unavailable state rather than a control that could not work. The
+    // placement is what this proves: the channel is offered *here* and nowhere
+    // else. `support-form.behavior.test.tsx` covers the widget-configured path.
+    mocks.getWalletPass.mockRejectedValue(refusal('WALLET_CLASS_NOT_APPROVED', 409));
+
+    const { container } = render(<WalletCard />);
+
+    await screen.findByRole('alert');
+
+    expect(container.querySelector('.support-form')).not.toBeNull();
+  });
+
+  it('renders it on a refusal that DOES offer a retry, because the two are not the same set', async () => {
+    // A 502 is a case where re-asking genuinely helps *and* where writing to us is
+    // still reasonable. There is no argument for withholding a channel from someone
+    // because a different control also exists on the screen.
+    mocks.getWalletPass.mockRejectedValue(refusal('ANY_CODE', 503));
+
+    const { container } = render(<WalletCard />);
+
+    await screen.findByRole('alert');
+
+    expect(screen.getByRole('button', { name: /reintentar/i })).toBeTruthy();
+    expect(container.querySelector('.support-form')).not.toBeNull();
+  });
+
+  it('renders none of it when the pass worked', async () => {
+    // A support form under a working card is a bug report about success. It would
+    // also be the only place in this app inviting a complaint, which is not what
+    // a card that just rendered is for.
+    mocks.getWalletPass.mockResolvedValue(pass());
+
+    const { container } = render(<WalletCard />);
+
+    await screen.findByRole('link', { name: /google wallet/i });
+
+    expect(container.querySelector('.support-form')).toBeNull();
+  });
+
+  it('renders none of it while it is still asking', () => {
+    mocks.getWalletPass.mockReturnValue(new Promise(() => {}));
+
+    const { container } = render(<WalletCard />);
+
+    expect(container.querySelector('.support-form')).toBeNull();
+  });
+
+  it('keeps the remedy note beside it, because that advice still holds', async () => {
+    // "Contale al comercio" is what `lib/wallet.ts` decided for these codes and it
+    // is correct whether or not the channel is deployed — it is the one route to a
+    // human that needs no infrastructure. The form is an addition, not a
+    // replacement, and losing the note would be a regression.
+    mocks.getWalletPass.mockRejectedValue(refusal('WALLET_CLASS_NOT_APPROVED', 409));
+
+    render(<WalletCard />);
+
+    await screen.findByRole('alert');
+
+    expect(screen.getByText(/contale al comercio/i)).toBeTruthy();
   });
 });
