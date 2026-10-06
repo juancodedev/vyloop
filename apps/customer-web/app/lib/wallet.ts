@@ -181,21 +181,42 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
   },
 
   /**
-   * The class exists and Google's review has not finished it. A different
-   * audience from the row above and a different remedy: this one is Google's
-   * queue, nobody can hurry it, and saying so stops a comensal from asking the
-   * merchant to fix something twice a day.
+   * The class exists and Google has not approved it.
    *
-   * Deliberately does not say the card is on its way. For a merchant whose class
-   * never gets submitted at all, that is a promise nobody can keep — which is
-   * exactly the claim the retired delivery guard used to be about, and this
-   * message has to not make it.
+   * ## Who this is for, and what they can actually do
+   *
+   * The action is the commerce's. The class is the merchant's Google resource and
+   * submitting it for review is their step; nothing a comensal can do moves it.
+   * Saying so is what makes this message useful rather than merely honest — they
+   * can walk into the shop and say "your Google Wallet class is not submitted",
+   * which is a fact the merchant may not know.
+   *
+   * ## Why it does not say a review is underway
+   *
+   * The previous wording was "Google está revisando la clase", and that is a
+   * second lie rather than a first. `reviewStatus: 'draft'` means the class was
+   * created and **not submitted**: there is no review running at Google, because
+   * nobody has asked for one. Telling a comensal to wait for a queue that does
+   * not exist wastes their time and hides the state worth relaying.
+   *
+   * ## Why it does not mention retrying
+   *
+   * The review is Google's and takes days. No number of retries from a phone
+   * changes that, so "reintentá en un rato" is advice that cannot work — and a
+   * comensal who follows it comes back to the same answer and concludes their own
+   * account is the problem, which is the inversion this whole module refuses.
+   *
+   * What this branch changed is that it is now *reached*. The gate used to wave a
+   * `draft` class through on `demo_mode` alone, so these tenants got a
+   * `WALLET_PASS_NOT_CREATABLE` from Google's 404 with a retry promise attached.
    */
   WALLET_CLASS_NOT_APPROVED: {
-    title: 'La tarjeta todavía está en revisión',
+    title: 'Google todavía no aprobó la tarjeta',
     message:
-      'Google está revisando la clase del pase de este comercio y no se puede usar hasta que la ' +
-      'apruebe. Tu cuenta está bien. Mientras tanto seguís acumulando y usando tus puntos en el local.',
+      'La clase del pase de este comercio todavía no fue aprobada por Google, y sin esa aprobación no ' +
+      'se puede crear ninguna tarjeta. Es el comercio quien tiene que enviarla a revisión: esa revisión ' +
+      'la hace Google, demora días y no depende de vos. Tu cuenta está bien y seguís acumulando y ' +
+      'usando tus puntos en el local.',
   },
 
   /**

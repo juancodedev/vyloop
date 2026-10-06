@@ -358,9 +358,11 @@ export interface ReconcileCustomerInput {
  * and they drift the first time a rule changes. The extra read is one program
  * lookup; a pass written for a class that cannot back it is a support incident.
  *
- * `demoMode` is passed rather than tested. It is a deployment fact, not a
- * per-call decision, and `reconcilePass` already consults it where it consults
- * every other readiness input.
+ * `demoMode` is passed rather than read here. It is a deployment fact, not a
+ * per-call decision, so it belongs in one place — and `reconcilePass` threads it
+ * to the gate, which deliberately ignores it in favour of what Google actually
+ * accepts. See `classReadinessFor` for why a global `WALLET_DEMO_MODE` must not
+ * decide whether a class is usable.
  *
  * ## Why there is no Demo Mode early return, unlike `runScheduledSweep`
  *

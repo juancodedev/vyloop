@@ -92,11 +92,17 @@ export interface ReconcileDeps {
   /**
    * The deployment-wide demo mode, from `WALLET_DEMO_MODE`.
    *
-   * Required rather than defaulted. It decides whether a `draft` class is
-   * acceptable, and a default that happened to be the wrong one would silently
-   * change what this function permits. Injected alongside the client and the
-   * clock for the same reason: so the whole path is exercisable without a
-   * credential or an environment.
+   * Required rather than defaulted, and injected alongside the client and the
+   * clock so the whole path is exercisable without a credential or an
+   * environment.
+   *
+   * **It no longer decides whether a class is usable.** That is
+   * `classReadinessFor`'s question, and it is answered by `reviewStatus` and by
+   * whether the class id carries Google's demo marker. This flag answers *who
+   * receives the pass*, and it is threaded in rather than read here so the
+   * deployment fact stays in one place — but the gate deliberately ignores it,
+   * because a global `WALLET_DEMO_MODE=true` would otherwise put every unapproved
+   * class back through and hand it a Google 404.
    */
   demoMode: boolean;
 }

@@ -31,7 +31,7 @@ import { BALANCE_DISPLAY_MAX } from './balance';
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
 import type { GoogleWalletClient } from './google-client';
 import { googleWalletClientFor } from './helpers';
-import { classIdFor } from './ids';
+import { DEMO_MODE_NAME_PREFIX, classIdFor } from './ids';
 import type { LoyaltyObject } from './object';
 import { PassPatchNotAppliedError } from './reconcile';
 import type { WalletPassRow, WalletProgramRow, WalletStore } from './store';
@@ -278,13 +278,47 @@ describe('reconcileCustomer: it is the push trigger, and it delegates', () => {
     expect(store.findProgram).toHaveBeenCalledWith(TENANT);
   });
 
-  it("passes the deployment's demo mode into the gate instead of assuming one", async () => {
-    // `WALLET_DEMO_MODE` absent is demo mode, and `parseDemoMode` fails closed.
-    // A class still under review is acceptable in demo mode and refused without
-    // it, so this case only reaches a Google write if the var was read and
-    // threaded through rather than hardcoded either way.
+  it("refuses a class Google has not approved, whatever the deployment's demo mode says", async () => {
+    // **This used to assert the opposite**, and the inversion is the whole bug.
+    //
+    // `WALLET_DEMO_MODE` absent is demo mode, and `parseDemoMode` fails closed,
+    // so this row was previously waved through on the strength of that flag: the
+    // class was `in_review`, demo mode was on, and the balance was pushed. In
+    // production that is a `draft` class Google would refuse an object for — the
+    // 404 that came back as `WALLET_PASS_NOT_CREATABLE` with a retry promise no
+    // customer could keep.
+    //
+    // Demo mode answers *who receives the pass*. It does not answer *whether the
+    // object can be created*, and the gate that used `WALLET_DEMO_MODE` for that
+    // question is why two production tenants could not issue.
+    //
+    // A class Google puts in demo mode is recognised by the `[TEST ONLY] ` marker
+    // on its id instead — see the next test.
     const store = fakeStore({
       program: programRow({ reviewStatus: 'in_review' }),
+      balance: 400,
+    });
+    const client = fakeClient(objectWithBalance('250'));
+    delete env.WALLET_DEMO_MODE;
+
+    const outcome = await install(store, client);
+
+    expect(outcome).toMatchObject({ kind: 'skipped', reason: 'class_not_approved' });
+    expect(client.getObject).not.toHaveBeenCalled();
+    expect(client.patchObject).not.toHaveBeenCalled();
+  });
+
+  it('does reach a Google write for a class carrying the [TEST ONLY] marker, which is the real demo path', async () => {
+    // The other half, and the one that must not break. A class Google seeded for
+    // demo mode stays unapproved and is marked on its id; Google accepts objects
+    // against it and limits delivery to the issuer's test accounts. Refusing this
+    // would send every one of Google's testers back to the 404, which is worse
+    // than the bug being fixed.
+    const store = fakeStore({
+      program: programRow({
+        reviewStatus: 'in_review',
+        classId: `${DEMO_MODE_NAME_PREFIX}${classIdFor(ISSUER, TENANT)}`,
+      }),
       balance: 400,
     });
     const client = fakeClient(objectWithBalance('250'));
@@ -295,10 +329,11 @@ describe('reconcileCustomer: it is the push trigger, and it delegates', () => {
     expect(outcome.kind).toBe('patched');
   });
 
-  it('reports the gate’s own refusal when a deployment without publishing access meets a class under review', async () => {
-    // The counterpart: same row, demo mode off, and the projection is refused
-    // before anything is asked of Google. The reason code comes from
-    // `reasonCodeFor`, so the caller reads a vocabulary it does not own.
+  it('reports the gate’s own refusal before anything is asked of Google', async () => {
+    // The reason code comes from `reasonCodeFor`, so the caller reads a vocabulary
+    // it does not own. With demo mode off and an unapproved class, the refusal is
+    // identical to the one above: which is the point of the gate no longer
+    // depending on the flag.
     const store = fakeStore({
       program: programRow({ reviewStatus: 'in_review' }),
       balance: 400,
