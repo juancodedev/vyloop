@@ -41,6 +41,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SUPPORT_FIELDS } from '../lib/support';
+
 import { SupportForm } from './support-form';
 
 const mocks = vi.hoisted(() => ({ sendSupportMessage: vi.fn() }));
