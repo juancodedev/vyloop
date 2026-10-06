@@ -20,6 +20,7 @@ import type {
   WalletCustomerRow,
   WalletPassRow,
   WalletProgramRow,
+  WalletProgramWithBusinessRow,
   WalletStore,
   WalletTenantBrandingRow,
   WalletTierRow,
@@ -145,6 +146,18 @@ class FakeStore implements WalletStore {
 
   async findTenantBranding(): Promise<WalletTenantBrandingRow | null> {
     throw new Error('findTenantBranding is not part of the issuance path');
+  }
+
+  /**
+   * Throws, like the other off-path reads here.
+   *
+   * Issuing a pass needs the class id, which `findProgram` owns. The joined read
+   * additionally carries a merchant's display name and slug, and an issuance path
+   * that consulted either would be reading branding to decide something the
+   * ledger has no use for — and could be made to fail by a missing name.
+   */
+  async findProgramWithBusiness(): Promise<WalletProgramWithBusinessRow | null> {
+    throw new Error('findProgramWithBusiness is not part of the issuance path');
   }
 
   async findProgramName(): Promise<string | null> {
