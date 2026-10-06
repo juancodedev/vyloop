@@ -1,4 +1,5 @@
 import { setCurrentBusinessId } from '@vyloop/db';
+import { CUSTOMER_PATCH_ERROR, CUSTOMER_PATCHABLE_FIELDS } from '@vyloop/types';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { HTTPException } from 'hono/http-exception';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -562,6 +563,54 @@ const ME_TIERS = [
 function key(table: string, projection?: Record<string, unknown>) {
   const proj = projection ? Object.keys(projection).sort().join(',') : '*';
   return `${table}|${proj || '*'}`;
+}
+
+/**
+ * The existence/ownership read every PATCH test needs to get past.
+ *
+ * The route resolves the customer before it looks at the body, so a refusal
+ * about a field only happens for a customer this business actually owns. Without
+ * this the allowlist tests would be asserting against a 404.
+ */
+function seedOneCustomer() {
+  mockDb.select.mockImplementationOnce(() => {
+    const chain: any = {};
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.limit = vi.fn(() => chain);
+    chain.orderBy = vi.fn(() => chain);
+    chain.leftJoin = vi.fn(() => chain);
+    chain.then = (resolve: (v: any) => any) =>
+      Promise.resolve([{ id: 'existing-id', businessId: 'biz-1' }]).then(resolve);
+    return chain;
+  });
+}
+
+/**
+ * Postgres `23505` as `@neondatabase/serverless` surfaces it: `code` plus the
+ * constraint that tripped. The route is expected to read the constraint name,
+ * because "phone" and "email" are different mistakes for the operator.
+ */
+class PgUniqueViolation extends Error {
+  readonly code = '23505';
+  readonly constraint_name: string;
+
+  constructor(constraint: string) {
+    super(`duplicate key value violates unique constraint "${constraint}"`);
+    this.constraint_name = constraint;
+  }
+}
+
+function failUpdateWith(err: unknown) {
+  mockDb.update.mockImplementationOnce(() => ({
+    set: vi.fn(() => ({
+      where: vi.fn(() => ({ returning: vi.fn(() => Promise.reject(err)) })),
+    })),
+  }));
+}
+
+function failUpdateWithUniqueViolation(constraint: string) {
+  failUpdateWith(new PgUniqueViolation(constraint));
 }
 
 /**
@@ -1170,33 +1219,31 @@ describe('CRUD Routes', () => {
       );
     });
 
-    it('ignores business_id from request body', async () => {
-      mockDb.select.mockImplementationOnce(() => {
-        const chain: any = {};
-        chain.from = vi.fn(() => chain);
-        chain.where = vi.fn(() => chain);
-        chain.limit = vi.fn(() => chain);
-        chain.offset = vi.fn(() => chain);
-        chain.orderBy = vi.fn(() => chain);
-        chain.leftJoin = vi.fn(() => chain);
-        chain.then = (resolve: (v: any) => any) =>
-          Promise.resolve([{ id: 'existing-id', businessId: 'biz-1' }]).then(resolve);
-        return chain;
-      });
+    // This test used to assert that a `businessId` in the body was *ignored*:
+    // status 200, and neither spelling of the column reaching the UPDATE. The
+    // property it was protecting — "the row does not move to another tenant" —
+    // is unchanged, but the mechanism is now a refusal rather than a silent
+    // strip. Silently dropping a field the operator typed is the exact failure
+    // mode this allowlist exists to end, and a tenant move was the field most
+    // worth refusing out loud.
+    it('refuses a businessId in the body and never moves the row to another tenant', async () => {
+      seedOneCustomer();
 
       const body = { fullName: 'Hacker', business_id: 'biz-evil', businessId: 'biz-evil' };
       const res = await request('PATCH', '/v1/customers/existing-id', { body });
 
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(400);
+      const data = await res.json() as any;
+      expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.NOT_PATCHABLE);
+      expect(data.error.message).toContain('businessId');
+      expect(data.error.message).toContain('business_id');
 
-      // Verify business_id was NOT passed to update.set
-      const updateSetFn = mockDb.update.mock.results[0]?.value.set;
-      expect(updateSetFn).toHaveBeenCalledWith(
-        expect.not.objectContaining({ businessId: expect.anything() }),
-      );
-      expect(updateSetFn).toHaveBeenCalledWith(
-        expect.not.objectContaining({ business_id: expect.anything() }),
-      );
+      // No UPDATE at all, so no spelling of the tenant column was written.
+      expect(mockDb.update).not.toHaveBeenCalled();
+
+      // And the tenant filter still comes from the token, not the payload.
+      const [lookup] = wheresFor('customers');
+      expect(lookup.params).toContain('biz-1');
     });
 
     it('returns 404 when customer not found', async () => {
@@ -1216,6 +1263,350 @@ describe('CRUD Routes', () => {
 
       expect(res.status).toBe(404);
     });
+
+    // -----------------------------------------------------------------------
+    // The allowlist
+    //
+    // Before these, `const { businessId, ...updateData } = body` and the rest of
+    // the body went into `.set()`. Every test here exists because that spread
+    // turned a merchant's PATCH into a write on any of the fifteen columns.
+    // -----------------------------------------------------------------------
+
+    describe('allowlist', () => {
+      /**
+       * The one test that makes this endpoint acceptable.
+       *
+       * `global_id` is half of the Google Wallet `objectId`
+       * (`<issuerId>.member-<globalId>`), so rewriting it does not "rename a
+       * customer": it points the pass we issue at a different object, the object
+       * already saved on their phone stops being theirs, and the old one is not
+       * deleted from Google. There is no way back short of reissuing.
+       */
+      it('rejects globalId, and the column does not change', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { globalId: '11111111-2222-4333-8444-555555555555' },
+        });
+
+        expect(res.status).toBe(400);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.NOT_PATCHABLE);
+        // Named, not swallowed: an operator who sends this has to be told it did
+        // not happen.
+        expect(data.error.message).toContain('globalId');
+
+        // The proof that matters — no UPDATE was issued at all.
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['deletedAt', '1999-01-01T00:00:00.000Z'],
+        ['id', 'other-id'],
+        ['currentTierId', 'tier-oro'],
+        ['memberCode', 'M-0001'],
+        ['metadata', { tier: 'oro' }],
+        ['createdAt', '1999-01-01T00:00:00.000Z'],
+      ])('rejects %s', async (field, value) => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { [field]: value },
+        });
+
+        expect(res.status).toBe(400);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.NOT_PATCHABLE);
+        expect(data.error.message).toContain(field);
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+
+      it('applies each of the four editable fields', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: {
+            fullName: 'Ana Updated',
+            phone: '+56988887777',
+            email: 'ana@updated.com',
+            birthDate: '1991-02-03',
+          },
+        });
+
+        expect(res.status).toBe(200);
+        const updateSetFn = mockDb.update.mock.results[0]?.value.set;
+        expect(updateSetFn).toHaveBeenCalledWith({
+          fullName: 'Ana Updated',
+          phone: '+56988887777',
+          email: 'ana@updated.com',
+          birthDate: '1991-02-03',
+          updatedAt: expect.any(Date),
+        });
+      });
+
+      it('reads its allowlist from the shared contract, not a local copy', async () => {
+        seedOneCustomer();
+
+        for (const field of CUSTOMER_PATCHABLE_FIELDS) {
+          mockDb.update.mockClear();
+          const res = await request('PATCH', '/v1/customers/existing-id', {
+            body: { [field]: field === 'birthDate' ? '1990-01-01' : 'x' },
+          });
+          expect(res.status, `${field} must be editable`).toBe(200);
+        }
+      });
+
+      /**
+       * Whole-body rejection, and the reason for it.
+       *
+       * A partial application would be the friendlier answer — the valid half
+       * lands, the invalid half is reported — and it is the wrong one. The
+       * operator left believing the name changed when it did not is a worse
+       * outcome than being told to fix the request and send it again: the first
+       * one is discovered at the next phone call, the second one immediately.
+       * So a body with one good field and one forbidden field writes nothing.
+       */
+      it('rejects the whole body when one field is editable and another is not', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { fullName: 'Ana Updated', globalId: '11111111-2222-4333-8444-555555555555' },
+        });
+
+        expect(res.status).toBe(400);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.NOT_PATCHABLE);
+        expect(data.error.message).toContain('globalId');
+
+        // The editable field was NOT applied either. This is the assertion that
+        // makes the test above worth writing.
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+
+      it('names every forbidden field in one answer', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { fullName: 'Ana', globalId: 'x', deletedAt: 'y' },
+        });
+
+        const data = await res.json() as any;
+        expect(data.error.message).toContain('globalId');
+        expect(data.error.message).toContain('deletedAt');
+      });
+
+      // A typo or a snake_case habit must produce the same clear refusal, not a
+      // Postgres "column does not exist" surfacing as a 500.
+      it('rejects a field that is not even a column', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { nombre: 'Ana' },
+        });
+
+        expect(res.status).toBe(400);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.NOT_PATCHABLE);
+        expect(data.error.message).toContain('nombre');
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+
+      it('lists what is editable, so the refusal is actionable', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { globalId: 'x' },
+        });
+
+        const data = await res.json() as any;
+        for (const field of CUSTOMER_PATCHABLE_FIELDS) {
+          expect(data.error.message).toContain(field);
+        }
+      });
+
+      it('refuses a body that names no editable field', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', { body: {} });
+
+        expect(res.status).toBe(400);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.EMPTY);
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['an array', ['fullName']],
+        ['a bare string', 'fullName'],
+        ['a number', 42],
+        ['null', null],
+      ])('refuses a body that is %s rather than an object', async (_label, body) => {
+        seedOneCustomer();
+
+        const req = new Request(`${BASE}/v1/customers/existing-id`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': 'user-1',
+            'X-Business-Id': 'biz-1',
+            'X-User-Role': 'admin',
+          },
+          body: JSON.stringify(body),
+        });
+        const res = await app.fetch(req, TEST_ENV, TEST_EXECUTION_CTX);
+
+        expect(res.status).toBe(400);
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('partial updates do not blank untouched columns', () => {
+      it('writes only the column that was sent, leaving the rest absent from the UPDATE', async () => {
+        seedOneCustomer();
+
+        await request('PATCH', '/v1/customers/existing-id', { body: { phone: '+56955554444' } });
+
+        const updateSetFn = mockDb.update.mock.results[0]?.value.set as { mock: { calls: unknown[][] } };
+        const payload = updateSetFn.mock.calls[0]![0] as Record<string, unknown>;
+        // The danger is a key present with an `undefined` value: drizzle passes
+        // those to Postgres as NULL, so the column the operator never touched
+        // would be emptied by an edit of a different column.
+        expect(Object.keys(payload).sort()).toEqual(['phone', 'updatedAt']);
+        for (const key of ['email', 'birthDate', 'fullName']) {
+          expect(payload).not.toHaveProperty(key);
+        }
+      });
+
+      it('clears a nullable column only when null is spelled out', async () => {
+        seedOneCustomer();
+
+        await request('PATCH', '/v1/customers/existing-id', { body: { email: null } });
+
+        const updateSetFn = mockDb.update.mock.results[0]?.value.set as { mock: { calls: unknown[][] } };
+        const payload = updateSetFn.mock.calls[0]![0] as Record<string, unknown>;
+        expect(payload.email).toBeNull();
+        expect(payload).not.toHaveProperty('fullName');
+      });
+
+      it('rejects a value that is neither a string nor null', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { fullName: { toString: 'nope' } },
+        });
+
+        expect(res.status).toBe(400);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.INVALID_VALUE);
+        expect(data.error.message).toContain('fullName');
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+
+      // PUT strips whitespace from the phone before storing it. The unique index
+      // and the POS equality lookup both read the stored value, so an unstripped
+      // phone saved here would be a number the counter can never match.
+      it('normalises the phone the same way registration does', async () => {
+        seedOneCustomer();
+
+        await request('PATCH', '/v1/customers/existing-id', {
+          body: { phone: '+569 5555 4444' },
+        });
+
+        const updateSetFn = mockDb.update.mock.results[0]?.value.set as { mock: { calls: unknown[][] } };
+        const payload = updateSetFn.mock.calls[0]![0] as Record<string, unknown>;
+        expect(payload.phone).toBe('+56955554444');
+      });
+    });
+
+    describe('uniqueness', () => {
+      it('translates a duplicate phone into an answer the operator can use', async () => {
+        seedOneCustomer();
+        failUpdateWithUniqueViolation('uq_customers_business_phone');
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { phone: '+56999999999' },
+        });
+
+        // Probed, not assumed: before the guard this was
+        // 500 {"code":"INTERNAL_ERROR","message":"Internal server error"}.
+        expect(res.status).toBe(409);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.PHONE_TAKEN);
+        expect(data.error.message).toMatch(/another customer in this business/i);
+        // Named the way the operator thinks about it — the phone, not the index.
+        expect(data.error.message).toMatch(/phone/i);
+        expect(data.error.message).not.toMatch(/uq_customers/);
+      });
+
+      it('translates a duplicate email into its own code and message', async () => {
+        seedOneCustomer();
+        failUpdateWithUniqueViolation('uq_customers_business_email');
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { email: 'taken@elsewhere.com' },
+        });
+
+        expect(res.status).toBe(409);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.EMAIL_TAKEN);
+        expect(data.error.message).toMatch(/another customer in this business/i);
+        expect(data.error.message).toMatch(/email/i);
+      });
+
+      it('gives phone and email different codes, so the form can blame the right input', async () => {
+        expect(CUSTOMER_PATCH_ERROR.PHONE_TAKEN).not.toBe(CUSTOMER_PATCH_ERROR.EMAIL_TAKEN);
+      });
+
+      /**
+       * Saving a customer back with the phone they already have is a no-op the
+       * operator performs constantly — the form submits all four fields, most of
+       * them unchanged. Postgres excludes the row being updated from the unique
+       * index, so this does not raise; the point of the test is that the guard
+       * above did not add a "check first" query that would break it.
+       */
+      it('accepts a phone that is already this customer\'s own', async () => {
+        seedOneCustomer();
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { phone: '+56912345678', fullName: 'Ana' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(mockDb.update).toHaveBeenCalledTimes(1);
+      });
+
+      it('lets an unrelated database failure through as a 500', async () => {
+        seedOneCustomer();
+        failUpdateWith(new Error('connection terminated unexpectedly'));
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { phone: '+56999999999' },
+        });
+
+        // Over-translating is its own lie: a broken database must not be
+        // reported to a merchant as "that phone belongs to someone else".
+        expect(res.status).toBe(500);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe('INTERNAL_ERROR');
+      });
+
+      // A unique index this route cannot name — `uq_customers_business_member_code`
+      // exists today — is still a conflict, not an internal error.
+      it('still reports a conflict it has no specific message for', async () => {
+        seedOneCustomer();
+        failUpdateWithUniqueViolation('uq_customers_business_member_code');
+
+        const res = await request('PATCH', '/v1/customers/existing-id', {
+          body: { phone: '+56999999999' },
+        });
+
+        expect(res.status).toBe(409);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.CONFLICT);
+        expect(data.error.message).toMatch(/another record/i);
+      });
+    });
+
   });
 
   // -----------------------------------------------------------------------
