@@ -976,6 +976,99 @@ expect(res.status).toBe(201);
         expect(data.event_published).toBe(false);
         expect(mockPublish).not.toHaveBeenCalled();
       });
+
+      /**
+       * A duplicate email in the same business used to be a 500.
+       *
+       * `uq_customers_business_email` is UNIQUE on (business_id, email) and the
+       * upsert only looks up by phone, so the insert can violate it. Nothing caught
+       * the violation, so it reached the top-level handler as `INTERNAL_ERROR` —
+       * the one answer a registering customer cannot act on. The field is optional
+       * on the form and people reuse their own address, so "internal error" read as
+       * "try again" and failed identically forever.
+       *
+       * `PATCH` already translated `23505`; the two routes disagree about the same
+       * constraint, and this pins the registration side now that it agrees.
+       */
+      it('answers a duplicate email with a 409 the form can show', async () => {
+        mockDb.select.mockImplementationOnce(() => {
+          const chain: any = {};
+          chain.from = vi.fn(() => chain);
+          chain.where = vi.fn(() => chain);
+          chain.limit = vi.fn(() => chain);
+          chain.offset = vi.fn(() => chain);
+          chain.orderBy = vi.fn(() => chain);
+          chain.leftJoin = vi.fn(() => chain);
+          chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+          return chain;
+        });
+
+        mockDb.insert.mockImplementationOnce(() => {
+          const violation: any = new Error('duplicate key value violates unique constraint');
+          violation.code = '23505';
+          violation.constraint_name = 'uq_customers_business_email';
+          return {
+            values: vi.fn(() => ({ returning: vi.fn(() => Promise.reject(violation)) })),
+          };
+        });
+
+        const res = await request('PUT', '/v1/customers', {
+          body: {
+            fullName: 'Alice Smith',
+            phone: '+56912345678',
+            email: 'taken@example.com',
+          },
+        });
+
+        expect(res.status).toBe(409);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe(CUSTOMER_PATCH_ERROR.EMAIL_TAKEN);
+
+        // The register form drops to its generic copy once a message exceeds 180
+        // characters, so the instruction that lets the customer finish has to fit.
+        expect(data.error.message.length).toBeLessThanOrEqual(180);
+        // Optional on that form, so the remedy is the one that unblocks them.
+        expect(data.error.message).toMatch(/opcional/i);
+
+        // Nothing was published: no customer exists to describe.
+        expect(mockPublish).not.toHaveBeenCalled();
+      });
+
+      /**
+       * The classifier returns `null` for anything that is not a unique violation,
+       * and this is what that decision buys. A dropped connection reported as a
+       * conflict sends whoever reads it hunting for a collision that does not
+       * exist, which is a worse outcome than an honest 500.
+       */
+      it('lets a genuine insert failure surface instead of calling it a conflict', async () => {
+        mockDb.select.mockImplementationOnce(() => {
+          const chain: any = {};
+          chain.from = vi.fn(() => chain);
+          chain.where = vi.fn(() => chain);
+          chain.limit = vi.fn(() => chain);
+          chain.offset = vi.fn(() => chain);
+          chain.orderBy = vi.fn(() => chain);
+          chain.leftJoin = vi.fn(() => chain);
+          chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+          return chain;
+        });
+
+        mockDb.insert.mockImplementationOnce(() => {
+          const failure: any = new Error('connection terminated unexpectedly');
+          failure.code = 'ECONNRESET';
+          return {
+            values: vi.fn(() => ({ returning: vi.fn(() => Promise.reject(failure)) })),
+          };
+        });
+
+        const res = await request('PUT', '/v1/customers', {
+          body: { fullName: 'Alice Smith', phone: '+56912345678' },
+        });
+
+        expect(res.status).toBe(500);
+        const data = await res.json() as any;
+        expect(data.error.code).toBe('INTERNAL_ERROR');
+      });
   });
 
   // -----------------------------------------------------------------------
