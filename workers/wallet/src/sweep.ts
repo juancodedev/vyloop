@@ -589,11 +589,11 @@ export async function sweepPasses(deps: SweepDeps, input: SweepInput): Promise<S
  * ## Why this goes straight to `provisionTenantClass` and not through the loop above
  *
  * The loop above gates every tenant on `classReadinessFor`, which rejects anything
- * that is not `approved` and answers `class_not_provisioned` for a tenant with no
- * row. That gate is the right one for a sweep that is about to write to a pass:
- * a class Google has not approved cannot have live objects, and patching anyway
- * would be the one path in this worker that writes to Google without the class
- * being ready.
+ * that is not `approved` — or marked as a Google demo class — and answers
+ * `class_not_provisioned` for a tenant with no row. That gate is the right one for
+ * a sweep that is about to write to a pass: a class Google has not approved
+ * cannot have live objects, and patching anyway would be the one path in this
+ * worker that writes to Google without the class being ready.
  *
  * It is the wrong gate here, because this loop's whole purpose is to *make* the
  * class. Passing these tenants through a check that refuses to act on an

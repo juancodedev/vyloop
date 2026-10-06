@@ -20,7 +20,7 @@
  *    Nothing in this file sums, adjusts, rounds or clamps a balance.
  */
 
-import { classIdFor, objectIdFor } from './ids';
+import { DEMO_MODE_NAME_PREFIX, classIdFor, objectIdFor } from './ids';
 import { createSaveToWalletUrl } from './jwt';
 import { findAvailableMemberCode, isValidMemberCode } from './member-code';
 import { buildLoyaltyObject } from './object';
@@ -71,6 +71,67 @@ export function reasonCodeFor(reason: WalletUnavailableReason): string {
 /**
  * Decide whether this tenant's class can back a customer pass.
  *
+ * ## The question this answers, stated so it cannot drift
+ *
+ * **"Will Google accept an object for this class?"** Not "is this merchant in
+ * demo mode".
+ *
+ * Those are two questions about two different objects, and conflating them is
+ * the bug this function used to have. Google accepts an object against a class
+ * that is `approved`, or against a class it has put in demo mode — which we
+ * recognise by the marker on the stored id (`DEMO_MODE_NAME_PREFIX`, declared
+ * once in `ids.ts`, and deliberately not spelled out in this file). Demo mode says *who
+ * receives the pass*: Google's demo-mode issuer accounts only deliver to their
+ * own Admin/Developer/test accounts. It says nothing about whether the object can
+ * be created at all.
+ *
+ * The old rule was `reviewStatus !== 'approved' && !demoMode`, where `demoMode`
+ * was `envDemoMode || program.demoMode !== false`. In production that let a
+ * `draft` class through on the strength of a `demo_mode: true` row, and the pass
+ * route then got:
+ *
+ * ```
+ * 404: Wallet Object Class {...} not approved
+ * ```
+ *
+ * from `insertObject`, which the route's catch turned into
+ * `WALLET_PASS_NOT_CREATABLE` — a code whose customer-facing copy said *"podés
+ * reintentar en un rato"*. That advice cannot work: the review is Google's and it
+ * takes days. Two of the five production tenants were hitting it
+ * (`cafe-prueba-0117`, `sonda-a2-1116`), and the three that worked were all
+ * `approved` — the `demo_mode` column happened to correlate with the outcome and
+ * so the rule looked correct.
+ *
+ * ## `envDemoMode` is deliberately not consulted here
+ *
+ * It stays on the signature because it is a real fact about the deployment and
+ * because dropping it would make this diff about a signature rather than about
+ * the rule. It is **not** part of the answer, and that is the point worth
+ * recording.
+ *
+ * Two ways to keep it, both wrong:
+ *
+ * - **As an allowance** (what it was): `workers/wallet/wrangler.jsonc` ships
+ *   `WALLET_DEMO_MODE: "true"`, so a global flag would put every `draft` tenant
+ *   back through this gate and the 404 would return with them. One environment
+ *   variable, two tenants, one support queue.
+ * - **As a ceiling that refuses every mint**: production would stop issuing
+ *   entirely, including for the three approved tenants that work today.
+ *
+ * So it answers a question this function does not ask. Delivery is decided
+ * where delivery is known: `GET /v1/wallet/status` reports `demo_mode` and the
+ * customer web's delivery guard refuses to offer the card, and `sweep.ts` refuses
+ * to write at all in demo mode. The pass route deliberately does not refuse on
+ * demo mode — the people who can test are the customers on Google's test-account
+ * list, and they hold the `customer` role, so refusing them blocked everyone.
+ *
+ * ## `demo_mode` on the row is untouched, and that is its actual job
+ *
+ * It is still written, still read, still surfaced by the operator console
+ * (`PUT /v1/wallet/program/demo-mode`) and still read by the inactivity sweep.
+ * It answers *who receives this pass*. It no longer answers *whether this class
+ * can back one*, which is what it was never able to answer.
+ *
  * ## Why the class is never created here
  *
  * The tempting implementation is: no row? Insert the class and carry on. It is
@@ -108,31 +169,32 @@ export function reasonCodeFor(reason: WalletUnavailableReason): string {
  * unusable states, silently starts issuing passes against a state nobody
  * reasoned about.
  *
- * ## Why demo mode is an exception, and only to that rule
+ * ## The marker is read, never re-spelled
  *
- * A `draft` class used to be an unconditional refusal. That is stricter than
- * Google: a new issuer account is in demo mode, its class reports `draft`, and
- * Google still allows pass creation, limiting **delivery** to the issuer's test
- * accounts. So the stricter gate bought nothing and cost the ability to exercise
- * signing, the save link and the sweep before a grant that arrives on Google's
- * timeline.
+ * The marker is declared once, in `ids.ts`. It is read from there here, and a
+ * contract test asserts this file holds no literal copy — because the way this
+ * bug comes back is somebody typing the prefix a second time because they did not
+ * know where it lived, after which the gate and the marker drift apart and only
+ * one of them moves.
  *
- * The exception is scoped to demo mode, and it does not make the pass good for
- * the public — it makes the pass testable. Google enforces the test-account
- * limit regardless of what this function returns; what demo mode controls is
- * whether *we* claim a pass works for a real customer. That claim is the one
- * that produces a support incident, so it is gated on the operator having
- * declared publishing access rather than on the class having been approved.
- *
- * Everything else about the gate is unchanged: an unrecognised status still
- * blocks, the derivation mismatch is still checked, and demo mode never makes a
- * missing row acceptable.
+ * The marker is a **name** marker: it is how *we* recognise a class Google put in
+ * demo mode, not part of the resource identifier Google knows it by. So the
+ * derivation check runs on the id **behind** the marker, and the returned
+ * `classId` is the derived one — an object built against the marked string is a
+ * 400 at the customer's tap. A marker is not a way to skip the derivation check
+ * either: skipping it is exactly how a pass gets built against somebody else's
+ * class, and there is a test for that.
  */
 export function classReadinessFor(
   program: WalletProgramRow | null,
   tenantId: string,
   envDemoMode: boolean,
 ): ClassReadiness {
+  // Read once so the "does this id carry the marker" question and the "strip it
+  // before comparing" question cannot disagree. `void envDemoMode` is here so the
+  // unused parameter is a decision the reader can see rather than an accident.
+  void envDemoMode;
+
   if (program === null) {
     return {
       ok: false,
@@ -144,30 +206,34 @@ export function classReadinessFor(
     };
   }
 
-  // The combination lives here rather than at the call sites so there is one
-  // place that knows the rule. `env || row` and not `row && env`: the deployment
-  // variable is a ceiling, so a deployment that says it has no publishing access
-  // refuses every mint no matter what any row claims, while a row can still hold
-  // a tenant in demo mode on a deployment that has been granted access.
-  //
-  // A row that cannot say is treated as demo mode. The alternative — treating an
-  // unreadable value as "has access" — is the failure this whole feature exists
-  // to make impossible.
-  const demoMode = envDemoMode || program.demoMode !== false;
+  // Google's own two shapes for a class it will accept an object against. The
+  // prefix is read from `ids.ts` rather than spelled here: see the note above.
+  const markedClassId = program.classId.startsWith(DEMO_MODE_NAME_PREFIX);
+  const storedClassId = markedClassId
+    ? program.classId.slice(DEMO_MODE_NAME_PREFIX.length)
+    : program.classId;
 
-  if (program.reviewStatus !== 'approved' && !demoMode) {
+  // `approved` is one of the two; the marker is the other. Nothing else, and in
+  // particular not `demo_mode` — which is why `cafe-prueba-0117` and
+  // `sonda-a2-1116` stop being waved through here.
+  if (program.reviewStatus !== 'approved' && !markedClassId) {
     return {
       ok: false,
       reason: 'class_not_approved',
       message:
         `The Google Wallet pass class for this business is in state "${program.reviewStatus}", ` +
-        'and Google only allows passes against an approved class. The review is done by Google ' +
-        'and cannot be skipped; your pass will be available as soon as it is approved.',
+        'and Google does not create pass objects against a class it has not approved. The class ' +
+        'has to be submitted by the business and approved by Google, which takes days; asking ' +
+        'again does not change the answer, so this is not something a customer can resolve by ' +
+        'retrying.',
     };
   }
 
   // The class id is a pure function of the issuer id and the tenant id, so a
   // stored value that disagrees is a data defect rather than a config choice.
+  //
+  // Compared against the id **behind the marker**, so the demo marker widens what
+  // this gate accepts without ever widening what the derivation accepts.
   //
   // Note the derivation uses the **requested** `tenantId`, not
   // `program.tenantId`. The store already filters by tenant, so a row for
@@ -176,7 +242,7 @@ export function classReadinessFor(
   // against somebody else's class. Tenant isolation enforced in two independent
   // places, one of which is a test rather than a filter.
   const expected = classIdFor(program.issuerId, tenantId);
-  if (program.classId !== expected) {
+  if (storedClassId !== expected) {
     return {
       ok: false,
       reason: 'class_id_mismatch',

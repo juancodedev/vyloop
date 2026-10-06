@@ -56,7 +56,8 @@ export interface WalletProgramRow {
    * `check` constraint, so the database is the authority on what can be in it
    * and a value this code has never heard of must be handled rather than
    * rejected at the type level. `classReadinessFor` fails closed on anything
-   * that is not exactly `approved`.
+   * that is not exactly `approved`, unless the class id carries Google's
+   * demo-mode marker — the one other shape Google accepts an object against.
    */
   reviewStatus: string;
   /**
@@ -65,8 +66,14 @@ export interface WalletProgramRow {
    *
    * Optional on the type because a row written before the column existed, or by
    * a query that has not been updated, must not read as "not in demo mode".
-   * `classReadinessFor` treats `undefined` as demo mode, which is the safe
-   * direction: absent means "do not claim this pass works for the public".
+   *
+   * **This is not read by `classReadinessFor`.** It answers *who receives the
+   * pass* — Google's demo-mode issuers only deliver to their own test accounts —
+   * not *whether the object can be created*, which Google answers from
+   * `reviewStatus` and from whether the class id carries the demo marker. The
+   * gate used to read this column and wave unapproved classes through, which is
+   * what left two production tenants unable to issue. Read by the operator
+   * console and the inactivity sweep instead.
    */
   demoMode?: boolean;
   /**
