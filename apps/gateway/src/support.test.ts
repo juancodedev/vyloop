@@ -40,7 +40,7 @@
  */
 
 import { Hono } from 'hono';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   SUPPORT_LIMITS,
@@ -203,6 +203,22 @@ async function errorOf(response: Response): Promise<{ code: string; message: str
 
   return { code: body.error?.code ?? '', message: body.error?.message ?? '' };
 }
+
+/**
+ * The whole gateway, for the two assertions that need the real middleware chain.
+ *
+ * Imported once in `beforeAll` rather than inside each test. The two tests that use
+ * it are the PII ones, and an `await import('./index')` in a test body pulls the
+ * entire gateway — Hono, `jose`, `@vyloop/db` — into that test's own 5s budget.
+ * Under the parallel load of `pnpm -r test` that tipped them over and produced a
+ * timeout that looked like a failure of the thing under test. `index.test.ts`
+ * already does this for the same reason.
+ */
+let gatewayApp: typeof import('./index').default;
+
+beforeAll(async () => {
+  gatewayApp = (await import('./index')).default;
+});
 
 // ---------------------------------------------------------------------------
 // 1. The rate limit
@@ -454,10 +470,9 @@ describe('the free text never reaches a log', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
-      const app = (await import('./index')).default;
       vi.stubGlobal('fetch', fakeFetch({ resend: { throws: true } }));
 
-      const res = await app.fetch(
+      const res = await gatewayApp.fetch(
         new Request(`https://api.test${SUPPORT_PATH}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.7' },
@@ -484,9 +499,7 @@ describe('the free text never reaches a log', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
-      const app = (await import('./index')).default;
-
-      await app.fetch(
+      await gatewayApp.fetch(
         new Request(`https://api.test${SUPPORT_PATH}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
