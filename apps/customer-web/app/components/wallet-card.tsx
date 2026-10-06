@@ -50,6 +50,20 @@ import { ClubError, ClubStatus } from './club-status';
  * and `wallet.test.ts` asserts the property across all of them at once, which is
  * the only way it can be asserted at all.
  *
+ * ## Why the retry button is conditional
+ *
+ * Because the copy and the control are two halves of one statement, and they
+ * used to disagree. This component passed a `Reintentar` button unconditionally,
+ * so the button re-requested `/v1/wallet/pass` on all ten refusals — seven of
+ * which are answered identically however many times they are tapped. The worst
+ * was `WALLET_CLASS_NOT_APPROVED`, whose own message says the review is Google's
+ * and takes days, with the button sitting two lines underneath.
+ *
+ * So the button is now a *rendering of a verdict* that `lib/wallet.ts` owns. Not
+ * a decision taken here: this component cannot see inside a refusal, so asking it
+ * "should I offer a retry?" would be asking it to guess at the one thing the whole
+ * mapping exists to get right.
+ *
  * ## No icon on the button
  *
  * `a11y-hygiene.contract.test.ts` pins the exact set of elements carrying
@@ -128,23 +142,49 @@ export function WalletCard() {
 
       {state.kind === 'refused' ? (
         <div
-          // The code and the status, as data rather than as copy. A customer
-          // showing this to somebody at the counter gives the support reader
-          // which refusal this was without anyone having to guess from the
+          // The code, the status and the verdict, as data rather than as copy. A
+          // customer showing this to somebody at the counter gives the support
+          // reader which refusal this was without anyone having to guess from the
           // sentence — a 409 is the merchant's onboarding and a 500 is ours.
           //
-          // Not logged, not sent, and no PII in either: a code and a status are
-          // the whole payload and both are drawn from a closed set.
+          // The verdict is new, and it is the third attribute for the reason the
+          // first two exist: a **missing** control is the one thing the DOM cannot
+          // explain on its own. A page with no retry looks broken in a different
+          // way from a page that was never supposed to offer one, so the reader
+          // otherwise has to reconstruct the decision from the sentence.
+          //
+          // Not logged, not sent, and no PII in any of the three: all are drawn
+          // from closed sets.
           data-wallet-code={state.failure.code}
           data-wallet-status={state.failure.status}
+          data-wallet-remedy={state.failure.remedy.kind}
         >
           <ClubError
             title={state.failure.title}
             description={state.failure.message}
             action={
-              <button type="button" className="btn btn--outline" onClick={retry}>
-                Reintentar
-              </button>
+              // The button, or the sentence that answers "and what do I do now?".
+              //
+              // It used to be the button unconditionally, which made it a control
+              // that consulted nothing: seven of the ten refusals are answered
+              // identically however many times it is tapped, and one of those
+              // seven says two lines above that a review is Google's and takes
+              // days. `lib/wallet.ts` owns the verdict, so this branch reads a
+              // decision rather than making one about a refusal it cannot see the
+              // inside of.
+              state.failure.remedy.kind === 'retry' ? (
+                <button type="button" className="btn btn--outline" onClick={retry}>
+                  Reintentar
+                </button>
+              ) : (
+                // A sentence rather than a second control. The only control that
+                // would help here is a way to reach a human, and this app has no
+                // support channel — a `mailto:` or a phone number would be
+                // inventing the destination as well as the control. What the
+                // customer can always do is tell whoever is standing next to them,
+                // which is what the note says.
+                <p className="club-status__description">{state.failure.remedy.note}</p>
+              )
             }
           />
         </div>

@@ -30,6 +30,13 @@
  * Each code therefore gets its own title and its own message, because each has a
  * different remedy and a different audience: the merchant, Google, or us.
  *
+ * And each one also declares **what it is allowed to offer**, because a refusal
+ * has two halves and the second half used to be invented by the renderer: seven
+ * of these ten codes are answered identically however many times the customer
+ * taps, and the page was offering a retry on all of them. See `WalletRemedy` for
+ * why that is a union rather than a flag, and for what stands in the button's
+ * place when re-asking cannot help.
+ *
  * ## What is deliberately not here
  *
  * The server's own `error.message`. Those are written for an operator or a log
@@ -120,6 +127,66 @@ export interface WalletPass {
   pass_state: WalletPassState;
 }
 
+/**
+ * What this refusal may offer the customer, having been asked to explain itself.
+ *
+ * ## Why this is a union and not a boolean
+ *
+ * Because the property worth holding is not "is a retry honest". It is that **the
+ * control and the sentence above it agree** — and two independent fields cannot
+ * hold that, because `can_retry: false` with no note is perfectly legal and is
+ * exactly the defect: a refusal that cannot be retried, rendered with nothing to
+ * do instead. A union deletes that state. `retry` cannot carry a note, and the
+ * other three cannot be written without one.
+ *
+ * ## Why there are three answers that are not `retry`
+ *
+ * Because they are three different audiences, and the sentence that occupies the
+ * slot has to be different for each: somebody is waiting on Google, somebody in
+ * the commerce has to act, or we have to fix it. Collapsing them into one "no
+ * retry" would have made the note a fourth thing to keep honest — and the note is
+ * what stops a dead control from becoming a dead end.
+ *
+ * ## Why the note is a sentence and not a second control
+ *
+ * Because the only control that would make sense there is a way to reach a human,
+ * and **this app has no support channel**. Inventing one — a `mailto:`, a
+ * WhatsApp link, a phone number — would be inventing the destination as well as
+ * the control, and a link to nowhere is worse than an honest absence. What the
+ * customer can always do is tell the person standing next to them, so the note
+ * says who has to act.
+ */
+export type WalletRemedy =
+  /** Asking again can plausibly produce a different answer. */
+  | { kind: 'retry' }
+  /** Nobody has to act: a process outside this app is already under way. */
+  | { kind: 'wait'; note: string }
+  /** Somebody in the commerce has to do something about it. */
+  | { kind: 'tell-anyone'; note: string }
+  /** We have to fix it, and the customer has nothing to do. */
+  | { kind: 'ours'; note: string };
+
+/**
+ * The three notes, stated once each.
+ *
+ * Shared because they are shared: six codes are waiting on the commerce to
+ * configure something, and writing six sentences to say that would be six chances
+ * to disagree. Kept short because they sit under a message that already carries
+ * the explanation — their whole job is to answer "and what do I do now?", which
+ * is what the button used to answer with a tap.
+ *
+ * ## Why none of them names a time
+ *
+ * "Pronto", "en un rato" and "más tarde" are promises about when something will
+ * change, and nobody in this system knows. `WALLET_CLASS_NOT_APPROVED` is the case
+ * that makes it concrete: the review may not have been submitted at all, so there
+ * may be no queue to wait in. So these say what is true instead — that the tap
+ * would not have helped, and who the next step belongs to.
+ */
+const WAIT_NOTE = 'No hace falta que hagas nada mientras tanto.';
+const TELL_ANYONE_NOTE = 'Contale al comercio y lo resuelven.';
+const OURS_NOTE = 'Esto lo tenemos que corregir nosotros.';
+
 /** One refusal, rendered. Both halves are customer-facing copy. */
 export interface WalletFailure {
   /** The server's stable code, echoed for the DOM and for a future support read. */
@@ -140,7 +207,20 @@ export interface WalletFailure {
   status: number;
   title: string;
   message: string;
+  /**
+   * Whether this refusal may offer a retry, and what stands in its place when it
+   * may not.
+   *
+   * Carried rather than re-derived in the component, for the same reason the copy
+   * is: the decision belongs with the reasoning, and a component that asked
+   * "should I show a button?" about a code it does not understand would be
+   * guessing at exactly the thing this module exists to get right.
+   */
+  remedy: WalletRemedy;
 }
+
+/** What an entry in the map holds: the copy, and the verdict, both required. */
+type WalletFailureCopy = Omit<WalletFailure, 'code' | 'status'>;
 
 /**
  * The code `api.getWalletPass` throws for a 200 with no pass in it.
@@ -159,25 +239,45 @@ export interface WalletFailure {
 export const WALLET_RESPONSE_MALFORMED = 'WALLET_MALFORMED_RESPONSE';
 
 /**
- * Every code this UI knows how to explain, and what it is allowed to say.
+ * Every code this UI knows how to explain, what it is allowed to say, and what
+ * it is allowed to offer.
  *
  * `order` is irrelevant; the exhaustiveness is the point. A code missing from
- * here does not fall through to a blank — it lands on the "our side" branch
- * below, which is still an honest message.
+ * here does not fall through to a blank — it lands on the fallback below, which
+ * is still an honest message and still refuses a retry it cannot promise.
+ *
+ * ## Why `remedy` is required and not optional
+ *
+ * Because that is the whole fix, expressed as a type. An entry that omits it does
+ * not compile, so a new code cannot arrive without somebody deciding whether a
+ * retry could help — and that decision cannot be deferred to whoever renders the
+ * card, who would be guessing about a refusal they do not understand. This is the
+ * structural guard; `wallet-remedy.test.ts` holds the same line at runtime by
+ * demanding a written reason per code.
+ *
+ * ## How each verdict was reached
+ *
+ * From `workers/wallet/src/routes.ts`, not from how the code reads. "This one is
+ * permanent" is a claim about the worker, and the worker is the only thing that
+ * can settle it — the reason travels with each verdict for that reason.
  */
-const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>> = {
+const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
   /**
    * The merchant never finished onboarding, so there is no class to build a pass
    * against. `issuance.ts` is explicit that this endpoint will not create one:
    * creating it here would start a human review from a customer's tap and still
    * fail, because a `draft` class cannot create an object. So the remedy is the
    * merchant's, and saying so is what lets a comensal escalate usefully.
+   *
+   * No retry. `routes.ts:964` refuses before a pass is ever built, and nothing
+   * this app does between two taps finishes the commerce's onboarding.
    */
   WALLET_CLASS_NOT_PROVISIONED: {
     title: 'Este comercio todavía no tiene tarjeta',
     message:
       'Google Wallet todavía no está configurado para este comercio. Tu cuenta está bien y no tenés ' +
       'que hacer nada: es algo que el comercio tiene que terminar de configurar.',
+    remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
 
   /**
@@ -209,6 +309,11 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
    * What this branch changed is that it is now *reached*. The gate used to wave a
    * `draft` class through on `demo_mode` alone, so these tenants got a
    * `WALLET_PASS_NOT_CREATABLE` from Google's 404 with a retry promise attached.
+   *
+   * The verdict follows the wording, and it is the case that made the rest of this
+   * file exist: `wait`, because the review is Google's and a comensal tapping a
+   * button cannot move it. The note says they have nothing to do, which is true
+   * whether the class was never submitted or is sitting in Google's queue.
    */
   WALLET_CLASS_NOT_APPROVED: {
     title: 'Google todavía no aprobó la tarjeta',
@@ -217,30 +322,59 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
       'se puede crear ninguna tarjeta. Es el comercio quien tiene que enviarla a revisión: esa revisión ' +
       'la hace Google, demora días y no depende de vos. Tu cuenta está bien y seguís acumulando y ' +
       'usando tus puntos en el local.',
+    remedy: { kind: 'wait', note: WAIT_NOTE },
   },
 
   /**
    * The stored class id disagrees with the id derived from the business and
    * issuer ids. A data defect in our own tables; the customer cannot resolve it
    * and neither can the merchant, so the message names us.
+   *
+   * No retry: a defect in our own tables does not heal between two taps, and the
+   * customer has nothing to do about it either way.
    */
   WALLET_CLASS_ID_MISMATCH: {
     title: 'No pudimos preparar la tarjeta',
     message:
       'Hay una inconsistencia en la configuración del comercio que tenemos que corregir. Tu cuenta ' +
       'está bien y tus puntos no cambian.',
+    remedy: { kind: 'ours', note: OURS_NOTE },
   },
 
   /**
    * Google could not create the object, so there is no working link to produce.
    * The single most common 409 in production, and the one a customer is most
    * likely to hit on a good connection: Google's API having a bad minute.
+   *
+   * ## The one genuinely ambiguous verdict, and why it keeps the retry
+   *
+   * `routes.ts:763` is the `catch` around `client.insertObject`, and the comment
+   * above it says so itself: the branch also catches `GoogleWalletAuthError` from
+   * `mintAccessToken`, so **an invalid Google token here lands on this same
+   * code**. One code therefore covers Google's API having a bad minute and a
+   * deployment whose token has expired, and those want opposite answers.
+   *
+   * It keeps the retry for three reasons, none of them a claim to know:
+   *
+   * - the transient cause dominates. The comment at `routes.ts:235` calls this
+   *   the most common 409 in production, and the bad-minute case is the one a
+   *   customer on a good connection actually hits;
+   * - the copy has always promised a retry, and this file exists so that copy and
+   *   control agree. Changing the sentence would be a product decision made on a
+   *   guess;
+   * - when the cause is the token, a customer who taps once more sees the same
+   *   sentence and escalates — which is what happens today, and is not made worse
+   *   by the button.
+   *
+   * The honest move is to record the ambiguity where somebody adding the next code
+   * will read it, which is what this paragraph and `wallet-remedy.test.ts` do.
    */
   WALLET_PASS_NOT_CREATABLE: {
     title: 'Google no pudo crear la tarjeta ahora',
     message:
       'Google no pudo generar el pase en este momento. Tu cuenta está bien y podés reintentar en un ' +
       'rato.',
+    remedy: { kind: 'retry' },
   },
 
   /**
@@ -249,6 +383,10 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
    * not say "your account is fine" — there is something real here, and the
    * remedy is a layout decision the merchant has to make. Saying otherwise would
    * be the same lie in the other direction.
+   *
+   * No retry: the remedy is a layout choice the commerce makes about its pass —
+   * `balance.ts` refuses to truncate rather than display a rounded lie — and the
+   * next request reads the same balance.
    */
   WALLET_BALANCE_NOT_DISPLAYABLE: {
     title: 'Tu saldo es más grande de lo que la tarjeta puede mostrar',
@@ -256,6 +394,7 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
       'Este programa todavía no tiene una forma de mostrar saldos tan grandes en Google Wallet. Tus ' +
       'puntos están intactos y los podés usar en el local; el comercio necesita configurar otra ' +
       'presentación.',
+    remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
 
   /**
@@ -273,6 +412,12 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
    * coming — this worker refuses to mint over a terminal pass precisely because
    * Google cannot bring it back, and copy that implied otherwise would be the
    * retired "ya va a estar" mistake in new words.
+   *
+   * No retry, and this is the one where a retry would be most tempting and most
+   * useless: `routes.ts:105` records that Google will not un-expire an object, and
+   * that `object_id` is derived from the customer's `global_id`, so a fresh
+   * request would be refused under **the same id**. There is nothing to ask again
+   * for.
    */
   WALLET_PASS_TERMINAL: {
     title: 'Esta tarjeta ya no se puede volver a usar',
@@ -280,27 +425,51 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
       'Google ya no permite reutilizar esta tarjeta porque su vigencia terminó. Tu cuenta y tus ' +
       'puntos están bien y los podés seguir usando en el local. Contale al comercio para que lo ' +
       'resuelvan.',
+    remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
 
-  /** A Google class with no programme to name a points currency in. */
+  /**
+   * A Google class with no programme to name a points currency in.
+   *
+   * No retry: `routes.ts:861` refuses because there is no points currency, and
+   * the next request finds the same absent programme row.
+   */
   LOYALTY_PROGRAM_NOT_CONFIGURED: {
     title: 'Este comercio todavía no configuró su programa',
     message:
       'El comercio tiene una tarjeta de Google Wallet pero todavía no configuró el programa de ' +
       'puntos que la tarjeta muestra. Tu cuenta está bien.',
+    remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
 
   /**
    * The worker is missing a value it cannot invent: an empty origins list, or a
    * member code that could not be obtained. A deployment fault with no customer
-   * trigger, and the one branch where "reintentá" is honest because the cause
-   * really can be transient.
+   * trigger.
+   *
+   * ## The verdict here used to be the opposite, and the reason was wrong
+   *
+   * This entry said "reintentá" on the grounds that the cause could be
+   * transient. The worker says otherwise about its own code: `routes.ts:57` —
+   * "this means this deployment is broken and no pass will ever work".
+   *
+   * And the two places that raise it are both permanent. `routes.ts:524` is
+   * `WALLET_ALLOWED_ORIGINS` being empty, which is an environment variable. And
+   * `routes.ts:906` is `MemberCodeUnavailableError`, whose own comment at
+   * `routes.ts:897` says reaching it "means something is wrong with the pepper or
+   * the row, not that the customer is unready".
+   *
+   * So the sentence lost its "podés reintentar más tarde" too, and that is the
+   * only copy in this map that moved. It had to: with the button gone, keeping the
+   * sentence would have left the page promising exactly what it now refuses to
+   * offer, which is the same defect in the other layer.
    */
   WALLET_NOT_CONFIGURED: {
     title: 'La tarjeta no está disponible en este momento',
     message:
-      'La integración con Google Wallet no está completa en este entorno. Tu cuenta está bien y podés ' +
-      'reintentar más tarde.',
+      'La integración con Google Wallet no está completa en este entorno. Tu cuenta está bien y tus ' +
+      'puntos no cambian: es algo que tenemos que corregir nosotros.',
+    remedy: { kind: 'ours', note: OURS_NOTE },
   },
 
   /**
@@ -319,6 +488,10 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
     message:
       'Este comercio todavía no tiene acceso de publicación en Google Wallet, así que una tarjeta ' +
       'sólo llega a cuentas de prueba de Google. Tu cuenta está bien.',
+    // No retry. `routes.ts:76` says it better than a comment here can: publishing
+    // access "stays true *after* the class is approved", so neither waiting nor
+    // asking again gets a real customer a real card.
+    remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
 
   [WALLET_RESPONSE_MALFORMED]: {
@@ -326,32 +499,103 @@ const FAILURES: Readonly<Record<string, Omit<WalletFailure, 'code' | 'status'>>>
     message:
       'La respuesta que nos llegó no traía una tarjeta. Tu cuenta está bien y podés reintentar en un ' +
       'momento.',
+    // Retry, and the strongest case for it in the file. This is not a server
+    // state at all: `api.getWalletPass` throws it when a 200 arrived carrying no
+    // `data`. Nothing is misconfigured and nothing is refused — the answer we got
+    // was unusable, and asking again is the only remedy that exists.
+    remedy: { kind: 'retry' },
   },
 };
 
 /**
- * The branch for anything this file does not know: a code added after it was
- * written, a gateway that answered with a body this system does not produce, or
- * a request that never arrived at all (`status` 0).
+ * Every code the map above holds.
  *
- * All three are *our* problem by default, because the alternative — treating an
- * unrecognised refusal as evidence about the customer's account — is the exact
- * inversion this module refuses to make. So the copy names us, and it says the
- * account is fine, which is the one claim every branch here can support.
+ * Exported for one reason: so a test can ask whether each one has been reasoned
+ * about. `wallet-remedy.test.ts` compares this list against a table of verdicts
+ * with a reason each, so an entry that compiles without anybody deciding whether
+ * a retry could help is a failure rather than a silent default. The structural
+ * half of the same guard is that `remedy` is required above, which fails
+ * `pnpm -r typecheck` before the runtime guard is ever reached.
  */
-const OURS: Omit<WalletFailure, 'code' | 'status'> = {
+export const WALLET_FAILURE_CODES: readonly string[] = Object.freeze(Object.keys(FAILURES));
+
+/**
+ * What to do about a code this file does not know.
+ *
+ * ## Why this was one branch and is now three
+ *
+ * It was one constant, and it promised "podés reintentar en un momento" for
+ * everything: a code added after this file was written, a gateway that answered
+ * with a body this system does not produce, and a request that never arrived at
+ * all. Those are not one condition. A 500 of a dropped connection is transient. A
+ * 500 of a bug here is not, and it will be produced again on every tap for as
+ * long as the bug lives — so the promise was kept only in the case it was about,
+ * and paid for by the other two.
+ *
+ * The split is on one fact, and it is the only fact available: **did an answer
+ * arrive at all.** Nothing here guesses whether the cause is transient, because
+ * nothing here can know.
+ *
+ * ## The verdicts, and why each is supportable
+ *
+ * - **No answer (`status` 0).** `wallet-card.tsx` substitutes 0 only when the
+ *   rejection was not an `ApiError`, so no HTTP status was ever parsed: the
+ *   request did not reach the API. Re-asking is not a hope here, it is the correct
+ *   response to a question that was never delivered. Retry.
+* - **The hop in between failed (502 / 503 / 504).** RFC 9110 defines these as
+ *   statements about a gateway or an upstream — a bad response, a temporarily
+ *   unavailable service, a gateway timeout — not about this application. A second
+ *   request is a reasonable thing to offer rather than a promise about the card.
+ *   Retry.
+ * - **Anything else with an HTTP status.** A server answered, with a stable code
+ *   this build does not know. A stable code is a code that will answer the same
+ *   way next time, so retrying is provably useless. No retry, and no sentence
+ *   asking the customer to.
+ *
+ * The first two share one sentence on purpose. Both are "we never got an answer
+ * we could use", and inventing two near-identical paragraphs to separate them
+ * would be copy written for a distinction the customer cannot act on — a support
+ * reader has it anyway, in `data-wallet-status`.
+ *
+ * Both still name us, because the alternative — treating an unrecognised refusal
+ * as evidence about the customer's account — is the exact inversion this module
+ * refuses to make.
+ */
+const NO_ANSWER: WalletFailureCopy = {
+  title: 'No pudimos preparar tu tarjeta',
+  message:
+    'No pudimos comunicarnos con el servicio al preparar tu tarjeta. Tu cuenta y tus puntos están ' +
+    'bien; podés reintentar en un momento.',
+  remedy: { kind: 'retry' },
+};
+
+const OURS: WalletFailureCopy = {
   title: 'No pudimos preparar tu tarjeta',
   message:
     'Hubo un problema de nuestro lado al preparar la tarjeta. Tu cuenta y tus puntos están bien; ' +
-    'podés reintentar en un momento.',
+    'esto lo tenemos que corregir nosotros.',
+  remedy: { kind: 'ours', note: OURS_NOTE },
 };
+
+/**
+ * Statuses that describe the hop rather than this application.
+ *
+ * Named as a set rather than a bare `status >= 500`, because "5xx" is not the
+ * claim: a 500 is this application saying it is broken, and that is precisely the
+ * case the promise must not cover. Only the three statuses the HTTP spec defines
+ * in terms of a gateway get the retry.
+ */
+const HOP_FAILURES: ReadonlySet<number> = new Set([502, 503, 504]);
 
 /**
  * Explain one refusal, in the customer's language.
  *
- * Branches on `code` and never on `status` alone. The status cannot tell a
- * merchant's unfinished onboarding from a 500 in this deployment, so it rides
- * along on the result for a support reader and never picks the copy.
+ * Branches on `code` and never on `status` alone to pick the copy. The status
+ * cannot tell a merchant's unfinished onboarding from a 500 in this deployment,
+ * so it rides along on the result for a support reader.
+ *
+ * The one place `status` is read is the fallback, and only to ask whether an
+ * answer arrived — see the two constants above.
  *
  * @param code   `error.code` from the gateway. May be absent or unrecognised.
  * @param status the HTTP status, or `0` for a request that never got one.
@@ -359,9 +603,11 @@ const OURS: Omit<WalletFailure, 'code' | 'status'> = {
 export function walletFailureFor(code: string, status: number): WalletFailure {
   const known = FAILURES[code];
 
-  return known === undefined
-    ? { code: code || 'NO_RESPONSE', status, ...OURS }
-    : { code, status, ...known };
+  if (known !== undefined) return { code, status, ...known };
+
+  const unreachable = status === 0 || HOP_FAILURES.has(status);
+
+  return { code: code || 'NO_RESPONSE', status, ...(unreachable ? NO_ANSWER : OURS) };
 }
 
 // ---------------------------------------------------------------------------
