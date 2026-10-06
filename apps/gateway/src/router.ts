@@ -22,6 +22,17 @@ export const ROUTE_MAP: ServiceBinding[] = [
   { prefix: '/v1/growth', binding: 'growth' },
   { prefix: '/v1/analytics', binding: 'analytics' },
   { prefix: '/v1/events', binding: 'gateway' }, // handled by ingestor
+  // The support channel on the card screen, handled by this worker too, for the
+  // same reason as `/v1/events`: `routerMiddleware` 404s any `/v1/*` path that no
+  // prefix matches rather than calling `next()`, so a route the gateway answers
+  // itself still has to be named here to be reachable.
+  //
+  // Longest-prefix match sorts `/v1/support` (12) above `/v1/auth` (8) and
+  // alongside `/v1/events`, so nothing else can claim it. Without this entry the
+  // route exists, is public, and answers 404 from the gateway — a failure that
+  // looks identical to the route not existing, which is what the wallet service
+  // binding did for as long as it had no route.
+  { prefix: '/v1/support', binding: 'gateway' },
   { prefix: '/v1/automation', binding: 'automation' },
   { prefix: '/v1/communication', binding: 'communication' },
   { prefix: '/v1/compliance', binding: 'compliance' },
@@ -80,6 +91,52 @@ export type GatewayEnv = {
    * default is the floor, not the mechanism.
    */
   WALLET_CUSTOMER_WEB_BASE_URL?: string | undefined;
+  /**
+   * Resend bearer token, for the public support form at `POST /v1/support`.
+   *
+   * A secret, so it arrives through the deploy job's `--var` flags rather than
+   * `wrangler.jsonc` — see the header of that file for the split, which is by
+   * sensitivity and nothing else.
+   *
+   * **Does not exist in any environment yet**, and the route fails closed
+   * without it: `src/support.ts` answers 503 and sends nothing. That is the
+   * intended state rather than a gap to paper over — an unverified key is worse
+   * than an absent one, because it would make the channel look deployed while
+   * delivering nothing.
+   */
+  RESEND_API_KEY?: string | undefined;
+  /**
+   * The verified Resend domain the support mail is sent from.
+   *
+   * Not a secret, and still not declared in `wrangler.jsonc`: a domain has to be
+   * *verified* in the Resend console before Resend will accept it, and none is
+   * verified for this project. A plausible-looking literal in the config would
+   * satisfy `wrangler-config.contract.test.ts` and every behavioural test while
+   * making every send fail with a 422 — the exact shape of the
+   * `SCHEMA_REGISTRY` bug, where a declared-but-wrong value answers correctly and
+   * wrongly at the same time.
+   *
+   * So it is a workflow flag, and absent means 503 with nothing sent.
+   */
+  SUPPORT_EMAIL_FROM?: string | undefined;
+  /**
+   * The inbox a human reads. Declared in `wrangler.jsonc` as a plain var, because
+   * there is exactly one correct answer for it and nothing secret about it.
+   */
+  SUPPORT_EMAIL_TO?: string | undefined;
+  /**
+   * Turnstile widget secret, for the same form.
+   *
+   * **The check is not optional.** `src/support.ts` refuses to send when this is
+   * absent rather than skipping verification, because a skip is invisible: the
+   * form would work, the inbox would fill with spam, and no log anywhere would say
+   * the protection had never run. Failing closed is the only behaviour that makes
+   * the state visible.
+   *
+   * No widget has been created for this project, so this is unset everywhere and
+   * the form is non-functional. That is reported rather than worked around.
+   */
+  TURNSTILE_SECRET_KEY?: string | undefined;
   RATE_LIMITER: KVNamespace;
   /**
    * Static assets from `apps/gateway/public/`, declared by the `assets` block in

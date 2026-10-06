@@ -378,13 +378,36 @@ jobs:
       # and that page must answer with no credentials at all. Same secret, same
       # `--var` mechanism `identity` and `wallet` use two steps above.
       #
-      # Note these flags REPLACE `vars` in wrangler.jsonc rather than merging, so
-      # a var added there without adding it here is deployed as absent.
+      # The three flags below back `POST /v1/support` (`src/support.ts`), the
+      # public support channel on the card screen. All three are absent until the
+      # corresponding secret exists in this repository, and that is the intended
+      # state: the route fails **closed** without them, answering 503 and sending
+      # nothing, rather than skipping its Turnstile verification or guessing a
+      # sender domain. A deployment whose `RESEND_API_KEY` is empty has an honest,
+      # visible, non-functional support channel — which is the correct description
+      # of a channel nobody has provisioned yet.
+      #
+      # `SUPPORT_EMAIL_FROM` is not a secret. It is a flag anyway, because it names
+      # a Resend domain that has to be *verified* in the Resend console and none is
+      # verified for this project. Declaring a plausible-looking domain in
+      # `wrangler.jsonc` would satisfy `wrangler-config.contract.test.ts` and every
+      # behavioural test while making Resend reject every send with a 422.
+      #
+      # NOTE these flags do NOT replace `vars` in wrangler.jsonc — they merge into
+      # it. The line below used to claim the opposite and was wrong;
+      # `wrangler-config.contract.test.ts` documents the merge as empirically
+      # verified (`wrangler deploy --var DATABASE_URL:… --dry-run` published the
+      # seven declared vars of `workers/wallet` alongside the flag, on 4.107.0 and
+      # again on 4.147.0), and `SUPPORT_EMAIL_TO` — declared in `vars` and not
+      # passed here — would not survive a replace.
       - name: Deploy gateway worker
         run: |
           npx --yes wrangler deploy \
             --var JWT_SECRET:${{ secrets.JWT_SECRET }} \
-            --var DATABASE_URL:${{ secrets.DATABASE_URL }}
+            --var DATABASE_URL:${{ secrets.DATABASE_URL }} \
+            --var RESEND_API_KEY:${{ secrets.RESEND_API_KEY }} \
+            --var SUPPORT_EMAIL_FROM:${{ secrets.SUPPORT_EMAIL_FROM }} \
+            --var TURNSTILE_SECRET_KEY:${{ secrets.TURNSTILE_SECRET_KEY }}
         working-directory: apps/gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
