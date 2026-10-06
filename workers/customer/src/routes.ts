@@ -115,10 +115,37 @@ router.put('/v1/customers', async (c) => {
   if (body.email) insertData.email = body.email;
   if (body.birthDate) insertData.birthDate = body.birthDate;
 
-  const [inserted] = await db
-    .insert(customers)
-    .values(insertData)
-    .returning();
+  // A duplicate email in the same business is a conflict, not a server fault.
+  //
+  // `uq_customers_business_email` is UNIQUE on (business_id, email) and the upsert
+  // above only looks the customer up by phone, so this insert can violate it. The
+  // violation was unhandled and reached the top-level handler as a `500`, which is
+  // the one answer a registering customer cannot act on: the field is optional on
+  // the form, people reuse their own address, and "internal server error" reads as
+  // "try again", which fails identically every time.
+  //
+  // 409 rather than 400, for the same reason `PATCH` uses it: the request was
+  // well-formed and the business's own data is what conflicts with it.
+  let insertedRows: typeof customers.$inferSelect[];
+  try {
+    insertedRows = await db
+      .insert(customers)
+      .values(insertData)
+      .returning();
+  } catch (err) {
+    const conflict = classifyUniqueViolation(
+      err,
+      REGISTRATION_UNIQUE_MESSAGES,
+      REGISTRATION_GENERIC_CONFLICT,
+    );
+    if (!conflict) throw err;
+    return c.json({ error: { code: conflict.code, message: conflict.message } }, 409);
+  }
+
+  // Destructured as before, from an array rather than a `| undefined` binding: an
+  // INSERT's `RETURNING` yields the row it wrote, and widening this to "possibly
+  // absent" would only have moved the question to the event builder below.
+  const [inserted] = insertedRows;
 
   // ---------------------------------------------------------------------------
   // Past this point nothing may turn a committed write into a failed registration.
@@ -1028,6 +1055,68 @@ const GENERIC_CONFLICT = {
     'resolved at the counter — check the value you entered and escalate it if it looks right.',
 };
 
+/**
+ * The same condition, said to the person registering rather than to the operator.
+ *
+ * The code is deliberately `EMAIL_TAKEN` and not a registration-specific one: the
+ * condition is identical — another customer of this business already holds that
+ * address — and a client that already knows that code keeps working. Only the
+ * remedy differs, and the remedy is what the sentence carries.
+ *
+ * Two constraints shaped the wording:
+ *
+ *  - `apps/customer-web/app/register/page.tsx` surfaces the server's own message
+ *    when it is at most 180 characters, so this has to stay under that or the
+ *    customer falls back to "no pudimos completar el registro" and learns nothing.
+ *  - The field is optional on that form. The useful instruction is therefore the
+ *    one that lets them finish: leave it blank.
+ */
+const REGISTRATION_UNIQUE_MESSAGES: Record<string, { code: string; message: string }> = {
+  uq_customers_business_email: {
+    code: CUSTOMER_PATCH_ERROR.EMAIL_TAKEN,
+    message:
+      'Ese correo ya está en uso en este local. Podés dejarlo vacío — es opcional — y registrarte igual.',
+  },
+};
+
+const REGISTRATION_GENERIC_CONFLICT = {
+  code: CUSTOMER_PATCH_ERROR.CONFLICT,
+  message: 'No pudimos registrarte con estos datos. Revisá los campos e intentá de nuevo.',
+};
+
+/**
+ * Read a unique-index violation out of a driver error, or return `null`.
+ *
+ * Shared by registration and the dashboard's edit route because both write to
+ * `customers` under the same two indexes, and they have disagreed exactly once
+ * already: `PATCH` learned to translate `23505` and `PUT` did not, so a duplicate
+ * email on registration surfaced as `500 INTERNAL_ERROR` for a condition the
+ * operator could have been told about in one sentence.
+ *
+ * `null` means "not a unique violation", and the caller rethrows. Reporting a
+ * dropped connection as a conflict is worse than a 500: it sends whoever reads it
+ * hunting for a collision that does not exist.
+ */
+function classifyUniqueViolation(
+  err: unknown,
+  messages: Record<string, { code: string; message: string }>,
+  generic: { code: string; message: string },
+): { code: string; message: string } | null {
+  // `@neondatabase/serverless` reports the driver error on `cause` when the driver
+  // has already unwrapped it, so both shapes are read rather than one.
+  const failure = err as {
+    code?: unknown;
+    constraint_name?: unknown;
+    cause?: { code?: unknown; constraint_name?: unknown };
+  };
+
+  const code = failure?.code ?? failure?.cause?.code;
+  if (code !== PG_UNIQUE_VIOLATION) return null;
+
+  const constraint = failure?.constraint_name ?? failure?.cause?.constraint_name;
+  return (typeof constraint === 'string' ? messages[constraint] : undefined) ?? generic;
+}
+
 router.patch('/v1/customers/:id', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const id = c.req.param('id');
@@ -1175,19 +1264,9 @@ router.patch('/v1/customers/:id', async (c) => {
 
     return c.json(updated, 200);
   } catch (err) {
-    const failure = err as { code?: unknown; constraint_name?: unknown; cause?: { constraint_name?: unknown } };
+    const conflict = classifyUniqueViolation(err, UNIQUE_CONSTRAINT_MESSAGES, GENERIC_CONFLICT);
 
-    // `@neondatabase/serverless` reports the driver error on `cause` when the
-    // driver has already unwrapped it, so both shapes are read rather than one.
-    const code = failure?.code ?? (failure?.cause as { code?: unknown } | undefined)?.code;
-    const constraint =
-      failure?.constraint_name ??
-      (failure?.cause as { constraint_name?: unknown } | undefined)?.constraint_name;
-
-    if (code === PG_UNIQUE_VIOLATION) {
-      const conflict =
-        (typeof constraint === 'string' ? UNIQUE_CONSTRAINT_MESSAGES[constraint] : undefined) ??
-        GENERIC_CONFLICT;
+    if (conflict) {
       // 409, not 400: the request was well-formed, the business's own data is
       // what conflicts with it.
       return c.json({ error: { code: conflict.code, message: conflict.message } }, 409);
