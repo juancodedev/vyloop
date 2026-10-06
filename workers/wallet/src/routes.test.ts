@@ -41,6 +41,16 @@ vi.mock('@vyloop/db', async () => {
       reviewStatus: text('review_status').notNull(),
       lastSyncedAt: timestamp('last_synced_at'),
     }),
+    // Present because the operator program read joins it. It was absent while no
+    // route reached across to `tenants`, and its absence surfaced as an unhandled
+    // error and a 500 rather than as anything about the response body — which is
+    // the correct thing for the mock to do, since a mock missing a table the
+    // production code imports should be loud rather than quietly return `{}`.
+    tenants: pgTable('tenants', {
+      id: uuid('id').primaryKey(),
+      name: text('name').notNull(),
+      slug: text('slug').notNull(),
+    }),
     loyaltyPrograms: pgTable('loyalty_programs', {
       id: uuid('id').primaryKey(),
       businessId: uuid('business_id').notNull(),
@@ -208,6 +218,24 @@ const PROGRAMS: Row[] = [
 let balances: Record<string, number> = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
 const statements: string[] = [];
 
+/**
+ * The branding rows the joined program read attaches.
+ *
+ * Distinct names and slugs per tenant, so a cross-tenant leak is a value nobody
+ * could mistake for the tenant that was asked about. A fixture that gave both
+ * tenants the same branding would make the isolation assertions vacuous.
+ *
+ * `slug` is `notNull` in the real schema, so a blank one is modelled explicitly
+ * through `blankSlugTenant` rather than by leaving a field undefined.
+ */
+const TENANTS: Row[] = [
+  { id: TENANT, name: 'Panadería del Barrio', slug: 'panaderia-del-barrio' },
+  { id: OTHER_TENANT, name: 'Ferretería Sur', slug: 'ferreteria-sur' },
+];
+
+/** The tenant whose branding row carries an empty slug, for the no-slug cases. */
+let blankSlugTenant: string | null = null;
+
 // ---------------------------------------------------------------------------
 // The Google client seam
 //
@@ -357,6 +385,20 @@ function installDb() {
     whereParams = query.params;
     return builder;
   });
+
+  /**
+   * The joined table, recorded rather than applied.
+   *
+   * A `leftJoin` in a query the fake does not understand used to be a hard
+   * `TypeError`, which is how the joined read failed loudly instead of passing
+   * vacuously. What the fake does *not* do is take the join's word for which rows
+   * match: the branding below is resolved from each admitted program's **own**
+   * `tenantId`, exactly as `tenants.id = tenant_wallet_programs.tenant_id` would.
+   * Resolving it from `whereParams` instead would make the join correct by
+   * construction and the tenant-isolation assertions below would be testing the
+   * fake rather than the route.
+   */
+  builder.leftJoin = vi.fn(() => builder);
   builder.set = vi.fn(() => builder);
   builder.returning = vi.fn(() => builder);
 
@@ -379,7 +421,23 @@ function installDb() {
           ? [{ pointsCurrency: 'puntos' }]
           : [];
       case 'tenant_wallet_programs':
-        return programs.filter((row) => whereParams.includes(String(row.tenantId)));
+        return programs
+          .filter((row) => whereParams.includes(String(row.tenantId)))
+          .map((row) => {
+            // Resolved from the row's own tenant. A row whose `tenants` entry is
+            // missing keeps its own columns and gets `null` branding — the LEFT
+            // JOIN, not an inner one.
+            const branding = TENANTS.find((t) => String(t.id) === String(row.tenantId));
+            return {
+              ...row,
+              businessName: branding ? String(branding.name) : null,
+              businessSlug: branding
+                ? blankSlugTenant === row.tenantId
+                  ? ''
+                  : String(branding.slug)
+                : null,
+            };
+          });
       case 'customers':
         return CUSTOMERS.filter(
           (row) =>
@@ -544,6 +602,7 @@ function reqAs(method: string, path: string, auth?: TestAuth | null, body?: unkn
     // and a shallow spread would hand every test the same instances to mutate.
     programs = PRISTINE_PROGRAMS.map((row) => ({ ...row }));
     balances = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
+    blankSlugTenant = null;
   for (const row of CUSTOMERS) row.memberCode = null;
   passRows = [];
   // Google holds a different balance by default, so the default request
@@ -980,6 +1039,65 @@ describe('the operator program console', () => {
     const json = (await res.json()) as { error: { code: string; message: string } };
     expect(json.error.code).toBe('WALLET_CLASS_NOT_PROVISIONED');
     expect(json.error.message).toMatch(/business onboarding/i);
+  });
+
+  it('reports the business\'s own name and slug alongside the program', async () => {
+    // The reason this route grew the two fields.
+    //
+    // The operator console had no way to learn which business it was acting for:
+    // `/v1/auth/token` carries `email`, `fullName` and `role`, and the operator
+    // program read carried `classId`, `reviewStatus` and the demo-mode flags. A
+    // page that needs this merchant's identity — the QR, for one — had nothing to
+    // build it from, so it used a constant, and that constant was some other
+    // merchant's business. The dashboard cannot fix that on its own: this is the
+    // contract that has to carry the name and the slug.
+    const res = await GET_OP('/v1/wallet/program');
+
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as {
+      data: { businessName: string | null; businessSlug: string | null };
+    };
+    expect(data.businessName).toBe('Panadería del Barrio');
+    expect(data.businessSlug).toBe('panaderia-del-barrio');
+  });
+
+  it('reports a second merchant\'s own name and slug, never the first tenant\'s', async () => {
+    // The isolation property, and the one this endpoint is trusted for now that it
+    // carries a merchant's identity. An operator token names one business, so the
+    // identity in the response has to be that business's; anything else is the
+    // dashboard's original bug reproduced at its source rather than at its
+    // symptom. The fake resolves the join from each row's own tenant, so this
+    // cannot pass by the join being faked correct.
+    const res = await reqAs('GET', '/v1/wallet/program', {
+      userId: 'user-2',
+      businessId: OTHER_TENANT,
+      userRole: 'admin',
+    });
+
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as {
+      data: { tenantId: string; businessName: string | null; businessSlug: string | null };
+    };
+    expect(data.tenantId).toBe(OTHER_TENANT);
+    expect(data.businessName).toBe('Ferretería Sur');
+    expect(data.businessSlug).toBe('ferreteria-sur');
+    expect(data.businessSlug).not.toBe('panaderia-del-barrio');
+  });
+
+  it('reports a blank slug as the blank string it is, so the client can refuse honestly', async () => {
+    // `tenants.slug` is `notNull` with no check constraint, so an empty string is
+    // reachable. It is reported verbatim rather than omitted or replaced: the
+    // dashboard's "this business has no public page" state is only truthful if it
+    // can tell a blank slug from a missing row, and a substitute value here would
+    // send customers to whichever business that value belonged to.
+    blankSlugTenant = TENANT;
+
+    const res = await GET_OP('/v1/wallet/program');
+
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as { data: { businessSlug: string | null } };
+    expect(data.businessSlug).toBe('');
+    expect(data.businessSlug).not.toBeNull();
   });
 
   it('refuses a switch request with no explicit value, so a live tenant is never switched off by a stray body', async () => {

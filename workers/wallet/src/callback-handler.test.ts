@@ -127,6 +127,19 @@ class FakeStore implements WalletStore {
   async findTenantBranding(): Promise<null> {
     throw new Error('not used by the callback path');
   }
+
+  /**
+   * Throws, like the other off-path reads here.
+   *
+   * A Google callback carries a `classId` and resolves the tenant from it; that is
+   * the deliberate cross-tenant read of this worker. It has no operator console
+   * attached to it and therefore no reason to learn a merchant's display name or
+   * slug, and a callback path that did would be resolving identity from something
+   * that is not the signed request.
+   */
+  async findProgramWithBusiness(): Promise<null> {
+    throw new Error('not used by the callback path');
+  }
   async findProgramName(): Promise<string | null> {
     throw new Error('not used by the callback path');
   }

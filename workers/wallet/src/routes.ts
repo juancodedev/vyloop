@@ -954,7 +954,7 @@ router.get('/v1/wallet/program', async (c) => {
   const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
   const store = createDrizzleWalletStore(db);
 
-  const program = await store.findProgram(tenantId);
+  const program = await store.findProgramWithBusiness(tenantId);
   if (!program) {
     return c.json(
       {
@@ -978,6 +978,22 @@ router.get('/v1/wallet/program', async (c) => {
   return c.json({
     data: {
       tenantId: program.tenantId,
+      // The business's own name and slug, joined from `tenants`.
+      //
+      // These are here because the operator console has no other way to learn
+      // which merchant it is acting for: the login response carries `email`,
+      // `fullName` and `role` and nothing else, so a screen that needs this
+      // merchant's identity had no source for it and fell back to a constant.
+      // That constant was one seeded merchant's, on a page mounted in the
+      // sidebar, so every merchant who opened it scanned a QR that pointed at
+      // somebody else's registration form.
+      //
+      // Reported verbatim, including a blank slug. A caller that cannot build a
+      // public page from an empty slug has to be able to *say* so; substituting
+      // a value here would send customers to whichever business that value
+      // belonged to, which is the failure this pair of fields exists to remove.
+      businessName: program.businessName,
+      businessSlug: program.businessSlug,
       classId: program.classId,
       reviewStatus: program.reviewStatus,
       storedDemoMode: program.demoMode,

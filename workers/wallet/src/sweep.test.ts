@@ -12,6 +12,7 @@ import type {
   ProgramInsert,
   WalletPassRow,
   WalletProgramRow,
+  WalletProgramWithBusinessRow,
   WalletStore,
   WalletTenantBrandingRow,
 } from './store';
@@ -240,6 +241,29 @@ class SweepStore implements WalletStore {
   async findProgram(tenant: string): Promise<WalletProgramRow | null> {
     this.record('findProgram', tenant);
     return this.programs[tenant] ?? null;
+  }
+
+  /**
+   * The sweep has no use for a merchant's name or slug, and this records that
+   * honestly rather than returning a joined row nobody asked for: a sweep that
+   * grew a dependence on this read would be a sweep that could now fail because a
+   * branding row is missing. `missingBranding` is modelled here as well as on
+   * `findTenantBranding`, because both reads take their identity from the same
+   * place and a test that only modelled one of them would not catch the other
+   * being wrong.
+   */
+  async findProgramWithBusiness(tenant: string): Promise<WalletProgramWithBusinessRow | null> {
+    this.record('findProgramWithBusiness', tenant);
+    const program = this.programs[tenant] ?? null;
+    if (!program) return null;
+    if (this.missingBranding.has(tenant)) {
+      return { ...program, businessName: null, businessSlug: null };
+    }
+    return {
+      ...program,
+      businessName: `Café ${tenant.slice(-4)}`,
+      businessSlug: `cafe-${tenant.slice(-4)}`,
+    };
   }
 
   // Provisioning's three methods, which used to throw because a sweep had no

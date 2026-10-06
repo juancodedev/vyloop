@@ -85,6 +85,32 @@ export interface WalletProgramRow {
 }
 
 /**
+ * A program row plus the business it belongs to.
+ *
+ * Extends rather than replaces `WalletProgramRow`, and that is the point: the
+ * base type means "what `tenant_wallet_programs` holds" and stays exactly that, so
+ * `listProgramTenants` can keep returning it without claiming fields it does not
+ * read. This type means "and here is the joined business identity", which is only
+ * true of the one read that joins.
+ *
+ * Both fields are nullable, and `null` means "there was no `tenants` row to join"
+ * — see `findProgramWithBusiness` for why the read is a LEFT JOIN and why that
+ * distinction has to survive into the type. `businessSlug` is `notNull` in the
+ * schema but is `text` with no check constraint, so a blank string is a value the
+ * column really holds and is passed through as such rather than normalised here.
+ */
+export interface WalletProgramWithBusinessRow extends WalletProgramRow {
+  /** `tenants.name`. `null` when there is no tenant row to join. */
+  businessName: string | null;
+  /**
+   * `tenants.slug`, verbatim. `null` when there is no tenant row to join; a blank
+   * string when the column is blank. Callers must treat both as "no public page",
+   * and neither as a slug they may put in a URL.
+   */
+  businessSlug: string | null;
+}
+
+/**
  * One pass this tenant's inactivity rule would deactivate.
  *
  * `lastActivityAt` is `null` for a customer who has never had a ledger movement,
@@ -348,6 +374,48 @@ export interface WalletStore {
 
   /** The tenant's Google program record, or `null` when it has no class row. */
   findProgram(tenantId: string): Promise<WalletProgramRow | null>;
+
+  /**
+   * The same program row, joined to the tenant's own name and slug.
+   *
+   * ## Why this is a second read and not a wider `findProgram`
+   *
+   * `findProgram` is not the only reader of `PROGRAM_COLUMNS`. `listProgramTenants`
+   * is, and that method is the **cross-tenant provisioning sweep**: one keyset page
+   * of every tenant that has a class, walked in primary-key order with a hard
+   * bound on the page. Adding the two business columns to the shared projection
+   * would put a `tenants` join inside that sweep, and the two possible joins fail
+   * in opposite directions. An INNER JOIN would silently *drop* program rows from
+   * provisioning — the sweep would skip a merchant and report itself healthy. A
+   * LEFT JOIN would be correct but still widens the projection for two callers
+   * that have no use for a merchant's name, and `listProgramTenants` is declared
+   * to return `WalletProgramRow[]`, so the fields would have to sit on a row type
+   * that read does not populate: a type lying about its own contents.
+   *
+   * The asymmetry is the reason this can be a separate method at all. `findProgram`
+   * is a **single-tenant, at-most-one-row** read, so a join there cannot change
+   * the cardinality of anything and costs one index lookup. The join is free where
+   * it is needed and confined to where it is harmless.
+   *
+   * ## Why the joined columns are nullable while the program's are not
+   *
+   * `tenant_wallet_programs.tenant_id` does reference `tenants.id`, so under
+   * referential integrity a program row always has a tenant row and both columns
+   * are `notNull`. The nullability is not paranoia about the schema; it is about
+   * the *read*. An INNER JOIN cannot distinguish "this tenant has no branding
+   * row" from "this tenant has no program row", and it would report the first as
+   * the second — a 404 on the operator console and on the pass route, with the
+   * readiness gate reading a missing program as demo mode. A LEFT JOIN keeps the
+   * program row intact and reports only the branding as absent, so the blast
+   * radius of a missing name is a missing name.
+   *
+   * A blank slug is a different state from an absent one and is passed through
+   * as the blank string it is. `tenants.slug` is `notNull` with no check
+   * constraint, so `''` is reachable and `provision.ts` already treats it as a
+   * real condition (`tenant_slug_missing`). Collapsing blank into `null` here would
+   * take away the caller's ability to say which of the two happened.
+   */
+  findProgramWithBusiness(tenantId: string): Promise<WalletProgramWithBusinessRow | null>;
 
   /**
    * Give a tenant its `tenant_wallet_programs` row.

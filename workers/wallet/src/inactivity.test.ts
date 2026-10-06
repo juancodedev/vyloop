@@ -54,6 +54,7 @@ import type { InactivityCandidateRow ,
   WalletCustomerRow,
   WalletPassRow,
   WalletProgramRow,
+  WalletProgramWithBusinessRow,
   WalletStore,
   WalletTenantBrandingRow,
 } from './store';
@@ -236,6 +237,20 @@ class CountingStore implements WalletStore {
   async findProgram(tenant: string): Promise<WalletProgramRow | null> {
     this.calls.push('findProgram');
     return this.programs.get(tenant) ?? null;
+  }
+  /**
+   * Recorded and answered from the same fixture as `findProgram`.
+   *
+   * The inactivity rule counts and mutes passes; it never reads a merchant's
+   * identity. Recording the call rather than throwing keeps that visible — a sweep
+   * that had quietly started depending on the business's name would show up as a
+   * new entry in `calls`, and the assertions on that array are what would break.
+   */
+  async findProgramWithBusiness(tenant: string): Promise<WalletProgramWithBusinessRow | null> {
+    this.calls.push('findProgramWithBusiness');
+    const program = this.programs.get(tenant);
+    if (!program) return null;
+    return { ...program, businessName: null, businessSlug: null };
   }
   async insertProgram(program: ProgramInsert): Promise<void> {
     this.calls.push('insertProgram');
