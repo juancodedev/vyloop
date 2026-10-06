@@ -268,16 +268,24 @@ function createFakeDb(
 
     return builder;
   });
-  builder.returning = vi.fn(() => builder);
+builder.returning = vi.fn(() => builder);
 
   /**
    * Arm the join and record its ON clause.
    *
-   * The decoration itself happens when the query resolves, below, because the
-   * rows have to be admitted by the predicate first: a joined column on a row the
-   * predicate would never have returned is not observable in this fake either.
+   * Armed only here, and the decoration below checks the flag. A fake that added
+   * the joined columns whenever it was *configured* with a join rather than when
+   * the store actually made one would report `businessName: null` on a read that
+   * never joined — inventing a property, and making "the sweep must not join"
+   * untestable against it.
+   *
+   * Decoration itself happens when the query resolves, because the rows have to be
+   * admitted by the predicate first: a joined column on a row the predicate would
+   * never have returned is not observable in this fake either.
    */
+  let joinArmed = false;
   builder.leftJoin = vi.fn((_table: unknown, clause: unknown) => {
+    joinArmed = true;
     joins.push({
       table: joined?.table ?? 'unknown',
       sql: clause === undefined ? '' : dialect.sqlToQuery(clause as never).sql,
@@ -286,7 +294,7 @@ function createFakeDb(
   });
 
   const decorate = (row: Row): Row => {
-    if (!joined) return row;
+    if (!joined || !joinArmed) return row;
 
     // Resolved from the row's OWN key, never from the predicate's parameters.
     const match = joined.rows.find((candidate) => String(candidate[joined.on]) === String(row[key]));
@@ -469,6 +477,38 @@ describe('WalletStore tenant scoping', () => {
 
     expect(program).not.toHaveProperty('businessName');
     expect(program).not.toHaveProperty('businessSlug');
+    expect(fake.joins).toEqual([]);
+  });
+
+  it('keeps the `tenants` join out of the cross-tenant provisioning sweep', async () => {
+    // The same argument, asserted against the caller the argument is actually
+    // about. `listProgramTenants` walks every tenant that has a class, in
+    // primary-key order with a hard page bound, and it is the read that must not
+    // acquire a dependency on a branding row: a sweep whose enumeration depended
+    // on `tenants` would skip a merchant with a missing branding row and report
+    // itself healthy, which is the failure mode this worker's sweep comments
+    // already call out twice.
+    //
+    // So both halves: the columns must not be on the rows the sweep receives, and
+    // the sweep must not join at all.
+    const fake = createFakeDb(
+      [
+        { tenantId: TENANT, classId: '1.tenant-a', reviewStatus: 'approved' },
+        { tenantId: OTHER_TENANT, classId: '1.tenant-b', reviewStatus: 'draft' },
+      ],
+      'tenantId',
+      undefined,
+      { table: 'tenants', rows: [], on: 'id', columns: { businessName: 'name', businessSlug: 'slug' } },
+    );
+    const store = createDrizzleWalletStore(fake.db);
+
+    const page = await store.listProgramTenants({ limit: 10, afterTenantId: null });
+
+    expect(page).toHaveLength(2);
+    for (const row of page) {
+      expect(row).not.toHaveProperty('businessName');
+      expect(row).not.toHaveProperty('businessSlug');
+    }
     expect(fake.joins).toEqual([]);
   });
 

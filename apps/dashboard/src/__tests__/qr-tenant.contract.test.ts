@@ -112,6 +112,44 @@ function offenders(pattern: RegExp, files: string[] = production): string[] {
 }
 
 /**
+ * Comments blanked out, with their newlines preserved.
+ *
+ * ## The `//` has to be whitespace-preceded, and that is not cosmetic
+ *
+ * The obvious form of this — a bare `//` followed by the rest of the line — is
+ * wrong in a way that hid the original bug from the very guard written to catch it.
+ * The QR page's constant was
+ *
+ *     const CUSTOMER_WEB_URL = 'https://vyloop-customer-web.pages.dev/register?biz=cafe-central';
+ *
+ * and a naive stripper reads the `//` in `https://` as the start of a line
+ * comment, blanks the rest of the line, and the seeded-business rule reports a
+ * clean run against the file that contains it. Verified: the naive pattern does not
+ * match that line, and the corrected one does.
+ *
+ * So the `//` must be preceded by whitespace or start the line, which is what
+ * distinguishes a comment from a URL in practice. The rule errs toward *not*
+ * stripping (`x=1;//note` keeps its text), which is the safe direction for a guard:
+ * a missed strip can only produce a false positive a human can dismiss, while a
+ * wrong strip produces a false negative that looks like a passing suite.
+ *
+ * (The pattern is written out in `stripComments` below rather than here, because a
+ * block comment cannot contain the comment-closing sequence it would be describing.)
+ *
+ * ## Why this is a scanner and not a parser
+ *
+ * It only has to make prose invisible to a prose rule. `delivery.contract.test.ts`
+ * makes the same trade and documents it; a real tokenizer would also have to know
+ * about JSX text, template literals and regex literals, and the guards here are not
+ * worth a parser's failure modes.
+ */
+function stripComments(source: string): string {
+  return source
+    .replaceAll(/\/\*[\s\S]*?\*\//g, (block) => block.replaceAll(/[^\n]/g, ' '))
+    .replaceAll(/(^|\s)\/\/[^\n]*/g, (line) => line.replaceAll(/[^\n]/g, ' '));
+}
+
+/**
  * The same scan with comments removed.
  *
  * A rule about a *value the product can act on* needs this, and `merchant-qr.ts`
@@ -122,8 +160,7 @@ function offenders(pattern: RegExp, files: string[] = production): string[] {
  * guard whose next author removes the guard.
  *
  * `delivery.contract.test.ts` draws the same line and for the same reason, and this
- * is a verbatim port of its scanner: block comments and line comments, not a
- * parser, because it only has to make prose invisible to a prose rule.
+ * is a port of its scanner, with the `//`-in-a-URL fix the original lacks.
  *
  * The identifier-shaped rules below still use the raw `offenders`, which is the
  * other half of that decision: those are about where an *expression* is written,
@@ -134,11 +171,7 @@ function copyOffenders(pattern: RegExp, files: string[] = production): string[] 
   const found: string[] = [];
 
   for (const path of files) {
-    const withoutComments = readFileSync(path, 'utf8')
-      .replaceAll(/\/\*[\s\S]*?\*\//g, (block) => block.replaceAll(/[^\n]/g, ' '))
-      .replaceAll(/\/\/[^\n]*/g, (line) => line.replaceAll(/[^\n]/g, ' '));
-
-    withoutComments
+    stripComments(readFileSync(path, 'utf8'))
       .split('\n')
       .forEach((line, i) => {
         if (pattern.test(line)) {
@@ -161,9 +194,7 @@ const page = () => readFileSync(pagePath, 'utf8');
  * not there. Asserting against prose would make the explanation the violation.
  */
 function pageCode(): string {
-  return page()
-    .replaceAll(/\/\*[\s\S]*?\*\//g, (block) => block.replaceAll(/[^\n]/g, ' '))
-    .replaceAll(/\/\/[^\n]*/g, (line) => line.replaceAll(/[^\n]/g, ' '));
+  return stripComments(page());
 }
 
 describe('dashboard delivery gate: the QR is this merchant\'s', () => {
