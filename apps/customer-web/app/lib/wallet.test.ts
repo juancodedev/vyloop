@@ -128,8 +128,21 @@ describe('wallet refusals never blame the customer', () => {
     // distinctness above by inventing copy per unknown code. An unrecognised
     // refusal is our problem by default, and every one of them says so the same
     // way.
+    //
+    // **The no-answer case is no longer one of them**, and this assertion is the
+    // record of why. It used to read
+    // `expect(render('', 0)).toBe(render('WALLET_SOMETHING_NEW', 409))`, holding a
+    // single fallback that promised "podés reintentar en un momento" for a request
+    // that never arrived *and* for a server that answered with a stable code this
+    // build does not know. Those want opposite answers, and the constant could not
+    // tell them apart, so it made the promise on behalf of the permanent case too.
+    //
+    // What holds now is narrower and is the property that matters: every
+    // unrecognised code that **got an answer** shares one sentence. The split is
+    // on whether an answer arrived at all — see `wallet-remedy.test.ts`.
     expect(render('WALLET_SOMETHING_NEW', 409)).toBe(render('UNKNOWN_ERROR', 500));
-    expect(render('', 0)).toBe(render('WALLET_SOMETHING_NEW', 409));
+    expect(render('WALLET_PASS_STATE_UNKNOWN', 500)).toBe(render('WALLET_SOMETHING_NEW', 409));
+    expect(render('', 0)).not.toBe(render('WALLET_SOMETHING_NEW', 409));
   });
 
   it('never leaks the raw server message to a customer', () => {
@@ -202,13 +215,26 @@ describe('the specific refusals worth naming', () => {
     }
   });
 
-  it('treats a configuration fault as ours and the merchant problem, not the customer one', () => {
+  it('treats a configuration fault as ours, and asks the customer for nothing', () => {
     // 500 from `WALLET_NOT_CONFIGURED` is the worker missing a value it cannot
     // invent. Nothing the comensal did causes it and nothing they can do fixes
     // it, so the message has to say both.
+    //
+    // **This assertion used to require `/reintent/` and that requirement was
+    // wrong.** The old reasoning was that the cause "really can be transient",
+    // which is not what the worker says about its own code: `routes.ts:57` calls
+    // this "this deployment is broken and no pass will ever work", and the two
+    // places that raise it are an empty `WALLET_ALLOWED_ORIGINS`
+    // (`routes.ts:524`) and a member code that could not be derived
+    // (`routes.ts:906`) — neither of which a second request changes.
+    //
+    // So the sentence lost "podés reintentar más tarde" with the button. The
+    // negative is the assertion now: a deployment fault must not send a customer
+    // away to do something that cannot work.
     const failure = walletFailureFor('WALLET_NOT_CONFIGURED', 500);
 
-    expect(`${failure.title} ${failure.message}`).toMatch(/reintent/i);
+    expect(`${failure.title} ${failure.message}`).not.toMatch(/reintent|m[áa]s tarde/i);
+    expect(`${failure.title} ${failure.message}`).toMatch(/nosotros/i);
     expect(failure.message).toMatch(/tu cuenta est[áa] bien/i);
   });
 
@@ -529,6 +555,19 @@ describe('the class_not_approved copy', () => {
  * compared. Deliberately a literal snapshot rather than a shape assertion: a
  * shape assertion would pass for copy that has been rewritten into something
  * equally wrong, and the point is that *these* words did not move.
+ *
+ * ## One entry did move, on purpose, and this is the record of it
+ *
+ * `WALLET_NOT_CONFIGURED` lost "podés reintentar más tarde". Not a reword: the
+ * retry button was removed from every refusal whose cause does not change
+ * between two taps, and this one was in that set — `routes.ts:524` (an empty
+ * `WALLET_ALLOWED_ORIGINS`) and `routes.ts:906` (a member code that could not be
+ * derived) are both permanent, and the worker says so about its own constant at
+ * `routes.ts:57`.
+ *
+ * Keeping the sentence after taking the button would have left the page promising
+ * precisely what it now refuses to offer. The snapshot's job is catching drift, and
+ * a promise removed against the worker's evidence is the opposite of drift.
  */
 describe('the rest of the refusal copy did not change', () => {
   const UNCHANGED: ReadonlyArray<readonly [string, number, string, string]> = [
@@ -580,8 +619,8 @@ describe('the rest of the refusal copy did not change', () => {
       'WALLET_NOT_CONFIGURED',
       500,
       'La tarjeta no est\u00e1 disponible en este momento',
-      'La integraci\u00f3n con Google Wallet no est\u00e1 completa en este entorno. Tu cuenta est\u00e1 bien y pod\u00e9s ' +
-        'reintentar m\u00e1s tarde.',
+      'La integraci\u00f3n con Google Wallet no est\u00e1 completa en este entorno. Tu cuenta est\u00e1 bien y tus ' +
+        'puntos no cambian: es algo que tenemos que corregir nosotros.',
     ],
     [
       'WALLET_DEMO_MODE',
