@@ -120,35 +120,73 @@ router.put('/v1/customers', async (c) => {
     .values(insertData)
     .returning();
 
-  // Validate event payload against schema registry
+  // ---------------------------------------------------------------------------
+  // Past this point nothing may turn a committed write into a failed registration.
+  //
+  // `ajv.compile()` builds validators with `new Function()`, which Cloudflare
+  // Workers forbids, so `validate()` throws `EvalError: Code generation from
+  // strings disallowed for this context` on every call — in production, on every
+  // single registration. There is no compatibility flag that changes this:
+  // `allow_eval_during_startup` covers module startup, and this compile happens
+  // per request, inside the handler.
+  //
+  // The previous ordering reported `500 INTERNAL_ERROR` for a customer that had
+  // already been inserted. The row committed and then the response denied it. A
+  // retry took the upsert branch above and returned 201, so a total outage read
+  // as a flake — which is how this survived as long as it did.
+  //
+  // The customer exists. That is a fact this response now reports, and it is not
+  // negotiable by a later side effect. Whether the event reached the queue is a
+  // different fact with a different owner: an unpublished event is a
+  // reconciliation problem, not a customer who failed to register, and collapsing
+  // the two is what made the original failure invisible.
+  // ---------------------------------------------------------------------------
   const event = buildCustomerRegisteredEvent(inserted, businessId);
-  const schemaResult = await validate(
-    c.env.SCHEMA_REGISTRY,
-    CUSTOMER_REGISTERED,
-    event.payload,
-  );
 
-  if (!schemaResult.valid) {
-    console.error(
-      '[customer] Event payload validation failed:',
-      schemaResult.errors,
+  // Two distinct questions, deliberately kept apart.
+  //
+  // `payloadValid` is "did the schema accept this". It is a property of the event
+  // and it still gates publication: a payload the registry rejects must not reach
+  // the queue, exactly as before this change.
+  //
+  // `threw` is "could we even ask". In production today that is the normal answer,
+  // because `validate()` cannot compile a validator in this runtime. It is not
+  // evidence that the payload is valid, so it must not be reported as validation
+  // passing — but an unavailable validator is not a reason to withhold the event
+  // either, or the queue would go silent for every registration for as long as
+  // Ajv stays in place.
+  let payloadValid = true;
+  try {
+    const schemaResult = await validate(
+      c.env.SCHEMA_REGISTRY,
+      CUSTOMER_REGISTERED,
+      event.payload,
     );
-    return c.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Event payload validation failed',
-          details: schemaResult.errors,
-        },
-      },
-      500,
-    );
+    if (!schemaResult.valid) {
+      payloadValid = false;
+      console.error(
+        '[customer] Event payload failed schema validation:',
+        schemaResult.errors,
+      );
+    }
+  } catch (err) {
+    // Surfaced rather than swallowed. This branch is the current state of this
+    // code in production, and it is the signal that schema validation has not in
+    // fact been running for any registration.
+    console.error('[customer] Schema validation unavailable:', err);
   }
 
-  // Publish event to domain events queue
-  await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+  let eventPublished = false;
+  if (payloadValid) {
+    try {
+      await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+      eventPublished = true;
+    } catch (err) {
+      console.error('[customer] Failed to publish customer.registered:', err);
+    }
+  }
 
-  return c.json({ ...inserted, event_published: true }, 201);
+  return c.json({ ...inserted, event_published: eventPublished }, 201);
 });
 
 // ---------------------------------------------------------------------------

@@ -2,28 +2,25 @@
   "name": "customer",
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
-  // `unsafe-eval` is required by `packages/schema-registry`, and **the test suite
-  // cannot catch its absence**. `ajv.compile()` builds a validator with
-  // `new Function()`, which Node permits and Workers forbids: `validate()` passes
-  // under Vitest and throws `EvalError: Code generation from strings disallowed for
-  // this context` once deployed.
-  //
-  // What that cost in production: `PUT /v1/customers` inserts the customer and only
-  // then compiles the schema, so every new customer received `500 INTERNAL_ERROR`
-  // **while the row was already committed**. They were registered and told they had
-  // not been. A retry took the upsert branch and succeeded, which made a total outage
-  // read as a flake — the failure that hid it for as long as it did.
-  //
-  // The flag costs exactly what it says: this worker can now generate code from
-  // strings at runtime, and it holds customer PII. That was traded deliberately to
-  // stop blocking registrations, and it is the first thing to revisit. The
-  // alternatives are precompiling the schemas at build time — impossible while they
-  // live in KV — or dropping runtime validation of the payload this same handler has
-  // just constructed from its own typed insert.
-  //
-  // Removing this flag silently reintroduces the outage. Nothing fails: the tests are
-  // green either way.
-  "compatibility_flags": ["nodejs_compat", "unsafe-eval"],
+// No flag here enables runtime `new Function()`, and that is deliberate.
+//
+// `packages/schema-registry` validates with `ajv.compile()`, which generates the
+// validator from a string. Workers forbids it — `EvalError: Code generation from
+// strings disallowed for this context` — and there is no way around it: the
+// nearest flag, `allow_eval_during_startup`, only covers module startup, and the
+// compile happens per request inside the route handler.
+//
+// An earlier attempt enabled a flag named `unsafe-eval` here. The deploy rejected
+// it: `No such compatibility flag`. It was worth recording because the failure
+// mode is the instructive one — the config is not validated by `pnpm -r typecheck`
+// or by any test, only by a deploy, so an invented flag reads as correct locally.
+//
+// The consequence for this worker is handled in `routes.ts`, not here: a
+// registration that has already been inserted reports the customer, and reports
+// the event separately. If Ajv is ever replaced by a validator that does not
+// codegen, `validate()` starts running again and the error log in that handler
+// stops firing.
+"compatibility_flags": ["nodejs_compat"],
   "vars": {},
   "kv_namespaces": [
     {
