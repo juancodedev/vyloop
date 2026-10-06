@@ -16,6 +16,7 @@ import {
 } from './middleware/rate-limit';
 import { ROBOTS_PATH, robotsRoute, WALLET_CALLBACK_PATH } from './robots';
 import { routerMiddleware, type GatewayEnv } from './router';
+import { SUPPORT_LIMIT_PER_WINDOW, SUPPORT_PATH, supportRoute } from './support';
 
 // ---------------------------------------------------------------------------
 // App
@@ -111,12 +112,21 @@ const WEBHOOK_PREFIX = '/v1/communication/webhook';
  * `wallet-callback-path.contract.test.ts` asserts it off the predicate directly
  * and end to end. The middleware chain, not this function, is what decides — but
  * a predicate that cannot be inspected cannot be argued about either.
+ *
+ * The second exact entry is `SUPPORT_PATH`, and it is a different exemption from
+ * the callback in every respect that matters. The callback is exempt because
+ * Google has no JWT to send; this one is exempt because **the person who needs to
+ * write to us is the person whose registration failed**, so a session is exactly
+ * the credential they do not have. What replaces the JWT here is a Turnstile token
+ * and a rate limit, both of which are named below, and the honeypot inside the
+ * route — none of which identifies anybody, which is the point: this route reads
+ * no account and writes none.
  */
 export function isPublicApiPath(path: string, method: string): boolean {
   return (
     path.startsWith('/v1/auth/') ||
     path.startsWith(WEBHOOK_PREFIX) ||
-    path === WALLET_CALLBACK_PATH ||
+    EXACT_PUBLIC_PATHS.includes(path) ||
     (method === 'PUT' && path === '/v1/customers')
   );
 }
@@ -132,6 +142,59 @@ export function isPublicApiPath(path: string, method: string): boolean {
  * a pass's state wrong with no error here to explain it.
  */
 const WALLET_CALLBACK_LIMIT_PER_WINDOW = 600;
+
+/**
+ * The public `/v1/*` paths this gateway names **one by one**, as opposed to the
+ * two it names by prefix.
+ *
+ * Exported because the set has a rule attached to it that nothing else can
+ * enforce: an exact-match public path **must** carry a number in
+ * `ANONYMOUS_LIMITS` below. The limiter does not default a missing one —
+ * `middleware/rate-limit.ts:81` skips any endpoint absent from `anonymousLimits`,
+ * so a public route with no number is not "unthrottled by default", it is
+ * *unbounded*, and nothing anywhere says so.
+ *
+ * That hole was papered over once. `SCHEMA_REGISTRY` sat in the
+ * `KNOWN_UNDECLARED` exemption list of `wrangler-config.contract.test.ts` and the
+ * exemption was the bug: the binding was absent from the config, the guard was
+ * silenced to accommodate it, and every event POST answered 500 for a reason
+ * nobody could find. So this list has no exemption list of its own. Every entry is
+ * covered by `support-limits.contract.test.ts`, and a new one without a number
+ * fails the build.
+ *
+ * Prefixes are deliberately **not** in here, and so cannot be checked by it:
+ * `/v1/auth/*` and `WEBHOOK_PREFIX` each cover routes with genuinely different
+ * costs, and `PUT /v1/customers` is unbounded on purpose. A rule that had to
+ * exempt those three would be the same shape as the exemption that hid the last
+ * bug. The rule is scoped to what is scoped.
+ */
+export const EXACT_PUBLIC_PATHS: readonly string[] = Object.freeze([
+  WALLET_CALLBACK_PATH,
+  SUPPORT_PATH,
+]);
+
+/**
+ * Limits for the anonymous routes that have one, per client address.
+ *
+ * Exported so the coverage of `EXACT_PUBLIC_PATHS` is assertable directly rather
+ * than only inferred from a 429. See that set's entry for why every one of them
+ * has to appear here.
+ */
+export const ANONYMOUS_LIMITS: Readonly<Record<string, number>> = Object.freeze({
+  '/v1/auth/business/signup': SIGNUP_LIMIT_PER_WINDOW,
+  [WALLET_CALLBACK_PATH]: WALLET_CALLBACK_LIMIT_PER_WINDOW,
+  // Three a minute for the support form. A person writes one message, and a
+  // second attempt after a validation slip is the only legitimate repeat.
+  //
+  // Set low, unlike the callback's 600, because the cost being bounded is
+  // different in kind. The callback's limit exists to stop an unauthenticated
+  // request burning two ECDSA verifications; this one exists to stop an inbox
+  // becoming unreadable, which is not a CPU cost and does not recover on its own.
+  // A wrong guess about a pass balance is fixed by a sweep; a support inbox full
+  // of spam is not fixed by anything except a limit, and the real customers stop
+  // being read.
+  [SUPPORT_PATH]: SUPPORT_LIMIT_PER_WINDOW,
+});
 
 // ---------------------------------------------------------------------------
 // Middleware chain for /v1/* routes
@@ -217,10 +280,13 @@ app.use('/v1/*', async (c, next) => {
       // limit tight enough to throttle a forgery campaign would also throttle a
       // legitimate burst of saves. It is a ceiling on amplification, not a
       // security control — the signature is.
-      anonymousLimits: {
-        '/v1/auth/business/signup': SIGNUP_LIMIT_PER_WINDOW,
-        [WALLET_CALLBACK_PATH]: WALLET_CALLBACK_LIMIT_PER_WINDOW,
-      },
+      //
+      // `ANONYMOUS_LIMITS` rather than an inline literal, so
+      // `support-limits.contract.test.ts` can assert that every path in
+      // `EXACT_PUBLIC_PATHS` has a number without reaching into a request. An
+      // exemption list is not provided for, and must not be added: the last hole
+      // in this middleware was closed by putting a name in one.
+      anonymousLimits: ANONYMOUS_LIMITS,
       windowSeconds: DEFAULT_WINDOW,
 
   })(c, next);
@@ -288,7 +354,30 @@ app.notFound((c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Error handler
+// The support channel
+// ---------------------------------------------------------------------------
+
+// Registered **after** the five `/v1/*` middlewares and reached *through* them,
+// which is the whole arrangement. It needs the rate limiter to run, and the rate
+// limiter only exists under that prefix.
+//
+// It still needs a `ROUTE_MAP` entry with `binding: 'gateway'`, because
+// `routerMiddleware` 404s any `/v1/*` path no prefix matches instead of calling
+// `next()` — so without that entry this handler would be unreachable in every
+// environment, which is exactly what happened to the wallet service binding when
+// it had no route. `src/support.ts` has the reasoning; this is the ingestor's
+// arrangement, reused.
+app.post(
+  SUPPORT_PATH,
+  supportRoute({
+    fetch: (...args) => fetch(...args),
+    now: () => new Date(),
+    newId: () => crypto.randomUUID(),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// 404 handler
 // ---------------------------------------------------------------------------
 
 /**

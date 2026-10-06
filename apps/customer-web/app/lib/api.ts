@@ -1,6 +1,7 @@
 // API client — real fetch() calls against the backend API gateway
 
 import { gatewayUrl } from './gateway-url';
+import type { SupportAccepted } from './support';
 import { WALLET_RESPONSE_MALFORMED, type WalletPass } from './wallet';
 
 const JWT_KEY = 'vyloop_jwt';
@@ -371,6 +372,51 @@ export const api = {
     const result = (await apiFetch(
       `/v1/loyalty/points/transactions${qs ? `?${qs}` : ''}`,
     )) as PaginatedTransactions | null;
-    return result ?? { data: [], meta: { total: 0, page: 1, per_page: 0 } };
+    return result ?? { data: [], meta: { total: 0, page: 0, per_page: 0 } };
+  },
+
+  /**
+   * Post a message to the support inbox from the card's refusal screen.
+   *
+   * ## Why this bypasses `apiFetch`
+   *
+   * Two reasons, and the second is the one that matters for correctness.
+   *
+   * 1. `apiFetch` attaches the caller's JWT from `localStorage`. This route needs
+   *    no session — and the person using it, by definition, may not have one:
+   *    their registration is what failed. Attaching a token the gateway does not
+   *    ask for would also mean this request carries an identity into a route whose
+   *    entire design is that it identifies nobody.
+   *
+   * 2. Everything `apiFetch` does *after* the header is still wanted, so it is
+   *    repeated rather than replaced: a non-2xx becomes an `ApiError` carrying the
+   *    server's `code` and `message`. That is what lets the form say **the
+   *    server's** words for "it did not arrive" instead of inventing a sentence
+   *    that might be kinder and less true. A 503 from a deployment with no Resend
+   *    key is exactly this case: the customer is told the channel is unavailable,
+   *    which is true, rather than told a message was received.
+   *
+   * The payload is built by `buildSupportPayload` in `lib/support.ts`, which owns
+   * the field names and holds the rule that this request carries no field the
+   * form does not collect.
+   */
+  async sendSupportMessage(payload: Record<string, unknown>): Promise<SupportAccepted> {
+    const res = await fetch(`${gatewayUrl()}/v1/support`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+
+      throw new ApiError(
+        res.status,
+        data?.error?.code ?? 'UNKNOWN_ERROR',
+        data?.error?.message ?? `Error ${res.status}`,
+      );
+    }
+
+    return (await res.json()) as SupportAccepted;
   },
 };

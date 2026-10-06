@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { SignJWT } from 'jose';
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
+import { SUPPORT_LIMIT_PER_WINDOW } from './support';
+
 // ---------------------------------------------------------------------------
 // Test configuration
 // ---------------------------------------------------------------------------
@@ -139,6 +141,26 @@ function declaredKvBindings(): string[] {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/**
+ * The configuration `POST /v1/support` reads.
+ *
+ * Kept next to `mockEnv` rather than inline in each test because the four names
+ * are the route's whole configuration surface, and a test that supplied them one
+ * at a time would pass with three of the four missing.
+ *
+ * `mockEnv()` with no override is deliberately *not* this object — one test above
+ * asserts the route answers 503 when none of them is present, which is the state
+ * every real deployment is in today.
+ */
+function supportEnv() {
+  return {
+    RESEND_API_KEY: 're_test_key',
+    SUPPORT_EMAIL_FROM: 'Vyloop <soporte@vyloop.test>',
+    SUPPORT_EMAIL_TO: 'jmunoz@juancode.dev',
+    TURNSTILE_SECRET_KEY: 'turnstile-secret',
+  };
+}
 
 describe('API Gateway', () => {
   let app: typeof import('./index').default;
@@ -669,6 +691,186 @@ describe('API Gateway', () => {
       );
 
       expect(res.status).toBe(200);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The support channel, through the real middleware chain
+  // -------------------------------------------------------------------------
+  //
+  // `support.test.ts` drives the handler on its own, which is the right place to
+  // test Turnstile, the honeypot and the PII rules. What cannot be tested there
+  // is the part that actually went wrong the last time a public route was added
+  // to this gateway: whether it survives the five `/v1/*` middlewares without a
+  // JWT. A route can be perfect in isolation and 401 in production, and the only
+  // way to see that is to let the chain run.
+  describe('The support channel', () => {
+    /** A real submission, as `apps/customer-web` builds it. */
+    function submission(overrides: Record<string, unknown> = {}) {
+      return {
+        wallet_code: 'WALLET_CLASS_NOT_APPROVED',
+        wallet_status: 409,
+        message: 'No me aparece la tarjeta y ya me registre dos veces.',
+        company_website: '',
+        'cf-turnstile-response': 'a-token',
+        ...overrides,
+      };
+    }
+
+    /** Answers siteverify with success and records nothing else. */
+    function stubFetch(): { calls: string[]; impl: typeof fetch } {
+      const calls: string[] = [];
+
+      return {
+        calls,
+        impl: (async (input: RequestInfo | URL) => {
+          const url = String(input);
+          calls.push(url);
+
+          if (url.includes('siteverify')) return Response.json({ success: true });
+          return Response.json({ id: 'email_1' });
+        }) as unknown as typeof fetch,
+      };
+    }
+
+    it('answers an unsigned request instead of 401, because the writer has no session', async () => {
+      // The premise of the whole route. The person who most needs to write to us
+      // is the one whose registration failed, so a JWT requirement would exclude
+      // exactly them.
+      const stub = stubFetch();
+      vi.stubGlobal('fetch', stub.impl);
+
+      try {
+        const res = await app.fetch(
+          new Request('http://localhost/v1/support', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(submission()),
+          }),
+          mockEnv({ ...supportEnv() }),
+        );
+
+        expect(res.status).toBe(202);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('reaches the Resend call, so the ROUTE_MAP entry is not missing', async () => {
+      // Without the `binding: 'gateway'` entry, `routerMiddleware` answers 404 for
+      // any `/v1/*` path no prefix matches — and a 404 from the gateway looks
+      // exactly like the route not existing. That is what the wallet service
+      // binding did for as long as it had no route.
+      const stub = stubFetch();
+      vi.stubGlobal('fetch', stub.impl);
+
+      try {
+        await app.fetch(
+          new Request('http://localhost/v1/support', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(submission()),
+          }),
+          mockEnv({ ...supportEnv() }),
+        );
+
+        expect(stub.calls.some((url) => url.includes('siteverify'))).toBe(true);
+        expect(stub.calls.some((url) => url.includes('resend'))).toBe(true);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('throttles the support form, which is public and has no identity to key on', async () => {
+      // The property `support-limits.contract.test.ts` argues for structurally,
+      // proven here with the real chain. `requestCount` stands in for the counter,
+      // and `SUPPORT_LIMIT_PER_WINDOW` is read rather than repeated so the two
+      // cannot disagree.
+      const requestCount = SUPPORT_LIMIT_PER_WINDOW;
+
+      const res = await app.fetch(
+        new Request('http://localhost/v1/support', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(submission()),
+        }),
+        mockEnv({
+          ...supportEnv(),
+          RATE_LIMITER: {
+            get: async () => String(requestCount),
+            put: async () => {},
+            delete: async () => {},
+          },
+        }),
+      );
+
+      expect(res.status).toBe(429);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('lets a real first message through', async () => {
+      // The other half of the pair above. A limit that refuses everything is
+      // indistinguishable from a broken route, and it would be found by a
+      // customer rather than by a test.
+      const stub = stubFetch();
+      vi.stubGlobal('fetch', stub.impl);
+
+      try {
+        const res = await app.fetch(
+          new Request('http://localhost/v1/support', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(submission()),
+          }),
+          mockEnv({
+            ...supportEnv(),
+            RATE_LIMITER: { get: async () => null, put: async () => {}, delete: async () => {} },
+          }),
+        );
+
+        expect(res.status).toBe(202);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('answers 503 and sends nothing when the support keys are absent', async () => {
+      // The state every environment is actually in today. Asserted end to end
+      // because the honesty of this route *is* this behaviour: a deployment
+      // without a Turnstile secret must be visibly non-functional rather than
+      // quietly unprotected.
+      const stub = stubFetch();
+      vi.stubGlobal('fetch', stub.impl);
+
+      try {
+        const res = await app.fetch(
+          new Request('http://localhost/v1/support', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(submission()),
+          }),
+          mockEnv(),
+        );
+
+        expect(res.status).toBe(503);
+        expect(stub.calls.some((url) => url.includes('resend'))).toBe(false);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('leaves the customer wallet routes authenticated, so the exemption stayed narrow', async () => {
+      // A sibling under `/v1/*` must still 401. The exemption is an exact match,
+      // so it cannot grow into a prefix.
+      for (const path of ['/v1/wallet/pass', '/v1/support/admin']) {
+        const res = await app.fetch(
+          new Request(`http://localhost${path}`, { method: 'POST' }),
+          mockEnv(),
+        );
+
+        expect(res.status, path).toBe(401);
+      }
     });
   });
 });
