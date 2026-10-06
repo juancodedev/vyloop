@@ -11,7 +11,7 @@ export default defineConfig({
     jsx: 'automatic',
   },
   resolve: {
-    // Every page in this app imports through `@/`, per the `paths` entry in
+// Every page in this app imports through `@/`, per the `paths` entry in
     // tsconfig.json. Next resolves it from that config at build time; vitest has
     // no tsconfig awareness, so without this the first suite to import a page
     // component fails on the alias rather than on anything about the page.
@@ -27,9 +27,9 @@ export default defineConfig({
     globals: true,
     // Left as `node`, which is what the guard suite in `src/__tests__` runs in and
     // what every existing test in this package already declares for itself. The
-    // one suite that needs a DOM — the customer edit form — asks for
-    // `// @vitest-environment jsdom` in its own header, so adding rendering
-    // support did not have to change the environment eight source-scanning
-    // guards run in.
+    // suites that need a DOM — the customer edit form and the QR page's render
+    // behaviour — each ask for `// @vitest-environment jsdom` in their own header,
+    // so adding rendering support did not have to change the environment the eight
+    // source-scanning guards run in.
   },
 });
