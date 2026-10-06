@@ -97,12 +97,30 @@ router.put('/v1/customers', async (c) => {
     if (body.email !== undefined) updateData.email = body.email;
     if (body.birthDate !== undefined) updateData.birthDate = body.birthDate;
 
-    const [updated] = await db
-      .update(customers)
-      .set(updateData)
-      .where(eq(customers.id, customer.id))
-      .returning();
+    // The repeat-registration branch writes to the same unique indexes as the
+    // insert below, so it needs the same classification. It had none, which meant a
+    // returning customer who supplied an email already used in this business got
+    // `500 INTERNAL_ERROR` — while the first-time registration of the same pair
+    // answered 409. One route, one index, two opposite answers depending on which
+    // branch the customer happened to land in.
+    let updatedRows: typeof customers.$inferSelect[];
+    try {
+      updatedRows = await db
+        .update(customers)
+        .set(updateData)
+        .where(eq(customers.id, customer.id))
+        .returning();
+    } catch (err) {
+      const conflict = classifyUniqueViolation(
+        err,
+        REGISTRATION_UNIQUE_MESSAGES,
+        REGISTRATION_GENERIC_CONFLICT,
+      );
+      if (!conflict) throw err;
+      return c.json({ error: { code: conflict.code, message: conflict.message } }, 409);
+    }
 
+    const [updated] = updatedRows;
     return c.json(updated, 200);
   }
 
@@ -1107,14 +1125,35 @@ function classifyUniqueViolation(
   const failure = err as {
     code?: unknown;
     constraint_name?: unknown;
-    cause?: { code?: unknown; constraint_name?: unknown };
+    constraint?: unknown;
+    cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown };
   };
 
   const code = failure?.code ?? failure?.cause?.code;
   if (code !== PG_UNIQUE_VIOLATION) return null;
 
-  const constraint = failure?.constraint_name ?? failure?.cause?.constraint_name;
-  return (typeof constraint === 'string' ? messages[constraint] : undefined) ?? generic;
+  // The field is `constraint`, not `constraint_name`.
+  //
+  // A Postgres driver error carries several fields whose names differ per driver,
+  // and the one this route has been reading since PR #177 does not exist on this
+  // one: the key set on `cause` is `name, severity, code, detail, hint, position,
+  // internalPosition, internalQuery, where, schema, table, column, dataType,
+  // constraint, file, line, routine, sourceError`. Reading `constraint_name` alone
+  // yields `undefined`, so the lookup misses and every violation silently fell
+  // through to the generic conflict.
+  //
+  // That failure is invisible from the outside: the status was already a correct
+  // 409, the sentence was merely the vaguer one, and a vague but plausible answer
+  // is what a wrong lookup looks like. Both names are read so a driver that does
+  // use `constraint_name` keeps working.
+  const constraint = failure?.constraint ?? failure?.cause?.constraint;
+  const legacyConstraint = failure?.constraint_name ?? failure?.cause?.constraint_name;
+
+  const named = [constraint, legacyConstraint].find(
+    (value): value is string => typeof value === 'string' && value.length > 0,
+  );
+
+  return (named ? messages[named] : undefined) ?? generic;
 }
 
 router.patch('/v1/customers/:id', async (c) => {
