@@ -248,34 +248,65 @@ app.post('/v1/auth/customer/token', async (c) => {
 
     const db = createDb(dbUrl);
 
-    // Look up customer by phone
-    let [customer] = await db
+    // ## The business is required, and an unknown one is an error
+    //
+    // A phone number is not unique across tenants. The same person is a customer of
+    // four different cafés, and `customers` holds one row per (business, phone) —
+    // so "log this person in" has no answer until the caller says which business.
+    //
+    // Previously this refined the lookup only when the tenant was found and
+    // otherwise fell through to a global `where phone = ? limit 1`. That limit
+    // returns whichever row the database happens to yield first, with no ordering
+    // to make it stable, so **the same phone could land in a different café on a
+    // different request**. And because the refinement was conditional, **a slug
+    // that did not exist produced no error at all**: it issued a valid token for an
+    // arbitrary tenant, which is tenant isolation failing silently rather than
+    // loudly.
+    //
+    // Both are refused here instead. A caller that means "this business" and gets
+    // a token for another one will render that other café's name and write its QR
+    // against a stranger's id, and the cashier scans it.
+    if (!body.businessSlug) {
+      return c.json(
+        {
+          error: {
+            code: 'AUTH_BUSINESS_REQUIRED',
+            message: 'Missing business context. Open the link or QR code of the business.',
+          },
+        },
+        400,
+      );
+    }
+
+    const [tenant] = await db
       .select()
-      .from(schema.customers)
-      .where(eq(schema.customers.phone, normalizedPhone))
+      .from(schema.tenants)
+      .where(eq(schema.tenants.slug, body.businessSlug))
       .limit(1);
 
-    // If businessSlug provided, refine the lookup to a specific tenant
-    if (body.businessSlug) {
-      const [tenant] = await db
-        .select()
-        .from(schema.tenants)
-        .where(eq(schema.tenants.slug, body.businessSlug))
-        .limit(1);
-
-      if (tenant) {
-        [customer] = await db
-          .select()
-          .from(schema.customers)
-          .where(
-            and(
-              eq(schema.customers.phone, normalizedPhone),
-              eq(schema.customers.businessId, tenant.id),
-            ),
-          )
-          .limit(1);
-      }
+    if (!tenant) {
+      return c.json(
+        {
+          error: {
+            code: 'AUTH_BUSINESS_UNKNOWN',
+            message: 'Unknown business. Open the link or QR code of the business.',
+          },
+        },
+        404,
+      );
     }
+
+    // Scoped to the tenant and nothing else: no fallback, no cross-tenant match.
+    const [customer] = await db
+      .select()
+      .from(schema.customers)
+      .where(
+        and(
+          eq(schema.customers.phone, normalizedPhone),
+          eq(schema.customers.businessId, tenant.id),
+        ),
+      )
+      .limit(1);
 
     if (!customer || customer.deletedAt) {
       return c.json(

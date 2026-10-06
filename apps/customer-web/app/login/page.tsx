@@ -88,6 +88,14 @@ function LoginContent() {
     event.preventDefault();
     setFailure(null);
 
+    // A phone number is not unique across businesses — the same person is a customer
+    // of several cafés — so without the business there is nothing to log in *to*.
+    // The server refuses it too, and refuses it here first so the person is told why
+    // before typing a number that could not identify anything.
+    if (!businessSlug) {
+      return;
+    }
+
     const fullPhone = parsePhone(phone);
     if (!fullPhone) {
       setPhoneError('Ingresá tu número de teléfono.');
@@ -98,10 +106,13 @@ function LoginContent() {
     setSubmitting(true);
 
     try {
-      const result = await login(fullPhone, businessSlug ?? undefined);
+      const result = await login(fullPhone, businessSlug);
 
       if (result.ok) {
-        router.push('/profile');
+        // The business travels with the navigation, the same way it travelled in.
+        // Dropping it here would put the customer on a profile that no longer knows
+        // which café it belongs to.
+        router.push(buildBusinessHref('/profile', businessSlug));
         return;
       }
 
@@ -134,6 +145,31 @@ function LoginContent() {
             <p className="club-login__context-copy">
               El contexto viene del enlace del comercio que abriste.
             </p>
+          </div>
+        ) : null}
+
+        {/*
+          The same shape the register screen already uses, and for the same reason.
+
+          A phone number alone cannot name a customer: the same person holds a
+          separate record at each café they joined. So `/login` with no business is
+          not a login with a missing field — it is a request that has no answer, and
+          the honest thing is to say which link is missing instead of collecting a
+          number that would identify an arbitrary tenant. The server refuses the
+          same request with `AUTH_BUSINESS_REQUIRED`; refusing it here as well means
+          nobody types a number before learning it cannot work.
+
+          `role="alert"` rather than `status`: a live region inserted into the DOM
+          already holding its text is announced reliably as an alert and unreliably
+          as a polite status, and this is a refusal rather than progress.
+        */}
+        {!businessSlug ? (
+          <div className="club-login__status club-login__status--error" role="alert" aria-atomic="true">
+            <strong>Falta el contexto del comercio.</strong>
+            <p>Volvé al inicio y abrí el enlace o el código QR del club al que pertenecés.</p>
+            <Link className="btn btn--outline club-login__status-action" href="/">
+              Volver al inicio
+            </Link>
           </div>
         ) : null}
 
@@ -176,6 +212,7 @@ function LoginContent() {
           noValidate
           aria-busy={submitting}
         >
+          <fieldset className="club-login__fieldset" disabled={!businessSlug}>
           <FormField
             id="phone"
             name="phone"
@@ -199,6 +236,7 @@ function LoginContent() {
           >
             {submitting ? 'Entrando…' : 'Ingresar'}
           </button>
+          </fieldset>
         </form>
 
         <p className="club-login__switch">
