@@ -12,6 +12,7 @@ import {
 } from '../lib/wallet';
 
 import { ClubError, ClubStatus } from './club-status';
+import { SupportForm } from './support-form';
 
 /**
  * The customer's Google Wallet pass, or the truth about why there isn't one.
@@ -153,8 +154,13 @@ export function WalletCard() {
           // way from a page that was never supposed to offer one, so the reader
           // otherwise has to reconstruct the decision from the sentence.
           //
-          // Not logged, not sent, and no PII in any of the three: all are drawn
-          // from closed sets.
+          // The first two are now also **sent** — `SupportForm` below reads them as
+          // values and puts them in the request body. That is the one deliberate
+          // break in this file's rule, and it is a break only because the channel
+          // it feeds is anonymous: `lib/support.ts` states what the whole payload
+          // is and holds its exact key set. What stays true is that none of the
+          // three is PII, and that the *message* a person types never reaches the
+          // DOM here — `SupportForm` keeps it in React state.
           data-wallet-code={state.failure.code}
           data-wallet-status={state.failure.status}
           data-wallet-remedy={state.failure.remedy.kind}
@@ -177,16 +183,38 @@ export function WalletCard() {
                   Reintentar
                 </button>
               ) : (
-                // A sentence rather than a second control. The only control that
-                // would help here is a way to reach a human, and this app has no
-                // support channel — a `mailto:` or a phone number would be
-                // inventing the destination as well as the control. What the
-                // customer can always do is tell whoever is standing next to them,
-                // which is what the note says.
+                // A sentence rather than a second control. It used to be the end of
+                // the conversation, and the comment here used to say why: "the only
+                // control that would help here is a way to reach a human, and this
+                // app has no support channel". **The destination now exists**
+                // (`POST /v1/support`, in the gateway), so the sentence below it is
+                // no longer the only thing this screen offers.
+                //
+                // It is kept, not replaced. It stays true whether or not the support
+                // channel is deployed — it is what `lib/wallet.ts` decided for these
+                // codes — and telling someone standing at a counter to say so works
+                // today with no infrastructure at all. The form is an addition to
+                // that, not a substitute for it.
                 <p className="club-status__description">{state.failure.remedy.note}</p>
               )
             }
           />
+
+          {/*
+            The way to write, on the only screen where it is relevant.
+
+            It is here rather than on a `/contact` page because the person who
+            reaches this screen is the one whose registration failed — they have no
+            account to be logged in with, and a second navigation away from the
+            code and status would cost them the only useful thing they can report.
+
+            Rendered on **every** refusal, not only the ones without a retry. The
+            two are not the same set: a malformed response or a 502 is a case where
+            re-asking genuinely helps *and* where writing to us is still reasonable,
+            and there is no argument for withholding a channel from someone because
+            a different control also exists.
+          */}
+          <SupportForm failure={state.failure} />
         </div>
       ) : null}
 
