@@ -2473,3 +2473,93 @@ a {
   letter-spacing: 0.1em;
   overflow-wrap: anywhere;
 }
+
+/* ---------------------------------------------------------------------------
+   The support channel on the card's refusal screen
+   ---------------------------------------------------------------------------
+   A form that exists because the sentence under the error used to be the end of
+   the conversation. It collects one field, so the layout has one job: make a
+   textarea and one button read as the last thing on the card rather than as part
+   of the error message above them. */
+
+/* A top rule and a gap, so the form reads as a separate step below the refusal
+   rather than as more of the same paragraph. The refusal keeps its own
+   `role="alert"`, and this must not compete with it for attention. */
+.support-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--club-line-soft);
+}
+
+/* The line that says the channel is read daily and asks for no name. It is the
+   reason the form is not intimidating: the reader decides how much to type. */
+.support-form__hint {
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+/* Full width, because a textarea narrower than the card invites one short line
+   and the whole point is that this is the only channel there is. `resize:
+   vertical` is left on: someone reviewing a long paragraph before sending it
+   should be able to see more of it. */
+.support-form__field {
+  width: 100%;
+  min-height: 96px;
+  font-family: inherit;
+}
+
+/* The honeypot. `display: none` rather than off-screen, and not by preference:
+   `a11y-hygiene.contract.test.ts` allows no inline style in the app and rejects
+   `aria-hidden` on anything Tab can reach, and a negative tab index is permitted
+   in exactly one file. A `display: none` input is already out of the tab order
+   and out of the accessibility tree, so it needs none of the three.
+
+   Honest about what this costs: a bot that reads computed styles will still see
+   it. Turnstile is the layer that stops those, verified on the server where it
+   cannot be skipped. This one removes the naive ones. */
+.support-form__trap {
+  display: none;
+}
+
+/* The widget slot. Cloudflare's implicit rendering finds its mount point by the
+   `.cf-turnstile` class, so that name is ours to apply and `globals.contract.test.ts`
+   requires a rule for every applied class — correctly, since a rule for it is the
+   place to say what the third-party iframe is allowed to do to our layout.
+
+   Width is pinned because Cloudflare's script defaults the widget to 300px, which
+   is wider than a 320px viewport minus padding and leaves a ragged edge. The
+   min-height reserves the space before the script runs, so the card does not jump
+   when the widget resolves. */
+.cf-turnstile {
+  width: 100%;
+  min-width: 300px;
+  min-height: 65px;
+}
+
+/* Under the button, in the error tone: it reports an outcome, so it reads as one
+   rather than as a second label for the field. `role="alert"` is on the element,
+   so this is presentation only. */
+.support-form__error {
+  margin: 0;
+}
+
+/* The sent and unavailable states, which are one paragraph each. They carry the
+   same spacing as the form so the card does not change height when the form is
+   replaced by its own outcome. */
+.support-form__aside {
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+.support-form--sent .club-status__description,
+.support-form--unavailable .club-status__description {
+  margin: 0;
+}
