@@ -45,6 +45,10 @@ vi.mock('@vyloop/db', async () => {
       id: uuid('id').primaryKey(),
       name: text('name').notNull(),
       country: text('country').notNull(),
+      // `notNull` with no check constraint, exactly as the real schema declares
+      // it. That combination is the reason a blank slug is reachable and is why
+      // the joined read reports absence rather than inventing one.
+      slug: text('slug').notNull(),
     }),
     tenantWalletPrograms: pgTable('tenant_wallet_programs', {
       tenantId: uuid('tenant_id').primaryKey(),
@@ -125,11 +129,36 @@ interface ScopedBuilder {
 
 type Builder = any;
 
+/**
+ * The joined table a read brings in, described the way the schema declares it.
+ *
+ * `on` is the ON clause: the joined row's column has to equal the base row's
+ * `key`, which is `tenant_id = tenants.id` for the branding join. The fake matches
+ * on **that** rather than on whatever the predicate happened to name, so a read
+ * whose join was wrong still gets its branding from the row's own tenant — the
+ * same row the real database would have attached it to. Resolving the join from
+ * the predicate instead would make every join in this file correct by
+ * construction, and the tenant-isolation assertions below would be testing the
+ * fake.
+ *
+ * `columns` is the projection, output name to the joined row's column. Its
+ * absence is what makes this a LEFT JOIN: a base row with no match keeps every
+ * column of its own and gets `null` for all of these, exactly as Postgres does.
+ */
+interface JoinSpec {
+  table: string;
+  rows: Row[];
+  on: string;
+  columns: Record<string, string>;
+}
+
 interface FakeDb {
   db: Builder;
   scoped: ScopedBuilder[];
   executed: Array<{ sql: string; params: unknown[] }>;
   updates: Array<{ table: string; values: Record<string, unknown>; whereSql: string }>;
+  /** The ON clause of every `leftJoin` the store made, compiled to SQL. */
+  joins: Array<{ table: string; sql: string }>;
   /**
    * What `db.execute` resolves to. `UPDATE ... RETURNING` reports how many rows it
    * actually changed, so a test has to be able to say "none" and see the caller
@@ -148,14 +177,20 @@ interface FakeDb {
  *                   only honoured the tenant half would return the *wrong*
  *                   customer's row and make the scoping test pass for the wrong
  *                   reason.
+ * @param joined     the joined table, if the read brings one in. Armed by the
+ *                   store actually calling `leftJoin`, so a read that returns
+ *                   rows without the joined columns fails here rather than
+ *                   quietly answering from the base rows alone.
  */
 function createFakeDb(
   rows: Row[],
   key: 'businessId' | 'tenantId' | 'id',
   alsoKey?: 'customerId',
+  joined?: JoinSpec,
 ): FakeDb {
   const scoped: ScopedBuilder[] = [];
   const executed: Array<{ sql: string; params: unknown[] }> = [];
+  const joins: Array<{ table: string; sql: string }> = [];
   const updates: Array<{ table: string; values: Record<string, unknown>; whereSql: string }> = [];
   // What `db.execute` resolves to. The `UPDATE ... RETURNING` writes report how
   // many rows they actually changed, so the fake has to be able to say "none"
@@ -233,17 +268,57 @@ function createFakeDb(
 
     return builder;
   });
-  builder.returning = vi.fn(() => builder);
+builder.returning = vi.fn(() => builder);
+
+  /**
+   * Arm the join and record its ON clause.
+   *
+   * Armed only here, and the decoration below checks the flag. A fake that added
+   * the joined columns whenever it was *configured* with a join rather than when
+   * the store actually made one would report `businessName: null` on a read that
+   * never joined — inventing a property, and making "the sweep must not join"
+   * untestable against it.
+   *
+   * Decoration itself happens when the query resolves, because the rows have to be
+   * admitted by the predicate first: a joined column on a row the predicate would
+   * never have returned is not observable in this fake either.
+   */
+  let joinArmed = false;
+  builder.leftJoin = vi.fn((_table: unknown, clause: unknown) => {
+    joinArmed = true;
+    joins.push({
+      table: joined?.table ?? 'unknown',
+      sql: clause === undefined ? '' : dialect.sqlToQuery(clause as never).sql,
+    });
+    return builder;
+  });
+
+  const decorate = (row: Row): Row => {
+    if (!joined || !joinArmed) return row;
+
+    // Resolved from the row's OWN key, never from the predicate's parameters.
+    const match = joined.rows.find((candidate) => String(candidate[joined.on]) === String(row[key]));
+
+    const projected: Row = {};
+    for (const [out, source] of Object.entries(joined.columns)) {
+      projected[out] = match?.[source] ?? null;
+    }
+
+    return { ...row, ...projected };
+  };
+
   builder.then = (
     onFulfilled?: (value: unknown) => unknown,
     onRejected?: (reason: unknown) => unknown,
   ) => {
     scoped.push(state);
-    return Promise.resolve(state.rows).then(onFulfilled, onRejected);
+    const resolved = joined ? state.rows.map(decorate) : state.rows;
+    return Promise.resolve(resolved).then(onFulfilled, onRejected);
   };
   builder.catch = (onRejected?: (reason: unknown) => unknown) =>
-    Promise.resolve(state.rows).catch(onRejected);
-  builder.finally = (onFinally?: () => void) => Promise.resolve(state.rows).finally(onFinally);
+    Promise.resolve(joined ? state.rows.map(decorate) : state.rows).catch(onRejected);
+  builder.finally = (onFinally?: () => void) =>
+    Promise.resolve(joined ? state.rows.map(decorate) : state.rows).finally(onFinally);
 
   const db: Builder = {
     select: vi.fn(() => builder),
@@ -271,7 +346,7 @@ function createFakeDb(
     }),
   };
 
-  return { db, scoped, executed, updates, executeRows };
+  return { db, scoped, executed, updates, executeRows, joins };
 }
 
 function isUuid(value: string): boolean {
@@ -380,6 +455,61 @@ describe('WalletStore tenant scoping', () => {
 
     expect(program?.classId).toBe('1.tenant-a');
     expect(fake.scoped[0]!.sql).toContain('tenant_id');
+  });
+
+  it('leaves the shared program projection free of joined business columns', async () => {
+    // The load-bearing negative for the join decision.
+    //
+    // `PROGRAM_COLUMNS` is read by `findProgram` **and** by `listProgramTenants`,
+    // the cross-tenant provisioning sweep. Putting `businessName`/`businessSlug`
+    // in the shared projection would drag a `tenants` join into that sweep: an
+    // INNER JOIN would silently drop program rows from provisioning, and a LEFT
+    // JOIN would widen a bounded cross-tenant enumeration for two callers that
+    // have no use for a merchant's name. Worse, `listProgramTenants` returns
+    // `WalletProgramRow[]`, so the fields would have to be declared on a row type
+    // that read does not populate — a type that lies about its own contents.
+    //
+    // So the plain read stays plain, and the joined one is a separate method.
+    const fake = createFakeDb([{ tenantId: TENANT, classId: '1.tenant-a' }], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    const program = await store.findProgram(TENANT);
+
+    expect(program).not.toHaveProperty('businessName');
+    expect(program).not.toHaveProperty('businessSlug');
+    expect(fake.joins).toEqual([]);
+  });
+
+  it('keeps the `tenants` join out of the cross-tenant provisioning sweep', async () => {
+    // The same argument, asserted against the caller the argument is actually
+    // about. `listProgramTenants` walks every tenant that has a class, in
+    // primary-key order with a hard page bound, and it is the read that must not
+    // acquire a dependency on a branding row: a sweep whose enumeration depended
+    // on `tenants` would skip a merchant with a missing branding row and report
+    // itself healthy, which is the failure mode this worker's sweep comments
+    // already call out twice.
+    //
+    // So both halves: the columns must not be on the rows the sweep receives, and
+    // the sweep must not join at all.
+    const fake = createFakeDb(
+      [
+        { tenantId: TENANT, classId: '1.tenant-a', reviewStatus: 'approved' },
+        { tenantId: OTHER_TENANT, classId: '1.tenant-b', reviewStatus: 'draft' },
+      ],
+      'tenantId',
+      undefined,
+      { table: 'tenants', rows: [], on: 'id', columns: { businessName: 'name', businessSlug: 'slug' } },
+    );
+    const store = createDrizzleWalletStore(fake.db);
+
+    const page = await store.listProgramTenants({ limit: 10, afterTenantId: null });
+
+    expect(page).toHaveLength(2);
+    for (const row of page) {
+      expect(row).not.toHaveProperty('businessName');
+      expect(row).not.toHaveProperty('businessSlug');
+    }
+    expect(fake.joins).toEqual([]);
   });
 
   it('excludes a withdrawn customer from the pass path', async () => {
@@ -1232,6 +1362,137 @@ describe('findTenantBranding', () => {
     const store = createDrizzleWalletStore(fake.db);
 
     expect(await store.findTenantBranding(CUSTOMER)).toBeNull();
+  });
+});
+
+describe('findProgramWithBusiness', () => {
+  /**
+   * Two merchants with distinct identities, so a leak is a value that cannot be
+   * mistaken for the tenant that was asked about. The names and slugs are
+   * deliberately unlike each other rather than similar.
+   */
+  function programs(): Row[] {
+    return [
+      { tenantId: TENANT, issuerId: '1', classId: '1.tenant-a', reviewStatus: 'approved', demoMode: false },
+      { tenantId: OTHER_TENANT, issuerId: '1', classId: '1.tenant-b', reviewStatus: 'draft', demoMode: false },
+    ];
+  }
+
+  function tenants(): Row[] {
+    return [
+      { id: TENANT, name: 'Panadería del Barrio', slug: 'panaderia-del-barrio' },
+      { id: OTHER_TENANT, name: 'Ferretería Sur', slug: 'ferreteria-sur' },
+    ];
+  }
+
+  const join: JoinSpec = {
+    table: 'tenants',
+    rows: tenants(),
+    on: 'id',
+    columns: { businessName: 'name', businessSlug: 'slug' },
+  };
+
+  it('returns the program row together with this tenant\'s own name and slug', async () => {
+    const fake = createFakeDb(programs(), 'tenantId', undefined, join);
+    const store = createDrizzleWalletStore(fake.db);
+
+    const row = await store.findProgramWithBusiness(TENANT);
+
+    expect(row).toMatchObject({
+      classId: '1.tenant-a',
+      businessName: 'Panadería del Barrio',
+      businessSlug: 'panaderia-del-barrio',
+    });
+  });
+
+  it('joins `tenants` on the tenant id, and scopes the read to the tenant asked about', async () => {
+    // Two properties in one test because they are the same join. The ON clause is
+    // what decides whose branding attaches to whose program: a join on anything
+    // other than `tenant_id = tenants.id` is precisely how one merchant ends up
+    // wearing another's name, and the predicate is what stops the read returning
+    // the other merchant's program row in the first place.
+    const fake = createFakeDb(programs(), 'tenantId', undefined, join);
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.findProgramWithBusiness(TENANT);
+
+    expect(fake.joins).toHaveLength(1);
+    expect(fake.joins[0]!.table).toBe('tenants');
+    expect(fake.joins[0]!.sql).toMatch(/"id"\s*=|tenant_id/);
+    expect(fake.scoped[0]!.sql).toContain('tenant_id');
+  });
+
+  it('gives a second merchant its own identity, not this one\'s', async () => {
+    // The cross-tenant test, and the reason the fake resolves the join from each
+    // row's own tenant rather than from the predicate: if the join were resolved
+    // from whatever tenant the predicate named, this test would report the other
+    // merchant's name while passing.
+    const fake = createFakeDb(programs(), 'tenantId', undefined, join);
+    const store = createDrizzleWalletStore(fake.db);
+
+    const row = await store.findProgramWithBusiness(OTHER_TENANT);
+
+    expect(row).toMatchObject({
+      classId: '1.tenant-b',
+      businessName: 'Ferretería Sur',
+      businessSlug: 'ferreteria-sur',
+    });
+    expect(row?.businessSlug).not.toBe('panaderia-del-barrio');
+  });
+
+  it('still returns the program row when the tenant has no branding row to join', async () => {
+    // A LEFT JOIN, not an inner one, and this is the test that says why.
+    //
+    // `tenant_wallet_programs.tenant_id` does reference `tenants.id`, so under
+    // referential integrity this cannot happen — but the failure mode of getting
+    // it wrong is severe and one-directional. An INNER JOIN reports "no branding
+    // row" as "no program row", which turns a missing name into a 404 on the
+    // operator console *and* on the pass route, and the readiness gate reads a
+    // missing program as demo mode. A missing QR is a much smaller problem than a
+    // business that suddenly cannot issue passes, so the joined columns are
+    // nullable and the program survives without them.
+    const fake = createFakeDb(programs(), 'tenantId', undefined, {
+      table: 'tenants',
+      rows: [tenants()[0]!], // no row for OTHER_TENANT
+      on: 'id',
+      columns: { businessName: 'name', businessSlug: 'slug' },
+    });
+    const store = createDrizzleWalletStore(fake.db);
+
+    const row = await store.findProgramWithBusiness(OTHER_TENANT);
+
+    expect(row).not.toBeNull();
+    expect(row?.classId).toBe('1.tenant-b');
+    expect(row?.businessName).toBeNull();
+    expect(row?.businessSlug).toBeNull();
+  });
+
+  it('reports a blank slug as the blank string the column holds, not as a name', async () => {
+    // `tenants.slug` is `notNull` with no check constraint, so an empty string is
+    // reachable and provisioning already treats it as a real condition. The read
+    // must not launder it — the difference between "absent" and "present and
+    // unusable" is what lets the caller say which one happened. Collapsing the
+    // two here would make the dashboard's no-slug state indistinguishable from a
+    // broken query, and the operator would be told the wrong thing.
+    const fake = createFakeDb(programs(), 'tenantId', undefined, {
+      table: 'tenants',
+      rows: [{ id: TENANT, name: 'Panadería del Barrio', slug: '   ' }],
+      on: 'id',
+      columns: { businessName: 'name', businessSlug: 'slug' },
+    });
+    const store = createDrizzleWalletStore(fake.db);
+
+    const row = await store.findProgramWithBusiness(TENANT);
+
+    expect(row?.businessSlug).toBe('   ');
+    expect(row?.businessSlug).not.toBeNull();
+  });
+
+  it('answers null for a tenant that has no program row at all', async () => {
+    const fake = createFakeDb(programs(), 'tenantId', undefined, join);
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findProgramWithBusiness(CUSTOMER)).toBeNull();
   });
 });
 
