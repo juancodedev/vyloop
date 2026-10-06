@@ -552,21 +552,23 @@ router.get('/v1/wallet/pass', async (c) => {
   // never built against a class that cannot back it, so this is checked before
   // the first mutation rather than after.
   const program = await store.findProgram(tenantId);
-  // Demo mode is no longer a refusal here.
+  // The gate asks one question — will Google create an object for this class —
+  // and answers it from the review status and the class id's demo marker. Demo
+  // mode is passed so the fact travels with the call, but it is **not** part of
+  // the answer, and that is deliberate.
   //
-  // It used to be, and the reason was sound: a pass minted against a
-  // test-accounts-only deployment does nothing for a real customer, and handing
-  // them one is a support incident. But the refusal also made the deployment
-  // untestable, because the people who *can* test are the customers the operator
-  // added to Google's test-account list — and those hold the `customer` role, not
-  // an operator role. This route is self-scoped, so an operator does not even have
-  // a customer row to mint from; blocking customers blocked everyone.
+  // It used to be. Two ways that went were both wrong: as an allowance it let a
+  // `draft` class through to a Google 404 that surfaced as
+  // `WALLET_PASS_NOT_CREATABLE` with a "retry in a while" the customer could not
+  // act on, and as a refusal it made the deployment untestable, because the
+  // people who can test are the customers on Google's test-account list — who
+  // hold the `customer` role, and this route is self-scoped, so an operator has
+  // no customer row to mint from and blocking customers blocked everyone.
   //
-  // What keeps a real customer away is not this route but
+  // What keeps a real customer away from a test-only pass is not this route but
   // `delivery.contract.test.ts` in the customer web, which forbids any wallet call
   // to action while the issuer is unapproved. The button does not exist, so the
-  // route is not reachable from the product. Relaxing the class gate therefore
-  // does not expose a customer to anything, because the customer has no way to ask.
+  // route is not reachable from the product.
   const envDemoMode = parseDemoMode(c.env.WALLET_DEMO_MODE);
   const readiness = classReadinessFor(program, tenantId, envDemoMode);
   if (!readiness.ok) {
