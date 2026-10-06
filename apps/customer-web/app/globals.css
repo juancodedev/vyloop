@@ -1627,6 +1627,22 @@ a {
   border-radius: var(--club-radius);
 }
 
+/*
+  The fieldset that makes the form unusable without a business.
+ *
+  A `<fieldset disabled>` is what disables the phone input and the submit button in
+  one place, which is why the register screen uses the same shape. The reset is here
+  rather than inline because `a11y-hygiene.contract.test.ts` refuses inline styles,
+  and because a fieldset carries browser defaults that would otherwise draw a border
+  and a gap around a form that has always looked borderless.
+*/
+.club-login__fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .club-login__status--error {
   border-left-color: var(--club-cherry);
 }
