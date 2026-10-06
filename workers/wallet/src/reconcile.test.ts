@@ -15,6 +15,7 @@ import type {
   PassReconciliationUpdate,
   WalletPassRow,
   WalletProgramRow,
+  WalletProgramWithBusinessRow,
   WalletStore,
   WalletTenantBrandingRow,
 } from './store';
@@ -118,6 +119,20 @@ class FakeStore implements WalletStore {
 
   async findTenantBranding(): Promise<WalletTenantBrandingRow | null> {
     throw new Error('findTenantBranding is not part of the reconciliation path');
+  }
+
+  /**
+   * Throws, like the other off-path reads above.
+   *
+   * The joined program read is how the operator console learns a merchant's name
+   * and slug, and reconciliation has no use for either: it compares Google against
+   * our rows, and both are already keyed by `customerId`. A reconciliation that
+   * reached for this would be reaching for a *third* answer to the question
+   * `findProgram` already owns, and it would be one that can fail for a reason
+   * having nothing to do with the ledger.
+   */
+  async findProgramWithBusiness(): Promise<WalletProgramWithBusinessRow | null> {
+    throw new Error('findProgramWithBusiness is not part of the reconciliation path');
   }
 
   async findProgramName(): Promise<string | null> {

@@ -59,6 +59,7 @@ import type {
   WalletCustomerRow,
   WalletPassRow,
   WalletProgramRow,
+  WalletProgramWithBusinessRow,
   WalletStore,
   WalletTenantBrandingRow,
   WalletTenantByClassIdRow,
@@ -187,6 +188,38 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
         .limit(1);
 
       return (row as WalletProgramRow | undefined) ?? null;
+    },
+
+    /**
+     * The program row joined to the tenant's own name and slug.
+     *
+     * ## `PROGRAM_COLUMNS` plus two, and not a wider `PROGRAM_COLUMNS`
+     *
+     * The shared projection is deliberately left alone. It is also read by
+     * `listProgramTenants`, the cross-tenant provisioning sweep, and a join in
+     * there either drops program rows from provisioning (INNER) or widens a
+     * bounded enumeration for no benefit (LEFT). The rationale is on the interface
+     * method in `store.ts`; this is the same decision at the query.
+     *
+     * `LEFT JOIN` and the join predicate is `tenants.id = tenant_id`, so the
+     * branding attaches to the row's own tenant and cannot be another merchant's
+     * by construction. The predicate on the base table is still there: the join
+     * decides *whose branding*, and the `where` decides *which program row*, and a
+     * join must never be what scopes a tenant read.
+     */
+    async findProgramWithBusiness(tenantId: string): Promise<WalletProgramWithBusinessRow | null> {
+      const [row] = await db
+        .select({
+          ...PROGRAM_COLUMNS,
+          businessName: tenants.name,
+          businessSlug: tenants.slug,
+        })
+        .from(tenantWalletPrograms)
+        .leftJoin(tenants, eq(tenants.id, tenantWalletPrograms.tenantId))
+        .where(eq(tenantWalletPrograms.tenantId, tenantId))
+        .limit(1);
+
+      return (row as WalletProgramWithBusinessRow | undefined) ?? null;
     },
 
     /**
