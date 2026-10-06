@@ -2,7 +2,28 @@
   "name": "customer",
   "main": "./src/index.ts",
   "compatibility_date": "2025-04-01",
-  "compatibility_flags": ["nodejs_compat"],
+  // `unsafe-eval` is required by `packages/schema-registry`, and **the test suite
+  // cannot catch its absence**. `ajv.compile()` builds a validator with
+  // `new Function()`, which Node permits and Workers forbids: `validate()` passes
+  // under Vitest and throws `EvalError: Code generation from strings disallowed for
+  // this context` once deployed.
+  //
+  // What that cost in production: `PUT /v1/customers` inserts the customer and only
+  // then compiles the schema, so every new customer received `500 INTERNAL_ERROR`
+  // **while the row was already committed**. They were registered and told they had
+  // not been. A retry took the upsert branch and succeeded, which made a total outage
+  // read as a flake — the failure that hid it for as long as it did.
+  //
+  // The flag costs exactly what it says: this worker can now generate code from
+  // strings at runtime, and it holds customer PII. That was traded deliberately to
+  // stop blocking registrations, and it is the first thing to revisit. The
+  // alternatives are precompiling the schemas at build time — impossible while they
+  // live in KV — or dropping runtime validation of the payload this same handler has
+  // just constructed from its own typed insert.
+  //
+  // Removing this flag silently reintroduces the outage. Nothing fails: the tests are
+  // green either way.
+  "compatibility_flags": ["nodejs_compat", "unsafe-eval"],
   "vars": {},
   "kv_namespaces": [
     {
