@@ -40,6 +40,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SUPPORT_FIELDS } from '../lib/support';
 import { SupportForm } from './support-form';
 
 const mocks = vi.hoisted(() => ({ sendSupportMessage: vi.fn() }));
@@ -120,6 +121,79 @@ describe('the form on the refusal screen', () => {
     expect(sent.wallet_code).toBe('WALLET_CLASS_NOT_APPROVED');
     expect(sent.wallet_status).toBe(409);
     expect(sent.message).toBe(MESSAGE);
+  });
+
+  /**
+   * The channel has never once succeeded, and no test could see it.
+   *
+   * The token came from a `useRef` that nothing ever wrote, so every submission
+   * sent an empty token, the gateway answered `403` to every customer, and the
+   * widget still rendered — a channel that looks complete and refuses everyone.
+   * Every other test in this file mocks `sendSupportMessage` and so was blind to
+   * it: the gap was not the gateway or the widget but the value on the wire.
+   *
+   * This one reads the token the way the browser produces it — a hidden input named
+   * by Cloudflare, holding whatever the widget last issued — and asserts it is what
+   * actually goes out.
+   */
+  it('sends the token the widget issued, not an empty string', async () => {
+    const issued = 'token-issued-by-the-widget';
+
+    // What Turnstile's implicit render leaves in the page: a hidden input under its
+    // own name. Nothing in this component creates it, so the test supplies it the
+    // way the widget would.
+    const field = document.createElement('input');
+    field.type = 'hidden';
+    field.name = SUPPORT_FIELDS.turnstile;
+    field.value = issued;
+    document.body.appendChild(field);
+
+    try {
+      render(<SupportForm failure={REFUSAL} siteKey={SITE_KEY} />);
+
+      fireEvent.change(screen.getByLabelText(/mensaje/i), { target: { value: MESSAGE } });
+      fireEvent.click(screen.getByRole('button', { name: /enviar/i }));
+
+      await waitFor(() => expect(mocks.sendSupportMessage).toHaveBeenCalledTimes(1));
+
+      const sent = mocks.sendSupportMessage.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(sent[SUPPORT_FIELDS.turnstile]).toBe(issued);
+      expect(sent[SUPPORT_FIELDS.turnstile]).not.toBe('');
+    } finally {
+      field.remove();
+    }
+  });
+
+  /**
+   * Without this, one bad moment is permanent.
+   *
+   * Cloudflare documents `600*` — the generic bot-behaviour family, which a network
+   * hiccup or an adblocker produces as readily as an actual bot — as **retryable**.
+   * That is only true if the widget is reset: tokens are single-use, so an unreset
+   * widget re-sends a spent token and the gateway refuses it again, every time.
+   *
+   * The customer who trips this is someone whose registration already failed. They
+   * are not going to try a fourth time.
+   */
+  it('resets the widget after a failure, so the retry can succeed', async () => {
+    const reset = vi.fn();
+    (globalThis as { turnstile?: unknown }).turnstile = { reset };
+
+    try {
+refuse();
+      render(<SupportForm failure={REFUSAL} siteKey={SITE_KEY} />);
+
+      fireEvent.change(screen.getByLabelText(/mensaje/i), { target: { value: MESSAGE } });
+      fireEvent.click(screen.getByRole('button', { name: /enviar/i }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent || '').toMatch(/no llegó tu mensaje|no pudimos enviar/i),
+      );
+
+      expect(reset).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (globalThis as { turnstile?: unknown }).turnstile;
+    }
   });
 
   it('keeps the free text in the textarea and nowhere else', async () => {

@@ -136,6 +136,78 @@ export function buildSupportPayload(input: SupportPayloadInput): Record<string, 
 }
 
 // ---------------------------------------------------------------------------
+// The challenge
+// ---------------------------------------------------------------------------
+
+/**
+ * The minimal shape of the widget global we rely on.
+ *
+ * Declared rather than reached through `any` so that a Turnstile release which
+ * renames or drops `reset` is a type error here instead of a runtime `undefined is
+ * not a function` in the one path a customer reaches when they are already
+ * frustrated.
+ */
+interface TurnstileApi {
+  reset(widgetId?: string | HTMLElement): void;
+}
+
+/**
+ * Read the token the widget has issued.
+ *
+ * Turnstile's implicit render writes the token into a hidden input named
+ * `cf-turnstile-response` and keeps it current for five minutes. Reading that input
+ * at submit time is the whole contract — there is no callback to wire and no
+ * reactive state to keep in sync.
+ *
+ * This exists because the form used to hold a `useRef` that was written nowhere:
+ * `token.current` was always `''`, so every submission sent an empty token and the
+ * gateway answered `403` to every customer. The widget rendered, looked correct,
+ * and the channel had never once succeeded.
+ *
+ * Returns `''` when the widget is absent or has not issued a token yet. That is not
+ * an error here — the gateway is the control and decides what an empty token means.
+ */
+export function readChallengeToken(doc: Document | undefined = globalThis.document): string {
+  if (!doc) return '';
+
+  const field = doc.querySelector<HTMLInputElement>(
+    `input[name="${SUPPORT_FIELDS.turnstile}"]`,
+  );
+
+  return field?.value ?? '';
+}
+
+/**
+ * Clear a spent token so the widget can issue another one.
+ *
+ * **Required for a retry to be possible at all.** Turnstile tokens are single-use,
+ * and Cloudflare documents `600*` — the generic "bot behaviour detected" family —
+ * as retryable, which presupposes the widget is reset. Without this a customer who
+ * trips bot detection once is stuck for good: the form re-sends the same empty or
+ * consumed token on every further attempt and the gateway refuses each one.
+ *
+ * Silence on failure is deliberate and not laziness: if the script has not loaded
+ * there is no widget and nothing to reset, and if the global is missing the widget
+ * is already unsolvable — both are states the submit path reports honestly on its
+ * own. Throwing here would replace a usable error message with an exception.
+ */
+export function resetChallenge(doc: Document | undefined = globalThis.document): void {
+  const api = (globalThis as { turnstile?: TurnstileApi }).turnstile;
+
+  if (!api || typeof api.reset !== 'function') return;
+
+  const widget = doc?.querySelector<HTMLElement>('.cf-turnstile');
+
+  try {
+    if (widget) api.reset(widget);
+    else api.reset();
+  } catch {
+    // See above: a widget that cannot be reset is a widget that cannot solve, and
+    // the next submit says so.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The answer
 // ---------------------------------------------------------------------------
 
