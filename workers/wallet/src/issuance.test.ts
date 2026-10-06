@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { BALANCE_DISPLAY_MAX } from './balance';
-import { classIdFor, objectIdFor } from './ids';
+import { DEMO_MODE_NAME_PREFIX, classIdFor, objectIdFor } from './ids';
 import {
   LoyaltyProgramNotConfiguredError,
   MemberCodeUnavailableError,
@@ -468,6 +471,312 @@ describe('classReadinessFor', () => {
 
     expect(new Set(codes).size).toBe(3);
     expect(reasonCodeFor('available')).toBe('OK');
+  });
+});
+
+// ============================================================================
+// Will Google accept this?
+//
+// The gate answers one question, and the question is not "is this merchant in
+// demo mode". It is "will Google's `loyaltyObject.insert` take this request".
+// Those are two different questions about two different objects, and the gate
+// that answers the second with the first is the bug this block exists to pin.
+//
+// The two rules, side by side:
+//
+//   | Google accepts  | the old gate accepted                    |
+//   | ---------------- | ----------------------------------------- |
+//   | approved class  | approved, or demo, or unreadable           |
+//   | [TEST ONLY] id  |                                          |
+//
+// `DEMO_MODE_NAME_PREFIX` is where the `[TEST ONLY] ` marker lives. One
+// declaration, in `ids.ts`, read by the gate — never re-spelled.
+// ============================================================================
+
+describe('classReadinessFor: will Google accept an object for this class?', () => {
+  /** A row for `tenantId`, defaulting to the approved happy path. */
+  function rowFor(tenantId: string, overrides: Partial<WalletProgramRow> = {}): WalletProgramRow {
+    return {
+      tenantId,
+      issuerId: ISSUER,
+      classId: classIdFor(ISSUER, tenantId),
+      reviewStatus: 'approved',
+      demoMode: false,
+      lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  /**
+   * The stored class id for a class Google put in demo mode.
+   *
+   * The marker is a **name** marker — `ids.ts` says so, and it is what Google
+   * requires on a pass while the issuer has no publishing access — so it is
+   * carried as a prefix on the stored id and the suffix is the resource id. The
+   * gate has to see through it, both to accept the class and to keep the
+   * derivation check meaningful.
+   */
+  function demoClassIdFor(tenantId: string): string {
+    return `${DEMO_MODE_NAME_PREFIX}${classIdFor(ISSUER, tenantId)}`;
+  }
+
+  it('accepts an approved class with demo mode off, because Google approves it', () => {
+    const readiness = classReadinessFor(rowFor(TENANT, { demoMode: false }), TENANT, false);
+
+    expect(readiness.ok).toBe(true);
+  });
+
+  it('accepts an approved class with demo mode on, because approval is what decides', () => {
+    // `demo_mode` answers *who receives the pass*, not *whether the object can
+    // be created*. A merchant who has left demo mode still needs the class
+    // approved, and one still inside it needs nothing extra. The flag must not
+    // move this answer in either direction.
+    const readiness = classReadinessFor(rowFor(TENANT, { demoMode: true }), TENANT, false);
+
+    expect(readiness.ok).toBe(true);
+  });
+
+  it('refuses a draft class with demo mode on and no [TEST ONLY] marker', () => {
+    // **The production bug.** `cafe-prueba-0117` and `sonda-a2-1116` both sit
+    // here: `draft`, `demo_mode: true`, no marker. The old gate answered `ok`
+    // because `demoMode` was true, the pass route went on to build an object,
+    // and Google answered:
+    //
+    //   404: Wallet Object Class {...} not approved
+    //
+    // which became `WALLET_PASS_NOT_CREATABLE` and told the customer to come
+    // back in a while. Retrying cannot ever work: the review is Google's and it
+    // takes days. So the gate has to refuse here, and say why.
+    const readiness = classReadinessFor(rowFor(TENANT, { reviewStatus: 'draft', demoMode: true }), TENANT, false);
+
+    expect(readiness.ok).toBe(false);
+    if (!readiness.ok) {
+      expect(readiness.reason).toBe('class_not_approved');
+      expect(reasonCodeFor(readiness.reason)).toBe('WALLET_CLASS_NOT_APPROVED');
+      // Says what is actually true: the class is not approved, and no amount of
+      // asking again from this side changes that.
+      expect(readiness.message).toMatch(/not approved|not been approved/i);
+      expect(readiness.message).not.toMatch(/try again|in a (while|moment)|reintent/i);
+    }
+  });
+
+  it('accepts a draft class whose id carries the [TEST ONLY] marker, which is the real demo path', () => {
+    // **The other half, and the one that must not break.** This is how Google
+    // itself seeds a demo-mode test: the class stays `draft` and the id carries
+    // the marker, and Google accepts objects against it while limiting delivery
+    // to the issuer's test accounts. Refusing this sends every one of Google's
+    // testers back to the 404, which is worse than the bug being fixed.
+    const readiness = classReadinessFor(
+      rowFor(TENANT, { reviewStatus: 'draft', demoMode: true, classId: demoClassIdFor(TENANT) }),
+      TENANT,
+      false,
+    );
+
+    expect(readiness.ok).toBe(true);
+  });
+
+  it('returns the derived resource id, so the marker never reaches Google', () => {
+    // The marker is how *we* recognise the class, not part of the resource
+    // identifier Google knows it by. An object built against the marked string
+    // is a 400 at the customer's tap, so the gate has to answer with the
+    // derived id while still recognising the class.
+    const readiness = classReadinessFor(
+      rowFor(TENANT, { reviewStatus: 'draft', classId: demoClassIdFor(TENANT) }),
+      TENANT,
+      false,
+    );
+
+    expect(readiness.ok).toBe(true);
+    if (readiness.ok) {
+      expect(readiness.classId).toBe(classIdFor(ISSUER, TENANT));
+      expect(readiness.classId).not.toContain(DEMO_MODE_NAME_PREFIX);
+    }
+  });
+
+  it('still refuses a draft class with demo mode off and no marker', () => {
+    const readiness = classReadinessFor(rowFor(TENANT, { reviewStatus: 'draft', demoMode: false }), TENANT, false);
+
+    expect(readiness.ok).toBe(false);
+    if (!readiness.ok) expect(readiness.reason).toBe('class_not_approved');
+  });
+
+  it('does not let the deployment-wide demo mode reopen a class Google will refuse', () => {
+    // **The symmetric risk.** `workers/wallet/wrangler.jsonc` ships
+    // `WALLET_DEMO_MODE: "true"`, so if the env flag were still an allowance in
+    // this function, every draft tenant in production would pass again and the
+    // 404 would come back with them. `envDemoMode` is passed as `true` here on
+    // purpose: the answer must be identical to the one above it.
+    const withEnvDemo = classReadinessFor(
+      rowFor(TENANT, { reviewStatus: 'draft', demoMode: false }),
+      TENANT,
+      true,
+    );
+    const withoutEnvDemo = classReadinessFor(
+      rowFor(TENANT, { reviewStatus: 'draft', demoMode: false }),
+      TENANT,
+      false,
+    );
+
+    expect(withEnvDemo.ok).toBe(false);
+    expect(withEnvDemo.ok).toBe(withoutEnvDemo.ok);
+  });
+
+  it('does not let a marker smuggle a class id that belongs to another tenant', () => {
+    // The derivation check runs on the id behind the marker. A prefix must not
+    // become a way to skip it, because skipping it is exactly how a pass gets
+    // built against somebody else's class.
+    const readiness = classReadinessFor(
+      rowFor(OTHER_TENANT, {
+        reviewStatus: 'draft',
+        classId: `${DEMO_MODE_NAME_PREFIX}${classIdFor(ISSUER, OTHER_TENANT)}`,
+      }),
+      TENANT,
+      false,
+    );
+
+    expect(readiness.ok).toBe(false);
+    if (!readiness.ok) expect(readiness.reason).toBe('class_id_mismatch');
+  });
+
+  /**
+   * The five production tenants, as read on 2026-10-06.
+   *
+   * The three that work are `approved`. The two that 404 are `draft`. The
+   * `demo_mode` column does not discriminate — it is `true` for two of the
+   * three that work — which is precisely why it looked like the gate was
+   * working. `classIdCarriesPrefix` is the fact that actually distinguishes
+   * them: none of the five carries the marker, so under the corrected rule
+   * exactly the three approved ones pass.
+   *
+   * The tenant ids are stand-ins. The gate reads `review_status`, `demo_mode`
+   * and whether the class id carries the marker; no uuid is consulted, so a
+   * different uuid per row is inert and pinning the real ones would be noise.
+   */
+  const PRODUCTION_TENANTS: ReadonlyArray<{
+    slug: string;
+    tenantId: string;
+    reviewStatus: string;
+    demoMode: boolean;
+    classIdCarriesPrefix: boolean;
+    googleAccepts: boolean;
+  }> = [
+    {
+      slug: 'cafe-central',
+      tenantId: '3c1a9f20-5d84-4b17-9e02-7a6c1d8f4e01',
+      reviewStatus: 'approved',
+      demoMode: false,
+      classIdCarriesPrefix: false,
+      googleAccepts: true,
+    },
+    {
+      slug: 'cafe-e2e-1448',
+      tenantId: '8b41d7c6-0e29-4f53-a7b8-2c9e6d0a3f12',
+      reviewStatus: 'approved',
+      demoMode: true,
+      classIdCarriesPrefix: false,
+      googleAccepts: true,
+    },
+    {
+      slug: 'vyloop-demo',
+      tenantId: 'f0d53a94-6c71-4e28-8b1d-4a7e3c95b023',
+      reviewStatus: 'approved',
+      demoMode: true,
+      classIdCarriesPrefix: false,
+      googleAccepts: true,
+    },
+    {
+      slug: 'cafe-prueba-0117',
+      tenantId: '2e8b04f1-9a36-4d7c-b5e2-6f1a8d4c7034',
+      reviewStatus: 'draft',
+      demoMode: true,
+      classIdCarriesPrefix: false,
+      googleAccepts: false,
+    },
+    {
+      slug: 'sonda-a2-1116',
+      tenantId: 'd47b6e08-1c92-4a5f-9e37-8b0d2f6a4c15',
+      reviewStatus: 'draft',
+      demoMode: true,
+      classIdCarriesPrefix: false,
+      googleAccepts: false,
+    },
+  ];
+
+  it.each(PRODUCTION_TENANTS)(
+    'agrees with Google on $slug ($reviewStatus, demo_mode $demoMode, marker $classIdCarriesPrefix)',
+    ({ tenantId, reviewStatus, demoMode, classIdCarriesPrefix, googleAccepts }) => {
+      // Built the way the row is built, from the same two inputs the fixture
+      // records: the review status Google reported, and whether the id carries
+      // the marker.
+      const row = rowFor(tenantId, {
+        reviewStatus,
+        demoMode,
+        classId: classIdCarriesPrefix ? demoClassIdFor(tenantId) : classIdFor(ISSUER, tenantId),
+      });
+
+      // With the deployment's `WALLET_DEMO_MODE=true`, the flag production runs.
+      const readiness = classReadinessFor(row, tenantId, true);
+
+      expect(readiness.ok, `${reviewStatus}/demo=${demoMode}/marker=${classIdCarriesPrefix}`).toBe(
+        googleAccepts,
+      );
+    },
+  );
+
+  it('refuses exactly the two tenants that Google refused, and no other', () => {
+    // The count, stated separately so a row flipping cannot hide behind five
+    // individually-passing assertions.
+    const refused = PRODUCTION_TENANTS.filter((tenant) => {
+      const row = rowFor(tenant.tenantId, {
+        reviewStatus: tenant.reviewStatus,
+        demoMode: tenant.demoMode,
+        classId: tenant.classIdCarriesPrefix
+          ? demoClassIdFor(tenant.tenantId)
+          : classIdFor(ISSUER, tenant.tenantId),
+      });
+
+      return !classReadinessFor(row, tenant.tenantId, true).ok;
+    }).map((tenant) => tenant.slug);
+
+    expect(refused).toEqual(['cafe-prueba-0117', 'sonda-a2-1116']);
+  });
+});
+
+/**
+ * The contract that keeps the prefix from having a second home.
+ *
+ * Worth more than every behavioural case above. The fix is one `startsWith`
+ * call, and the way this bug comes back is somebody typing `'[TEST ONLY] '` a
+ * second time because they did not know where the constant lived — at which
+ * point the gate and the marker drift apart and, when the marker changes, only
+ * one of them moves. So this asserts on the **source**: the gate names the
+ * constant and holds no literal of its own.
+ *
+ * Reading the file rather than importing it is the point. An import would prove
+ * only that a symbol resolves; this proves what the file says.
+ */
+describe('the demo-mode marker has exactly one home', () => {
+  const source = readFileSync(join(__dirname, 'issuance.ts'), 'utf8');
+
+  it('is declared once, in ids.ts', () => {
+    const ids = readFileSync(join(__dirname, 'ids.ts'), 'utf8');
+
+    expect(ids).toContain("export const DEMO_MODE_NAME_PREFIX = '[TEST ONLY] '");
+    // And nowhere else in this file: the declaration is the only occurrence, so
+    // the constant cannot be a second copy of itself.
+    expect([...ids.matchAll(/DEMO_MODE_NAME_PREFIX\s*=/g)]).toHaveLength(1);
+  });
+
+  it('is read from DEMO_MODE_NAME_PREFIX by the gate, not re-spelled', () => {
+    expect(source).toMatch(/import\s*\{[^}]*DEMO_MODE_NAME_PREFIX[^}]*\}\s*from\s*'\.\/ids'/);
+    expect(source).toContain('DEMO_MODE_NAME_PREFIX');
+  });
+
+  it('never appears as a literal anywhere in the gate', () => {
+    // No `'[TEST ONLY] '` and no `"[TEST ONLY] "` and no template literal
+    // spelling it out. The constant is the only spelling, and this is what fails
+    // the day somebody adds a second one.
+    expect(source).not.toMatch(/\[TEST ONLY\]/);
   });
 });
 
