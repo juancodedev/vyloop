@@ -399,3 +399,224 @@ describe('the wording for a returned pass never claims a card the customer lacks
   });
 });
 
+// ============================================================================
+// The retry promise
+//
+// A comensal of `cafe-prueba-0117` or `sonda-a2-1116` was told: "Google no pudo
+// generar el pase en este momento. Tu cuenta está bien y podés reintentar en un
+// rato." That sentence was wrong twice over.
+//
+// Once, because the cause was not a bad minute at Google. The class had never
+// been approved, so `loyaltyObject.insert` answered 404
+// `not approved` — a permanent answer, not a transient one.
+//
+// Twice because the advice cannot work. The review is Google's, it takes days,
+// and no number of retries from a phone changes it. So the customer came back,
+// was refused identically, and eventually concluded something was wrong with
+// their own account — the exact inversion this module refuses to make.
+//
+// The gate now refuses before Google is asked, which is the real fix. This block
+// pins the copy, because copy is the half a customer actually reads and it can
+// drift back independently of the gate.
+// ============================================================================
+
+describe('the class_not_approved copy', () => {
+  function notApproved(): WalletFailure {
+    return walletFailureFor('WALLET_CLASS_NOT_APPROVED', 409);
+  }
+
+  it('never tells the customer a retry would help, because it cannot', () => {
+    // The load-bearing assertion, and the one that fails the day somebody
+    // "softens" the wording. Every phrasing a customer could read as "ask again
+    // and it will work" is listed, because a single word is what makes the
+    // promise: "reintentá", "probá de nuevo", "en un rato", "vuelve a intentar".
+    //
+    // A comensal who retries gets the same 409, reads the same sentence, and
+    // concludes the problem is them.
+    const { title, message } = notApproved();
+
+    for (const text of [title, message, `${title} ${message}`]) {
+      expect(text, text).not.toMatch(/reintent/i);
+      expect(text, text).not.toMatch(/intenta(?:r|do)? (de nuevo|otra vez|mas|nuevamente)/i);
+      expect(text, text).not.toMatch(/vuelve? a (intentar|pedir|probar)/i);
+      expect(text, text).not.toMatch(/en un rato|m[aá]s tarde|pronto|otro momento/i);
+      expect(text, text).not.toMatch(/ya (va a estar|estar[aá])/i);
+    }
+  });
+
+  it('names the commerce as the one who has to act, not the customer', () => {
+    // The remedy, and the audience. `WALLET_CLASS_NOT_APPROVED` means the
+    // business's class is sitting at Google unapproved — so what moves it is the
+    // business submitting it. Telling the comensal to do anything is both
+    // impossible and corrosive: it turns a merchant's unfinished setup into a
+    // stream of customers contacting support about their own accounts.
+    //
+    // Asserted as **the commerce being the subject of an obligation**, not merely
+    // as the word "comercio" appearing. The previous wording named the commerce
+    // only as the owner of the class ("la clase del pase de este comercio") and
+    // handed the sentence to Google, which is why it could sit here claiming the
+    // audience while describing nobody's next step.
+    const { message } = notApproved();
+
+    expect(message).toMatch(/(comercio|negocio|tienda)[^.]*\b(tiene que|debe|necesita|hay que)\b/i);
+    // And the customer's own remedy is explicitly nil.
+    expect(message).toMatch(/tu cuenta (y tus puntos )?est[áa]n? bien/i);
+  });
+
+  it('does not claim a review is already under way when the class may never have been submitted', () => {
+    // The subtler half of the same sentence, and the reason "Google está
+    // revisando la clase" is a second lie rather than a first.
+    //
+    // The two production tenants this copy now reaches are `draft`. `draft` means
+    // the class was created and **not submitted** — there is no review running at
+    // Google, because nobody has asked for one. Telling a comensal that Google is
+    // reviewing their shop's class sends them to wait for a queue that does not
+    // exist, and it hides the actual state, which is the one thing they can relay
+    // to the merchant.
+    //
+    // So the copy names what is true in both cases — Google has not approved it —
+    // rather than claiming a process is in flight that may not have started.
+    const { title, message } = notApproved();
+
+    for (const text of [title, message]) {
+      expect(text, text).not.toMatch(/google est[aá] revisando/i);
+      expect(text, text).not.toMatch(/est[aá] en revisi[óo]n/i);
+    }
+  });
+
+  it('keeps the distinctness the other branches rely on', () => {
+    // `WALLET_CLASS_NOT_PROVISIONED` also names the commerce, so "names the
+    // commerce" alone would collapse the two. They are different states with
+    // different remedies: no class at all versus a class Google has not looked
+    // at yet. Every branch must stay distinguishable, or the page is guessing.
+    const notApprovedText = (() => {
+      const { title, message } = notApproved();
+      return `${title} ${message}`;
+    })();
+
+    for (const { code, status } of CASES) {
+      if (code === 'WALLET_CLASS_NOT_APPROVED') continue;
+
+      expect(render(code, status), code).not.toBe(notApprovedText);
+    }
+  });
+
+  it('does not promise the card is on its way, because nobody here knows that', () => {
+    // The class has not been submitted, or was submitted and is waiting. We do
+    // not know which, and "ya va a estar" is the retired delivery-guard mistake
+    // in new words — the promise is not ours to make and it is the sentence a
+    // customer builds a plan around.
+    const { title, message } = notApproved();
+    const text = `${title} ${message}`;
+
+    expect(text).not.toMatch(/ya (va a estar|est[aá])/i);
+    expect(text).not.toMatch(/pr[óo]ximamente|en breve|coming soon/i);
+    expect(text).not.toMatch(/agreg[áa] la (tarjeta|pase)/i);
+  });
+});
+
+/**
+ * Every other branch, pinned.
+ *
+ * ## Why this exists
+ *
+ * The copy for `WALLET_CLASS_NOT_APPROVED` had to change, and while changing one
+ * entry in a map of eleven it is very easy to change a neighbour without
+ * noticing — and a neighbour here is a sentence a real customer reads about
+ * their own account.
+ *
+ * So the whole map is written out, exactly as it stood before this fix, and
+ * compared. Deliberately a literal snapshot rather than a shape assertion: a
+ * shape assertion would pass for copy that has been rewritten into something
+ * equally wrong, and the point is that *these* words did not move.
+ */
+describe('the rest of the refusal copy did not change', () => {
+  const UNCHANGED: ReadonlyArray<readonly [string, number, string, string]> = [
+    [
+      'WALLET_CLASS_NOT_PROVISIONED',
+      409,
+      'Este comercio todav\u00eda no tiene tarjeta',
+      'Google Wallet todav\u00eda no est\u00e1 configurado para este comercio. Tu cuenta est\u00e1 bien y no ten\u00e9s ' +
+        'que hacer nada: es algo que el comercio tiene que terminar de configurar.',
+    ],
+    [
+      'WALLET_CLASS_ID_MISMATCH',
+      409,
+      'No pudimos preparar la tarjeta',
+      'Hay una inconsistencia en la configuraci\u00f3n del comercio que tenemos que corregir. Tu cuenta ' +
+        'est\u00e1 bien y tus puntos no cambian.',
+    ],
+    [
+      'WALLET_PASS_NOT_CREATABLE',
+      409,
+      'Google no pudo crear la tarjeta ahora',
+      'Google no pudo generar el pase en este momento. Tu cuenta est\u00e1 bien y pod\u00e9s reintentar en un ' +
+        'rato.',
+    ],
+    [
+      'WALLET_BALANCE_NOT_DISPLAYABLE',
+      409,
+      'Tu saldo es m\u00e1s grande de lo que la tarjeta puede mostrar',
+      'Este programa todav\u00eda no tiene una forma de mostrar saldos tan grandes en Google Wallet. Tus ' +
+        'puntos est\u00e1n intactos y los pod\u00e9s usar en el local; el comercio necesita configurar otra ' +
+        'presentaci\u00f3n.',
+    ],
+    [
+      'WALLET_PASS_TERMINAL',
+      409,
+      'Esta tarjeta ya no se puede volver a usar',
+      'Google ya no permite reutilizar esta tarjeta porque su vigencia termin\u00f3. Tu cuenta y tus ' +
+        'puntos est\u00e1n bien y los pod\u00e9s seguir usando en el local. Contale al comercio para que lo ' +
+        'resuelvan.',
+    ],
+    [
+      'LOYALTY_PROGRAM_NOT_CONFIGURED',
+      409,
+      'Este comercio todav\u00eda no configur\u00f3 su programa',
+      'El comercio tiene una tarjeta de Google Wallet pero todav\u00eda no configur\u00f3 el programa de ' +
+        'puntos que la tarjeta muestra. Tu cuenta est\u00e1 bien.',
+    ],
+    [
+      'WALLET_NOT_CONFIGURED',
+      500,
+      'La tarjeta no est\u00e1 disponible en este momento',
+      'La integraci\u00f3n con Google Wallet no est\u00e1 completa en este entorno. Tu cuenta est\u00e1 bien y pod\u00e9s ' +
+        'reintentar m\u00e1s tarde.',
+    ],
+    [
+      'WALLET_DEMO_MODE',
+      409,
+      'S\u00f3lo funciona en cuentas de prueba',
+      'Este comercio todav\u00eda no tiene acceso de publicaci\u00f3n en Google Wallet, as\u00ed que una tarjeta ' +
+        's\u00f3lo llega a cuentas de prueba de Google. Tu cuenta est\u00e1 bien.',
+    ],
+    [
+      WALLET_RESPONSE_MALFORMED,
+      200,
+      'La tarjeta lleg\u00f3 incompleta',
+      'La respuesta que nos lleg\u00f3 no tra\u00eda una tarjeta. Tu cuenta est\u00e1 bien y pod\u00e9s reintentar en un ' +
+        'momento.',
+    ],
+  ];
+
+  it.each(UNCHANGED)('%s is exactly what it was', (code, status, title, message) => {
+    const failure = walletFailureFor(code, status);
+
+    expect(failure.title).toBe(title);
+    expect(failure.message).toBe(message);
+  });
+
+  it('covers every code the map knows, so a new branch cannot slip past the snapshot', () => {
+    // Without this the table could silently fall behind the map, and a code added
+    // after this fix would land with no assertion on its words at all.
+    const known = CASES.map(({ code }) => code).filter(
+      (code) =>
+        code !== 'WALLET_CLASS_NOT_APPROVED' &&
+        code !== 'WALLET_SOMETHING_NEW' &&
+        code !== 'UNKNOWN_ERROR',
+    );
+
+    expect(new Set(known)).toEqual(new Set(UNCHANGED.map(([code]) => code)));
+  });
+});
+
