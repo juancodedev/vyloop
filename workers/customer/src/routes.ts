@@ -1,6 +1,7 @@
 import { createDb, customers, customerEvents, consents, tenants, loyaltyPrograms, pointsTransactions, membershipTiers, customerWalletPasses } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
+import { CUSTOMER_PATCH_ERROR, CUSTOMER_PATCHABLE_FIELDS } from '@vyloop/types';
 import { eq, and, isNull, like, or, count, desc, asc, sum, sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
@@ -956,17 +957,49 @@ router.get('/v1/customers/:id', async (c) => {
 // Partial update: PATCH /v1/customers/:id
 // ---------------------------------------------------------------------------
 
+/**
+ * `23505`, as `@neondatabase/serverless` surfaces a failed unique index.
+ *
+ * `constraint_name` is the field that makes this translatable: `phone` and
+ * `email` are different mistakes for the operator and get different sentences,
+ * while an index this route has no message for still gets a conflict rather than
+ * a 500.
+ */
+const PG_UNIQUE_VIOLATION = '23505';
+
+const UNIQUE_CONSTRAINT_MESSAGES: Record<string, { code: string; message: string }> = {
+  uq_customers_business_phone: {
+    code: CUSTOMER_PATCH_ERROR.PHONE_TAKEN,
+    message:
+      'Another customer in this business already uses this phone number. Search for that phone to find them, ' +
+      'or correct the number here — the customer stays on their own record.',
+  },
+  uq_customers_business_email: {
+    code: CUSTOMER_PATCH_ERROR.EMAIL_TAKEN,
+    message:
+      'Another customer in this business already uses this email address. Search for that address to find them, ' +
+      'or correct it here — the customer stays on their own record.',
+  },
+};
+
+/** A unique index we have no dedicated sentence for is still a conflict. */
+const GENERIC_CONFLICT = {
+  code: CUSTOMER_PATCH_ERROR.CONFLICT,
+  message:
+    'This change collides with another record in this business, so nothing was saved. Nothing here can be ' +
+    'resolved at the counter — check the value you entered and escalate it if it looks right.',
+};
+
 router.patch('/v1/customers/:id', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const id = c.req.param('id');
-  const body = await c.req.json<Record<string, unknown>>();
-
-  // Silently ignore business_id / businessId from body (defense)
-  const { businessId: _ignoreBiz, business_id: _ignoreBizSnake, ...updateData } = body;
-
   const db = createDb(c.env.DATABASE_URL);
 
-  // Verify customer exists and belongs to this business
+  // Verify customer exists and belongs to this business.
+  //
+  // First, before the body is even looked at, and the filter takes the tenant
+  // from the token — never from the payload. That stays the answer for another
+  // business's customer whatever they send.
   const existing = await db
     .select()
     .from(customers)
@@ -986,14 +1019,147 @@ router.patch('/v1/customers/:id', async (c) => {
     );
   }
 
-  // Apply partial update with only provided fields
-  const [updated] = await db
-    .update(customers)
-    .set({ ...updateData, updatedAt: new Date() })
-    .where(eq(customers.id, id))
-    .returning();
+  let parsed: unknown;
+  try {
+    parsed = await c.req.json();
+  } catch {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'Request body is not valid JSON' } },
+      400,
+    );
+  }
 
-  return c.json(updated, 200);
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Request body must be a JSON object of fields to change',
+        },
+      },
+      400,
+    );
+  }
+
+  const body = parsed as Record<string, unknown>;
+  const editable = new Set<string>(CUSTOMER_PATCHABLE_FIELDS);
+
+  // The allowlist, and it refuses rather than filters.
+  //
+  // This used to be `const { businessId, ...updateData } = body` with everything
+  // else spread into `.set()`, which made "the columns a merchant can write" a
+  // property of the request rather than of the endpoint. `globalId` was the
+  // expensive one: `object_id` is `<issuerId>.member-<globalId>`, so rewriting it
+  // re-points the pass we issue at a different Google object, the object already
+  // on the customer's phone stops being theirs, and the old one is not deleted.
+  //
+  // Naming the offending field rather than dropping it is the other half. A
+  // silently ignored `globalId` leaves the operator certain it changed, and
+  // "it said 200 and nothing happened" is the failure nobody reports.
+  const rejected = Object.keys(body).filter((field) => !editable.has(field));
+  if (rejected.length > 0) {
+    return c.json(
+      {
+        error: {
+          code: CUSTOMER_PATCH_ERROR.NOT_PATCHABLE,
+          message:
+            `This endpoint cannot change: ${rejected.join(', ')}. ` +
+            `The editable fields are ${CUSTOMER_PATCHABLE_FIELDS.join(', ')} — nothing was saved, ` +
+            `so correct the request and send it again.`,
+        },
+      },
+      400,
+    );
+  }
+
+  const provided = Object.keys(body);
+  if (provided.length === 0) {
+    return c.json(
+      {
+        error: {
+          code: CUSTOMER_PATCH_ERROR.EMPTY,
+          message:
+            `The request named no field to change. Send at least one of ` +
+            `${CUSTOMER_PATCHABLE_FIELDS.join(', ')}.`,
+        },
+      },
+      400,
+    );
+  }
+
+  // Build the SET clause by hand rather than spreading.
+  //
+  // The spread version could produce a key whose value was `undefined`, which
+  // drizzle hands to Postgres as NULL: editing a phone would have emptied the
+  // email. `undefined` therefore never reaches the UPDATE — absent means
+  // untouched — and clearing a nullable column has to be spelled as `null`.
+  const updateData: Record<string, string | null> = {};
+  for (const field of CUSTOMER_PATCHABLE_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    const value = body[field];
+    if (value === null) {
+      updateData[field] = null;
+      continue;
+    }
+    if (typeof value !== 'string') {
+      return c.json(
+        {
+          error: {
+            code: CUSTOMER_PATCH_ERROR.INVALID_VALUE,
+            message: `${field} must be a text value or null to clear it, and nothing was saved.`,
+          },
+        },
+        400,
+      );
+    }
+    updateData[field] = value;
+  }
+
+  // Same normalisation as PUT /v1/customers. Both the unique index and the POS
+  // equality lookup read the stored value, so an unstripped phone saved here is
+  // a number the counter can never match against.
+  if (typeof updateData.phone === 'string') {
+    updateData.phone = updateData.phone.replace(/\s+/g, '');
+  }
+
+  try {
+    const [updated] = await db
+      .update(customers)
+      .set({ ...updateData, updatedAt: new Date() })
+      .where(
+        and(
+          eq(customers.id, id),
+          eq(customers.businessId, businessId),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .returning();
+
+    return c.json(updated, 200);
+  } catch (err) {
+    const failure = err as { code?: unknown; constraint_name?: unknown; cause?: { constraint_name?: unknown } };
+
+    // `@neondatabase/serverless` reports the driver error on `cause` when the
+    // driver has already unwrapped it, so both shapes are read rather than one.
+    const code = failure?.code ?? (failure?.cause as { code?: unknown } | undefined)?.code;
+    const constraint =
+      failure?.constraint_name ??
+      (failure?.cause as { constraint_name?: unknown } | undefined)?.constraint_name;
+
+    if (code === PG_UNIQUE_VIOLATION) {
+      const conflict =
+        (typeof constraint === 'string' ? UNIQUE_CONSTRAINT_MESSAGES[constraint] : undefined) ??
+        GENERIC_CONFLICT;
+      // 409, not 400: the request was well-formed, the business's own data is
+      // what conflicts with it.
+      return c.json({ error: { code: conflict.code, message: conflict.message } }, 409);
+    }
+
+    // Anything else is genuinely ours. Reporting a broken connection as "that
+    // phone belongs to someone else" would send the operator hunting for a
+    // conflict that does not exist.
+    throw err;
+  }
 });
 
 // ---------------------------------------------------------------------------
