@@ -29,6 +29,7 @@ const {
   mockDb,
   tables,
   selectCalls,
+  updateCalls,
   setTableResults,
   resetSelectCalls,
   recordingChain,
@@ -57,6 +58,9 @@ const {
     // so an optional property may not be assigned `undefined` explicitly.
     limit: number | undefined;
   }> = [];
+
+  /** The same, for writes: the SET payload and the WHERE they were issued under. */
+  const updateCalls: Array<{ set: any; where: any }> = [];
 
   /**
    * Result store, keyed by `<table>|<projection>`.
@@ -170,34 +174,45 @@ const {
         ),
       })),
     })),
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({
-        where: vi.fn(() => ({
-          returning: vi.fn(() =>
-            Promise.resolve([
-              {
-                id: 'existing-id',
-                globalId: 'existing-global-id',
-                businessId: 'biz-1',
-                phone: '+56912345678',
-                fullName: 'Alice Updated',
-                email: 'alice@updated.com',
-                birthDate: null,
-                identityDoc: null,
-                identityType: null,
-                language: 'es',
-                optedInAt: null,
-                lastVisitAt: null,
-                metadata: {},
-                deletedAt: null,
-                createdAt: new Date('2026-01-01T00:00:00.000Z'),
-                updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-              },
-            ]),
-          ),
-        })),
-      })),
-    })),
+    update: vi.fn(() => {
+      // The write is recorded the way the read is: a WHERE nobody inspects is a
+      // tenant filter that can be deleted without a test noticing.
+      const call: { set: any; where: any } = { set: undefined, where: undefined };
+      const chain: any = {
+        set: vi.fn((payload: any) => {
+          call.set = payload;
+          return chain;
+        }),
+        where: vi.fn((cond: any) => {
+          call.where = cond;
+          return chain;
+        }),
+        returning: vi.fn(() => {
+          updateCalls.push(call);
+          return Promise.resolve([
+            {
+              id: 'existing-id',
+              globalId: 'existing-global-id',
+              businessId: 'biz-1',
+              phone: '+56912345678',
+              fullName: 'Alice Updated',
+              email: 'alice@updated.com',
+              birthDate: null,
+              identityDoc: null,
+              identityType: null,
+              language: 'es',
+              optedInAt: null,
+              lastVisitAt: null,
+              metadata: {},
+              deletedAt: null,
+              createdAt: new Date('2026-01-01T00:00:00.000Z'),
+              updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+            },
+          ]);
+        }),
+      };
+      return chain;
+    }),
     delete: vi.fn(() => ({
       where: vi.fn(() => Promise.resolve()),
     })),
@@ -211,6 +226,7 @@ const {
     recordingChain,
     tables,
     selectCalls,
+    updateCalls,
     setTableResults: (map: Record<string, any[]>) => {
       tableResults = new Map(
         Object.entries(map).map(([k, rows]) => [k, rows]),
@@ -426,6 +442,7 @@ async function request(
 function resetMocks() {
   setTableResults({});
   resetSelectCalls();
+  updateCalls.length = 0;
   mockPublish.mockReset();
   mockValidate.mockReset();
   mockValidate.mockResolvedValue({ valid: true });
@@ -467,34 +484,44 @@ function resetMocks() {
     })),
   }));
   mockDb.update.mockReset();
-  mockDb.update.mockImplementation(() => ({
-    set: vi.fn(() => ({
-      where: vi.fn(() => ({
-        returning: vi.fn(() =>
-          Promise.resolve([
-            {
-              id: 'existing-id',
-              globalId: 'existing-global-id',
-              businessId: 'biz-1',
-              phone: '+56912345678',
-              fullName: 'Alice Updated',
-              email: 'alice@updated.com',
-              birthDate: null,
-              identityDoc: null,
-              identityType: null,
-              language: 'es',
-              optedInAt: null,
-              lastVisitAt: null,
-              metadata: {},
-              deletedAt: null,
-              createdAt: new Date('2026-01-01T00:00:00.000Z'),
-              updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-            },
-          ]),
-        ),
-      })),
-    })),
-  }));
+  // The default implementation lives in the hoisted block, where it can push to
+  // `updateCalls`. Resetting the mock is not enough: the recorder would carry the
+  // previous test's writes into the next one.
+  mockDb.update.mockImplementation(() => {
+    const call: { set: any; where: any } = { set: undefined, where: undefined };
+    const chain: any = {
+      set: vi.fn((payload: any) => {
+        call.set = payload;
+        return chain;
+      }),
+      where: vi.fn((cond: any) => {
+        call.where = cond;
+        return chain;
+      }),
+      returning: vi.fn(() => {
+        updateCalls.push(call);
+        return Promise.resolve([{
+          id: 'existing-id',
+          globalId: 'existing-global-id',
+          businessId: 'biz-1',
+          phone: '+56912345678',
+          fullName: 'Alice Updated',
+          email: 'alice@updated.com',
+          birthDate: null,
+          identityDoc: null,
+          identityType: null,
+          language: 'es',
+          optedInAt: null,
+          lastVisitAt: null,
+          metadata: {},
+          deletedAt: null,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+        }]);
+      }),
+    };
+    return chain;
+  });
   mockDb.delete.mockReset();
   mockDb.delete.mockImplementation(() => ({
     where: vi.fn(() => Promise.resolve()),
@@ -571,19 +598,12 @@ function key(table: string, projection?: Record<string, unknown>) {
  * The route resolves the customer before it looks at the body, so a refusal
  * about a field only happens for a customer this business actually owns. Without
  * this the allowlist tests would be asserting against a 404.
+ *
+ * Seeded through the recording chain rather than a hand-rolled one so the query
+ * the route actually issued — tenant included — is inspectable.
  */
 function seedOneCustomer() {
-  mockDb.select.mockImplementationOnce(() => {
-    const chain: any = {};
-    chain.from = vi.fn(() => chain);
-    chain.where = vi.fn(() => chain);
-    chain.limit = vi.fn(() => chain);
-    chain.orderBy = vi.fn(() => chain);
-    chain.leftJoin = vi.fn(() => chain);
-    chain.then = (resolve: (v: any) => any) =>
-      Promise.resolve([{ id: 'existing-id', businessId: 'biz-1' }]).then(resolve);
-    return chain;
-  });
+  setTableResults({ [key('customers')]: [{ id: 'existing-id', businessId: 'biz-1' }] });
 }
 
 /**
@@ -1345,9 +1365,8 @@ describe('CRUD Routes', () => {
       });
 
       it('reads its allowlist from the shared contract, not a local copy', async () => {
-        seedOneCustomer();
-
         for (const field of CUSTOMER_PATCHABLE_FIELDS) {
+          seedOneCustomer();
           mockDb.update.mockClear();
           const res = await request('PATCH', '/v1/customers/existing-id', {
             body: { [field]: field === 'birthDate' ? '1990-01-01' : 'x' },
@@ -1486,6 +1505,31 @@ describe('CRUD Routes', () => {
         const payload = updateSetFn.mock.calls[0]![0] as Record<string, unknown>;
         expect(payload.email).toBeNull();
         expect(payload).not.toHaveProperty('fullName');
+      });
+
+      /**
+       * The write carries the tenant too, not only the read that found the row.
+       *
+       * There is no row-level security on these tables — `enableRls()` and
+       * `createRlsPolicies()` in `packages/db/src/rls.ts` are applied by no
+       * migration — so a `WHERE id = $1` on the UPDATE is a row identified only by
+       * a value from the URL. The existence check narrows it, so this is
+       * defence in depth rather than the only thing standing between tenants. It
+       * is still worth having, and worth a test: a WHERE nobody compiles in a
+       * suite is a WHERE that can be deleted without anything going red.
+       */
+      it('scopes the UPDATE itself to the tenant and to a live row', async () => {
+        seedOneCustomer();
+
+        await request('PATCH', '/v1/customers/existing-id', { body: { phone: '+56955554444' } });
+
+        const [write] = updateCalls;
+        const { sql: where, params } = compile(write.where);
+        expect(where).toMatch(/"business_id"/);
+        expect(where).toMatch(/"deleted_at"/);
+        // The tenant in the WHERE is the token's, and the id is the path's.
+        expect(params).toContain('biz-1');
+        expect(params).toContain('existing-id');
       });
 
       it('rejects a value that is neither a string nor null', async () => {
