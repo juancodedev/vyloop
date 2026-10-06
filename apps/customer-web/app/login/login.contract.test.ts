@@ -48,9 +48,16 @@ describe('Stage 3 club-barrio login contract', () => {
     expect(page).not.toMatch(/\{businessSlug\}/);
   });
 
-  it('keeps login usable without a business context', () => {
-    expect(page).not.toMatch(/disabled=\{!hasBusinessContext\}/);
-    expect(page).not.toMatch(/Falta el contexto del comercio/);
+  it('refuses the form when there is no business context', () => {
+    // A phone number is not unique across businesses — the same person holds a
+    // separate record at each café — so without the business the form cannot say who
+    // is logging in. The previous version of this test asserted the opposite
+    // ("keeps login usable without a business context"), which is the behaviour that
+    // let `/login` with no `?biz=` pick whichever tenant the database returned first.
+    expect(page).toMatch(/Falta el contexto del comercio/);
+    expect(page).toMatch(/disabled=\{!businessSlug\}/);
+    // And the submit is refused before a phone is even parsed, so no request is made.
+    expect(page).toMatch(/if \(!businessSlug\) \{\s*return;/);
   });
 
   it('normalizes the phone once and branches on the typed login result', () => {
@@ -58,8 +65,16 @@ describe('Stage 3 club-barrio login contract', () => {
     expect(page).toMatch(/const cleaned = rawPhone\.replace\(\/\[\\s-\]\/g, ''\);/);
     expect(page).toMatch(/if \(!cleaned\) return null;/);
     expect(page).toMatch(/const fullPhone = parsePhone\(phone\);/);
-    expect(page).toMatch(/const result = await login\(fullPhone, businessSlug \?\? undefined\);/);
-    expect(page).toMatch(/if \(result\.ok\) \{\s*router\.push\('\/profile'\);/);
+    // The slug is required, so it is passed as a string rather than as an optional.
+    expect(page).toMatch(/const result = await login\(fullPhone, businessSlug\);/);
+    // The business travels with the navigation: the token is scoped to it, and a
+    // profile that has forgotten which café it belongs to is the isolation bug in a
+    // different costume.
+    //
+    // Asserted on the call rather than on the whole `if`, so an explanatory comment
+    // between the two lines cannot read as a failure.
+    expect(page).toMatch(/router\.push\(buildBusinessHref\('\/profile', businessSlug\)\);/);
+    expect(page).not.toMatch(/router\.push\('\/profile'\)/);
     // A single parse means the separators are stripped exactly once.
     expect(page.match(/\.replace\(\/\[\\s-\]\/g/g)).toHaveLength(1);
   });

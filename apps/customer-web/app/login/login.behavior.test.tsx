@@ -119,18 +119,48 @@ describe('login page behavior', () => {
     expect(mocks.login).toHaveBeenCalledWith('+56912345678', 'barber');
   });
 
-  it('hides the context card and still works when there is no biz parameter', async () => {
+  it('refuses to log in without a biz, because the phone alone names no business', async () => {
+    // A phone number is not unique across businesses: the same person holds a
+    // separate customer record at every café they joined, so `limit 1` over the
+    // phone column returned whichever tenant the database happened to yield, and
+    // the same number could land in a different café on a different request.
+    //
+    // The previous version of this test asserted the opposite — that the form
+    // "still works" without a business — which is the behaviour that made the
+    // choice invisible.
     cleanup();
     mocks.businessSlug = null;
     renderPage();
 
     expect(screen.queryByLabelText('Contexto del programa')).toBeNull();
 
+    // The person is told what is missing before being asked for a number that
+    // could not identify anything.
+    expect(screen.getByRole('alert').textContent || '').toMatch(/contexto del comercio/i);
+
+    // And the form is not usable, so the refusal cannot be stepped past by typing.
+    // A `<fieldset disabled>` is what disables the controls inside it; that is a
+    // behaviour of the fieldset rather than an attribute copied onto each control,
+    // so the assertion is on the fieldset itself.
+    const fieldset = document.querySelector('fieldset.club-login__fieldset') as HTMLFieldSetElement;
+    expect(fieldset).not.toBeNull();
+    expect(fieldset.disabled).toBe(true);
+
+    await submitForm();
+
+    // No request at all: the server refuses this too, with `AUTH_BUSINESS_REQUIRED`.
+    expect(mocks.login).not.toHaveBeenCalled();
+  });
+
+  it('carries the biz onto the profile after a successful login', async () => {
+    // The token is scoped to the business that was asked for. Dropping `biz` from
+    // the navigation would put the customer on a profile that no longer knows which
+    // café it belongs to.
     typePhone('+56912345678');
     await submitForm();
 
-    expect(mocks.login).toHaveBeenCalledWith('+56912345678', undefined);
-    expect(mocks.push).toHaveBeenCalledWith('/profile');
+    expect(mocks.login).toHaveBeenCalledWith('+56912345678', 'barber');
+    expect(mocks.push).toHaveBeenCalledWith('/profile?biz=barber');
   });
 
   it('keeps the biz parameter on the register and back links', () => {
@@ -147,10 +177,14 @@ describe('login page behavior', () => {
     mocks.businessSlug = null;
     renderPage();
 
-    expect(screen.getByRole('link', { name: 'Registrate aquí' }).getAttribute('href')).toBe(
+expect(screen.getByRole('link', { name: 'Registrate aquí' }).getAttribute('href')).toBe(
       '/register',
     );
-    expect(screen.getByRole('link', { name: /Volver al inicio/ }).getAttribute('href')).toBe('/');
+    // Two links back to the home page now exist — the shell's and the one inside the
+    // missing-context notice — and neither may carry a `biz`, because there is none.
+    for (const link of screen.getAllByRole('link', { name: /Volver al inicio/ })) {
+      expect(link.getAttribute('href')).toBe('/');
+    }
   });
 
   it('reports a 401 as an unregistered phone with a working register link', async () => {
@@ -226,7 +260,7 @@ describe('login page behavior', () => {
     const settledButton = getSubmitButton(/^Ingresar$/);
     expect(settledButton.disabled).toBe(false);
     expect(screen.queryByRole('button', { name: /Entrando/ })).toBeNull();
-    expect(mocks.push).toHaveBeenCalledWith('/profile');
+    expect(mocks.push).toHaveBeenCalledWith('/profile?biz=barber');
   });
 
   it('re-enables the submit button after a failed attempt so the user can retry', async () => {
@@ -242,7 +276,7 @@ describe('login page behavior', () => {
     await submitForm();
 
     expect(mocks.login).toHaveBeenCalledTimes(2);
-    expect(mocks.push).toHaveBeenCalledWith('/profile');
+    expect(mocks.push).toHaveBeenCalledWith('/profile?biz=barber');
   });
 
   it('replaces the failure with a fresh attempt instead of stacking messages', async () => {
