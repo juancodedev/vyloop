@@ -826,12 +826,79 @@ describe('CRUD Routes', () => {
       expect(data.id).toBe('new-id');
       expect(mockPublish).toHaveBeenCalledTimes(1);
       // Schema validated
-      expect(mockValidate).toHaveBeenCalledWith(
-        expect.anything(),
-        'CustomerRegistered',
-        expect.objectContaining({ customer_id: 'new-global-id' }),
-      );
-    });
+expect(mockValidate).toHaveBeenCalledWith(
+          expect.anything(),
+          'CustomerRegistered',
+          expect.objectContaining({ customer_id: 'new-global-id' }),
+        );
+      });
+
+      /**
+       * The invariant the production outage broke.
+       *
+       * `validate()` cannot run in Cloudflare Workers at all: `ajv.compile()`
+       * generates the validator from a string and the runtime forbids it, so it
+       * throws `EvalError: Code generation from strings disallowed for this
+       * context` on every registration. The insert has committed by the time that
+       * happens, and the handler used to convert the throw into `500` — telling a
+       * customer who had been registered that they had not been. A retry took the
+       * upsert branch and returned 201, so a total outage looked like a flake.
+       *
+       * Both cases below are reachable in production rather than hypothetical:
+       * the first is the current state of this endpoint, and the second is what
+       * an unavailable queue does. Neither may rewrite a committed write.
+       */
+      it('still reports the customer when schema validation cannot run', async () => {
+        mockDb.select.mockImplementationOnce(() => {
+          const chain: any = {};
+          chain.from = vi.fn(() => chain);
+          chain.where = vi.fn(() => chain);
+          chain.limit = vi.fn(() => chain);
+          chain.offset = vi.fn(() => chain);
+          chain.orderBy = vi.fn(() => chain);
+          chain.leftJoin = vi.fn(() => chain);
+          chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+          return chain;
+        });
+
+        mockValidate.mockRejectedValueOnce(
+          new Error('EvalError: Code generation from strings disallowed for this context'),
+        );
+
+        const res = await request('PUT', '/v1/customers', {
+          body: { fullName: 'Alice Smith', phone: '+56912345678' },
+        });
+
+        expect(res.status).toBe(201);
+        const data = await res.json() as any;
+        expect(data.id).toBe('new-id');
+        expect(data.fullName).toBe('Alice Smith');
+      });
+
+      it('reports the customer and the failed publish as separate facts', async () => {
+        mockDb.select.mockImplementationOnce(() => {
+          const chain: any = {};
+          chain.from = vi.fn(() => chain);
+          chain.where = vi.fn(() => chain);
+          chain.limit = vi.fn(() => chain);
+          chain.offset = vi.fn(() => chain);
+          chain.orderBy = vi.fn(() => chain);
+          chain.leftJoin = vi.fn(() => chain);
+          chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+          return chain;
+        });
+
+        mockPublish.mockRejectedValueOnce(new Error('queue unavailable'));
+
+        const res = await request('PUT', '/v1/customers', {
+          body: { fullName: 'Alice Smith', phone: '+56912345678' },
+        });
+
+        expect(res.status).toBe(201);
+        const data = await res.json() as any;
+        expect(data.id).toBe('new-id');
+        expect(data.event_published).toBe(false);
+      });
 
     it('returns 400 when required fields are missing', async () => {
       const res = await request('PUT', '/v1/customers', { body: { phone: '+56912345678' } as any });
@@ -876,7 +943,7 @@ describe('CRUD Routes', () => {
       expect(mockPublish).not.toHaveBeenCalled();
     });
 
-    it('rejects invalid event schema before publishing', async () => {
+    it('reports the customer but withholds the event when the schema rejects it', async () => {
       // No existing customer
       mockDb.select.mockImplementationOnce(() => {
         const chain: any = {};
@@ -896,13 +963,19 @@ describe('CRUD Routes', () => {
       const body = { fullName: 'Alice Smith', phone: '+56912345678' };
       const res = await request('PUT', '/v1/customers', { body });
 
-      expect(res.status).toBe(500);
-      const data = await res.json() as any;
-      expect(data.error.code).toBe('VALIDATION_ERROR');
+expect(res.status).toBe(201);
+        const data = await res.json() as any;
 
-      // Event NOT published
-      expect(mockPublish).not.toHaveBeenCalled();
-    });
+        // The insert has already committed, so the customer exists and the response
+        // says so. Returning 500 here is what told people they had not registered
+        // while they were already in the database.
+        expect(data.id).toBe('new-id');
+
+        // The event is still withheld: a payload the registry rejects must not
+        // reach the queue. That half of the old behaviour was correct and is kept.
+        expect(data.event_published).toBe(false);
+        expect(mockPublish).not.toHaveBeenCalled();
+      });
   });
 
   // -----------------------------------------------------------------------
