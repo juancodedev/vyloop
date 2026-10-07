@@ -96,8 +96,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       lucide-react:
-        specifier: ^1.25.0
-        version: 1.48.0(react@19.2.7)
+        specifier: ^1.52.0
+        version: 1.52.0(@types/react@19.2.17)(react@19.2.7)
       next:
         specifier: '>=15.5.24'
         version: 16.3.6(@types/node@26.6.4)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -160,8 +160,8 @@ importers:
         specifier: ^2.3.8
         version: 2.3.8
       lucide-react:
-        specifier: ^1.25.0
-        version: 1.48.0(react@19.2.7)
+        specifier: ^1.52.0
+        version: 1.52.0(@types/react@19.2.17)(react@19.2.7)
       next:
         specifier: '>=15.5.24'
         version: 16.3.6(@types/node@26.6.4)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2907,10 +2907,14 @@ packages:
     peerDependencies:
       react: 19.2.7
 
-  lucide-react@1.48.0:
-    resolution: {integrity: sha512-R0CIKY/fXiC6y9xRBADgsK+VW2p/pcTJOMhLZf1T+uG+vJUvyUR02nGOgmIIC7MPkiNK4Ox8QDnbqF8rJYWPZQ==}
+  lucide-react@1.52.0:
+    resolution: {integrity: sha512-TUgPtl5ZI9WgxOcbu4ckaC5B3l1qxPQrCMgb6OfUB9owx/OvSJfcf93SMgUWAxRw5/1XDfh9uI5F5iNGXCcGDQ==}
     peerDependencies:
+      '@types/react': '*'
       react: 19.2.7
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   lz-string@1.5.0:
     resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
@@ -5889,9 +5893,11 @@ snapshots:
     dependencies:
       react: 19.2.7
 
-  lucide-react@1.48.0(react@19.2.7):
+  lucide-react@1.52.0(@types/react@19.2.17)(react@19.2.7):
     dependencies:
       react: 19.2.7
+    optionalDependencies:
+      '@types/react': 19.2.17
 
   lz-string@1.5.0: {}
 
