@@ -288,11 +288,34 @@ export function googleReviewStatusFor(
   }
 }
 
-/** Google's reverse mapping, for writing a freshly read status back. */
+/**
+ * Google's reverse mapping, for writing a freshly read status back.
+ *
+ * Case-insensitive, because that is what the wire actually carries.
+ *
+ * The type spells the states in capitals — `DRAFT | UNDER_REVIEW | APPROVED |
+ * REJECTED` — because that is how Google's documentation names them, and that
+ * spelling is right for what we *send*. What Google *returns* from
+ * `loyaltyclass.get` is lower case. So a switch written against the documented
+ * spelling matched nothing, `storedReviewStatusFor` returned `null` for every
+ * possible response, and `POST /v1/wallet/program/sync` answered `502` with
+ * "Google reported a review status this system does not recognise" — for
+ * `"approved"`, the one state it was supposed to recognise.
+ *
+ * The visible effect was that `review_status` could never be written from Google:
+ * a class Google had approved kept saying `draft` here, and the customer kept
+ * being told their card was awaiting review. The three merchants stuck in `draft`
+ * are the same bug.
+ *
+ * Fail-closed is kept for values that are genuinely unknown. Normalising the case
+ * accepts both spellings of a known state; it does not accept a new one.
+ */
 export function storedReviewStatusFor(
   google: string | null | undefined,
 ): 'draft' | 'under_review' | 'approved' | 'rejected' | null {
-  switch (google) {
+  if (typeof google !== 'string') return null;
+
+  switch (google.trim().toUpperCase()) {
     case 'DRAFT':
       return 'draft';
     case 'UNDER_REVIEW':

@@ -639,6 +639,44 @@ describe('review status translation', () => {
       expect(storedReviewStatusFor(googleReviewStatusFor(stored))).toBe(stored);
     }
   });
+
+  /**
+   * The casing Google actually returns.
+   *
+   * The test above fed this function the documented spelling — `APPROVED` — and it
+   * passed, which is exactly why the bug survived: production answered
+   *
+   *   502 WALLET_SYNC_FAILED — Google reported a review status this system does
+   *   not recognise ("approved")
+   *
+   * for the one state the mapping existed to recognise. `review_status` could then
+   * never be written from Google, so a class Google had approved kept reading
+   * `draft` here and the customer kept being told their card was under review.
+   *
+   * `loyaltyclass.get` returns lower case. These are the strings observed from the
+   * live API, not a guess about it.
+   */
+  it('accepts the lower case Google actually returns on the wire', () => {
+    expect(storedReviewStatusFor('approved')).toBe('approved');
+    expect(storedReviewStatusFor('draft')).toBe('draft');
+    expect(storedReviewStatusFor('under_review')).toBe('under_review');
+    expect(storedReviewStatusFor('rejected')).toBe('rejected');
+  });
+
+  it('tolerates surrounding whitespace from the response', () => {
+    expect(storedReviewStatusFor('  APPROVED  ')).toBe('approved');
+  });
+
+  /**
+   * Fail-closed is kept for genuinely unknown states. Normalising the case accepts
+   * both spellings of a known state; it must not start accepting new ones, because
+   * the sync route writes the result straight over a known status.
+   */
+  it('still refuses a value it does not recognise, in either casing', () => {
+    expect(storedReviewStatusFor('pending')).toBeNull();
+    expect(storedReviewStatusFor('PENDING')).toBeNull();
+    expect(storedReviewStatusFor('')).toBeNull();
+  });
 });
 
 // ============================================================================
