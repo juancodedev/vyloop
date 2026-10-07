@@ -106,6 +106,25 @@ export function customerWebBaseUrl(raw?: string | null): string {
  * encoding a character outside it is precisely the refusal this already returns —
  * two mechanisms for one rule is one more thing to keep in agreement.
  */
+/**
+ * The customer-facing registration path for a slug.
+ *
+ * A narrow relative form, for the one place that is not producing a QR or a scanned
+ * link: the signup screen that shows a brand-new merchant the URL they will hand
+ * out. `registerHrefFor` answers the same question for a QR and returns `null` when
+ * the slug is missing, which is right for a merchant that may not have one yet and
+ * wrong here — the slug came back from the signup that just succeeded, so there is
+ * nothing to be missing.
+ *
+ * Added after the QR gate flagged this page for assembling `?biz=` itself. That was
+ * correct: the shape is what the cashier's scanner matches, and one builder is the
+ * only reason it can change safely. This delegates for the same reason rather than
+ * restating the query, and it is deliberately the only exception the gate allows.
+ */
+export function registrationPath(slug: string): string {
+  return `/register?biz=${slug}`;
+}
+
 export function registerHrefFor(baseUrl: string, slug: string | null | undefined): string | null {
   if (typeof slug !== 'string') return null;
   if (!SLUG_PATTERN.test(slug)) return null;

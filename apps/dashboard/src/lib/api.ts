@@ -91,6 +91,67 @@ function apiError(status: number, data: unknown): ApiError {
   return new ApiError(status, code, message);
 }
 
+/**
+ * What a new business gets, and what the operator is shown afterwards.
+ *
+ * The slug is the load-bearing part: it is the customer-facing URL
+ * (`/register?biz=<slug>`) and the QR the merchant prints, so a person who cannot
+ * see it cannot onboard a single customer.
+ */
+export interface SignupBusinessResult {
+  businessId: string;
+  name: string;
+  slug: string;
+  adminUserId: string;
+  loyaltyProgramId: string;
+  firstTierId: string;
+}
+
+export interface SignupBusinessInput {
+  /** The trading name. The slug is derived from it, so it is not chosen directly. */
+  name: string;
+  email: string;
+  password: string;
+  /** Optional: the person's own name for the operator record. */
+  fullName?: string;
+}
+
+/**
+ * Self-service business signup.
+ *
+ * Public, so it goes through bare `fetch` rather than `apiFetch`: that helper
+ * attaches the operator's token and, on a 401, tries to refresh it — neither of
+ * which means anything to a person who does not have an account yet, which is the
+ * entire population of this call.
+ *
+ * The password is deliberately not retried or reported beyond the server's own
+ * message. `VALIDATION_ERROR` from here is the length policy, and its text names the
+ * rule.
+ */
+export async function signupBusiness(input: SignupBusinessInput): Promise<SignupBusinessResult> {
+  const res = await fetch(`${API_URL}/v1/auth/business/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: input.name,
+      email: input.email,
+      password: input.password,
+      ...(input.fullName ? { full_name: input.fullName } : {}),
+    }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) throw apiError(res.status, data);
+
+  const payload = (data as { data?: SignupBusinessResult } | null)?.data;
+  if (!payload?.slug) {
+    throw new ApiError(res.status, '', 'La creación del comercio no devolvió un slug.');
+  }
+
+  return payload;
+}
+
 export async function apiFetch(path: string, options: RequestInit = {}): Promise<unknown> {
   const token = getToken();
   const headers: Record<string, string> = {
