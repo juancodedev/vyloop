@@ -92,14 +92,28 @@ const BASELINE_COVERING_0002 = {
  * them.
  */
 const FACTS_WITH_0002 = {
-  tables: new Set(['alpha']),
-  columns: new Set(['alpha.label']),
-  indexes: new Set(['idx_alpha_label']),
-  constraints: new Set(),
-};
+    tables: new Set(['alpha']),
+    columns: new Set(['alpha.label']),
+    indexes: new Set(['idx_alpha_label']),
+    constraints: new Set(),
+  };
 
-/** A database that answered. */
-const seen = (rows, facts = FACTS_WITH_0002) => ({ reachable: true, rows, facts });
+/**
+ * A database that answered, and which ran exactly the migrations `rows` records.
+ *
+ * `appliedAt` is the same array on purpose: `ROWS_*` are already the journal rows
+ * drizzle writes, `{ id, hash, created_at }`, and `hash` is the whole of what
+ * `unappliedMigrations` matches on. Handing the gate a different shape here — or
+ * omitting it, which is what these fixtures did until the check existed — reads as
+ * a database that has run nothing, and every fixture then fails with "10
+ * migrations that this database has never run".
+ */
+const seen = (rows, facts = FACTS_WITH_0002) => ({
+    reachable: true,
+    rows,
+    facts,
+    appliedAt: rows,
+  });
 
 /** A database that did not. */
 const unreachable = (error = 'connect ECONNREFUSED') => ({ reachable: false, error });
