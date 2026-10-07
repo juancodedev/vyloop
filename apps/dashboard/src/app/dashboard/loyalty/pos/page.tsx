@@ -13,7 +13,8 @@ import {
   type CameraFailure,
 } from '@/lib/camera-permission';
 import { resolveLookupTarget } from '@/lib/lookup-identifier';
-import { previewPoints } from '@/lib/loyalty-points';
+import { DEFAULT_EARN_RULE, describeEarnRule, type EarnRule } from '@/lib/loyalty-earn-rule';
+import { resolveEarn } from '@/lib/loyalty-points';
 import { parsePassCode } from '@/lib/pass-code';
 import { presentPass, type WirePassState } from '@/lib/pass-state';
 
@@ -67,9 +68,6 @@ const MENU: MenuItem[] = [
 export default function PosPage() {
   // Cart
   const [cart, setCart] = useState<CartEntry[]>([]);
-
-  // Earn rate (fetched)
-  const [earnRate, setEarnRate] = useState(1);
 
   // Customer
   const [customer, setCustomer] = useState<{
@@ -129,12 +127,25 @@ export default function PosPage() {
     customerName: string;
   } | null>(null);
 
-  // ─── Fetch earn rate on mount ─────────────────────────────────────
+  // ─── Fetch the accumulation program on mount ───────────────────────
+
+  // The whole rule, not just the rate: which body field the worker reads — a
+  // qualifying count or a money amount — is a property of the tenant's program,
+  // and this page used to assume it was always a count. It defaults to `visit`,
+  // which is the mechanic that has been live since before `earn_by` existed, so a
+  // failed load leaves every existing tenant behaving exactly as it did.
+  const [earnRule, setEarnRule] = useState<EarnRule>(DEFAULT_EARN_RULE);
 
   useEffect(() => {
     api.getLoyaltyConfig()
-      .then((c) => setEarnRate(c.earnRate))
-      .catch(() => setEarnRate(1));
+      .then((c) =>
+        setEarnRule({
+          earnBy: c.earnBy,
+          earnRate: c.earnRate,
+          earnUnitAmount: c.earnUnitAmount,
+        }),
+      )
+      .catch(() => setEarnRule(DEFAULT_EARN_RULE));
   }, []);
 
   // ─── Cart helpers ─────────────────────────────────────────────────
@@ -175,15 +186,19 @@ export default function PosPage() {
 
   // ─── Points calculation ───────────────────────────────────────────
 
-  // An ESTIMATE, shown to the cashier before the charge.
-  //
-  // `pointsToEarn` is never sent to the server. `POST /v1/loyalty/points/assign`
-  // takes the base amount and applies `earnRate × tierMultiplier` itself, so
-  // sending this number would apply the tier a second time: a Gold customer
-  // (`×2`) would be credited `subtotal × earnRate × 2 × 2`. Because that number
-  // is what lands in `points_transactions.points`, with `balance_after`
-  // accumulated from it, the inflated balance would be permanent.
-  const pointsToEarn = previewPoints(subtotal, earnRate, customer?.multiplier ?? 1);
+  // ONE decision, resolved once per render, for both things the page needs:
+  // which field this sale has to travel in, and what to show for it. They used to
+  // be two separate ones — `previewPoints(subtotal, …)` for the screen and a hard
+  // `points: subtotal` for the request — and that is how pesos ended up being
+  // displayed as a visit count while a `purchase` program refused the body as
+  // `AMOUNT_REQUIRED`. Neither number is sent: the worker derives the base from the
+  // field the program actually reads, and applies the rate and the tier itself.
+  const earn = resolveEarn(earnRule, subtotal, customer?.multiplier ?? 1);
+  const pointsToEarn = earn.preview;
+  // The rule that produced it, in the mechanic's own terms. Shared with the config
+  // screen, so a purchase program says what it pays per $X of purchase and a visit
+  // program says nothing about money at all — it has no money rule.
+  const earnRuleText = describeEarnRule(earnRule);
   // Canje máximo: no más de lo que tiene el cliente, ni más que el subtotal (1 pt = $1)
   const maxRedeem = customer ? Math.min(customer.points, Math.ceil(subtotal)) : 0;
   const redeemValue = Math.min(Number(redeemInput) || 0, maxRedeem);
@@ -371,14 +386,19 @@ export default function PosPage() {
     setErrorMsg('');
 
     try {
-      // 1. Assign points. The `subtotal` is the BASE amount: the server resolves
-      // the earn rate and the tier from it, at the moment of the charge. The
-      // preview above is not sent — see `pointsToEarn`.
-      const earned = await api.assignPoints(
-        customer.id,
-        subtotal,
-        `Venta POS: ${cart.map((e) => `${e.item.name} x${e.qty}`).join(', ')}`,
-      );
+      const note = `Venta POS: ${cart.map((e) => `${e.item.name} x${e.qty}`).join(', ')}`;
+
+      // 1. Accumulate. Which field the sale travels in is the PROGRAM's fact, so it
+      // is read from the config rather than guessed here: a `purchase` program
+      // refuses a caller-supplied count with `AMOUNT_REQUIRED`, and a `visit`
+      // program refuses a money amount with `VISIT_COUNT_REQUIRED`. Either way the
+      // value is the same raw subtotal — what the sale is worth is the cashier's
+      // business, which field it is filed under is the merchant's. The estimate
+      // above is never sent: see `earn`.
+      const earned =
+        earn.inputField === 'amount_pesos'
+          ? await api.assignPurchasePoints(customer.id, subtotal, note)
+          : await api.assignPoints(customer.id, subtotal, note);
 
       const receiptData = {
         items: [...cart],
@@ -396,7 +416,7 @@ export default function PosPage() {
       setErrorMsg(err instanceof Error ? err.message : 'Error al procesar el cobro');
       setStatus('idle');
     }
-  }, [cart, customer, pointsToEarn, redeemResult, discount, total, subtotal]);
+  }, [cart, customer, earn, redeemResult, discount, total, subtotal]);
 
   // ─── New sale after receipt ───────────────────────────────────────
 
@@ -626,6 +646,12 @@ export default function PosPage() {
                         Estimado con la tasa y el nivel actuales. El cobro real lo calcula el
                         servidor, que resuelve el nivel en el momento del cobro.
                       </p>
+                      {/* Which rule produced it. Without this the estimate is a number
+                          the cashier can only take on faith; with it, and only for a
+                          `purchase` program, it is checkable against the cart's own
+                          total. The wording is the config screen's, so the two cannot
+                          describe one program two different ways. */}
+                      <p className={styles.earnNote}>{earnRuleText.headline}</p>
                     </>
                   )}
 
