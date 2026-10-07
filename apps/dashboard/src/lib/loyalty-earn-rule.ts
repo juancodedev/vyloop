@@ -34,14 +34,35 @@ import type { EarnBy } from './api';
 /** What the worker falls back to when no program row exists. Mirrors its own default. */
 const DEFAULT_UNIT_AMOUNT = 1000;
 
+/** What the worker falls back to when no rate can be read. Mirrors `resolveEarnRate`. */
+const DEFAULT_EARN_RATE = 1;
+
 /** Mirrors `MAX_EARN_RATE` in `workers/growth/src/routes.ts`. */
 const MAX_EARN_RATE = 1000;
+
+/** Mirrors `MAX_EARN_UNIT_AMOUNT` in `workers/growth/src/routes.ts`. */
+const MAX_EARN_UNIT_AMOUNT = 10_000_000;
 
 export interface EarnRule {
   earnBy: EarnBy;
   earnRate: number;
   earnUnitAmount: number;
 }
+
+/**
+ * The program as the worker sees it when nothing could be read.
+ *
+ * `DEFAULT_EARN_BY` and `earn_unit_amount`'s `1000.00` come from
+ * `workers/growth/src/routes.ts`. A POS that failed to load its config must fall
+ * back to the same program the worker will charge against, and `visit` is the
+ * mechanic that has been live since before `earn_by` existed — so a load failure
+ * cannot silently turn a sale into a money amount.
+ */
+export const DEFAULT_EARN_RULE: EarnRule = {
+  earnBy: 'visit',
+  earnRate: DEFAULT_EARN_RATE,
+  earnUnitAmount: DEFAULT_UNIT_AMOUNT,
+};
 
 export interface EarnRuleDescription {
   /** One line: the rate, and the thing it is a rate of. */
@@ -60,6 +81,47 @@ function formatPesos(amount: number): string {
 }
 
 /**
+ * The money amount as a number, or the worker's default when it is unusable.
+ *
+ * Split out of `formatUnitAmount` so the *wording* on the config screen and the
+ * *arithmetic* in the POS preview are decided by the same validity rule. Two
+ * predicates for one column is how a screen ends up promising `$1.000` while the
+ * estimate divides by something else.
+ *
+ * ## This fallback is deliberately weaker than the worker's
+ *
+ * `parseEarnUnitAmount` returns `null` for an unusable unit and
+ * `POST /v1/loyalty/points/assign` then **refuses the sale** with
+ * `INVALID_EARN_UNIT_AMOUNT`, because paying out against a guessed unit pays real
+ * money's worth of points. This function falls back to `1000` instead, because a
+ * screen has to render *something*: `$NaN` is not a state a merchant can act on.
+ *
+ * So the consequence is stated rather than hidden — an unusable unit makes the
+ * preview an estimate against the default, and the charge still fails at the
+ * worker with the real reason. Guessing the balance locally is not an option
+ * either: the base is never sent, so there is no number here that could reach
+ * `points_transactions.points`.
+ */
+export function usableUnitAmount(amount: number): number {
+  return Number.isFinite(amount) && amount > 0 && amount <= MAX_EARN_UNIT_AMOUNT
+    ? amount
+    : DEFAULT_UNIT_AMOUNT;
+}
+
+/**
+ * The rate as a number, or the worker's fallback of 1 when it is unusable.
+ *
+ * The same reason as `usableUnitAmount`, and the arithmetic reason matters more
+ * here: the worker multiplies a `NaN` rate straight into
+ * `points_transactions.points`, and this client refuses to *show* one — so a
+ * preview built from the raw rate would print `NaN` for a program the worker will
+ * happily charge at rate 1.
+ */
+export function usableEarnRate(rate: number): number {
+  return Number.isFinite(rate) && rate > 0 && rate <= MAX_EARN_RATE ? rate : DEFAULT_EARN_RATE;
+}
+
+/**
  * The money amount, or the worker's default when it is unusable.
  *
  * An unusable unit must never reach the screen as `$NaN` or `$0`: the worker
@@ -67,9 +129,7 @@ function formatPesos(amount: number): string {
  * one is describing a program that cannot run.
  */
 export function formatUnitAmount(amount: number): string {
-  const usable =
-    Number.isFinite(amount) && amount > 0 && amount <= 10_000_000 ? amount : DEFAULT_UNIT_AMOUNT;
-  return formatPesos(usable);
+  return formatPesos(usableUnitAmount(amount));
 }
 
 /**
@@ -80,8 +140,7 @@ export function formatUnitAmount(amount: number): string {
  * describe a program the API will not store.
  */
 export function formatEarnRate(rate: number): string {
-  const usable = Number.isFinite(rate) && rate > 0 && rate <= MAX_EARN_RATE ? rate : 1;
-  return usable.toLocaleString('es-CL', { maximumFractionDigits: 4 });
+  return usableEarnRate(rate).toLocaleString('es-CL', { maximumFractionDigits: 4 });
 }
 
 function pluralizePoints(rate: number, singular: string, plural: string): string {

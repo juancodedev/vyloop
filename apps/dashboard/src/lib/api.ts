@@ -403,6 +403,42 @@ interface ApiRewardRecord {
   imageUrl?: string | null;
 }
 
+/**
+ * What a successful accumulation returns: the ledger row, and the balance the
+ * worker accumulated from the points *it* computed. Identical under both mechanics
+ * — the caller never reads its own estimate back out of this.
+ */
+export interface AssignPointsResult {
+  id: string;
+  points: number;
+  balance_after: number;
+}
+
+/**
+ * One POST to `/v1/loyalty/points/assign`, for either accumulation mechanic.
+ *
+ * The mechanic decides which input field the body carries, and the worker refuses
+ * the wrong one — so the field is passed in fully formed and this helper adds only
+ * what is identical across both: the customer, the sale's reference id, and the
+ * note. Keeping the reference id here is what stops the two methods from drifting
+ * into two different id schemes, which would be invisible until a duplicate sale
+ * turned into a 409 on the second one.
+ */
+async function postAssignPoints(
+  input: { customer_id: string; points?: number; amount_pesos?: number },
+  note?: string,
+): Promise<AssignPointsResult> {
+  const result = await apiFetch('/v1/loyalty/points/assign', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...input,
+      reference_id: `sale-${input.customer_id}-${Date.now()}`,
+      ...(note ? { note } : {}),
+    }),
+  }) as { data: AssignPointsResult };
+  return result.data;
+}
+
 export const api = {
   async getCustomer(id: string): Promise<CustomerDetail> {
     const raw = await apiFetch(`/v1/customers/${id}`) as Record<string, unknown>;
@@ -621,21 +657,42 @@ export const api = {
     await apiFetch(`/v1/loyalty/rewards/${id}`, { method: 'DELETE' });
   },
 
+  /**
+   * Accumulate under a **visit** program: `points` is the qualifying count.
+   *
+   * `POST /v1/loyalty/points/assign` reads the tenant's `earn_by` and consumes a
+   * different field per mechanic, so this and `assignPurchasePoints` are two
+   * methods rather than one with an optional argument: a single helper would let a
+   * caller send the wrong field, and the worker refuses it with a 400 the cashier
+   * reads as a broken system. What travels as the count is the caller's business —
+   * the POS sends its subtotal, which is what it has.
+   *
+   * Not to be confused with the estimate: the base is what travels, never the
+   * preview, because the server applies the rate and the tier itself.
+   */
   async assignPoints(
     customerId: string,
     points: number,
     note?: string,
-  ): Promise<{ id: string; points: number; balance_after: number }> {
-    const result = await apiFetch('/v1/loyalty/points/assign', {
-      method: 'POST',
-      body: JSON.stringify({
-        customer_id: customerId,
-        points,
-        reference_id: `sale-${customerId}-${Date.now()}`,
-        ...(note ? { note } : {}),
-      }),
-    }) as { data: { id: string; points: number; balance_after: number } };
-    return result.data;
+  ): Promise<AssignPointsResult> {
+    return postAssignPoints({ customer_id: customerId, points }, note);
+  },
+
+  /**
+   * Accumulate under a **purchase** program: `amount_pesos` is the money, and the
+   * points are derived from it by the tenant's rule.
+   *
+   * No `points` key is sent alongside it — `AMOUNT_REQUIRED` says a caller-supplied
+   * count is refused rather than trusted, because a count next to a money amount is
+   * the hole `docs/17-Estrategia-Competitiva.md` §7.5 describes: whoever sends it
+   * decides the customer's balance.
+   */
+  async assignPurchasePoints(
+    customerId: string,
+    amountPesos: number,
+    note?: string,
+  ): Promise<AssignPointsResult> {
+    return postAssignPoints({ customer_id: customerId, amount_pesos: amountPesos }, note);
   },
 
   async redeemPoints(
