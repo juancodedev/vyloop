@@ -1,3 +1,4 @@
+import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, it, expect } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -5,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 // ---------------------------------------------------------------------------
 
 describe('Database schema', () => {
-  it('should export all 15 tables from @vyloop/db', async () => {
+  it('should export every table from @vyloop/db', async () => {
     const db = await import('./index');
 
     // Identity domain
@@ -24,6 +25,9 @@ describe('Database schema', () => {
     expect(db.pointsTransactions).toBeDefined();
     expect(db.crossLoyaltyAlliances).toBeDefined();
     expect(db.referrals).toBeDefined();
+
+    // Counter domain — a sale that already happened
+    expect(db.checkins).toBeDefined();
 
     // Automation domain
     expect(db.workflows).toBeDefined();
@@ -158,6 +162,60 @@ describe('Database schema', () => {
     }
   });
 
+  it('should shape checkins so a pending credit is findable', async () => {
+    // `points` nullable is the whole design of the table: `NULL` means "the sale
+    // is recorded and the credit has not landed yet", which is a backlog somebody
+    // can query. Asserted on nullability because `NOT NULL DEFAULT 0` would be the
+    // tempting shape and it would make the failure state unrepresentable, and
+    // therefore invisible.
+    const db = await import('./index');
+    const columns = db.checkins as unknown as Record<
+      string,
+      { name: string; notNull: boolean }
+    >;
+
+    expect(columns.points.name).toBe('points');
+    expect(columns.points.notNull).toBe(false);
+
+    // The sale's own facts are NOT NULL, so a NULL-`points` row still says what
+    // was sold, to whom, and for how much. That is what makes it a *pending
+    // credit* rather than an unrecorded sale.
+    for (const column of ['businessId', 'customerId', 'memberCode', 'amountCents']) {
+      expect(columns[column]!.notNull, `${column} must be NOT NULL`).toBe(true);
+    }
+
+    // The manual path's whole cost: `payment_id` is NULL there, and Postgres'
+    // `NULL != NULL` is why the unique index does not collide on it.
+    expect(columns.paymentId.name).toBe('payment_id');
+    expect(columns.paymentId.notNull).toBe(false);
+  });
+
+  it('should dedupe checkins on (business_id, payment_id)', async () => {
+    const db = await import('./index');
+    const config = getTableConfig(db.checkins);
+
+    const constraint = config.uniqueConstraints.find(
+      (entry) => entry.name === 'uq_checkins_business_payment',
+    );
+    expect(constraint, 'uq_checkins_business_payment is not declared').toBeDefined();
+
+    // Both columns, in this order, asserted on the *built* config rather than on
+    // the Drizzle source. The column list is the whole idempotency guarantee: a
+    // dedupe that ignored `business_id` would let one merchant's payment id
+    // suppress another merchant's sale.
+    expect(constraint!.columns.map((column) => (column as { name: string }).name)).toEqual([
+      'business_id',
+      'payment_id',
+    ]);
+
+    // A `unique` constraint rather than a `CREATE UNIQUE INDEX`, and that
+    // distinction is load-bearing for `allIndexes`: `uniqueConstraints` is a
+    // separate bucket from `indexes`, so this does not add an entry to the derived
+    // index registry, and `index.test.ts`'s exact-set assertion stays honest
+    // without a second list to update.
+    expect(config.indexes).toEqual([]);
+  });
+
   it('should expose customers.member_code as a nullable column', async () => {
     const db = await import('./index');
     const columns = db.customers as unknown as Record<string, { name: string; notNull: boolean }>;
@@ -185,13 +243,39 @@ describe('Database schema', () => {
     expect(s.pointsTransactions).toBeDefined();
   });
 
-  it('should have 15 tables in the schema object', async () => {
+  it('should expose every pgTable in the schema object, and nothing else', async () => {
     const db = await import('./index');
-    const _tableNames = Object.keys(db.schema).filter(
-      (key) => (db.schema as Record<string, unknown>)[key] !== undefined,
-    );
-    // Each table registers under its export name in `* as schema`
-    // The schema re-export contains all tables
-    expect(Object.keys(db.schema).length).toBeGreaterThanOrEqual(15);
+
+    // Asserted by NAME rather than by a count. The previous form was
+    // `toBeGreaterThanOrEqual(15)` against a schema that already had 22 tables:
+    // a count that is simultaneously stale and unfalsifiable, so it could not fail
+    // for the reason anyone would want it to. Naming every table makes a table
+    // added without a matching assertion here fail, which is the only way a
+    // counter earns its place.
+    expect(Object.keys(db.schema).sort()).toEqual([
+      'branches',
+      'checkins',
+      'churnPredictions',
+      'consents',
+      'crossLoyaltyAlliances',
+      'customerEvents',
+      'customerWalletPasses',
+      'customers',
+      'localizationConfigs',
+      'loyaltyPrograms',
+      'membershipTiers',
+      'messageLog',
+      'pointsTransactions',
+      'referrals',
+      'rewardGrants',
+      'rewards',
+      'tenantWalletPrograms',
+      'tenants',
+      'users',
+      'walletCallbackDeliveries',
+      'whatsappTemplates',
+      'workflowExecutions',
+      'workflows',
+    ]);
   });
 });

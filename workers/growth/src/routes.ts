@@ -1,8 +1,9 @@
-import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import { eq, and, count, sql, or, isNull, lte, gte, gt, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
+import type { Context } from 'hono';
 
 import type { Bindings } from './helpers';
 import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole, requireOperatorRole, schedulePassReconcile } from './helpers';
@@ -115,6 +116,77 @@ export function parseEarnUnitAmount(value: unknown): number | null {
 
 export function isEarnBy(value: unknown): value is EarnBy {
   return typeof value === 'string' && (EARN_BY_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * The one formula that turns a qualifying sale into points.
+ *
+ * ## Why this is a function and not left inline
+ *
+ * Because there is now more than one caller that has to run it, and the second
+ * one is not optional. `POST /v1/loyalty/points/assign` runs it for the integrated
+ * POS and the manual scanner. `POST /v1/checkins` runs it for the merchant's own
+ * terminal reporting a sale it already completed — and that path cannot call the
+ * other route, because the terminal sends a `payment_id` and a money amount and
+ * has no idea a loyalty program exists. Two copies of this expression would be two
+ * rules, and the drift between them would surface as a merchant's preview
+ * disagreeing with their customer's balance.
+ *
+ * It lives beside `resolveEarnRate` / `parseEarnUnitAmount` / `isEarnBy` rather
+ * than in `helpers.ts` because those are its other three inputs and they are all
+ * here: moving only this one would separate the rule from the guards that keep it
+ * finite, which is the opposite of what extracting it was for.
+ *
+ * ## What the three inputs already are, and why this does not resolve them
+ *
+ * All three arrive resolved, and that is the point of the signature:
+ *
+ *   base           — the qualifying count (`visit`) or the units of money bought
+ *                    (`purchase`). Resolving it needs the tenant's mechanic, and
+ *                    the two mechanics read different fields, so the caller that
+ *                    holds the field has to choose.
+ *   earnRate       — `resolveEarnRate` has already run. A raw `earnRate` can be
+ *                    `NaN` from a row the write path predates, and `NaN`
+ *                    multiplied in here lands in
+ *                    `points_transactions.points`: a balance nobody can spend,
+ *                    with no error raised anywhere in the request.
+ *   tierMultiplier — same reason, read from a column this worker did not write.
+ *
+ * So this is deliberately the smallest thing that can hold the rule: three numbers
+ * in, one number out, no I/O and no database. Anything it could resolve for itself
+ * would be a second place where the answer could differ.
+ *
+ * ## Why the declaration has this exact shape
+ *
+ * The expression is transcribed into the dashboard, and two contract tests read
+ * *this file* to check it: `loyalty-points.contract.test.ts` and
+ * `pos-earn-mechanic.contract.test.ts`. Both do it by matching the declaration
+ * below and comparing what follows the `=` against their own transcription, so
+ * the *spelling* is load-bearing as well as the arithmetic: renaming the
+ * constant, splitting the expression across lines, or inlining it as an argument
+ * would leave both tests matching nothing.
+ *
+ * Which is worth stating plainly, because it is a trap rather than a rule: this
+ * comment must not itself quote that declaration. Both tests take the FIRST
+ * match in the file, so a copy of the pattern written here in the prose would be
+ * the thing they matched, and both would report a fragment of this sentence
+ * instead of the formula. That is exactly what happened when this function was
+ * first extracted.
+ *
+ * ## Why flooring
+ *
+ * Flooring rounds in the merchant's favour, which is the direction that does not
+ * generate a support ticket. A fraction of a point is not currency and neither
+ * side can spend it, so the only question is who absorbs the rounding — and it is
+ * not the customer.
+ */
+export function computeEarnedPoints(
+  base: number,
+  earnRate: number,
+  tierMultiplier: number,
+): number {
+  const effectivePoints = Math.floor(base * earnRate * tierMultiplier);
+  return effectivePoints;
 }
 
 /**
@@ -852,16 +924,18 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     }
   }
 
-  // One formula, one place. `earnRate` and `tierMultiplier` are both read from
-  // columns this route did not write, and `resolveEarnRate` on each keeps them
-  // finite and positive — so this is the last line before a `NaN` would be stored
-  // as `points_transactions.points`. The shape of the expression is pinned by
-  // `apps/dashboard/src/__tests__/loyalty-points.contract.test.ts`, which
-  // transcribes it to keep the POS preview and this ledger from drifting apart.
+  // One formula, one place — and it is now literally one place. This route used
+  // to hold the arithmetic inline, which made it unreusable: the second caller
+  // (`POST /v1/checkins`, for a merchant's own terminal reporting a completed
+  // sale) would have had to copy the expression, and two copies of a points rule
+  // is two rules.
   //
-  // Flooring rounds in the merchant's favour, which is the direction that does
-  // not generate a support ticket.
-  const effectivePoints = Math.floor(base * earnRate * tierMultiplier);
+  // `earnRate` and `tierMultiplier` are both read from columns this route did not
+  // write, and `resolveEarnRate` on each keeps them finite and positive, so the
+  // guard below is the last line before a `NaN` would be stored as
+  // `points_transactions.points`. The expression itself and why it is pinned by
+  // the dashboard's contract test are documented in `computeEarnedPoints`.
+  const effectivePoints = computeEarnedPoints(base, earnRate, tierMultiplier);
   if (!Number.isFinite(effectivePoints)) {
     return c.json(
       {
@@ -1602,6 +1676,526 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
     }
     throw err;
   }
+});
+
+// ============================================================================
+// A sale that already happened
+// ============================================================================
+
+/** Stable, specific codes. Callers branch on these rather than parsing prose. */
+export const MEMBER_CODE_NOT_FOUND = 'MEMBER_CODE_NOT_FOUND';
+export const INVALID_MEMBER_CODE = 'INVALID_MEMBER_CODE';
+export const INVALID_AMOUNT_CENTS = 'INVALID_AMOUNT_CENTS';
+
+/**
+ * Resolve a scanned `member_code` to a customer of *this* business.
+ *
+ * Tenant-scoped on the same column the unique index is scoped on, and that is the
+ * whole reason the credential's scope is sufficient: `member_code` is unique per
+ * business (`uq_customers_business_member_code`), so `business_id` is not a
+ * convenience filter here, it is what makes the lookup unambiguous. A terminal
+ * holding merchant A's credential cannot name merchant B's pass, because the code
+ * it would have to guess is not in A's index.
+ *
+ * `deletedAt` is excluded for the reason `resolveOwnCustomer` excludes it: a
+ * withdrawn membership must not keep accruing points. Reading it here rather than
+ * trusting the caller also means the two passes endpoints and the checkin writer
+ * cannot disagree about whether a customer exists.
+ *
+ * `currentTierId` comes back in the same read because the earn rule needs it and
+ * this is the row already in hand — the tier is resolved at the moment of the
+ * sale, which is the property that makes the server the authority rather than the
+ * POS that previewed it.
+ */
+async function resolveMemberCode(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  businessId: string,
+  memberCode: string,
+): Promise<{ id: string; currentTierId: string | null } | undefined> {
+  const [customer] = await db
+    .select({ id: customers.id, currentTierId: customers.currentTierId })
+    .from(customers)
+    .where(
+      and(
+        eq(customers.businessId, businessId),
+        eq(customers.memberCode, memberCode),
+        isNull(customers.deletedAt),
+      ),
+    )
+    .limit(1);
+
+  return customer as { id: string; currentTierId: string | null } | undefined;
+}
+
+/**
+ * POST /v1/passes/resolve
+ *
+ * "Does this code belong to someone?" — the question a cashier asks at the till.
+ *
+ * ## The rule that shapes this route
+ *
+ * **Our failure must never cost a merchant a sale.** A 500 on this screen means
+ * we denied a customer their coffee because our side had a problem, and that is
+ * not a tolerable bug class: it is our outage becoming their lost revenue. So the
+ * answer is always "keep charging". A `known: false` is *information* — the
+ * cashier can proceed, just without attributing the sale — and not a veto.
+ *
+ * Which is why this creates nothing, holds no state, and answers 200 for both
+ * outcomes. It is a lookup dressed up as a route because a POST is what a
+ * terminal's scan reader naturally produces, not because there is anything to
+ * write.
+ *
+ * `business_id` comes from the header and never from the body. It is the
+ * credential's scope that stops one terminal resolving another merchant's pass,
+ * and a body field would be the caller choosing its own scope.
+ */
+router.post('/v1/passes/resolve', async (c) => {
+  const { businessId } = extractAuthHeaders(c);
+  const body = await c.req.json<{ member_code?: unknown }>();
+
+  // A missing or non-string code is answered as "unknown" rather than refused,
+  // and the distinction is deliberate: refusing is a veto, and the rule above says
+  // this route does not veto. Nothing is looked up, so nothing can leak either.
+  if (typeof body.member_code !== 'string' || body.member_code.length === 0) {
+    return c.json({ data: { known: false } });
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const customer = await resolveMemberCode(db, businessId, body.member_code);
+
+  if (!customer) {
+    return c.json({ data: { known: false } });
+  }
+
+  // `fullName` is the real column, not an invented `display_name`. It is
+  // nullable, so the field is passed through as-is rather than defaulted: a
+  // customer with no name on file is a gap in our data, and papering over it with
+  // a placeholder the cashier reads aloud is worse than an empty field.
+  const [profile] = await db
+    .select({ fullName: customers.fullName })
+    .from(customers)
+    .where(and(eq(customers.businessId, businessId), eq(customers.id, customer.id)))
+    .limit(1);
+
+  return c.json({
+    data: {
+      known: true,
+      customer_id: customer.id,
+      display_name: profile?.fullName ?? null,
+    },
+  });
+});
+
+/**
+ * Credit the points a completed sale earned, and record them on the checkin.
+ *
+ * ## Why this is separate from the route
+ *
+ * Because it has to run from two places: the first write of a checkin, and a
+ * retry that found an earlier row with `points IS NULL`. Putting it here is what
+ * makes those two paths the same code rather than two implementations that agree
+ * today.
+ *
+ * ## Why it can leave `points` NULL instead of failing
+ *
+ * Because a half-finished credit is recoverable and a lost sale is not. Every
+ * reason this returns without crediting — an unusable earn rule on the program —
+ * leaves the checkin row in place with `points IS NULL`, which is a queryable
+ * backlog. The alternative, refusing the whole request, would throw away a sale
+ * that genuinely happened over a configuration problem on our side, which is the
+ * exact trade the non-negotiable rule forbids.
+ *
+ * `reference_id` is the `payment_id` on the terminal path, which is what makes
+ * the second layer free: `uq_points_tx_reference` over
+ * `(customer_id, reference_id)` is the ledger's own dedupe, and the event is
+ * already named when it arrives.
+ *
+ * On the manual path there is no `payment_id`, so the checkin's own id is used as
+ * the reference. That is not equivalent dedupe and does not pretend to be: two
+ * manual entries for one sale are two sales in the ledger, exactly as documented
+ * on the table. Using the checkin id at least keeps the reference present and
+ * unique, so the ledger row is attributable rather than anonymous.
+ */
+async function creditCheckin(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  c: Context<{ Bindings: Bindings }>,
+  args: {
+    businessId: string;
+    customer: { id: string; currentTierId: string | null };
+    checkinId: string;
+    amountCents: number;
+    paymentId: string | null;
+    // `string | null` rather than optional: both callers pass a value that may be
+    // absent, and `exactOptionalPropertyTypes` is on in this package, so an
+    // optional property would reject the explicit `undefined` they hand it.
+    note: string | null;
+  },
+): Promise<{ points: number | null; balanceAfter: number | null }> {
+  const { businessId, customer, checkinId, amountCents, paymentId } = args;
+
+  const referenceId = paymentId ?? checkinId;
+
+  // -----------------------------------------------------------------------
+  // The tenant's accumulation rule
+  // -----------------------------------------------------------------------
+  const [program] = await db
+    .select()
+    .from(loyaltyPrograms)
+    .where(eq(loyaltyPrograms.businessId, businessId))
+    .limit(1);
+
+  const earnBy = isEarnBy(program?.earnBy) ? program.earnBy : DEFAULT_EARN_BY;
+  const earnRate = resolveEarnRate(program?.earnRate ?? '1.0');
+
+  let tierMultiplier = 1.0;
+  if (customer.currentTierId) {
+    const [tier] = await db
+      .select()
+      .from(membershipTiers)
+      .where(eq(membershipTiers.id, customer.currentTierId))
+      .limit(1);
+
+    // Same reason as `earnRate`: `Number('N/A')` is `NaN`, and the tier bonus is
+    // multiplied straight into the ledger row.
+    if (tier) {
+      tierMultiplier = resolveEarnRate(tier.multiplier);
+    }
+  }
+
+  /**
+   * What this sale is worth in the program's unit, before the rate and the tier.
+   *
+   * `purchase` is the mechanic that reads money, and `amount_cents` is
+   * authoritative — the figure the payment rail actually settled. It arrives in
+   * cents because that is what a rail reports; the tenant's unit is in pesos
+   * because that is what a merchant configures, so the /100 is a unit conversion
+   * rather than a judgement about the amount.
+   *
+   * `visit` is the default, and the arithmetic above is not a rounding of the
+   * money: a completed sale is one qualifying visit, because "a visit is a count,
+   * not a peso amount" is the decision the earn mechanic already settled
+   * (`docs/18-Trabajo-Pendiente.md`, "Resuelto — bajo `visit`"). Deriving the
+   * count from `amount_cents` here would be the POS bug that made half of every
+   * `.50` menu un-saleable.
+   *
+   * A `purchase` program whose unit cannot be read returns `null` rather than
+   * guessing. Paying out against a guessed unit pays real money's worth of
+   * points, and the sale is already recorded either way.
+   */
+  let base: number | null;
+
+  if (earnBy === 'purchase') {
+    const unit = parseEarnUnitAmount(program?.earnUnitAmount ?? '1000.00');
+    base = unit === null ? null : amountCents / 100 / unit;
+  } else {
+    base = 1;
+  }
+
+  const points = base === null ? null : computeEarnedPoints(base, earnRate, tierMultiplier);
+
+  if (points === null || !Number.isFinite(points) || points < 1) {
+    console.error(
+      `[growth] Checkin ${checkinId} in tenant ${businessId} was recorded but no points were ` +
+        `credited: the program earns by purchase and its earn_unit_amount is unusable, or the ` +
+        `rule produced no points. The row keeps points NULL, which is the pending-credit backlog.`,
+    );
+    return { points: null, balanceAfter: null };
+  }
+
+  // -----------------------------------------------------------------------
+  // The ledger write
+  // -----------------------------------------------------------------------
+  // Raw SQL for the same reason `POST /v1/loyalty/points/assign` uses it:
+  // `balance_after` has to be read from the previous row of the same customer in
+  // the same statement, or two concurrent sales would both read the same balance
+  // and one of them would be lost.
+  //
+  // There is one state in which the INSERT throws, no INSERT lands, and the points
+  // are still owed on this checkin: the ledger already holds the reference, so the
+  // money moved on an earlier attempt and only the checkin was left behind. That
+  // branch falls through to the same update rather than returning early, which is
+  // why `balanceAfter` is declared here and read after the `try`: it stays `null`
+  // on that path, because this attempt did not observe a balance and reporting one
+  // we did not read is the same defect as reporting points we did not earn.
+  let balanceAfter: number | null = null;
+
+  try {
+    const result = await db.execute(sql`
+      INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
+      VALUES (
+        ${businessId}::uuid,
+        ${customer.id}::uuid,
+        'earn',
+        ${points}::integer,
+        COALESCE(
+          (SELECT balance_after FROM points_transactions WHERE customer_id = ${customer.id}::uuid ORDER BY created_at DESC LIMIT 1),
+          0
+        ) + ${points}::integer,
+        ${referenceId},
+        ${args.note}
+      )
+      RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
+    `);
+
+    const tx = result.rows?.[0];
+    if (!tx) {
+      console.error(
+        `[growth] The ledger insert for checkin ${checkinId} returned no row. ` +
+          `The checkin keeps points NULL and the credit is pending.`,
+      );
+      return { points: null, balanceAfter: null };
+    }
+
+    balanceAfter = Number(tx.balance_after);
+
+    await publish(
+      c.env.DOMAIN_EVENTS_QUEUE,
+      buildPointsAssignedEvent(
+        customer.id,
+        businessId,
+        points,
+        tierMultiplier,
+        balanceAfter,
+        referenceId,
+      ),
+    );
+
+    // The balance moved, so the pass has to learn that it moved. Handed off rather
+    // than awaited for the reason documented on `schedulePassReconcile`: a Google
+    // round trip must never be on a sale's critical path.
+    schedulePassReconcile(c, { tenantId: businessId, customerId: customer.id });
+  } catch (err: unknown) {
+    const error = err as { message?: string; code?: string };
+
+    if (error.message?.includes('uq_points_tx_reference') || error.code === '23505') {
+      // The ledger already has this reference. That means a *previous* attempt
+      // credited it and then died before writing `points` back onto the checkin —
+      // which is exactly the partial failure this route is shaped around. The
+      // credit is not repeated; the checkin is simply brought up to date, and the
+      // customer ends with one credit, not two.
+      console.error(
+        `[growth] Checkin ${checkinId} already has a ledger row for reference ${referenceId}; ` +
+          `the credit landed on an earlier attempt and only the checkin was left behind.`,
+      );
+    } else {
+      throw err;
+    }
+  }
+
+  // The credit is on the ledger, one way or the other. Recording it on the checkin
+  // is what turns "pending" into "done", and it is deliberately a separate
+  // statement from the insert above: this one is idempotent by nature — writing
+  // the same points twice changes nothing — whereas the ledger row is not.
+  await db
+    .update(checkins)
+    .set({ points })
+    .where(eq(checkins.id, checkinId));
+
+  return { points, balanceAfter };
+}
+
+/**
+ * POST /v1/checkins
+ *
+ * Record a sale that has already been paid for, and credit what it earned.
+ *
+ * ## The shape of the flow, and why
+ *
+ * This is the second half of a two-endpoint contract, and it happens at a
+ * different moment than `/v1/passes/resolve`: that one answers "is this pass
+ * real?" at the till before the money moves, this one records the fact *after* it
+ * settles. They are not one endpoint because they are not one moment, and merging
+ * them would force the cashier's scan to be the same thing as the payment.
+ *
+ * ## The retry is the load-bearing part
+ *
+ * A terminal that retries after a partial failure must **finish** crediting, not
+ * merely decline to double-credit. So:
+ *
+ *   - `ON CONFLICT DO NOTHING` on `(business_id, payment_id)` makes the insert
+ *     idempotent at the database, not at the application, so two concurrent
+ *     retries of the same payment cannot both win.
+ *   - When the insert inserted nothing, the existing row is read back, and
+ *     `points IS NULL` is the observable signal that the sale is recorded and the
+ *     credit is still owed. That row gets credited now.
+ *   - A row that already carries points is left completely untouched and answered
+ *     200.
+ *
+ * Without the third step the gap is a loss rather than a delay, and it would be a
+ * loss the merchant cannot even see: the terminal's message was the only evidence
+ * that an attribution had happened.
+ *
+ * ## Why a resolved customer is a 404 and not a skip
+ *
+ * There is nothing to record. The sale happened, but with no member there is no
+ * identity to attribute it to, and inventing one — the nearest customer, or a
+ * placeholder row — would put points on somebody's balance for a purchase they
+ * did not make. The 404 tells the terminal that its attribution did not land,
+ * which is the only useful thing it can do with the answer.
+ *
+ * ## Why the validation is narrow
+ *
+ * `amount_cents` must be a positive integer and nothing more. It is not checked
+ * against the cart, because there is no cart here: the merchant's system owns the
+ * product identity and we deliberately hold no catalogue to disagree with it.
+ * `items` is stored as sent and never parsed into a total.
+ */
+router.post('/v1/checkins', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const { businessId } = auth;
+  const body = await c.req.json<{
+    payment_id?: string;
+    member_code?: unknown;
+    amount_cents?: unknown;
+    items?: unknown;
+    note?: string;
+  }>();
+
+  if (typeof body.member_code !== 'string' || body.member_code.length === 0) {
+    return c.json(
+      {
+        error: {
+          code: INVALID_MEMBER_CODE,
+          message: 'member_code is required and must be a non-empty string',
+        },
+      },
+      400,
+    );
+  }
+
+  // An integer, and positive. Not validated against anything else: the amount is
+  // authoritative and there is no cart on our side to contradict it.
+  if (typeof body.amount_cents !== 'number' || !Number.isInteger(body.amount_cents) || body.amount_cents < 1) {
+    return c.json(
+      {
+        error: {
+          code: INVALID_AMOUNT_CENTS,
+          message: 'amount_cents is required and must be an integer greater than 0, in cents',
+        },
+      },
+      400,
+    );
+  }
+
+  // Optional, and only when it is a non-empty string. Absent is the manual path
+  // and is a legitimate state — `payment_id` is NULL there and the unique index
+  // does not collide, which is documented on the table rather than worked around.
+  const paymentId =
+    typeof body.payment_id === 'string' && body.payment_id.length > 0 ? body.payment_id : null;
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const customer = await resolveMemberCode(db, businessId, body.member_code);
+
+  if (!customer) {
+    // Nothing written. A sale with no member has no identity to attach to, and
+    // guessing one would credit somebody else's balance.
+    return c.json(
+      {
+        error: {
+          code: MEMBER_CODE_NOT_FOUND,
+          message: 'No active customer in this business has that member_code.',
+        },
+      },
+      404,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // The insert, idempotent at the database
+  // -----------------------------------------------------------------------
+  // `ON CONFLICT DO NOTHING` rather than a read-then-write: the check has to be
+  // the unique index's, decided by Postgres in the same statement, or two
+  // concurrent retries of one payment would both insert and the second would fail
+  // as an unhandled error rather than answering 200.
+  const [inserted] = await db
+    .insert(checkins)
+    .values({
+      businessId,
+      customerId: customer.id,
+      // The scanned string, kept verbatim even though `customerId` is resolved
+      // from it: it is the audit trail of what the terminal actually received, and
+      // the only thing that can still answer that question once a code is
+      // reassigned.
+      memberCode: body.member_code,
+      paymentId,
+      amountCents: body.amount_cents,
+      items: (body.items ?? null) as never,
+      note: body.note ?? null,
+      // Explicitly NULL: this is the "credit pending" signal a retry reads, and
+      // `creditCheckin` is what fills it in.
+      points: null,
+    })
+    .onConflictDoNothing({ target: [checkins.businessId, checkins.paymentId] })
+    .returning();
+
+  if (inserted) {
+    const credited = await creditCheckin(db, c, {
+      businessId,
+      customer,
+      checkinId: inserted.id,
+      amountCents: body.amount_cents,
+      paymentId,
+      note: body.note ?? null,
+    });
+
+    // 201 rather than 200: this is the response that tells the terminal, without
+    // a word of prose, that its message is the one that opened the record.
+    return c.json({ data: { ...inserted, points: credited.points } }, 201);
+  }
+
+  // -----------------------------------------------------------------------
+  // The insert lost. Read back the row that is already there.
+  // -----------------------------------------------------------------------
+  // Only reachable when `payment_id` is present — with a NULL it cannot collide,
+  // and the row above always exists.
+  const [existing] = await db
+    .select()
+    .from(checkins)
+    .where(and(eq(checkins.businessId, businessId), eq(checkins.paymentId, paymentId!)))
+    .limit(1);
+
+  if (!existing) {
+    // The insert conflicted and the row is somehow unreadable. Reported rather
+    // than treated as success, because answering 200 here would tell the terminal
+    // its sale is recorded when we cannot say that.
+    return c.json(
+      {
+        error: {
+          code: 'CONFLICT_WITHOUT_ROW',
+          message: 'A checkin already exists for this payment_id but could not be read back.',
+        },
+      },
+      500,
+    );
+  }
+
+  if (existing.points !== null) {
+    // Already credited. Untouched — not re-credited, not re-published, not
+    // re-projected. A retry is a statement that we may have failed, not a request
+    // to do the work twice.
+    return c.json({ data: existing }, 200);
+  }
+
+  // The row is there and the credit never landed. That is the partial failure this
+  // endpoint exists to finish, so finish it.
+  const retried = await creditCheckin(db, c, {
+    businessId,
+    customer,
+    checkinId: existing.id,
+    amountCents: existing.amountCents,
+    paymentId,
+    // The note recorded the first time, not one invented now: a retry reports the
+    // same sale, and the ledger row for it should carry what that sale said.
+    note: existing.note ?? null,
+  });
+
+  return c.json({ data: { ...existing, points: retried.points } }, 200);
 });
 
 export default router;
