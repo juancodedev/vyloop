@@ -347,6 +347,101 @@ export const referrals = pgTable('referrals', {
 });
 
 // ============================================================================
+// Counter Domain — a sale that already happened
+// ============================================================================
+
+/**
+ * A completed sale, reported to us after the fact.
+ *
+ * **We do not own the checkout.** The merchant's terminal completes the sale and
+ * then tells us the fact; we accumulate on top of a fact we did not create. That
+ * single decision is what every column here is shaped by, and it is why there is
+ * no `products` table anywhere in this schema: the identity of a product belongs
+ * to the merchant, and copying it here would be a copy that starts lying the
+ * instant they rename something. `items` is the merchant's own description,
+ * kept as a snapshot and never as a source of truth.
+ *
+ * ## The event's identity, and why idempotency is free
+ *
+ * The payment rail names its own transactions, and it names them *at the moment
+ * the money moves* — which is exactly when this row is written. So the identity
+ * of "this sale" is the `paymentId`, handed to us, rather than a key we would
+ * have to invent and then hope every caller used the same one:
+ *
+ *     unique(business_id, payment_id)
+ *
+ * A terminal that retries after a partial failure sends the same `paymentId` and
+ * gets the same row. A customer who genuinely buys twice has two `paymentId`s
+ * and earns twice, which is the correct answer rather than a collision. A time
+ * window was the tempting alternative and it is strictly worse: it cannot tell
+ * those two cases apart, so it swallows one of them.
+ *
+ * ## Why `memberCode` is stored even though `customerId` is resolved from it
+ *
+ * Because the resolution can change later. Codes get reassigned; a customer row
+ * gets soft-deleted. Keeping the string the terminal actually scanned is what
+ * makes an attribution auditable after the fact instead of only at write time —
+ * and it is the answer to "why did *this* customer get credited", asked months
+ * later by a merchant who does not trust us.
+ *
+ * ## Why `points` is nullable, and why that is the whole design
+ *
+ * `NULL` means "the sale is recorded and the credit has not landed yet". It is a
+ * *visible* backlog: a row a human or a job can find with
+ * `WHERE points IS NULL`, which is the difference between a gap that gets
+ * finished and a gap that gets forgotten. `NOT NULL DEFAULT 0` would have made
+ * the failure state unrepresentable and therefore invisible.
+ *
+ * The write path relies on this. `POST /v1/checkins` inserts with
+ * `ON CONFLICT DO NOTHING`; when it finds the row already present it reads
+ * `points`, and a retry finishes a credit that a partial failure left pending. A
+ * retry that could only ever answer "already done" would turn every transient
+ * error into a customer who paid and never accumulated.
+ *
+ * ## The manual path has no `paymentId`, and that is accepted
+ *
+ * A cashier writing `{ member_code, amount_cents }` by hand sends no
+ * `paymentId`, so the column is `NULL` — and Postgres treats `NULL != NULL` in a
+ * unique index, so the index does not collide and nothing breaks. What that path
+ * simply does not have is deduplication: it cannot protect itself against its own
+ * double entry. That is the honest cost of it being the emulator of the real
+ * path, not a defect to paper over with a synthetic key that would collide with
+ * a real one.
+ *
+ * ## `items` is best-effort and `amountCents` is authoritative
+ *
+ * A payment rail transports the *total*, not the cart. The line items live in the
+ * merchant's own POS, which is a different system, so `items` will very often be
+ * `NULL` — that is the expectation to hold, not a failure to fix. It is stored
+ * without anything built on top of it: the column is the experiment, and the
+ * analysis gets written when there is real data to look at. If the two ever
+ * disagree, the money wins and the sale is never refused over metadata.
+ */
+export const checkins = pgTable('checkins', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+  // What the terminal received, kept verbatim as the audit trail of the scan.
+  memberCode: text('member_code').notNull(),
+  paymentId: text('payment_id'),
+  amountCents: integer('amount_cents').notNull(),
+  items: jsonb('items'),
+  note: text('note'),
+  points: integer('points'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  // Declared in the extra-config callback, like every other index and constraint
+  // in this file — see the note at the top of the file for why a module-level
+  // `index()` export here is silently dropped by drizzle-kit and never reaches a
+  // migration.
+  //
+  // Plain `unique`, not a partial index: the manual path's NULL `payment_id`
+  // simply never collides under Postgres' NULL semantics, so a partial index would
+  // buy nothing and would hide that reasoning one layer down.
+  unique('uq_checkins_business_payment').on(table.businessId, table.paymentId),
+]);
+
+// ============================================================================
 // Automation Domain
 // ============================================================================
 
@@ -755,6 +850,14 @@ export type NewCrossLoyaltyAlliance = typeof crossLoyaltyAlliances.$inferInsert;
 
 export type Referral = typeof referrals.$inferSelect;
 export type NewReferral = typeof referrals.$inferInsert;
+
+/**
+ * `points` is `number | null` here, and that is the design rather than an
+ * oversight: `null` is "sale recorded, credit pending", which the write path
+ * reads and which a job can find with `WHERE points IS NULL`.
+ */
+export type Checkin = typeof checkins.$inferSelect;
+export type NewCheckin = typeof checkins.$inferInsert;
 
 export type Workflow = typeof workflows.$inferSelect;
 export type NewWorkflow = typeof workflows.$inferInsert;

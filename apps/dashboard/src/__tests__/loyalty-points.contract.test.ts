@@ -167,6 +167,23 @@ describe('points are not multiplied twice', () => {
 
     expect(normalized).toBe('Math.floor(base * earnRate * tierMultiplier)');
   });
+
+  it('is the rule both callers share, not one call site copied twice', () => {
+    // The formula was extracted into `computeEarnedPoints` because a second
+    // caller needed it (`POST /v1/checkins`, for a merchant's terminal reporting
+    // a sale it already completed). What has to stay true after that extraction is
+    // that there is exactly ONE expression: a copy left behind at the old call
+    // site would pass the match above while the two callers drifted apart, which
+    // is the drift this file exists to prevent.
+    //
+    // `pos-earn-mechanic.contract.test.ts` reads the same file for the same
+    // reason, so this is the pair of them that has to hold.
+    expect(growthSource).toMatch(/export function computeEarnedPoints\(/);
+    // Both callers go through it.
+    expect(growthSource.match(/computeEarnedPoints\(base, earnRate, tierMultiplier\)/g)).toHaveLength(2);
+    // And the floor appears exactly once in the worker.
+    expect([...growthSource.matchAll(/Math\.floor\(/g)]).toHaveLength(1);
+  });
 });
 
 // ─── 2. The request carries the base, not the preview ──────────────────
