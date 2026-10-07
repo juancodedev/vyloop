@@ -1,100 +1,217 @@
 # Trabajo pendiente
 
-## Etapa 0b — `POST /v1/checkins`: el eslabón roto del mostrador
+## Etapa 0b — Registro de una venta ya cobrada: el eslabón roto del mostrador
 
-**Estado:** especificada, no empezada.
+**Estado:** forma decidida, no empezada.
 **Valor:** máximo. El producto no existe sin esto.
 **Origen:** `docs/17-Estrategia-Competitiva.md` §7 y Etapa 0.
 
 ### El problema
 
 El cliente se registra, pide su pase y lo guarda. **Pero nadie puede acumular nada en el mostrador.**
-El POS hoy cobra y acumula puntos, pero solo para el negocio que ya tiene integración: manda
-`points` ya calculados. No existe el canal para el negocio sin integración.
+Hoy el POS cobra y acumula puntos, pero solo para el negocio que ya tiene integración: manda
+`points` ya calculados. No existe el canal para el negocio que no la tiene — que es todos.
 
-### El diseño (§7)
+### El giro que define esta etapa
 
-El `checkin` es el **puente de identidad** entre el mostrador y Mercado Pago. El cajero no escribe
-nada de lo que el sistema puede saber solo:
+La versión anterior de este documento describía un flujo distinto: **nosotros** creábamos la orden en
+Mercado Pago (`POST /v1/orders` con `external_reference` = UUID del checkin) y el cajero pagaba a
+través de nuestra pantalla. Eso nos ponía a nosotros como el que cobra.
+
+**No es el producto.** El producto es el inverso: **la venta la completa el terminal del comercio y
+a nosotros solo nos llega el hecho.** Nosotros no tocamos el checkout.
 
 ```
-1. El cliente presenta su pase, o el cajero lo busca por nombre
-2. Nuestra app abre un checkin: UUID propio + member_code + amount_cents, status pending
-3. POST /v1/orders
-       external_reference  = <UUID del checkin>
-       X-Idempotency-Key   = <el mismo UUID>
-       type                = "point"  (la maquinita cobra)
-                          |  = "qr"    (el cliente escanea un QR dinámico)
-       transactions.payments[].amount = "<monto>"
-       config.point.terminal_id       = TIPO__SERIAL
-       config.qr.mode                  = "dynamic" → devuelve qr_data EMVCo
-4. Guardamos order_id de Mercado Pago en el checkin
-5. El cliente paga
-6. Webhook de MP → buscamos por external_reference → ya sabemos QUIÉN y CUÁNTO
-7. Growth calcula los puntos según la regla del tenant y los asigna
-8. Poll de reconciliación para los webhooks perdidos
+1. El cliente muestra su pase. El cajero lo escanea con el lector del terminal.
+2. El terminal nos pregunta si ese código existe. → respondemos sí/no para mostrar.
+   Nunca rechazamos la venta. (ver "La regla que no se negocia")
+3. La venta se cobra, normalmente, en el terminal.
+4. Cuando el pago se concreta, el terminal nos manda el hecho:
+       { payment_id, member_code, amount_cents }
+5. Deduplicamos por payment_id. Si ya lo vimos, no hacemos nada y devolvemos 200.
+6. Growth calcula los puntos con la regla del tenant y los asigna con
+   reference_id = payment_id.
 ```
 
-`external_reference` es lo que nos separa del competidor: Loyalia cuenta cada ticket como **visita**
-y tira el monto a la basura. Con el monto atado a un cliente, acumulamos **por valor**.
+El paso 4 es el que antes no existía. Antes **nosotros** iniciábamos la venta; ahora la venta ya
+ocurrió y nosotros la escuchamos.
 
-### Contrato del endpoint
+**Por qué el giro importa, más allá de la implementación:**
+
+- La lealtad que exige poseer el checkout solo crece al ritmo de los comercios que instalan nuestro POS.
+  La que escucha al terminal crece al ritmo de todos los demás.
+- El monto atado a una identidad de cliente es lo que nos separa del competidor: Loyalia cuenta
+  cada ticket como **visita** y tira el monto a la basura. Acumulando **por valor**, el mismo ticket
+  vale distinta cosa según quién compró y cuánto gastó.
+
+### La identidad del evento, y por qué la idempotencia sale gratis
+
+En este flujo **el evento ya viene con nombre, y lo emite el propio medio de pago**: el `payment_id`.
+No hay que inventar una clave, y no hay que confiar en que un cliente se comporte.
+
+```
+unique(business_id, payment_id)
+```
+
+| Caso | Resultado |
+|---|---|
+| El terminal reintenta el mismo pago | Mismo `payment_id` → ya existe → no acumula dos veces |
+| El cliente compra dos veces | Distinto `payment_id` → se acumula normal, que es lo correcto |
+
+Una **ventana temporal** habría sido peor: no distingue "el terminal reintentó" de "el cliente
+compró otra vez", y por eso se come una de las dos. No hace falta.
+
+La capa segunda ya existe y no hay que crearla: `uq_points_tx_reference` sobre
+`(customer_id, reference_id)` (`packages/db/src/schema.ts:315`) es la red del ledger. `reference_id`
+recibe el mismo `payment_id`.
+
+> Esto reemplaza la decisión que estaba abierta en la versión anterior de este documento. No es la
+> opción A (clave del cliente), ni la B (ventana temporal), ni la C (el `order_id` que se guardaba
+> *después* de crear la orden): es el identificador de la transacción del medio de pago, disponible
+> en el momento en que la venta se cobra.
+
+### Contrato
+
+Dos endpoints, porque son dos momentos distintos y no deben ser un endpoint solo.
+
+**A. Resolver el pase.** Sucede al principio, cuando el cajero escanea. No crea nada.
+
+```
+POST /v1/passes/resolve
+{ "member_code": "ABC-1234" }
+
+→ 200 { "known": true,  "customer_id": "...", "display_name": "..." }
+→ 200 { "known": false }
+```
+
+Siempre 200. Un `known: false` es información para el cajero, no un veto.
+
+**B. Registrar la venta.** Sucede al final, cuando el pago se concreta.
 
 ```
 POST /v1/checkins
 {
-  "member_code":     "string",   // obligatorio — el pase del cliente
-  "amount_cents":    12500,      // obligatorio — monto de la compra
-  "note":            "string",   // opcional
-  "ticket_photo":    "..."       // opcional
+  "payment_id":    "1234567890",  // opcional — lo manda el terminal. Ausente en la vía manual.
+  "member_code":   "ABC-1234",    // obligatorio
+  "amount_cents":  12500,         // obligatorio
+  "items":         [ ... ],       // opcional — ver "Los productos, más adelante"
+  "note":          "..."          // opcional
 }
 
-→ 201 {
-    "id":            "<uuid>",  // también el external_reference
-    "member_code":   "...",
-    "status":        "pending",
-    "order_id":      null,
-    "points":        null,       // null hasta que el pago se confirme
-    "created_at":    "..."
-  }
+→ 201 { ... }   primera vez
+→ 200 { ... }   ya lo habíamos visto (mismo payment_id)
 ```
 
-### Alcance
+El `201` / `200` es la semántica natural de un create idempotente, y le dice al terminal — sin
+palabras — si su mensaje fue el que abrió el registro o uno repetido.
 
-| | |
-|---|---|
-| Tabla | `checkins`: `id`, `business_id`, `customer_id`, `member_code`, `amount_cents`, `note`, `status`, `order_id`, `created_at` |
-| Ruta | `POST /v1/checkins` en `workers/growth/src/routes.ts` |
-| UI | botón de check-in en `apps/dashboard/src/app/dashboard/loyalty/pos/` — escáner (`html5-qrcode` ya está) + búsqueda por nombre |
-| Migración | `packages/db/drizzle/` — **escrita y aplicada antes del deploy** |
+### La vía manual (el emulador de hoy)
+
+El mismo núcleo, escrito por una persona. Un cajero autenticado en el dashboard registra
+`{ member_code, amount_cents }` sin `payment_id`.
+
+**Es el hermano más débil y conviene decirlo:** sin `payment_id` no hay deduplicación posible
+contra un doble registro. `payment_id` es `NULL`, y en Postgres `NULL != NULL`, así que el índice
+único no colisiona — no rompe nada, simplemente no protege. Es aceptable porque esta vía es el
+emulador; la vía real es el terminal.
+
+### La tabla
+
+```
+checkins
+  id            uuid        PK — nuestro, siempre
+  business_id   uuid        FK — del credencial del terminal, nunca del body
+  customer_id   uuid        FK — resuelto por nosotros desde member_code
+  member_code   text        lo que recibió el terminal; queda como evidencia de lo escaneado
+  payment_id    text        NULL en la vía manual
+  amount_cents  integer     autoritativo
+  items         jsonb       NULL — ver más abajo
+  note          text        NULL
+  points        integer     NULL hasta que Growth lo calcule
+  created_at    timestamptz
+```
+
+`unique(business_id, payment_id)`, índice parcial o no — la semántica de `NULL` de Postgres ya
+resuelve el caso manual.
+
+`member_code` se guarda aunque `customer_id` ya esté resuelto: es la evidencia de lo que el cajero
+escaneó, y es lo que permite auditar una atribución cuando el código se reasigna.
+
+`business_id` sale del **credencial**, nunca del body. El `member_code` es único por negocio
+(`uq_customers_business_member_code`), así que el scope del credencial es lo que impide que un
+terminal de un negocio resuelva un pase de otro.
 
 ### Criterio de aceptación
 
-> Un cajero autenticado escanea un pase real, la acumulación sube, el pase del cliente lo refleja,
-> y un segundo escaneo del mismo evento no duplica nada.
+> Una venta real llega por el terminal, la acumulación sube, el pase del cliente lo refleja, y el
+> mismo `payment_id` enviado dos veces acumula una sola vez.
 
-Las tres partes importan. La tercera es la difícil.
+Las tres partes importan. La tercera es la difícil, y ya está resuelta por diseño.
 
-### Decisión pendiente ANTES de escribir la tabla
+### La regla que no se negocia
 
-**¿Cómo se implementa la idempotencia?** Determinа las columnas, así que no se puede decidir después.
+**Nuestro failure no puede costar una venta al comercio.**
 
-| | Cómo | Consecuencia en la tabla |
-|---|---|---|
-| **A** | Clave de idempotencia explícita, `unique(business_id, idempotency_key)` | Una columna más. El cajero o el POS la manda. Semántica clara de "es el mismo evento". |
-| **B** | Deduplicación por ventana temporal: mismo `member_code` dentro de N minutos | Índice sobre `(business_id, member_code, created_at)`. Sin columna nueva. Pero **deja pasar** dos check-ins legítimos del mismo cliente en la ventana. |
-| **C** | Deduplicación por `order_id` de Mercado Pago | Sin columna extra, pero solo protege **después** de crear la orden en MP. No protege el checkin local, que es donde el doble escaneo ocurre. |
+Si caemos, si el pase no existe, si el código está vencido: **la venta se cobra igual.** El paso 2
+responde siempre "seguí cobrando". Un `500` en esa pantalla significa que le negamos el café a un
+cliente porque nuestro lado tuvo un problema, y eso no es un bug tolerable.
 
-**Recomendación: A**, con **C** como capa segunda. B es la única que no necesita columna y es la
-que más riesgo de puntos fantasma arrastra.
+Por eso el registro de una venta nunca puede depender de que la validación haya funcionado.
+
+### Los productos, más adelante (decidido, no en esta etapa)
+
+`items` es un `jsonb` opcional, y su forma está decidida aunque la etapa no lo implemente:
+
+```
+[ { product_ref, name, qty, unit_price_cents }, ... ]
+```
+
+Tres reglas:
+
+1. **`product_ref` es un string opaco del comercio o del medio de pago.** No es FK.
+2. **Los valores van inlineados porque es un snapshot.** Si mañana el producto se renombra o se
+   borra del catálogo, la estadística histórica tiene que seguir diciendo lo que realmente se vendió.
+   Un registro vivo miente sobre el pasado.
+3. **`amount_cents` es autoritativo y `items` es best-effort.** Si la suma no cuadra, la venta no
+   se cae. Son datos auxiliares; no se rechaza una venta real por metadata.
+
+**No habrá tabla `products` por tenant.** La identidad del producto es del comercio, y copiarla es
+copiar algo que ya existe y que se desactualiza en el instante en que renombran un producto. Un
+catálogo nuestro se vuelve mentira con velocidad.
+
+**La expectativa honesta:** el medio de pago transporta el **total**, no el carrito. La línea de
+ítems vive en el POS del comercio, que es otro sistema. Es probable que `items` sea `null` la
+mayoría de las veces. Por eso se guarda sin construir nada encima: la columna es el experimento, y
+el análisis se escribe cuando haya datos reales que miren.
 
 ### Fuera de alcance de esta etapa
 
 - El cálculo de puntos por monto ya existe (`earn_by` / `earn_unit_amount`, commit `551b912`). Esta etapa **consume** esa regla, no la crea.
 - `points_transactions.program_id` — no existe; es lo que impide N programas por tenant.
+- **El otro producto**: nuestro POS creando la orden en Mercado Pago. Comparte el núcleo —misma
+  tabla, mismo dedupe por el identificador de la transacción— pero es otra etapa. Ahí sí nace
+  `pending`, porque ahí el hueco entre crear la orden y que alguien la pague es real.
+- `items` y `ticket_photo` como capturas propias: el terminal no tiene ni una cosa ni la otra.
 - El evento `PurchaseCompleted` del Schema Registry — es la Etapa 1.
 - Los handlers de webhook de Mercado Pago — Etapa 6b.
 - Reconciliación por poll — Etapa 1.
+
+### Abierto a propósito
+
+- **¿El terminal reintenta, y cómo lo sabremos si no lo hizo?** No investigado. Decisión
+  explícita: esta etapa define *nuestra* parte y no especula sobre la del otro. Pero queda escrito
+  que es la falla más cara del diseño — ver abajo.
+
+#### La falla que esta etapa no cubre
+
+El terminal es el único que sabe que se escaneó un pase. **El webhook de Mercado Pago tiene el monto
+y el `payment_id`, pero no sabe que hubo una atribución de lealtad.** Si el mensaje del terminal se
+pierde y nunca se reintenta, el cliente pagó y no acumuló nada, y el cajero no tiene forma de ver
+por qué.
+
+Es la única falla del sistema que le cuesta plata al usuario final. Reconciliar eso depende de
+saber la semántica de reintento del otro lado, así que **no se diseña todavía** — pero tampoco
+debe olvidarse: si aparece, es una etapa propia y va antes que las estadísticas.
 
 ---
 
@@ -162,9 +279,41 @@ sea vendible otra vez: la base es entera por construcción, no por redondeo.
 |---|---|
 | `workers/growth/src/routes.ts` | El contrato del servidor ya era correcto. `Number.isInteger` está bien: un conteo de visitas es un entero. Los **llamadores** estaban mal. |
 | `packages/db/**` | No hay nada que migrar. |
-| `MAX_EARN_RATE` / `MAX_EARN_UNIT_AMOUNT` | Los techos siguen siendo una pregunta abierta, en otro work unit. |
+| `MAX_EARN_RATE` / `MAX_EARN_UNIT_AMOUNT` | Resueltos abajo — no estaban sin fundamento, y el defecto no era el número. |
+
+### Los ceilings: resueltos, y no eran lo que parecía
+
+Este documento decía que los techos estaban *"sin fundamento, decisión aparte sin dueño"*. Era un
+diagnóstico incorrecto.
+
+**Están derivados de las columnas.** `earn_rate` es `numeric(10,4)` (`packages/db/src/schema.ts:229`)
+→ tope real `999999.9999`. `earn_unit_amount` es `numeric(12,2)` (`schema.ts:265`) → tope real
+`9.999.999.999,99`. Ambos valores caen dentro, que es lo que dice el comentario en `routes.ts:47-48`.
+
+**Y no son reglas de negocio, son guardas de sensatez.** El propio código lo dice: *"earnRate past
+this is a typo, not a promotion"* (`routes.ts:42`). Nada calcula puntos **en** el techo. El valor
+exacto es arbitrario **por diseño**: tiene que estar arriba de todo valor real y dentro de la
+columna, y nada más. Fundamentarlo como número de negocio era la pregunta equivocada.
+
+**El defecto real era otro.** El número está duplicado a mano en dos runtimes —
+`apps/dashboard/src/lib/loyalty-earn-rule.ts:51,54` lo copia, y su comentario lo admite: *"Mirrors
+`MAX_EARN_RATE` in `workers/growth/src/routes.ts`"*. Y la divergencia es asimétrica en la dirección
+peligrosa:
+
+| | Si el valor es inservible |
+|---|---|
+| Worker (`parseEarnUnitAmount`, `routes.ts:108`) | devuelve `null` → **rechaza la venta** con `INVALID_EARN_UNIT_AMOUNT` |
+| Dashboard (`usableUnitAmount`, `loyalty-earn-rule.ts:115`) | cae a `1000` → **renderiza un número igual** |
+
+Si alguien baja el techo del worker, el POS sigue prometiendo un programa que el worker ya rechaza.
+El preview promete, el cargo revienta.
+
+**La fix no es elegir otro número: es derivar el predicado de un solo lugar.** La columna sigue siendo
+la fuente de la verdad, y los dos runtimes la leen.
 
 ### Sigue abierto
 
-- Los ceilings (`MAX_EARN_RATE`, `MAX_EARN_UNIT_AMOUNT`) — decisión aparte, sin dueño todavía.
-- La **Etapa 0b** de arriba (`POST /v1/checkins`) y su decisión de idempotencia, sin cambios.
+- La **Etapa 0b** de arriba: la forma y la idempotencia están decididas; falta escribir el código.
+- La semántica de reintento del terminal, y la reconciliación que depende de ella — diferida a
+  propósito en esta etapa, con el riesgo anotado.
+- Los límites logísticos del `verify` — sin relación con lo anterior.
