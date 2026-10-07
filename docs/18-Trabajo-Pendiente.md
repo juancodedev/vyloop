@@ -311,9 +311,55 @@ El preview promete, el cargo revienta.
 **La fix no es elegir otro número: es derivar el predicado de un solo lugar.** La columna sigue siendo
 la fuente de la verdad, y los dos runtimes la leen.
 
+---
+
+## Pendiente — `sslmode=require` se va a debilitar en silencio cuando bumpee `pg`
+
+**Estado:** anotado, sin acción. No es urgente: no hay clientes reales y la configuración actual es
+más estricta de lo que su nombre dice.
+
+### Qué pasa
+
+Todas las connection strings del repo —las de `.dev.vars` y la que usa `deploy.yml`— terminan en
+`sslmode=require`. El driver de Postgres advierte en cada ejecución:
+
+```
+Warning: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as
+aliases for 'verify-full'. In the next major version (pg-connection-string v3.0.0
+and pg v9.0.0), these modes will adopt standard libpq semantics, which have
+weaker security guarantees.
+```
+
+**Hoy `require` es un alias de `verify-full`**: se cifra *y* se verifica el certificado del servidor
+contra la CA del sistema. En `pg` v9, `require` pasa a significar lo que siempre significo en libpq:
+cifrado, **sin verificar el certificado**.
+
+O sea: la línea que hoy dice `require` está más segura de lo que se lee. Al bumpear `pg` a v9
+deja de estarlo, y nada en el código va a avisar — el warning es del driver, y sigue apareciendo.
+
+### Por qué no se arregla ahora
+
+Porque arreglarlo hoy es cambiar la cadena de conexión por algo que ya funciona. Las dos salidas son
+válidas y la decisión se toma junto con el bumpee:
+
+| | Cuándo |
+|---|---|
+| Poner `sslmode=verify-full` explícito | Ahora, si se quiere que el nombre diga lo que hace |
+| Dejarlo y revisarlo al bumpear `pg` a v9 | Cuando toque; el warning sigue visible hasta entonces |
+
+Ninguna de las dos rompe nada hoy. Lo que **no** hay que hacer es bumpear `pg` a v9 y seguir leyendo
+`require` como si significara lo que significa hoy.
+
+### Cómo se detecta
+
+`node scripts/check-migration-drift.mjs` y cualquier worker que imprima el warning. Si desaparece
+el warning sin que haya cambiado la cadena, alguien ya lo migro — volver a revisar acá.
+
 ### Sigue abierto
 
-- La **Etapa 0b** de arriba: la forma y la idempotencia están decididas; falta escribir el código.
+- La **Etapa 0b**: implementada y en `main` (PR #202). Migración `0011` aplicada a mano en la rama
+  `production` de Neon, con su fila en `drizzle.__drizzle_migrations`. Gate de drift en verde.
 - La semántica de reintento del terminal, y la reconciliación que depende de ella — diferida a
-  propósito en esta etapa, con el riesgo anotado.
+  propósito en la Etapa 0b, con el riesgo anotado ahí. **Sigue siendo la falla más cara del diseño.**
+- `sslmode=require` y el bumpee a `pg` v9 — lo de arriba.
 - Los límites logísticos del `verify` — sin relación con lo anterior.
