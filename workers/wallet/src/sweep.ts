@@ -74,7 +74,7 @@
 import { createDb } from '@vyloop/db';
 
 import { createDrizzleWalletStore } from './drizzle-store';
-import type { GoogleWalletClient } from './google-client';
+import { storedReviewStatusFor, type GoogleWalletClient } from './google-client';
 import type { WalletBindings } from './helpers';
 import {
   googleWalletClientFor,
@@ -90,7 +90,12 @@ import { provisionTenantClass } from './provision';
 import type { ProvisionDeps } from './provision';
 import { reconcilePass } from './reconcile';
 import type { ReconcileOutcome } from './reconcile';
-import type { PassLifecycleState, WalletPassRow, WalletStore } from './store';
+import type {
+  PassLifecycleState,
+  WalletPassRow,
+  WalletProgramRow,
+  WalletStore,
+} from './store';
 
 // ---------------------------------------------------------------------------
 // The schedule
@@ -266,7 +271,14 @@ export interface SweepFailure {
     | 'resolve_passes'
     | 'reconcile'
     | 'list_unprovisioned_tenants'
-    | 'provision';
+    | 'provision'
+    // The review-status refresh has its own stages because "Google did not answer"
+    // and "Google answered something this build does not know" call for different
+    // responses from whoever reads the report, and both are about review state
+    // rather than about a pass.
+    | 'list_review_status'
+    | 'sync_review_status'
+    | 'write_review_status';
   reason: string;
 }
 
@@ -294,6 +306,19 @@ export interface SweepReport {
   passesSkippedNotDue: number;
   /** Google objects with no pass row of ours. Not actionable, and not ignored. */
   objectsWithoutPassRow: number;
+  /**
+   * Program rows whose stored review status was refreshed from Google this run.
+   *
+   * A count here means a real read happened. It does **not** mean anything was
+   * approved — a class that is still `draft` at Google is still `draft` here, and
+   * that is the whole point of reading it: the row stops being a guess made when the
+   * class was created and starts being Google's answer.
+   */
+  reviewStatusesSynced: number;
+  /** Rows where Google's answer differs from what was stored. */
+  reviewStatusesChanged: number;
+  /** A Google read failed for a class. Retried next run; never fatal to the sweep. */
+  reviewStatusesFailed: number;
   /**
    * Lifecycle states **actually recorded**, by state.
    *
@@ -385,6 +410,9 @@ function emptyReport(demoMode: boolean): SweepReport {
     passesActedOn: 0,
     passesSkippedNotDue: 0,
     objectsWithoutPassRow: 0,
+    reviewStatusesSynced: 0,
+    reviewStatusesChanged: 0,
+    reviewStatusesFailed: 0,
     lifecycleWrites: { inactive: 0, expired: 0, completed: 0 },
     lifecycleWritesSkipped: 0,
     observationsNotRecorded: 0,
@@ -517,6 +545,97 @@ export interface SweepInput {
  * passes of every already-provisioned merchant from being swept. See
  * `MAX_PROVISION_PER_RUN`.
  */
+/**
+ * Refresh every stored review status from Google.
+ *
+ * ## Why this is here rather than a second cron
+ *
+ * The account has all five cron triggers allocated, so a sixth is rejected outright
+ * and fails the deploy — see the note in `wrangler.jsonc`. This runs inside the
+ * sweep the daily trigger already fires, which also means it holds the Google
+ * service-account credentials that reading a class needs. A route-based sync
+ * cannot do this job: it reads one tenant, the caller's, and every merchant would
+ * have to be synced by hand from their own dashboard.
+ *
+ * ## Why the row needed refreshing at all
+ *
+ * `review_status` is written once when the class is created, as `draft`, and left
+ * there. Google approves classes on its own schedule, and nothing was reading that
+ * answer back — so a class approved on day two went on telling this system it was in
+ * draft, and the customer went on being told their card was awaiting review. Worse,
+ * the one route that could refresh it could not: it compared Google's answer against
+ * the documented uppercase spelling while the API returns lower case, answered `502`
+ * for every state including `approved`, and never wrote anything. Both halves are
+ * fixed; this is the half that makes it happen without anyone asking.
+ *
+ * ## Bounded, and bounded per tenant
+ *
+ * One `getClass` per row, capped by `MAX_TENANTS_PER_RUN` like the rest of the
+ * sweep. A failing read is recorded and the next row is attempted: one merchant's
+ * unreachable class must not stop every other merchant from being refreshed.
+ */
+async function syncReviewStatuses(
+  deps: SweepDeps,
+  report: SweepReport,
+  observedAt: Date,
+  programs: readonly WalletProgramRow[],
+): Promise<void> {
+  // The caller's already-fetched page, not a second one. The sweep asks for tenants
+  // once per invocation and the tests hold it to that; a second read here would also
+  // mean the two halves of a run could disagree about which rows exist.
+  for (const program of programs) {
+    if (program.reviewStatus === 'approved') continue;
+
+    let remote;
+    try {
+      remote = await deps.client.getClass(program.classId);
+    } catch (err: unknown) {
+      report.reviewStatusesFailed += 1;
+      report.failures.push({
+        tenantId: program.tenantId,
+        stage: 'sync_review_status',
+        reason: describe(err),
+      });
+      continue;
+    }
+
+    // A class that is not at Google is not a state we can write. Recorded as a
+    // failure rather than guessed at: inventing `draft` here would make a deleted
+    // class look like a pending one.
+    if (remote === null) {
+      report.reviewStatusesFailed += 1;
+      continue;
+    }
+
+    const stored = storedReviewStatusFor(remote.reviewStatus);
+    if (stored === null) {
+      // Google added a state this build does not know. Left untouched, which means
+      // the row keeps its previous value rather than being overwritten with a guess.
+      report.reviewStatusesFailed += 1;
+      continue;
+    }
+
+    // Read before the write, not after. A store is free to hand back rows that alias
+    // its own state — the test store does exactly that — so comparing after the
+    // update compares the new value with itself and reports no change for every row
+    // the sweep actually fixed.
+    const previous = program.reviewStatus;
+
+    try {
+      await deps.store.updateProgramReviewStatus(program.tenantId, stored, observedAt);
+      report.reviewStatusesSynced += 1;
+      if (stored !== previous) report.reviewStatusesChanged += 1;
+    } catch (err: unknown) {
+      report.reviewStatusesFailed += 1;
+      report.failures.push({
+        tenantId: program.tenantId,
+        stage: 'write_review_status',
+        reason: describe(err),
+      });
+    }
+  }
+}
+
 export async function sweepPasses(deps: SweepDeps, input: SweepInput): Promise<SweepReport> {
   const report = emptyReport(input.demoMode);
 
@@ -578,10 +697,16 @@ export async function sweepPasses(deps: SweepDeps, input: SweepInput): Promise<S
   // provisioned here is `draft` with no passes, so there is nothing of its own to
   // reconcile in this run either way. The order is about priority, not about a
   // dependency.
-  await provisionMissingClasses(deps, report);
+await provisionMissingClasses(deps, report);
 
-  return report;
-}
+    // Last, and deliberately so: a class provisioned moments ago by the line above
+    // is `draft` at Google and will still be `draft` on this read. Running the sync
+    // first would report a change for a row nothing could have moved, which is the
+    // kind of count that makes people trust a number they should not.
+    await syncReviewStatuses(deps, report, observedAt, tenants);
+
+    return report;
+  }
 
 /**
  * Give a Google class to the tenants that never got one.

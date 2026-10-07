@@ -648,6 +648,105 @@ function onePage(objects: LoyaltyObject[]): PageSpec[] {
 }
 
 // ---------------------------------------------------------------------------
+// Review status refresh
+// ---------------------------------------------------------------------------
+
+/**
+ * The sweep is the only thing that can do this.
+ *
+ * `review_status` is written as `draft` when the class is created and never read back,
+ * while Google approves classes on its own schedule. A class approved on day two
+ * therefore went on saying `draft` here, and the customer went on being told their
+ * card was awaiting review — and the one route that could refresh it compared Google's
+ * answer against the documented uppercase spelling while the API returns lower case,
+ * so it answered 502 for every state and never wrote anything.
+ */
+describe('the sweep refreshes review statuses from Google', () => {
+  it('writes the answer Google gives, in the casing Google gives it', async () => {
+    // Lower case on purpose: this is what `loyaltyclass.get` returns, and asserting
+    // the documented `APPROVED` here is how a mapping that cannot match any real
+    // response got tested and passed.
+    const store = new SweepStore({
+      [tenantId(1)]: program(tenantId(1), { reviewStatus: 'draft' }),
+    });
+    const client = fakeGoogle({ pages: onePage([]) });
+    client.getClass.mockResolvedValue({ id: 'c', reviewStatus: 'approved' });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(store.programs[tenantId(1)]?.reviewStatus).toBe('approved');
+    expect(report.reviewStatusesSynced).toBe(1);
+    expect(report.reviewStatusesChanged).toBe(1);
+  });
+
+  it('leaves a class that is still draft at Google as draft', async () => {
+    const store = new SweepStore({
+      [tenantId(1)]: program(tenantId(1), { reviewStatus: 'draft' }),
+    });
+    const client = fakeGoogle({ pages: onePage([]) });
+    client.getClass.mockResolvedValue({ id: 'c', reviewStatus: 'under_review' });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    // A state change is reported as one only when the row really changed. Reading
+    // `draft` and writing `draft` is a read, not an approval.
+    expect(store.programs[tenantId(1)]?.reviewStatus).toBe('under_review');
+    expect(report.reviewStatusesSynced).toBe(1);
+    expect(report.reviewStatusesChanged).toBe(1);
+  });
+
+  it('does not ask Google about a class already approved here', async () => {
+    const store = new SweepStore({ [tenantId(1)]: program(tenantId(1)) });
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(client.getClass).not.toHaveBeenCalled();
+    expect(report.reviewStatusesSynced).toBe(0);
+  });
+
+  /**
+   * A state this build does not know is not written. The sync route writes its result
+   * over a known status, so guessing here would replace a real value with a fiction.
+   */
+  it('writes nothing when Google reports a state this build does not know', async () => {
+    const store = new SweepStore({
+      [tenantId(1)]: program(tenantId(1), { reviewStatus: 'draft' }),
+    });
+    const client = fakeGoogle({ pages: onePage([]) });
+    client.getClass.mockResolvedValue({ id: 'c', reviewStatus: 'pending_something_new' });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(store.programs[tenantId(1)]?.reviewStatus).toBe('draft');
+    expect(report.reviewStatusesFailed).toBe(1);
+    expect(report.reviewStatusesChanged).toBe(0);
+  });
+
+  /**
+   * One merchant's unreachable class must not stop every other merchant from being
+   * refreshed, or a single outage freezes the whole fleet's review state.
+   */
+  it('keeps going when one class cannot be read', async () => {
+    const store = new SweepStore({
+      [tenantId(1)]: program(tenantId(1), { reviewStatus: 'draft' }),
+      [tenantId(2)]: program(tenantId(2), { reviewStatus: 'draft' }),
+    });
+    const client = fakeGoogle({ pages: onePage([]) });
+    client.getClass
+      .mockRejectedValueOnce(new Error('Google unavailable'))
+      .mockResolvedValueOnce({ id: 'c', reviewStatus: 'approved' });
+
+    const report = await sweepPasses({ store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING }, { demoMode: false });
+
+    expect(store.programs[tenantId(1)]?.reviewStatus).toBe('draft');
+    expect(store.programs[tenantId(2)]?.reviewStatus).toBe('approved');
+    expect(report.reviewStatusesFailed).toBe(1);
+    expect(report.reviewStatusesChanged).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Demo Mode
 // ---------------------------------------------------------------------------
 
