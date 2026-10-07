@@ -15,6 +15,15 @@
  * the final number has no authority left: the tier can change between the preview
  * and the charge, and the server must be the one to resolve it.
  *
+ * ## A second client bug, in the same argument
+ *
+ * Under `earn_by: 'visit'` the value in that position was the **peso subtotal**,
+ * while the worker requires an integer count (`!Number.isInteger(points) ||
+ * points < 1`). Every price in the demo menu ends in `.50`, so half of all sales
+ * were refused with 400. A visit is now one visit per redeemed sale, and the
+ * count comes from `VISITS_PER_CHARGE` — see `pos-earn-mechanic.contract.test.ts`,
+ * which owns the mechanic itself and why the number is what it is.
+ *
  * ## Why these tests read the source instead of rendering
  *
  * `vitest.config.ts` sets no `environment`, so the dashboard runs in `node`: no
@@ -33,7 +42,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { previewPoints } from '../lib/loyalty-points';
+import { previewPoints, resolveEarn } from '../lib/loyalty-points';
 
 const posSource = readFileSync(
   new URL('../app/dashboard/loyalty/pos/page.tsx', import.meta.url).pathname,
@@ -117,17 +126,7 @@ function secondArgumentOf(source: string, callee: string): string {
   return args[1]!.trim();
 }
 
-/** The whole `Math.floor(...)` expression a preview computes. */
-function floorExpressionIn(source: string): string {
-  const match = source.match(/Math\.floor\(([^()]+)\)/);
-  expect(match, 'no Math.floor(...) expression found').not.toBeNull();
-  return match![1]!.replace(/\s+/g, ' ').trim();
-}
 
-/** The identifiers an expression multiplies together. */
-function factorsOf(expression: string): string[] {
-  return [...new Set(expression.match(/[A-Za-z_$][\w$]*/g) ?? [])];
-}
 
 // ─── 1. A tier above ×1 must not inflate the charge ────────────────────
 
@@ -173,11 +172,16 @@ describe('points are not multiplied twice', () => {
 // ─── 2. The request carries the base, not the preview ──────────────────
 
 describe('the assign request', () => {
-  it('sends the subtotal as `points`', () => {
-    // The single line that decides whether a balance is corrupted. It is read
-    // out of the source because the bug was never a wrong number in isolation —
-    // it was the wrong number in this position.
-    expect(secondArgumentOf(posSource, 'api.assignPoints')).toBe('subtotal');
+  it('sends the visit count as `points`, which is `earn.base`', () => {
+    // The single line that decides whether a sale can happen at all. Under `visit`
+    // the worker requires a positive integer, so whatever is in this position has
+    // to BE a count — the peso subtotal is a money amount, and sending it here is
+    // what made every `.50` sale fail.
+    //
+    // It is `earn.base` and not a literal, because the same resolution decides the
+    // field, the value and the estimate. A hand-written `1` here would agree with
+    // the helper today and drift from it the moment `visit` grows a second rule.
+    expect(secondArgumentOf(posSource, 'api.assignPoints')).toBe('earn.base');
   });
 
   it('never sends the preview as the base', () => {
@@ -188,6 +192,26 @@ describe('the assign request', () => {
     expect(sent).not.toMatch(/multiplier/);
   });
 
+  it('never sends the peso subtotal as the count', () => {
+    // Stated separately from the equality above, because this is the specific
+    // regression: the argument was `subtotal` until a visit stopped being measured
+    // in pesos, and `subtotal` is the one value that is still in scope on the page
+    // and is wrong in this position.
+    const sent = secondArgumentOf(posSource, 'api.assignPoints');
+
+    expect(sent).not.toBe('subtotal');
+    expect(sent).not.toMatch(/subtotal/);
+  });
+
+  it('does not derive the count by rounding the money', () => {
+    // `Math.round(subtotal)` / `Math.ceil(subtotal)` were the tempting patches and
+    // both are wrong: they turn $3.50 into four visits and $0.01 into one, so the
+    // count would be a peso amount with the decimals removed rather than a count.
+    const sent = secondArgumentOf(posSource, 'api.assignPoints');
+
+    expect(sent).not.toMatch(/round|ceil|floor/);
+  });
+
   it('still passes a note describing the sale', () => {
     // Guards the fix against being "simplified" into a bare two-argument call.
     const sent = secondArgumentOf(posSource, 'api.assignPoints');
@@ -196,10 +220,33 @@ describe('the assign request', () => {
     expect(sent.length).toBeGreaterThan(0);
   });
 
-  it('still sends the raw subtotal, not a floored one', () => {
-    // The server floors the product itself. Flooring the base first would make
-    // the ledger disagree with the preview on every fractional sale.
-    expect(secondArgumentOf(posSource, 'api.assignPoints')).not.toMatch(/floor\(/);
+  it('never sends the estimate as the count', () => {
+    // `preview` is a rate × tier product and the worker multiplies again. Under
+    // `visit` this is the same defect as sending the money, one step removed: both
+    // put a number in `points` that is not the base.
+    const sent = secondArgumentOf(posSource, 'api.assignPoints');
+
+    expect(sent).not.toMatch(/preview/i);
+    expect(sent).not.toBe('pointsToEarn');
+  });
+
+  it('still sends the raw money under the purchase mechanic', () => {
+    // The money half of the same decision, and the reason the "not floored"
+    // rationale that used to live here is still true — just for the other method.
+    //
+    // `workers/growth/src/routes.ts` computes `base = amount / unit` and then
+    // `Math.floor(base * earnRate * tierMultiplier)` itself. Flooring the amount on
+    // the client would make the ledger disagree with the preview on every sale that
+    // is not a whole peso, which is every sale in the demo menu.
+    //
+    // Under `visit` there is no money to floor at all: the base is a count, so the
+    // old rationale ("the server floors the product itself") described a property
+    // of a number this position no longer holds. The property that replaced it is
+    // the two assertions above — the count is not derived from the money.
+    const sent = secondArgumentOf(posSource, 'api.assignPurchasePoints');
+
+    expect(sent).toBe('subtotal');
+    expect(sent).not.toMatch(/floor\(|round\(|ceil\(/);
   });
 });
 
@@ -308,11 +355,19 @@ describe('a tier with no multiplier', () => {
     expect(serverEffectivePoints(previewPoints(base, earnRate, multiplier), earnRate, multiplier)).toBe(base);
   });
 
-  it('still does', () => {
-    // The fix must not move a number that was already right. This is the test
-    // that fails if someone "corrects" the base into a floored or rate-scaled
-    // value to make some other case line up.
-    expect(secondArgumentOf(posSource, 'api.assignPoints')).toBe('subtotal');
+  it('still does, and no longer because pesos were the count', () => {
+    // The reason this shipped and sat there: with a `×1` tier and a rate of 1, the
+    // old bug and the old reading of `visit` happened to produce the same number,
+    // so the demo tenant looked correct.
+    //
+    // A count is now what travels, and at `×1` that is genuinely `1` — not 1000,
+    // not 4000. This test used to assert `subtotal` here and would have read as
+    // "the number was already right"; it is the same tier multiplier either way, so
+    // the ×1 tier still applies exactly once.
+    expect(secondArgumentOf(posSource, 'api.assignPoints')).toBe('earn.base');
+    expect(serverEffectivePoints(1, 1, 1)).toBe(1);
+    // And the money still travels under the mechanic that reads money.
+    expect(secondArgumentOf(posSource, 'api.assignPurchasePoints')).toBe('subtotal');
     expect(serverEffectivePoints(1000, 1, 1)).toBe(1000);
   });
 });
@@ -327,27 +382,53 @@ describe('the customer page points breakdown', () => {
     return customerSource.slice(start, end === -1 ? undefined : end);
   })();
 
-  const calculated = floorExpressionIn(block);
-  const shown = factorsOf(calculated);
+  /**
+   * The factors the breakdown prints, read from what it displays.
+   *
+   * The page no longer floors anything itself — the total is `earn.preview`, the
+   * same derivation the charge uses, so there is no `Math.floor(...)` in this block
+   * to read an expression out of. The invariant is unchanged and still worth
+   * pinning: the factors it prints must be the ones the shared helper multiplies,
+   * or the equation on screen is false for the operator checking it.
+   *
+   * `previewPoints(base, rate, multiplier)` is that product, transcribed from
+   * `lib/loyalty-points.ts`; `pos-earn-mechanic.contract.test.ts` owns the mechanic
+   * that decides what the base is.
+   */
+  const SHOWN_FACTORS = ['earn.base', 'earnRate', 'tierMultiplier'];
 
-  it('calculates from the amount, the rate and the multiplier', () => {
-    // Unchanged arithmetic — this asserts the formula was not touched while the
-    // label around it was corrected.
-    expect(calculated).toBe('amount * earnRate * tierMultiplier');
-    expect(shown).toEqual(['amount', 'earnRate', 'tierMultiplier']);
+  it('prints the base the mechanic actually sends, not the typed amount', () => {
+    // Under `visit` the base is a count of visits and under `purchase` it is the
+    // money over the tenant's unit. Printing the raw typed amount described a number
+    // this modal does not send — and labelled a visit count "pts".
+    expect(block).toMatch(/<span>[^<]*Base:[^<]*\{\s*earn\.base\s*\}/);
+    expect(block).not.toMatch(/<span>[^<]*Base:[^<]*\{\s*amount\s*\}/);
   });
 
-  it('shows every factor it multiplies', () => {
+  it('labels the base in the mechanic’s own unit', () => {
+    // `pts` next to a visit count told the operator the field was money. The unit
+    // comes from the same label the input uses, so the field and the equation agree.
+    expect(block).toMatch(/<span>[^<]*Base:[^<]*\{\s*earn\.base\s*\}[^<]*\{\s*saleAmountLabel\s*\}/);
+  });
+
+  it('shows every factor the total multiplies', () => {
     // The invariant that matters: a factor that is multiplied but not shown is a
     // number the operator cannot check. The breakdown used to multiply by
     // `earnRate` while printing only the base and the multiplier, so the
     // equation on screen was false for every program whose rate was not 1.
-    for (const factor of shown) {
+    for (const factor of ['earnRate', 'tierMultiplier']) {
       expect(
         block,
         `"${factor}" is multiplied into the total but never displayed`,
-      ).toMatch(new RegExp(`<span>[^<]*\\{\\s*${factor}\\s*\\}`));
+      ).toMatch(new RegExp(`<span>[^<]*\\{\\s*${factor.replace('.', '\\.')}\\s*\\}`));
     }
+  });
+
+  it('prints the shared preview rather than a second floor', () => {
+    // One derivation, not two. The screen computing its own total is how it came to
+    // describe a rule the charge did not run.
+    expect(block).toMatch(/<span><strong>=\s*\{\s*earn\.preview\s*\}/);
+    expect(block).not.toMatch(/Math\.floor\(/);
   });
 
   it('labels the rate it applies', () => {
@@ -360,16 +441,19 @@ describe('the customer page points breakdown', () => {
     //
     // Only `{interpolations}` count. The surrounding prose — "Base", "Multiplicador",
     // "pts" — is wording, not an operand, and reading it as one made this test
-    // report the fix as the defect.
+    // report the fix as the defect. `saleAmountLabel` is wording too: it names the
+    // unit of a factor already displayed, it is not an operand of its own.
     const displayed = [...block.matchAll(/<span>([^<]*)<\/span>/g)].flatMap((match) =>
-      [...match[1]!.matchAll(/\{\s*([A-Za-z_$][\w$]*)\s*\}/g)].map((inner) => inner[1]!),
+      [...match[1]!.matchAll(/\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\}/g)].map(
+        (inner) => inner[1]!,
+      ),
     );
 
-    expect(displayed.filter((name) => name !== 'Math' && name !== 'floor')).not.toEqual([]);
+    expect(displayed.filter((name) => name !== 'saleAmountLabel')).not.toEqual([]);
 
     for (const factor of displayed) {
-      if (factor === 'Math' || factor === 'floor') continue;
-      expect(shown, `"${factor}" is displayed but never multiplied`).toContain(factor);
+      if (factor === 'saleAmountLabel') continue;
+      expect(SHOWN_FACTORS, `"${factor}" is displayed but never multiplied`).toContain(factor);
     }
   });
 
@@ -380,13 +464,24 @@ describe('the customer page points breakdown', () => {
   });
 
   it('adds up to the total it prints', () => {
-    // With the rate shown, the equation is finally checkable — so check it.
-    const amount = 1500;
+    // With the rate shown, the equation is finally checkable — so check it, through
+    // the same helper the page prints from.
+    const base = 1500;
     const earnRate = 1.5;
     const tierMultiplier = 2;
 
-    expect(Math.floor(amount * earnRate * tierMultiplier)).toBe(4500);
-    // ...and the equation that used to be printed for those inputs.
-    expect(Math.floor(amount * tierMultiplier)).toBe(3000);
+    expect(previewPoints(base, earnRate, tierMultiplier)).toBe(4500);
+    // ...and the equation that used to be printed for those inputs, which is the one
+    // this suite exists to keep honest.
+    expect(previewPoints(base, 1, tierMultiplier)).toBe(3000);
+  });
+
+  it('credits a visit once, whatever amount the operator typed', () => {
+    // The mechanic's own arithmetic, so the printed total for a `visit` program is
+    // one visit rated and multiplied — and does not move with the typed amount.
+    const rule = { earnBy: 'visit', earnRate: 1.5, earnUnitAmount: 1000 } as const;
+
+    expect(resolveEarn(rule, { pesos: 1, visits: 1 }, 2).preview).toBe(3);
+    expect(resolveEarn(rule, { pesos: 99999.99, visits: 1 }, 2).preview).toBe(3);
   });
 });

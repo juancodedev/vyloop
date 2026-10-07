@@ -27,6 +27,16 @@
  * Both are floored and both are multiplied by the customer's tier multiplier by
  * `POST /v1/loyalty/points/assign`, which is why the detail sentence mentions the
  * level in both cases.
+ *
+ * ## What a visit is, in a sentence a merchant can act on
+ *
+ * The `visit` wording has to answer one question a merchant will otherwise have to
+ * guess at: *what counts as one visit?* The answer is a redeemed sale or a check-in,
+ * and the amount of that sale is not part of it — a `$3.50` coffee and a `$5.500`
+ * sandwich are both one. That is why this branch says "conteo" and never mentions
+ * money, and why the caller sends a count rather than a peso total: the worker
+ * refuses a non-integer count, so a merchant who believed the mechanic was priced
+ * would be told the sale failed for a reason no screen explained.
  */
 
 import type { EarnBy } from './api';
@@ -169,8 +179,13 @@ export function describeEarnRule(rule: EarnRule): EarnRuleDescription {
 
   const points = pluralizePoints(Number(rate.replace(',', '.')), 'punto', 'puntos');
 
+  // "Conteo" rather than "visita" alone, because a merchant registers check-ins and
+  // manual counts as well as sales. And the "no depende del monto" clause is not
+  // decoration: it is the one fact that tells a merchant why two very different
+  // tickets credit the same, and it is the same fact that keeps the caller from
+  // sending a peso total where a whole number is required.
   return {
     headline: `${rate} ${points} por cada visita`,
-    detail: `Cada visita o conteo válido otorga ${rate} ${points} base. El total se multiplica por su nivel y se redondea hacia abajo.`,
+    detail: `Cada visita, venta cobrada o conteo válido otorga ${rate} ${points} base. No depende del monto de la compra. El total se multiplica por su nivel y se redondea hacia abajo.`,
   };
 }

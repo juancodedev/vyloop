@@ -12,6 +12,8 @@ import {
   patchErrorFor,
   type CustomerDraft,
 } from '@/lib/customer-edit';
+import { DEFAULT_EARN_RULE, type EarnRule } from '@/lib/loyalty-earn-rule';
+import { resolveEarn } from '@/lib/loyalty-points';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,7 +82,11 @@ export default function CustomerDetailPage() {
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [tierName, setTierName] = useState('—');
   const [tierMultiplier, setTierMultiplier] = useState(1);
-  const [earnRate, setEarnRate] = useState(1);
+  // The whole program, not just the rate: which field the worker reads is a
+  // property of the tenant's mechanic, and this modal records sales the same way the
+  // POS does. `DEFAULT_EARN_RULE` is `visit`, which is the mechanic the worker falls
+  // back to, so a failed config load leaves every existing tenant behaving as it did.
+  const [earnRule, setEarnRule] = useState<EarnRule>(DEFAULT_EARN_RULE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -176,7 +182,15 @@ export default function CustomerDetailPage() {
     setSubmitting(true);
     setModalError(null);
     try {
-      await api.assignPoints(customer.id, amount, note || undefined);
+      // Which field this sale travels in, and what value travels in it, are the
+      // tenant's mechanic — not this page's guess. `purchase` reads money, so the
+      // raw amount goes; `visit` reads a count, so the count does. The previous
+      // single call always sent `amount` as `points`, which a `purchase` tenant
+      // refuses with `AMOUNT_REQUIRED` and a fractional amount refuses on `visit`
+      // because the worker requires a whole number of visits.
+      await (earn.inputField === 'amount_pesos'
+        ? api.assignPurchasePoints(customer.id, amount, note || undefined)
+        : api.assignPoints(customer.id, earn.base, note || undefined));
       showToast('success', 'Venta registrada exitosamente');
       handleCloseModal();
       // Refresh in place. This used to raise `loading` as well, which is what
@@ -239,11 +253,18 @@ export default function CustomerDetailPage() {
     Promise.all([
       api.getCustomer(customerId),
       api.getTiers().catch(() => []),
-      api.getLoyaltyConfig().catch(() => ({ earnRate: 1 })),
+      // The whole rule, and `DEFAULT_EARN_RULE` on failure: `earn_by` defaults to
+      // `visit` in the worker, so a load error must not leave this page sending
+      // money to a program that counts visits.
+      api.getLoyaltyConfig().catch(() => DEFAULT_EARN_RULE),
     ])
       .then(([cust, tiers, config]) => {
         setCustomer(cust);
-        setEarnRate(config.earnRate);
+        setEarnRule({
+          earnBy: config.earnBy,
+          earnRate: config.earnRate,
+          earnUnitAmount: config.earnUnitAmount,
+        });
 
         // Map tier ID to name + multiplier
         if (cust.currentTierId) {
@@ -281,6 +302,17 @@ export default function CustomerDetailPage() {
   }
 
   const tierBaseColor = tierColor(tierName);
+
+  // What this modal sends — the same single decision the POS makes, through the same
+  // helper. `amount` is a peso amount under `purchase` and a count of visits under
+  // `visit`, so the field's label and its step follow the mechanic instead of
+  // assuming pesos: the worker refuses a non-integer count, and an operator told to
+  // "type the sale amount" would type 3.50.
+  const earn = resolveEarn(earnRule, { pesos: amount, visits: amount }, tierMultiplier);
+  const earnRate = earnRule.earnRate;
+  const saleAmountLabel = earnRule.earnBy === 'purchase' ? 'Monto de venta ($)' : 'Visitas / conteos';
+  const saleAmountStep = earnRule.earnBy === 'purchase' ? '0.01' : '1';
+  const saleAmountPlaceholder = earnRule.earnBy === 'purchase' ? 'Ej: 1500' : 'Ej: 1';
 
   // Derived with the same function the save uses, so the marker cannot disagree
   // with what would actually be sent.
@@ -546,13 +578,14 @@ export default function CustomerDetailPage() {
 
             <div className="modal-body">
               <div className="form-group">
-                <label htmlFor="sale-amount">Monto de venta ($)</label>
+                <label htmlFor="sale-amount">{saleAmountLabel}</label>
                 <input
                   id="sale-amount"
                   type="number"
                   min="1"
+                  step={saleAmountStep}
                   className="form-control"
-                  placeholder="Ej: 1500"
+                  placeholder={saleAmountPlaceholder}
                   value={amount || ''}
                   onChange={(e) => setAmount(Number(e.target.value))}
                 />
@@ -568,12 +601,19 @@ export default function CustomerDetailPage() {
                       multiply by `earnRate` while printing only the base and the
                       multiplier, so the equation on screen was false for every
                       program whose rate was not 1 — and exactly true, and so
-                      invisible, for the default one. */}
+                      invisible, for the default one.
+
+                      The base is `earn.base`, not the typed amount: under `visit`
+                      it is a count of visits and under `purchase` it is the money
+                      over the tenant's unit. Printing the raw amount would show an
+                      equation for a number this modal does not send — and would
+                      call a visit count "pts". The total is `earn.preview`, the same
+                      derivation the charge uses, rather than a second floor here. */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
-                    <span>Base: {amount} pts</span>
+                    <span>Base: {earn.base} {saleAmountLabel}</span>
                     <span>&times; Tasa ({earnRate}x)</span>
                     <span>&times; Multiplicador ({tierMultiplier}x)</span>
-                    <span><strong>= {Math.floor(amount * earnRate * tierMultiplier)} pts</strong></span>
+                    <span><strong>= {earn.preview} pts</strong></span>
                   </div>
                   <p className="text-sm text-muted" style={{ margin: '0.5rem 0 0' }}>
                     El cobro real lo calcula el servidor, que resuelve el nivel en el momento del

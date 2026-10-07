@@ -29,10 +29,56 @@
  * The worker's `base` is not the same number under both accumulation mechanics,
  * and neither is the body field it reads (see `earnBase`). `previewPoints` is the
  * rate × tier product they share; `resolveEarn` is the branch above it.
+ *
+ * ## A visit is a count, and a count is not money
+ *
+ * Under `earn_by: 'visit'` the honest value at a counter is "a visit happened".
+ * The POS used to send the peso subtotal as that count, which was two things wrong
+ * at once: the worker requires a positive **integer**
+ * (`!Number.isInteger(points) || points < 1`), and every price in the menu ends in
+ * `.50` — so half of all sales came back 400. Rounding the subtotal would not have
+ * been the fix either; it would make a `$3.50` latte count as four visits.
+ *
+ * So the two facts are now separate inputs to `earnBase`, and the mechanic picks
+ * the one it is defined in. `pesos` is only read by `purchase`; `visits` is only
+ * read by `visit`. See `VISITS_PER_CHARGE`.
  */
 
 import type { EarnRule } from './loyalty-earn-rule';
 import { usableEarnRate, usableUnitAmount } from './loyalty-earn-rule';
+
+/**
+ * How many qualifying visits one redeemed sale or check-in is worth.
+ *
+ * ## One, and it is a decision rather than a computation
+ *
+ * Not `Math.round(subtotal)`, not `Math.ceil(subtotal)`: a peso total is a money
+ * amount, and converting one into the other is what put `3.5` in a field that
+ * requires a whole number. A `$3.50` latte and a `$5.500` sandwich are both one
+ * visit — the customer came once.
+ *
+ * This is the `visit` mechanic's meaning, so it lives in one named place rather
+ * than as a literal at each call site. Every existing tenant is on `visit`, so this
+ * changes what each of them credits; balances already in `points_transactions` were
+ * written under the old reading and are test data, left exactly as they are.
+ */
+export const VISITS_PER_CHARGE = 1;
+
+/**
+ * The two facts a charge has, in the units each mechanic actually reads.
+ *
+ * Both are held because the mechanic decides which one is the base — the caller
+ * knows the amount on the counter and knows how many qualifying visits the sale
+ * represents, and it is not the caller's job to guess which of those the tenant's
+ * program pays on. Under `purchase` the count is irrelevant; under `visit` the
+ * money is.
+ */
+export interface EarnSale {
+  /** What the sale came to, in pesos. The base under `purchase`. */
+  pesos: number;
+  /** Qualifying visits this sale represents. The base under `visit`. */
+  visits: number;
+}
 
 export function previewPoints(base: number, earnRate: number, multiplier: number): number {
   return Math.floor(base * earnRate * multiplier);
@@ -50,8 +96,8 @@ export function previewPoints(base: number, earnRate: number, multiplier: number
  * with `VISIT_COUNT_REQUIRED`. Sending both is refused under either mechanic.
  *
  * The POS used to send `points` unconditionally, with a subtotal in pesos as its
- * value. That is the right call for a `visit` program — which is all of them today,
- * since `earn_by` defaults to `visit` — and a 400 for any `purchase` tenant.
+ * value. That was a 400 for any `purchase` tenant, and — because the worker
+ * requires that count to be an integer — a 400 for half of all `visit` sales too.
  */
 
 /** The single body field a mechanic consumes from the request. */
@@ -79,7 +125,7 @@ export interface EarnAssignment {
 }
 
 /**
- * How the worker arrives at `base`, from the amount the counter has in hand.
+ * How the worker arrives at `base`, from what the counter has in hand.
  *
  * Mirrors the two `base = …` lines in `workers/growth/src/routes.ts`:
  *
@@ -88,12 +134,15 @@ export interface EarnAssignment {
  *   purchase → the money over the tenant's unit, so `base` is how many units of
  *              `earn_rate` the amount bought.
  *
- * Under `visit` the POS's `amount` argument is the count it sends. That is the
- * behaviour this preserves, not a claim that a peso total is a visit count — a
- * separate question from which field the program reads.
+ * The other half of each sale is not read. `purchase` ignores `visits` because a
+ * visit count is not money, and `visit` ignores `pesos` because a peso total is not
+ * a count — reading it was what made every `.50` sale fail the worker's integer
+ * guard.
  */
-export function earnBase(rule: EarnRule, amount: number): number {
-  return rule.earnBy === 'purchase' ? amount / usableUnitAmount(rule.earnUnitAmount) : amount;
+export function earnBase(rule: EarnRule, sale: EarnSale): number {
+  return rule.earnBy === 'purchase'
+    ? sale.pesos / usableUnitAmount(rule.earnUnitAmount)
+    : sale.visits;
 }
 
 /**
@@ -106,11 +155,16 @@ export function earnBase(rule: EarnRule, amount: number): number {
  * both from the same rule is the whole point — a caller that computes the estimate
  * by one route and the charge by another is exactly the bug this replaces.
  *
- * `amount` is whatever the counter holds: a subtotal in pesos, which under
- * `visit` is the count that travels as `points`.
+ * `sale` is what the counter holds: a subtotal in pesos, and how many qualifying
+ * visits it represents. Under `visit` only the second is the base; under `purchase`
+ * only the first is.
  */
-export function resolveEarn(rule: EarnRule, amount: number, multiplier: number): EarnAssignment {
-  const base = earnBase(rule, amount);
+export function resolveEarn(
+  rule: EarnRule,
+  sale: EarnSale,
+  multiplier: number,
+): EarnAssignment {
+  const base = earnBase(rule, sale);
 
   return {
     inputField: rule.earnBy === 'purchase' ? 'amount_pesos' : 'points',

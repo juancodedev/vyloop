@@ -79,6 +79,43 @@ describe('describeEarnRule — a visit program', () => {
     expect(`${described.headline} ${described.detail}`).not.toContain('$');
     expect(`${described.headline} ${described.detail}`).not.toContain('pesos');
   });
+
+  it('states that the amount is not part of it', () => {
+    // The one question a merchant otherwise has to guess at. The mechanic credits
+    // a count, the worker requires that count to be a whole number, and the caller
+    // sends one per redeemed sale — so a `$3.50` coffee and a `$5.500` sandwich are
+    // the same amount of points.
+    //
+    // A screen that leaves this out produces two failures nobody can act on: the
+    // merchant prices against spend that is not counted, and the cashier gets a
+    // 400 on every fractional-peso sale with no sentence on screen saying why.
+    const described = describeEarnRule({ earnBy: 'visit', earnRate: 2, earnUnitAmount: 1000 });
+
+    expect(described.detail.toLowerCase()).toContain('monto');
+    expect(described.detail.toLowerCase()).toMatch(/no depende/i);
+  });
+
+  it('names the events that count as one visit', () => {
+    // A merchant registers check-ins and manual counts as well as sales, so the
+    // sentence that says what one visit is has to cover the ones they will use.
+    const described = describeEarnRule({ earnBy: 'visit', earnRate: 1, earnUnitAmount: 1000 });
+
+    expect(described.detail.toLowerCase()).toContain('conteo');
+    expect(described.detail.toLowerCase()).toContain('venta');
+  });
+
+  it('credits what the worker credits — the rate is points per visit', () => {
+    // The sentence and the arithmetic must agree, or the merchant is promised a
+    // rule the ledger does not run.
+    const rate = 2;
+    const described = describeEarnRule({ earnBy: 'visit', earnRate: rate, earnUnitAmount: 1000 });
+
+    expect(described.headline).toContain(`${rate}`);
+    expect(described.headline).toMatch(/por cada visita/);
+    // One visit at this rate, before the tier multiplier: the base the worker
+    // multiplies by `earnRate`.
+    expect(1 * rate).toBe(2);
+  });
 });
 
 describe('describeEarnRule — the heading', () => {

@@ -14,7 +14,7 @@ import {
 } from '@/lib/camera-permission';
 import { resolveLookupTarget } from '@/lib/lookup-identifier';
 import { DEFAULT_EARN_RULE, describeEarnRule, type EarnRule } from '@/lib/loyalty-earn-rule';
-import { resolveEarn } from '@/lib/loyalty-points';
+import { resolveEarn, VISITS_PER_CHARGE } from '@/lib/loyalty-points';
 import { parsePassCode } from '@/lib/pass-code';
 import { presentPass, type WirePassState } from '@/lib/pass-state';
 
@@ -186,14 +186,22 @@ export default function PosPage() {
 
   // ─── Points calculation ───────────────────────────────────────────
 
-  // ONE decision, resolved once per render, for both things the page needs:
-  // which field this sale has to travel in, and what to show for it. They used to
-  // be two separate ones — `previewPoints(subtotal, …)` for the screen and a hard
-  // `points: subtotal` for the request — and that is how pesos ended up being
-  // displayed as a visit count while a `purchase` program refused the body as
-  // `AMOUNT_REQUIRED`. Neither number is sent: the worker derives the base from the
-  // field the program actually reads, and applies the rate and the tier itself.
-  const earn = resolveEarn(earnRule, subtotal, customer?.multiplier ?? 1);
+  // ONE decision, resolved once per render, for all three things the page needs:
+  // which field this sale has to travel in, what to put in it, and what to show for
+  // it. They used to be two separate ones — `previewPoints(subtotal, …)` for the
+  // screen and a hard `points: subtotal` for the request — and that is how pesos
+  // ended up being displayed as a visit count, why a `purchase` program refused the
+  // body as `AMOUNT_REQUIRED`, and why half the menu failed the worker's integer
+  // guard on the way out.
+  //
+  // The two facts go in separately and the mechanic picks the one it pays on: money
+  // for `purchase`, a count for `visit`. Neither number is sent — the worker applies
+  // the rate and the tier itself, and does the division by the unit.
+  const earn = resolveEarn(
+    earnRule,
+    { pesos: subtotal, visits: VISITS_PER_CHARGE },
+    customer?.multiplier ?? 1,
+  );
   const pointsToEarn = earn.preview;
   // The rule that produced it, in the mechanic's own terms. Shared with the config
   // screen, so a purchase program says what it pays per $X of purchase and a visit
@@ -388,17 +396,21 @@ export default function PosPage() {
     try {
       const note = `Venta POS: ${cart.map((e) => `${e.item.name} x${e.qty}`).join(', ')}`;
 
-      // 1. Accumulate. Which field the sale travels in is the PROGRAM's fact, so it
-      // is read from the config rather than guessed here: a `purchase` program
-      // refuses a caller-supplied count with `AMOUNT_REQUIRED`, and a `visit`
-      // program refuses a money amount with `VISIT_COUNT_REQUIRED`. Either way the
-      // value is the same raw subtotal — what the sale is worth is the cashier's
-      // business, which field it is filed under is the merchant's. The estimate
-      // above is never sent: see `earn`.
+      // 1. Accumulate. Which field the sale travels in, and what value travels in it,
+      // are the PROGRAM's facts — so both come from `earn` above, resolved once from
+      // the config rather than guessed here: a `purchase` program refuses a
+      // caller-supplied count with `AMOUNT_REQUIRED`, and a `visit` program refuses
+      // a money amount with `VISIT_COUNT_REQUIRED`.
+      //
+      // Two values in two units, and the units are the whole point: `purchase` gets
+      // the raw money — the division by the tenant's unit is the worker's to do — and
+      // `visit` gets the visit count, never the peso subtotal. A money amount sent as
+      // a count fails the worker's integer guard on every fractional peso, which is
+      // half this menu. The estimate is not sent either; see `earn`.
       const earned =
         earn.inputField === 'amount_pesos'
           ? await api.assignPurchasePoints(customer.id, subtotal, note)
-          : await api.assignPoints(customer.id, subtotal, note);
+          : await api.assignPoints(customer.id, earn.base, note);
 
       const receiptData = {
         items: [...cart],
