@@ -222,7 +222,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -255,11 +255,11 @@ importers:
   packages/db:
     dependencies:
       '@neondatabase/serverless':
-        specifier: ^1.0.0
-        version: 1.1.0
+        specifier: ^1.2.0
+        version: 1.2.0
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       pg:
         specifier: ^8.0.0
         version: 8.22.0
@@ -371,7 +371,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -402,7 +402,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -433,7 +433,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -467,8 +467,8 @@ importers:
   workers/customer:
     dependencies:
       '@neondatabase/serverless':
-        specifier: ^1.0.0
-        version: 1.1.0
+        specifier: ^1.2.0
+        version: 1.2.0
       '@vyloop/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -483,7 +483,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -514,7 +514,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -532,8 +532,8 @@ importers:
   workers/identity:
     dependencies:
       '@neondatabase/serverless':
-        specifier: ^1.0.0
-        version: 1.1.0
+        specifier: ^1.2.0
+        version: 1.2.0
       '@vyloop/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -545,7 +545,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -570,7 +570,7 @@ importers:
         version: link:../../packages/db
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
         specifier: ^4.13.5
         version: 4.13.9
@@ -1474,8 +1474,8 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@neondatabase/serverless@1.1.0':
-    resolution: {integrity: sha512-r3ZZhRjEcfEdKIZnoB1RusNgvHuaBRqfCzV4Gi+5A9yUX0S4HTws/ASWqt13wL4y4I+0rqsWGdA2w7EQXHi3+Q==}
+  '@neondatabase/serverless@1.2.0':
+    resolution: {integrity: sha512-tnaqgixUengZQNd9ZrS3ytQfamJzLKY8QxgqWQTNHHtB+KrFQWk77JTbbpg4RD+J3qE4eO2lVytvGDX5Kj6FdQ==}
     engines: {node: '>=19.0.0'}
 
   '@next/env@16.3.6':
@@ -4422,7 +4422,7 @@ snapshots:
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
-  '@neondatabase/serverless@1.1.0': {}
+  '@neondatabase/serverless@1.2.0': {}
 
   '@next/env@16.3.6': {}
 
@@ -5168,10 +5168,10 @@ snapshots:
       esbuild: 0.25.12
       tsx: 4.23.15
 
-  drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.1.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9):
+  drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9):
     optionalDependencies:
       '@cloudflare/workers-types': 5.20260925.2
-      '@neondatabase/serverless': 1.1.0
+      '@neondatabase/serverless': 1.2.0
       '@types/pg': 8.11.6
       gel: 2.2.0
       pg: 8.22.0
