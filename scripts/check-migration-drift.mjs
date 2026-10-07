@@ -589,6 +589,46 @@ export function generateBaseline({ migrations, rows, facts }) {
  * actually applied it. It is also why an entry cannot be written by hand — a
  * hand-written claim is checked exactly like a generated one.
  */
+/**
+ * Migrations the journal lists that the database has no record of running.
+ *
+ * ## Why this is the check the gate was missing
+ *
+ * Everything else `runGate` looks at is either a file in the repository or a fact
+ * the baseline claims about the schema. The baseline is empty in this project, so
+ * every live-schema assertion was vacuously satisfied, and the journal-versus-schema
+ * comparison passed because both sides are generated from the same source.
+ *
+ * Nothing asked the database. This asks it: for each migration the journal lists,
+ * is there a row in `drizzle.__drizzle_migrations`?
+ *
+ * Matching is by the tag embedded in the recorded hash, which is the only durable
+ * join between the two. A migration whose hash is absent is reported by tag, not by
+ * an opaque digest, because the operator's next command is about the tag.
+ */
+export function unappliedMigrations(migrations, appliedAt, baseline) {
+  // `appliedAt` rows carry a bare `sha256(fileContents)` — no tag anywhere in it.
+  // Matching therefore goes through `migration.hash`, which `loadMigrations`
+  // computes with the same bytes and the same digest that
+  // `drizzle-orm/migrator`'s `readMigrationFiles` uses, because that is the value
+  // `PgDialect.migrate` wrote. An earlier version of this function tried to recover a
+  // tag out of the hash and found none, and reported all ten migrations as unapplied
+  // against a database that had already run five.
+  const appliedHashes = new Set((appliedAt ?? []).map((row) => String(row?.hash ?? '')));
+
+  // A migration the baseline covers was applied **outside** drizzle, by hand, so it
+  // is legitimately absent from `__drizzle_migrations` — and the baseline is the
+  // record of that, already checked against the live schema by
+  // `unsatisfiedBaseline`. Without this exemption the gate would block every
+  // deploy of a project that has ever applied a migration by hand, which is the
+  // case this gate was written for.
+  const covered = new Set((baseline?.migrations ?? []).map((entry) => entry.tag));
+
+  return migrations
+    .filter((m) => !appliedHashes.has(m.hash) && !covered.has(m.tag))
+    .map((m) => m.tag);
+}
+
 export function unsatisfiedBaseline(baseline, migrations, facts) {
   const byTag = new Map(migrations.map((m) => [m.tag, m]));
 
@@ -665,18 +705,24 @@ export function runGate({ migrations, observation, baseline }) {
   const drift = computeDrift({ migrations, rows, baseline: effective });
   const { errors: baselineErrors } = validateBaseline(effective, migrations);
   const unsatisfied = unsatisfiedBaseline(effective, migrations, facts);
-  const staleBaseline = staleBaselineEntries(effective, migrations, rows);
+const staleBaseline = staleBaselineEntries(effective, migrations, rows);
+    const neverApplied = unappliedMigrations(migrations, observation.appliedAt, effective);
 
-  const findings = [];
+    const findings = [];
   if (baselineErrors.length > 0) findings.push('the baseline is not valid');
   if (drift.forward.length > 0) findings.push(`${drift.forward.length} unregistered migration(s)`);
   if (drift.reverse.length > 0) findings.push(`${drift.reverse.length} unknown journal row(s)`);
   if (drift.incoherent.length > 0)
     findings.push(`${drift.incoherent.length} contradictory timestamp(s)`);
   if (unsatisfied.length > 0) findings.push(`${unsatisfied.length} unverified baseline entry(ies)`);
-  if (staleBaseline.length > 0) findings.push(`${staleBaseline.length} stale baseline entry(ies)`);
+if (staleBaseline.length > 0) findings.push(`${staleBaseline.length} stale baseline entry(ies)`);
+    if (neverApplied.length > 0)
+      findings.push(
+        `${neverApplied.length} migration(s) in the journal that this database has never run: ` +
+          neverApplied.join(', '),
+      );
 
-  return {
+    return {
     ok: findings.length === 0,
     exitCode: findings.length === 0 ? 0 : 1,
     reachable: true,
@@ -685,9 +731,10 @@ export function runGate({ migrations, observation, baseline }) {
     forward: drift.forward,
     reverse: drift.reverse,
     incoherent: drift.incoherent,
-    unsatisfied,
-    staleBaseline,
-    baselineErrors,
+unsatisfied,
+      staleBaseline,
+      neverApplied,
+      baselineErrors,
     wouldApply: drift.wouldApply,
   };
 }
@@ -792,7 +839,16 @@ export function formatReport(gate) {
 // ---------------------------------------------------------------------------
 
 const DRIFT_QUERY =
-  'select id, hash, created_at from drizzle.__drizzle_migrations order by created_at';
+    'select id, hash, created_at from drizzle.__drizzle_migrations order by created_at';
+
+/**
+ * The migrations the database recorded as run.
+ *
+ * The same table `DRIFT_QUERY` reads, named separately because the two are used for
+ * different questions: `DRIFT_QUERY` answers "what order were these applied in",
+ * and this answers "which of the migrations in the journal is in here at all".
+ */
+const APPLIED_MIGRATIONS_QUERY = DRIFT_QUERY;
 
 /**
  * Read the journal table and the schema, or report that it could not be read.
@@ -851,24 +907,44 @@ export async function observeDatabase(url, { connectTimeoutMs = 10_000 } = {}) {
       'select indexname as name from pg_indexes where schemaname = $1',
       [schema],
     );
-    const constraints = await pool.query(
-      `select c.conname as name from pg_constraint c
-       join pg_namespace n on n.oid = c.connamespace
-       where n.nspname = $1`,
-      [schema],
-    );
+const constraints = await pool.query(
+        `select c.conname as name from pg_constraint c
+         join pg_namespace n on n.oid = c.connamespace
+         where n.nspname = $1`,
+        [schema],
+      );
 
-    return {
-      reachable: true,
-      rows: rows.rows,
-      schema,
-      facts: {
-        tables: new Set(tables.rows.map((r) => r.table_name)),
-        columns: new Set(columns.rows.map((r) => r.name)),
-        indexes: new Set(indexes.rows.map((r) => r.name)),
-        constraints: new Set(constraints.rows.map((r) => r.name)),
-      },
-    };
+      /**
+       * The journal rows the database itself recorded.
+       *
+       * Read here and, until this change, nowhere. The gate compared the committed
+       * schema files against the committed journal — two files in the repository —
+       * and then checked the *baseline* against the live schema. Neither of those
+       * asks the database which migrations it has actually run, so a migration in
+       * the journal that was never applied was invisible to it:
+       *
+       *     [PASS] the target schema matches the migration journal
+       *     PASS — safe to deploy.
+       *
+       * while production was missing five of them, and `/v1/communication/templates`
+       * was answering 500 on a column that migration would have created.
+       *
+       * A schema file and a journal agree perfectly about work that never happened.
+       */
+      const applied = await pool.query(APPLIED_MIGRATIONS_QUERY);
+
+      return {
+        reachable: true,
+        rows: rows.rows,
+        schema,
+        appliedAt: applied.rows,
+        facts: {
+          tables: new Set(tables.rows.map((r) => r.table_name)),
+          columns: new Set(columns.rows.map((r) => r.name)),
+          indexes: new Set(indexes.rows.map((r) => r.name)),
+          constraints: new Set(constraints.rows.map((r) => r.name)),
+        },
+      };
   } catch (error) {
     return { reachable: false, error: error.message };
   } finally {
