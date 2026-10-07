@@ -40,6 +40,7 @@ export const BUSINESS_ID_TABLES = [
   'reward_grants',
   'message_log',
   'whatsapp_templates',
+  'checkins',
 ] as const;
 
 /**

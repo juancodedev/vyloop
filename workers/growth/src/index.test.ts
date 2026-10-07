@@ -9,7 +9,7 @@ vi.mock('@vyloop/db', async () => {
   // cross-tenant comparison as happily as a correct one. `customers` and
   // `pointsTransactions` are real for the same reason: they are the two tables
   // the loyalty ownership check and the points read are scoped against.
-  const { pgTable, uuid, integer, numeric, text, timestamp } = await import('drizzle-orm/pg-core');
+  const { pgTable, uuid, integer, numeric, text, timestamp, jsonb } = await import('drizzle-orm/pg-core');
   const tierTable = pgTable('membership_tiers', {
     id: uuid('id').primaryKey(),
     businessId: uuid('business_id').notNull(),
@@ -25,6 +25,12 @@ vi.mock('@vyloop/db', async () => {
     businessId: uuid('business_id').notNull(),
     currentTierId: uuid('current_tier_id'),
     deletedAt: timestamp('deleted_at'),
+    // Read by `/v1/passes/resolve` and `POST /v1/checkins`. Real columns for the
+    // reason the other tables are real: a flat `{}` renders an opaque predicate, so
+    // a lookup that ignored `businessId` would pass the same test as one that
+    // honoured it.
+    memberCode: text('member_code'),
+    fullName: text('full_name'),
   });
   const pointsTable = pgTable('points_transactions', {
     id: uuid('id').primaryKey(),
@@ -37,6 +43,21 @@ vi.mock('@vyloop/db', async () => {
     note: text('note'),
     createdAt: timestamp('created_at').notNull(),
   });
+  // `checkins` is real for the same reason. Its tenant predicate and its
+  // `onConflictDoNothing` target are both `businessId`, so a flat `{}` would make
+  // every cross-tenant assertion on this table pass vacuously.
+  const checkinTable = pgTable('checkins', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    memberCode: text('member_code').notNull(),
+    paymentId: text('payment_id'),
+    amountCents: integer('amount_cents').notNull(),
+    items: jsonb('items'),
+    note: text('note'),
+    points: integer('points'),
+    createdAt: timestamp('created_at').notNull(),
+  });
   const table = {};
   return {
     createDb: vi.fn(),
@@ -44,6 +65,7 @@ vi.mock('@vyloop/db', async () => {
     membershipTiers: tierTable,
     customers: customerTable,
     pointsTransactions: pointsTable,
+    checkins: checkinTable,
     rewards: table,
     rewardGrants: table,
     schema: {},
@@ -75,6 +97,7 @@ vi.mock('@vyloop/event-bus', () => ({
 
 import { createDb } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
+import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -101,6 +124,10 @@ function createBuilder(data: unknown = []): Builder {
   builder.offset = vi.fn(() => builder);
   builder.limit = vi.fn(() => builder);
   builder.returning = vi.fn(() => builder);
+  // Needed by `POST /v1/checkins`, whose insert is `ON CONFLICT DO NOTHING`. The
+  // mock cannot enforce the unique index, so the conflict branch of that route is
+  // driven by what the insert returns — documented at each such test.
+  builder.onConflictDoNothing = vi.fn(() => builder);
   builder.then = p.then.bind(p);
   builder.catch = p.catch.bind(p);
   builder.finally = p.finally.bind(p);
@@ -3100,6 +3127,501 @@ describe('Growth Worker', () => {
 
       expect(res.status).toBe(409);
       expect(reconcileCustomer).not.toHaveBeenCalled();
+    });
+  });
+
+  // ==========================================================================
+  // POST /v1/passes/resolve — the scan, at the till, before the money moves
+  // ==========================================================================
+
+  describe('POST /v1/passes/resolve', () => {
+    it('answers known:true with the customer and their real name', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'cust-1', currentTierId: null }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ fullName: 'Ada Lovelace' }]));
+
+      const res = await POST('/v1/passes/resolve', { member_code: 'ABC-1234' });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.known).toBe(true);
+      expect(json.data.customer_id).toBe('cust-1');
+      // `full_name` is `customers.fullName`, the column that actually exists. A
+      // made-up name here would be a field the merchant's screen renders blank.
+      expect(json.data.display_name).toBe('Ada Lovelace');
+    });
+
+    it('answers known:false for a code nobody has, and still 200', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      const res = await POST('/v1/passes/resolve', { member_code: 'NOPE-0000' });
+
+      // The number that matters is this one. A 404 here reads to a terminal as
+      // "do not sell", and refusing a merchant's sale because a pass was not
+      // found is the failure this whole route exists to prevent.
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data).toEqual({ known: false });
+      // And it creates nothing: a lookup that wrote would be a second thing to
+      // reconcile when it went wrong.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('never credits points', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'cust-1', currentTierId: null }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ fullName: 'Ada Lovelace' }]));
+
+      await POST('/v1/passes/resolve', { member_code: 'ABC-1234' });
+
+      // Scanning happens before the payment settles. Crediting here would pay for
+      // a sale that might still be abandoned at the till.
+      const statements = mockDb.execute.mock.calls
+        .map((call) => call[0])
+        .filter((arg) => arg !== undefined && arg !== null)
+        .map((arg) => new PgDialect().sqlToQuery(arg as never).sql);
+      expect(statements.filter((sql) => /points_transactions/.test(sql))).toEqual([]);
+    });
+
+    it('scopes the lookup to the credential, so a code is not global', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      const r = await POST('/v1/passes/resolve', { member_code: 'ABC-1234' });
+
+      // `businessId` in the rendered SQL is the whole tenant boundary: `member_code`
+      // is unique per business, so the credential's scope is what makes the lookup
+      // unambiguous. A body-supplied business_id would be the caller choosing its
+      // own scope, which is why there is no such field.
+      const statement = mockDb.select.mock.results[0]?.value?.where?.mock.calls[0]?.[0];
+      expect(statement).toBeDefined();
+      const { sql: rendered } = new PgDialect().sqlToQuery(statement as never);
+      expect(rendered).toContain('"customers"."business_id"');
+      expect(rendered).toContain('"customers"."member_code"');
+      // A withdrawn membership must not keep resolving at the till.
+      expect(rendered).toContain('"customers"."deleted_at"');
+      expect(r.status).toBe(200);
+    });
+
+    it.each([
+      { label: 'absent', body: {} },
+      { label: 'not a string', body: { member_code: 1234 } },
+      { label: 'empty', body: { member_code: '' } },
+    ])('answers 200 with known:false when the code is $label', async ({ body }) => {
+      // Answered, not refused. This route does not veto a sale, and a malformed
+      // scan is a malformed scan rather than a reason to stop charging.
+      const res = await POST('/v1/passes/resolve', body);
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data).toEqual({ known: false });
+      // Nothing looked up, so nothing can leak and nothing can be written.
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+  });
+
+  // ==========================================================================
+  // POST /v1/checkins — the fact, after the money moves
+  // ==========================================================================
+
+  describe('POST /v1/checkins', () => {
+    /**
+     * A `visit` program with no tier, so the credited number is legible in the
+     * assertions below.
+     */
+    function stubProgram(overrides: Record<string, unknown> = {}) {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'prog-1',
+            earnRate: '1.0000',
+            earnBy: 'visit',
+            earnUnitAmount: '1000.00',
+            ...overrides,
+          },
+        ]),
+      );
+    }
+
+    /** The customer the code resolves to. `currentTierId: null` unless overridden. */
+    function stubMember(currentTierId: string | null = null) {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'cust-1', currentTierId }]),
+      );
+    }
+
+    function stubLedger(balanceAfter = 5) {
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: balanceAfter }] });
+    }
+
+    /** The ledger INSERT the route ran. `withRls` ate the first `execute`. */
+    function ledgerStatement(): SQL {
+      // `mockDb.execute` is untyped, so the statement comes back as `any`.
+      return mockDb.execute.mock.calls[1]?.[0] as SQL;
+    }
+
+    /**
+     * The `reference_id` the ledger INSERT was asked to write.
+     *
+     * The bound parameters are read rather than interpolated, and the index is
+     * counted off the real parameter order — `business_id`, `customer_id`,
+     * `points`, then the `balance_after` subquery's own `customer_id` and `points`,
+     * then `reference_id`, then `note`. The subquery's parameters are the reason a
+     * reader cannot just take "the last one before note": they are interleaved.
+     */
+    function ledgerReference(): unknown {
+      const { params } = new PgDialect().sqlToQuery(ledgerStatement() as never);
+      return params[5];
+    }
+
+    /** The `points` value the ledger INSERT was asked to write. */
+    function ledgerPoints(): unknown {
+      const { params } = new PgDialect().sqlToQuery(ledgerStatement() as never);
+      return params[2];
+    }
+
+    /** The row the route inserted, as the route passed it to `values()`. */
+    function insertedValues(): Record<string, unknown> {
+      return mockDb.insert.mock.results[0]?.value?.values?.mock.calls[0]?.[0];
+    }
+
+    /**
+     * The `points` the route wrote back onto the checkin.
+     *
+     * `update()` takes the table as its only argument, so the patch is on the
+     * builder it returned rather than on a second call argument.
+     */
+    function updatedPoints(): Record<string, unknown> {
+      return mockDb.update.mock.results[0]?.value?.set?.mock.calls[0]?.[0];
+    }
+
+    /**
+     * `withRls` opens the session before anything is judged, so "no ledger write"
+     * means the INSERT never ran — not that the database was never touched. The
+     * session statement itself carries no compilable SQL here, because
+     * `setCurrentBusinessId` is mocked to return undefined.
+     */
+    function ledgerStatements(): string[] {
+      return mockDb.execute.mock.calls
+        .map((call) => call[0])
+        .filter((arg) => arg !== undefined && arg !== null)
+        .map((arg) => new PgDialect().sqlToQuery(arg as never).sql)
+        .filter((sql) => /points_transactions/.test(sql));
+    }
+
+    it('records the sale and credits the customer (201)', async () => {
+      stubMember();
+      stubProgram();
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'chk-1',
+            businessId: 'biz-1',
+            customerId: 'cust-1',
+            memberCode: 'ABC-1234',
+            paymentId: 'pay-1',
+            amountCents: 12500,
+            items: null,
+            note: null,
+            points: null,
+          },
+        ]),
+      );
+      stubLedger(3);
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-1',
+        member_code: 'ABC-1234',
+        amount_cents: 12500,
+      });
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.points).toBe(1);
+      // `reference_id` is the payment id: the event is already named when it
+      // reaches us, so the ledger's own `uq_points_tx_reference` dedupes it for
+      // free without a second key.
+      expect(ledgerReference()).toBe('pay-1');
+      // And the member_code the terminal sent is stored verbatim alongside the
+      // resolved uuid, because codes get reassigned and only the string can still
+      // answer "what was actually scanned".
+      expect(insertedValues()).toMatchObject({
+        memberCode: 'ABC-1234',
+        paymentId: 'pay-1',
+        amountCents: 12500,
+      });
+    });
+
+    it('credits under the tenant\'s money rule when the program earns by purchase', async () => {
+      stubMember();
+      stubProgram({ earnBy: 'purchase', earnRate: '1.0000', earnUnitAmount: '1000.00' });
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-1', amountCents: 1250000 }]));
+      stubLedger(12);
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-2',
+        member_code: 'ABC-1234',
+        amount_cents: 1250000,
+      });
+
+      expect(res.status).toBe(201);
+      // $12.500 at 1 point per $1.000 → 12. The cents-to-pesos step is a unit
+      // conversion, not a decision about the amount: `amount_cents` is what the
+      // rail settled and the tenant's unit is in pesos.
+      expect(ledgerPoints()).toBe(12);
+    });
+
+    it('applies the customer\'s tier multiplier on top of the rule', async () => {
+      stubMember('tier-1');
+      stubProgram();
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'tier-1', multiplier: '2.00' }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-1', amountCents: 5000 }]));
+      stubLedger(2);
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-3',
+        member_code: 'ABC-1234',
+        amount_cents: 5000,
+      });
+
+      expect(res.status).toBe(201);
+      // One visit × rate 1 × tier 2, through the same shared formula the assign
+      // route uses. Two copies of this rule is two rules.
+      expect(ledgerPoints()).toBe(2);
+    });
+
+    it('answers 200 and credits nothing when the same payment arrives again', async () => {
+      // The insert conflicts, so it returns no row. The existing row already has
+      // points, which means the credit landed on the first attempt.
+      stubMember();
+      mockDb.insert.mockReturnValueOnce(createBuilder([]));
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'chk-1', paymentId: 'pay-1', points: 1, amountCents: 5000 }]),
+      );
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-1',
+        member_code: 'ABC-1234',
+        amount_cents: 5000,
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.points).toBe(1);
+      // The acceptance criterion: the same payment sent twice accumulates once.
+      // No ledger write, no event, no pass projection.
+      expect(publish).not.toHaveBeenCalled();
+      expect(ledgerStatements()).toEqual([]);
+    });
+
+    it('finishes the credit a previous attempt left pending, and answers 200', async () => {
+      // The load-bearing case. The row exists with `points IS NULL`: the sale was
+      // recorded and the credit never landed. A retry that could only decline to
+      // double-credit would turn every transient failure into a customer who paid
+      // and never accumulated — and the terminal's message is the only evidence
+      // that an attribution happened at all.
+      stubMember();
+      mockDb.insert.mockReturnValueOnce(createBuilder([]));
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'chk-1', paymentId: 'pay-4', points: null, amountCents: 5000, note: null },
+        ]),
+      );
+      stubProgram();
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      stubLedger(4);
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-4',
+        member_code: 'ABC-1234',
+        amount_cents: 5000,
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.points).toBe(1);
+      // The credit actually ran this time, against the same reference.
+      expect(ledgerReference()).toBe('pay-4');
+      // And it is recorded back onto the checkin, which is what turns "pending"
+      // into "done" and stops the row showing up in the backlog query.
+      expect(updatedPoints()).toEqual({ points: 1 });
+    });
+
+    it('does not credit twice when the ledger already holds the reference', async () => {
+      // The narrower partial failure: the ledger row landed, then the process died
+      // before writing `points` back. The unique violation is the evidence that the
+      // money already moved, so it must not be retried as a fresh credit.
+      stubMember();
+      mockDb.insert.mockReturnValueOnce(createBuilder([]));
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'chk-1', paymentId: 'pay-5', points: null, amountCents: 5000, note: null },
+        ]),
+      );
+      stubProgram();
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockRejectedValueOnce({
+        message: 'duplicate key value violates unique constraint "uq_points_tx_reference"',
+        code: '23505',
+      });
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-5',
+        member_code: 'ABC-1234',
+        amount_cents: 5000,
+      });
+
+      // The checkin is brought up to date so the backlog clears, but no second
+      // credit was written: the customer ends with one, not two.
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.points).toBe(1);
+      expect(updatedPoints()).toEqual({ points: 1 });
+    });
+
+    it('records the sale without points when the program\'s unit is unusable, rather than refusing it', async () => {
+      // A `purchase` program with an unreadable unit. The sale genuinely happened
+      // and the customer is owed for it, so failing the request would throw away a
+      // real sale over a configuration problem on our side — the trade the
+      // non-negotiable rule forbids. The row lands with `points IS NULL`, which is
+      // a backlog somebody can find with one query.
+      stubMember();
+      stubProgram({ earnBy: 'purchase', earnUnitAmount: 'not-a-number' });
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'chk-1', paymentId: 'pay-6', amountCents: 5000, points: null }]),
+      );
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-6',
+        member_code: 'ABC-1234',
+        amount_cents: 5000,
+      });
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.points).toBeNull();
+      // No ledger write, and `points` is left NULL rather than zeroed: zero would
+      // look credited and close the backlog with a lie.
+      expect(ledgerStatements()).toEqual([]);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('records a manual entry with no payment_id and no dedupe', async () => {
+      // The documented weaker path. `payment_id` is NULL, and Postgres' `NULL !=
+      // NULL` means the unique index does not collide — nothing breaks, it simply
+      // cannot protect this path from its own double entry. The checkin's own id is
+      // used as the ledger reference so the credit is at least attributable.
+      stubMember();
+      stubProgram();
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-manual', amountCents: 5000 }]));
+      stubLedger(1);
+
+      const res = await POST('/v1/checkins', { member_code: 'ABC-1234', amount_cents: 5000 });
+
+      expect(res.status).toBe(201);
+      expect(insertedValues()).toMatchObject({ paymentId: null });
+      expect(ledgerReference()).toBe('chk-manual');
+    });
+
+    it('stores items as sent, without checking them against the amount', async () => {
+      // `items` is best-effort metadata and `amount_cents` is authoritative. A
+      // mismatch must not refuse a real sale: we hold no catalogue to reconcile
+      // against, and the merchant's system owns the product identity.
+      stubMember();
+      stubProgram();
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-1', amountCents: 5000 }]));
+      stubLedger(1);
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-7',
+        member_code: 'ABC-1234',
+        amount_cents: 5000,
+        items: [{ product_ref: 'x', name: 'Café', qty: 2, unit_price_cents: 250 }],
+      });
+
+      expect(res.status).toBe(201);
+      // The amount is stored exactly as sent, and nothing reconciles the two.
+      expect(insertedValues()).toMatchObject({
+        amountCents: 5000,
+        items: [{ product_ref: 'x', name: 'Café', qty: 2, unit_price_cents: 250 }],
+      });
+    });
+
+    it('inspects the conflict target on (business_id, payment_id)', async () => {
+      stubMember();
+      mockDb.insert.mockReturnValueOnce(createBuilder([]));
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'chk-1', paymentId: 'pay-8', points: 1, amountCents: 5000 }]),
+      );
+
+      await POST('/v1/checkins', { payment_id: 'pay-8', member_code: 'ABC-1234', amount_cents: 5000 });
+
+      // The dedupe has to be the unique index's, decided by Postgres in the same
+      // statement. A read-then-write would let two concurrent retries of one
+      // payment both insert, and the loser would fail as an unhandled error rather
+      // than answering 200.
+      const statement = mockDb.insert.mock.results[0]?.value?.onConflictDoNothing?.mock.calls[0]?.[0];
+      expect(statement).toBeDefined();
+      expect(statement.target).toHaveLength(2);
+    });
+
+    it.each([
+      // The member code is present in every case here, so the amount is what these
+      // are about. A request missing both is judged on the member code first and is
+      // asserted separately below.
+      { label: 'absent', body: { member_code: 'ABC-1234' } },
+      { label: 'a string', body: { member_code: 'ABC-1234', amount_cents: 'mucho' } },
+      { label: 'a decimal', body: { member_code: 'ABC-1234', amount_cents: 50.5 } },
+      { label: 'zero', body: { member_code: 'ABC-1234', amount_cents: 0 } },
+      { label: 'negative', body: { member_code: 'ABC-1234', amount_cents: -5000 } },
+    ])('answers 400 and writes nothing when the amount is $label', async ({ body }) => {
+      const res = await POST('/v1/checkins', body);
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_AMOUNT_CENTS');
+      // The sale has already happened at this point, so the check must run before
+      // the database is touched at all — not merely before the insert.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(mockDb.execute).not.toHaveBeenCalled();
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+
+    it('answers 400 when there is no member_code to attribute the sale to', async () => {
+      const res = await POST('/v1/checkins', { amount_cents: 5000 });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_MEMBER_CODE');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 and writes nothing when the code belongs to nobody', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      const res = await POST('/v1/checkins', {
+        payment_id: 'pay-9',
+        member_code: 'GONE-0000',
+        amount_cents: 5000,
+      });
+
+      expect(res.status).toBe(404);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('MEMBER_CODE_NOT_FOUND');
+      // Nothing is written. A sale with no member has no identity to attach to,
+      // and inventing one would put points on somebody else's balance for a
+      // purchase they did not make. `withRls` has already opened the session by
+      // this point, so the claim is about writes rather than about contact.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(ledgerStatements()).toEqual([]);
     });
   });
 });
