@@ -224,8 +224,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
       jose:
         specifier: ^6.2.12
         version: 6.2.12
@@ -373,8 +373,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260722.1
@@ -404,8 +404,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260722.1
@@ -435,8 +435,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260722.1
@@ -485,8 +485,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260722.1
@@ -516,8 +516,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260722.1
@@ -547,8 +547,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
       jose:
         specifier: ^6.2.12
         version: 6.2.12
@@ -572,8 +572,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260925.2)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.9
+        specifier: ^4.13.13
+        version: 4.13.13
       jose:
         specifier: ^6.2.12
         version: 6.2.12
@@ -2681,8 +2681,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.13.9:
-    resolution: {integrity: sha512-7dMkQmZoC4E6F7AtaQSPhlWAdnBti+j7rreMZl8QB4jFiEhP9TWbGWUMi8WYzBCgmgulxuvLQupKqo+Co6Omyg==}
+  hono@4.13.13:
+    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
     engines: {node: '>=16.9.0'}
 
   html-encoding-sniffer@6.0.0:
@@ -5664,7 +5664,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.13.9: {}
+  hono@4.13.13: {}
 
   html-encoding-sniffer@6.0.0:
     dependencies:
