@@ -324,18 +324,40 @@ jobs:
       - name: Deploy ${{ matrix.service }} worker
         run: |
           ARGS=""
-          if [ "${{ matrix.service }}" = "identity" ]; then
-            ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
-            ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
-          fi
-          if [ "${{ matrix.service }}" = "communication" ]; then
-            ARGS="$ARGS --var WHATSAPP_PHONE_ID:${{ secrets.WHATSAPP_PHONE_ID }}"
-            ARGS="$ARGS --var WHATSAPP_TOKEN:${{ secrets.WHATSAPP_TOKEN }}"
-            ARGS="$ARGS --var WHATSAPP_VERIFY_TOKEN:${{ secrets.WHATSAPP_VERIFY_TOKEN }}"
-          fi
-          if [ "${{ matrix.service }}" = "wallet" ]; then
-            ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
-          fi
+          # `DATABASE_URL` is a connection string with a password in it, so it
+          # arrives as a `--var` from the secret rather than living in a
+          # `wrangler.jsonc` that is committed.
+          #
+          # **Six** workers read it, not two. Four of them call
+          # `createDb(c.env.DATABASE_URL)` — `analytics`, `automation`,
+          # `communication` and `growth` — and `customer` takes it the same way.
+          # Listing only `identity` and `wallet` left the other four depending on a
+          # binding that this job never sets, which is not something any local run
+          # can show: the deploy is the only place the omission exists.
+          #
+          # `wrangler deploy` keeps bindings a previous deploy set, so a worker that
+          # had the var once keeps working while a worker that never did returns
+          # `500` from `set_config` on the first query. That is what
+          # `/v1/communication/templates` was doing.
+          #
+          # The list is the `createDb(c.env.DATABASE_URL)` set plus `identity`, and
+          # it is asserted by `deploy-bindings.contract.test.ts` so a seventh worker
+          # cannot join that group without the deploy being taught about it.
+          case "${{ matrix.service }}" in
+            identity)
+              ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
+              ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+              ;;
+            communication)
+              ARGS="$ARGS --var WHATSAPP_PHONE_ID:${{ secrets.WHATSAPP_PHONE_ID }}"
+              ARGS="$ARGS --var WHATSAPP_TOKEN:${{ secrets.WHATSAPP_TOKEN }}"
+              ARGS="$ARGS --var WHATSAPP_VERIFY_TOKEN:${{ secrets.WHATSAPP_VERIFY_TOKEN }}"
+              ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+              ;;
+            analytics | automation | customer | growth | wallet)
+              ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+              ;;
+          esac
           npx --yes wrangler deploy $ARGS
         working-directory: ${{ matrix.dir }}
         env:
