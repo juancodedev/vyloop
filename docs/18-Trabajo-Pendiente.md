@@ -36,7 +36,7 @@ nada de lo que el sistema puede saber solo:
 ```
 
 `external_reference` es lo que nos separa del competidor: Loyalia cuenta cada ticket como **visita**
-y tira el monto a la basura.-atado a un cliente, acumulamos **por valor**.
+y tira el monto a la basura. Con el monto atado a un cliente, acumulamos **por valor**.
 
 ### Contrato del endpoint
 
@@ -98,7 +98,9 @@ que más riesgo de puntos fantasma arrastra.
 
 ---
 
-## Bug vivo — decisión necesaria antes de seguir
+## Resuelto — bajo `visit`, una visita es un conteo (no un monto en pesos)
+
+> Estado: cerrado. Se conserva el registro de la decisión, no la pregunta.
 
 **Origen:** commit `551b912` (la regla pesos→puntos).
 
@@ -109,29 +111,60 @@ if (!Number.isInteger(body.points)) → 400 VALIDATION_ERROR
 ```
 
 El guard anterior era `body.points < 1`. El POS, bajo `earn_by: 'visit'` (que es el default, y donde
-están todos los tenants hoy), manda el **subtotal en pesos como `points`**:
+están todos los tenants hoy), mandaba el **subtotal en pesos como `points`**:
 
 ```
 venta de $4.00  → points: 4     → entero     → ✅
 venta de $3.50  → points: 3.5   → no entero  → ❌ 400
 ```
 
-**Todos los precios del menú terminan en .50.** Es decir: la mitad de las ventas fallan.
+**Todos los precios del menú terminan en .50.** Es decir: la mitad de las ventas fallaban.
 
-**Por qué no lo arregló el worker:** cada arreglo posible cruza una frontera de otro work unit.
+### Qué se decidió
 
-- El valor honesto bajo `visit` es un **conteo** ("hubo una visita"), no un monto en pesos. Pero eso **cambia el saldo de todos los tenants existentes** y toca `apps/dashboard/src/app/dashboard/customers/[id]/page.tsx`, que comparte el helper.
-- `loyalty-points.contract.test.ts` fija `api.assignPoints(customer.id, subtotal, …)` con una aserción explícita de "not floored" cuya razón escrita —*"el server hace el floor del producto"*— ya está desactualizada.
+**Opción B.** No A: `Math.round(subtotal)` no arreglaba el bug, lo escondía. Un café de $3.50
+contando como 4 visitas es una mentira en la única dirección que el cajero puede ver en el ticket,
+y deja el `NaN` reintroducido por la puerta de atrás. No C: revertir el guard deshace la protección
+del `NaN` y devuelve el 400 sin explicación.
 
-### Opciones
+La pregunta que había que responder antes de escribir código era *"¿qué es una visita?"*, y la
+respuesta es un hecho sobre el **evento**, no sobre su precio: **una venta cobrada o un check-in es
+una visita.** El cliente vino una vez, haya gastado $1 o $99.999. Un monto en pesos no es un conteo
+— y por eso el POS lo estaba mandando donde el worker exige un entero.
 
-| | Cambio | Costo |
-|---|---|---|
-| **A** | El POS manda `Math.round(subtotal)` bajo `visit` | Pie de oat. Un café de $3.50 cuenta como 4 puntos. Semánticamente raro pero **no rompe saldo existente**. |
-| **B** | `visit` deja de aceptar pesos y el POS manda `1` por check-in | Correcto semánticamente, pero **cambia el saldo de todos los tenants**. Necesita migración de datos y comunicación. |
-| **C** | Revertir el guard a `body.points < 1` y filtrar solo no-finitos | Deshace la protección del `NaN`. **No.** |
+### De dónde sale el número
 
-**Recomendación: A como mitigación inmediata**, y **B como el arreglo de fondo** cuando se defina qué
-es una visita. A es un parche; B es la decisión de producto.
+De un solo lugar con nombre: `VISITS_PER_CHARGE` en `apps/dashboard/src/lib/loyalty-points.ts`.
 
-Mientras no se elija, **la mitad de las ventas de los tenants en `visit` devuelven 400.**
+No es `Math.round`, no es `Math.ceil`, no es el largo del carrito. `earnBase` ahora recibe los dos
+hechos de una venta por separado — `pesos` y `visits` — y **la mecánica elige cuál lee**:
+
+```
+purchase → pesos / earn_unit_amount   (cuánta unidad se compró)
+visit    → visits                     (cuántas visitas, tal cual)
+```
+
+Bajo `visit` el dinero no se lee en absoluto, que es exactamente lo que hace que una venta de $3.50
+sea vendible otra vez: la base es entera por construcción, no por redondeo.
+
+### Consecuencias aceptadas
+
+- **Cambia el comportamiento de todos los tenants**, porque `visit` es el default. Aceptado: la
+  alternativa era que la mitad del menú no se vendiera.
+- **Los saldos que ya están en `points_transactions` se quedan como están.** Son datos de prueba
+  escritos bajo la lectura vieja. Sin migración, sin backfill, sin limpieza.
+- La etiqueta del modal "Registrar Venta" en `customers/[id]` pasa a decir **Visitas / conteos**
+  con `step="1"` bajo `visit`: el operador ya no tiene que escribir pesos donde va un conteo.
+
+### Qué NO se tocó (y por qué está bien así)
+
+| | |
+|---|---|
+| `workers/growth/src/routes.ts` | El contrato del servidor ya era correcto. `Number.isInteger` está bien: un conteo de visitas es un entero. Los **llamadores** estaban mal. |
+| `packages/db/**` | No hay nada que migrar. |
+| `MAX_EARN_RATE` / `MAX_EARN_UNIT_AMOUNT` | Los techos siguen siendo una pregunta abierta, en otro work unit. |
+
+### Sigue abierto
+
+- Los ceilings (`MAX_EARN_RATE`, `MAX_EARN_UNIT_AMOUNT`) — decisión aparte, sin dueño todavía.
+- La **Etapa 0b** de arriba (`POST /v1/checkins`) y su decisión de idempotencia, sin cambios.

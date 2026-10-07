@@ -6,11 +6,15 @@ import { api } from '@/lib/api';
 import type { EarnBy, LoyaltyConfig } from '@/lib/api';
 import { describeEarnRule } from '@/lib/loyalty-earn-rule';
 
+// Each mechanic's option text says what the mechanic actually credits. Under
+// `visit` that is deliberately "no depende del monto": the count a caller sends is
+// a count, the worker refuses a non-integer one, and a merchant who thought the
+// program paid on spend would only discover it as a failed sale.
 const EARN_BY_OPTIONS: Array<{ value: EarnBy; label: string; hint: string }> = [
   {
     value: 'visit',
     label: 'Por visita / conteo',
-    hint: 'Cada visita, chequeo o conteo válido otorga puntos. No depende del monto.',
+    hint: 'Una venta cobrada o un conteo válido otorga puntos. No depende del monto: cada visita cuenta igual.',
   },
   {
     value: 'purchase',

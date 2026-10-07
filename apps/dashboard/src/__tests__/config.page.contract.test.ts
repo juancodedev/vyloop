@@ -77,4 +77,41 @@ describe('the loyalty config page describes the rule it is running', () => {
     expect(configPageSource).toMatch(/TASA DE ACUMULACIÓN/);
     expect(configPageSource).not.toMatch(/puntos por \$1\.000/);
   });
+
+  it('tells the merchant that a visit does not depend on the amount', () => {
+    // The option hint is the only place a merchant reads, before saving, what one
+    // visit is worth. Under `visit` the caller sends a count and the worker refuses
+    // a non-integer one, so "does not depend on the amount" is the fact that makes
+    // the program make sense — and the absence of it is what made a fractional-peso
+    // sale fail with no on-screen explanation.
+    //
+    // No money in it: the hint for `visit` says so in words, because a peso figure
+    // here would describe the mechanic this program does not run.
+    const visitHint = configPageSource.match(/value: 'visit',[\s\S]*?hint:\s*'([^']+)'/);
+
+    expect(visitHint, 'no visit option hint found').not.toBeNull();
+    expect(visitHint![1]!.toLowerCase()).toMatch(/no depende/i);
+    expect(visitHint![1]!).not.toContain('$');
+    expect(visitHint![1]!.toLowerCase()).not.toContain('pesos');
+  });
+
+  it('names a redeemed sale as one visit, which is what the POS sends', () => {
+    // The specific gap: the hint used to say "visita, chequeo o conteo" without ever
+    // saying that a sale IS one. A merchant reading it could reasonably think the
+    // count came from somewhere else in the system, and the POS sends exactly this
+    // — one count per redeemed sale — which is why the sentence has to name it.
+    const visitHint = configPageSource.match(/value: 'visit',[\s\S]*?hint:\s*'([^']+)'/);
+
+    expect(visitHint![1]!.toLowerCase()).toMatch(/venta cobrada/);
+  });
+
+  it('does not let the visit option describe a spend-based program', () => {
+    // The mirror of the assertion above: a `visit` option whose hint promises money
+    // would be the same false promise this file was written for, in the one place a
+    // merchant chooses between the two mechanics.
+    const visitHint = configPageSource.match(/value: 'visit',[\s\S]*?hint:\s*'([^']+)'/);
+
+    expect(visitHint![1]!.toLowerCase()).not.toMatch(/de compra/);
+    expect(visitHint![1]!.toLowerCase()).not.toMatch(/pesos/);
+  });
 });
