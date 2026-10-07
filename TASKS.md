@@ -120,22 +120,87 @@
 - [x] **QR del negocio** — Página para mostrar/compartir el QR del comercio
 - [x] **CRUD de rewards** — UI para crear/editar rewards del programa de lealtad
 - [x] **Fix loyalty customers** — Row click navega al detalle del cliente
+- [x] **Guard deQR sin comercios sembrados, también en el dashboard** — `cafe-central`,
+      `demo-shop` y `barro` existen en los seeds, y un comercio nunca puede ver el nombre de otro
+      ni ser enviado al registro de otro. Cubierto en los dos paquetes:
+      `apps/customer-web/app/delivery.contract.test.ts` y
+      `apps/dashboard/src/__tests__/qr-tenant.contract.test.ts`
 - [ ] **Dashboard analytics** — KPIs (clientes nuevos, puntos emitidos, canjes)
 
 ### Customer Web
-- [ ] **Auth real** — Reemplazar mock auth por autenticación real contra el gateway
+- [x] **Auth real** — Login por teléfono contra `POST /v1/auth/customer/token`, reemplazando el mock
+- [x] **Aislamiento por comercio en el login** — `businessSlug` es obligatorio y un slug desconocido
+      se rechaza. Antes: sin `?biz=` elegía el tenant que la base devolviera primero, y un slug
+      inexistente emitía un token de un tenant arbitrario
+- [x] **Canal de soporte en la pantalla de error** — `POST /v1/support` con rate limit, honeypot y
+      Turnstile. Falla cerrado: sin token devuelve 403, y sin secret configurado 503
 - [ ] **Canje de rewards** — Flujo para que el cliente canjee sus puntos
 - [ ] **Push notifications** — Notificaciones de puntos, niveles, rewards
 
-### Otros
-- [ ] **Design tokens** — Sistema de diseño unificado (colores, tipografía, spacing)
-- [ ] **Modo oscuro** — Dark mode en dashboard y customer-web
-- [ ] **Internacionalización** — Soporte multi-idioma (es, pt, en)
-- [ ] **Tests end-to-end** — Playwright o Cypress para flujos críticos
-- [ ] **Documentación API** — OpenAPI spec actualizada con todos los endpoints vivos
-- [ ] **Licencia** — Definir y agregar licencia al proyecto
+### Alta de comercios (autoservicio)
+- [x] **Formulario de alta** — `/login?signup=true` llama a `POST /v1/auth/business/signup`, deriva
+      el slug, inicia sesión al operador nuevo y muestra el enlace de registro
+- [x] **Botón "Comenzar Gratis"** — la landing del dashboard enlaza al alta
 
----
+### Google Wallet — estado de revisión
+- [x] **Sincronización de `review_status`** — el sweep diario refresca de Google toda clase que no
+      esté `approved`. El cron vive en el sweep existente porque la cuenta tiene sus 5 cron triggers
+      asignados y un sexto es rechazado con `10072`
+- [x] **Casing de la respuesta de Google** — `loyaltyclass.get` devuelve `reviewStatus` en
+      minúsculas. El mapeo inverso no matcheaba ninguna respuesta real y devolvía 502 para todos los
+      estados, incluido `approved`
+
+### Otros
+  - [ ] **Design tokens** — Sistema de diseño unificado (colores, tipografía, spacing)
+  - [ ] **Modo oscuro** — Dark mode en dashboard y customer-web
+  - [ ] **Internacionalización** — Soporte multi-idioma (es, pt, en)
+  - [ ] **Tests end-to-end** — Playwright o Cypress para flujos críticos
+  - [ ] **Documentación API** — OpenAPI spec actualizada con todos los endpoints vivos
+  - [ ] **Licencia** — Definir y agregar licencia al proyecto
+
+  ---
+
+  ## 🐾 Bugs de producción encontrados probando el flujo real
+
+  Los cuatro se mergearon con los cuatro gates en verde. **Ninguno era visible desde los tests**,
+  y tres compartían la misma forma: el test afirmaba el comportamiento equivocado, o no afirmaba
+  nada sobre el valor queimportaba.
+
+  | Qué | Síntoma | Por qué los gates no lo vieron |
+  |---|---|---|
+| `PUT /v1/customers` con email duplicado | 500 | La violación de índice único no se manejaba; `PATCH` sí lo hacía y `PUT` no |
+  | Nombre del índice en el error del driver | `CUSTOMER_CONFLICT` siempre, nunca `CUSTOMER_EMAIL_TAKEN` | El fixture usaba `constraint_name`; el driver lo llama `cause.constraint` |
+  | `PUT /v1/customers` sin token válido | 500 **después** de insertar la fila | El cliente quedaba registrado y se le decía que no. El test afirmaba el 500 como correcto |
+  | El form de soporte sin token de Turnstile | 403 siempre | `useRef` declarado y leído, escrito nunca. **Todos** los tests mockean `sendSupportMessage` |
+
+  ### La lección, en una línea
+
+  > **Un mock que reemplaza el valor que viaja por el cable no está probando el cable.**
+  > Un mapping testeado contra su propio enum no matchea ninguna respuesta real.
+
+  ### La trampa de infraestructura
+
+  `wrangler.jsonc` **no lo valida ningún gate**. Un flag de compatibility inventado pasó lint,
+  typecheck y tests enteros, y el deploy lo rechazó con `No such compatibility flag`. Lo mismo
+  con `useSearchParams()` fuera de un boundary de Suspense: los cuatro gates en verde, el build roto.
+
+  **El build es su propio check, y no lo corre ningún script de tests.**
+
+  ### Los guards que sí atraparon cosas
+
+  Vale la pena lo contrario, porque es lo que se está buscando:
+
+  - El guard de QR del dashboard rechazó el form de alta por un
+    `placeholder="Café Central"` y después por armar `?biz=` a mano. **Ambas veces tenía razón** —
+    el segundo porque esa es la forma que matchea el escáner del cajero.
+  - `customer-patch.contract.test.ts` rechazó que un test escribiera un código de error a mano.
+  - `qr-tenant.contract.test.ts` y `globals.contract.test.ts` rechazaron markup sin regla CSS y un
+    `style` inline.
+
+  Un guard que te frena sin que lo esperes está funcionando. El problema no es que haya demasiados:
+  es que **no cubren el cable ni el build**, que es donde estaban los cuatro bugs.
+
+  ---
 
 ## Referencias Rápidas
 
@@ -147,12 +212,26 @@
 | Customer Web | https://vyloop-customer-web.pages.dev |
 | Gateway API | https://gateway.cl-jmunoz.workers.dev |
 
+### El link del cliente es el que lleva el comercio
+
+```
+https://vyloop-customer-web.pages.dev/register?biz=<slug>
+```
+
+**Sin `?biz=` no hay login ni registro**, y está a propósito: un teléfono no es único entre
+comercios, así que sin el slug la pregunta no tiene respuesta. Cada comercio ve el suyo al
+terminar el alta, y es también lo que imprime como QR.
+
+**`vyloop.juancode.dev` NO es el customer-web.** Ese es el dashboard. El `/c/<uuid>` del QR es el
+`global_id` del cliente y lo resuelve el POS con `/v1/customers/by-global-id/:globalId`; apunta a
+`pages.dev`, que es donde vive de verdad.
+
 ### Credenciales Demo
 
 | Rol | Email / Teléfono | Contraseña |
 |-----|------------------|-------------|
 | Admin (Café Central) | demo@cafecentral.com | demo123 |
-| Cliente (Lucía Fernández) | +56956789012 | (login con teléfono) |
+| Cliente (Lucía Fernández) | +56956789012 | (login con teléfono, en `/login?biz=cafe-central`) |
 
 ### Comandos Útiles
 

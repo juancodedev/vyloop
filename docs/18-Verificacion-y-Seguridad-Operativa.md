@@ -195,6 +195,39 @@ Sí se loguea: el **código** de error, el `request_id`, y el nombre del recurso
 Comprobado contra producción el 2026-10-05: **5 tenants, 13 clientes, 5 pases, 5 filas de clase
 de wallet, 7 entregas de callback registradas.**
 
+Actualizado el **2026-10-07**: **6 tenants** — `cafeteria-dragon` se creó ese mismo día desde el
+formulario de alta, que es la primera vez que un comercio entró por la interfaz en vez de por
+un `curl`. Sigue habiendo **5 clases aprobadas** de las 6; la nueva está en `draft` porque Google
+aún no la revisó.
+
+### El registro de clientes devuelve 409 por email repetido, no 500
+
+Comprobado el 2026-10-07 contra producción, con un teléfono nuevo y un email ya usado en el mismo
+comercio:
+
+```
+teléfono nuevo     + email tomado  ->  409 CUSTOMER_EMAIL_TAKEN
+teléfono conocido  + email tomado  ->  409 CUSTOMER_EMAIL_TAKEN
+email libre                      ->  201
+```
+
+El mensaje entra en los 180 caracteres que el formulario exige antes de caer en su copy genérico, y
+dice lo único que desbloquea al cliente: que el campo es opcional y lo deje vacío.
+
+### El login de cliente exige el comercio
+
+`POST /v1/auth/customer/token` **requiere `businessSlug`**. Un teléfono no es único entre
+comercios — la misma persona es cliente de cuatro cafés y `customers` tiene una fila por
+`(business_id, phone)` — así que sin el comercio la pregunta no tiene respuesta.
+
+Sin él, la búsqueda era `where phone = ? limit 1`, sin orden: **la misma fila y otro café según el
+día**. Y un slug que no existía no daba error, porque el refinamiento era condicional y caía al
+lookup global: **token válido de un tenant arbitrario**, que renderiza el nombre de un café y
+escribe un QR con el id de un cliente de otro local.
+
+Ante la ausencia de `?biz=`, `/login` muestra qué enlace falta y deshabilita el formulario en vez
+de pedir un número que no puede identificar nada.
+
 ### Cómo se identificó producción, y por qué este documento se equivocaba antes
 
 La versión anterior de esta tabla nombraba `polished-firefly-68401534` como producción. **No lo
@@ -333,6 +366,37 @@ Está anotado como pendiente en `docs/14-Backlog.md`.
 ## 6. La review de Google Wallet es de ida
 
 Esta sección resume las propiedades de la API de Google que hacen la revisión irreversible. Las fuentes son las mismas que cita `docs/11-crear-tarjeta-lealtad.md`.
+
+### `review_status` es una caché, y hay que refrescarla
+
+Google aprueba clases **por su cuenta y en su propio calendario**. `review_status` se escribe una vez, como `draft`, al crear la clase. Si nadie lee la respuesta de Google, la fila dice `draft` para siempre — y el cliente ve *"tu tarjeta está en revisión"* aunque Google la haya aprobado hace días.
+
+Hay dos piezas, y **las dos hacen falta**:
+
+| pieza | qué hace | qué pasaba si falta |
+|---|---|---|
+| `POST /v1/wallet/program/sync` | refresca **un** tenant, el de quien llama | el comerciante tiene que refrescar a mano desde su panel |
+| el sweep diario | refresca **todos** los que no estén `approved` | el estado de la flota se congela el día que se crea |
+
+El cron vive dentro del sweep existente porque la cuenta de Cloudflare tiene sus **cinco cron triggers asignados** — un sexto es rechazado con el error `10072` y rompe el deploy. `automation` dispara el `scheduled` del worker `wallet` por service binding, así que el refresh corre con las credenciales de Google de ese worker y alcanza a todos los tenants. **Por eso la ruta no puede hacer este trabajo**: lee un solo tenant, el del que llama.
+
+> **El casing importa.** `loyaltyclass.get` devuelve `reviewStatus` en **minúsculas** (`approved`), aunque la documentación de Google lo describa en mayúsculas. Un `switch` escrito contra la grafía documentada no matchea ninguna respuesta real y devuelve `null` — que el sync convertía en `502`, para todos los estados incluido `approved`. Consecuencia observada: **`review_status` nunca pudo escribirse desde Google**, y los merchants quedaron en `draft` sin que nadie pudiera saberlo.
+
+### Estado verificado por lectura real
+
+Comprobado contra producción el 2026-10-07, leyendo `review_status` desde la API de Google y no desde la fila:
+
+```
+slug                  review_status   leído de Google
+cafeteria-dragon      draft           2026-10-07   ← creada hoy, Google aún no aprueba
+cafe-central          approved        2026-10-07   ← confirmada contra Google
+cafe-e2e-1448         approved        sin releer
+vyloop-demo           approved        sin releer
+cafe-prueba-0117      draft           NUNCA        ← espera el sweep
+sonda-a2-1116         draft           NUNCA        ← espera el sweep
+```
+
+`cafeteria-dragon` es el control: se leyó y Google **`draft`**. No era caché viejo — Google de verdad no la aprobó todavía, y es una clase creada el mismo día. Un `draft` de una hora y un `draft` de seis días se distinguen por la fecha de creación, no por el estado.
 
 ### `reviewStatus` no vuelve a `draft`
 

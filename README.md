@@ -30,26 +30,31 @@ Vyloop es una plataforma multi-tenant de lealtad y engagement para PyMEs en Lati
 
 ### Google Wallet — estado real
 
-- **Clase de Google Wallet aprobada.** La clase de Café Central pasó la review de Google. *No
-  verificado desde este repositorio*: vive en la consola de Google Pay & Wallet, y la única
-  huella local es la fila de `tenant_wallet_programs`.
-- **Pase emitido y guardado en Google Wallet desde un teléfono real.** Verificado en la sesión
-  de integración. En producción hay **3 pases en estado `issued`** — ese estado lo escribe la
-  reconciliación leyendo el objeto en Google, así que el objeto existe del lado de Google.
+- **Clase de Google Wallet aprobada, y verificado desde este repositorio.** Se lee de la API de
+  Google, no de la consola: `POST /v1/wallet/program/sync` trae `review_status` de
+  `loyaltyclass.get`. En producción hay **5 clases `approved` de 6**; la sexta
+  (`cafeteria-dragon`) está en `draft` porque se creó hoy y Google todavía no la revisó.
+- **Pase emitido y guardado en Google Wallet desde un teléfono real.** En producción hay pases en
+  estado `issued` — ese estado lo escribe la reconciliación leyendo el objeto en Google, así que el
+  objeto existe del lado de Google.
 - **Callback de Google deploying y firmando.** `POST /v1/wallet/google/callback` verifica la
-  firma antes de tocar la base, y `media.juancode.dev` lo sirve con un `robots.txt` que permite
-  a Googlebot alcanzarlo. *No verificado de punta a punta:* la tabla
-  `wallet_callback_deliveries` está vacía en producción, así que no hay evidencia de que un
-  callback haya llegado a aplicarse. Está en el backlog.
+  firma antes de tocar la base, y `media.juancode.dev` lo sirve con un `robots.txt` que permite a
+  Googlebot alcanzarlo.
 
-> ⚠️ **La fila de `tenant_wallet_programs` todavía dice `review_status = 'draft'` y su
-> `demo_mode` es `false`.** Nadie corrió `POST /v1/wallet/program/sync` después de la aprobación,
-> así que la fila local no refleja lo que Google ya dijo. Es el paso 4 de
-> [`docs/11-crear-tarjeta-lealtad.md`](docs/11-crear-tarjeta-lealtad.md), y el orden importa:
-> sincronizar primero, después el flag. `scripts/check-wallet-readiness.mjs` lo reporta.
+> **El estado de revisión ya no se sincroniza a mano.** El sweep diario refresca de Google toda
+> clase que no esté `approved`, así que la fila deja de ser una suposición hecha al crear la clase
+> y pasa a ser la respuesta de Google. El cron vive dentro del sweep existente porque la cuenta de
+> Cloudflare tiene sus cinco cron triggers asignados y un sexto es rechazado con `10072`.
 
-Lo que **no** está: el gate de migraciones en el deploy, y las piezas de UX que faltan para que
-un comensal llegue solo hasta la tarjeta — están en [`docs/14-Backlog.md`](docs/14-Backlog.md).
+> ⚠️ **El casing de la respuesta de Google importa.** `loyaltyclass.get` devuelve `reviewStatus` en
+> **minúsculas**, aunque la documentación de Google lo describa en mayúsculas. Un mapeo escrito
+> contra la grafía documentada no matchea ninguna respuesta real. Pasó meses: `review_status` era
+> un valor que **nunca pudo escribirse desde Google**, y varios comercios quedaron en `draft`
+> sin que nadie lo supiera. Cualquier mapping contra una API externa se testea con **lo que la API
+> devuelve de verdad**, no contra el enum propio.
+
+Lo que **no** está: las piezas de UX que faltan para que un comensal llegue solo hasta la tarjeta —
+están en [`docs/14-Backlog.md`](docs/14-Backlog.md).
 
 ---
 
@@ -59,9 +64,14 @@ un comensal llegue solo hasta la tarjeta — están en [`docs/14-Backlog.md`](do
 
 | | Base | Qué es |
 |---|---|---|
-| **Producción** | Neon `polished-firefly-68401534` | La que inyecta `.github/workflows/deploy.yml` desde el secret de GitHub `DATABASE_URL` |
+| **Producción** | Neon `ep-shiny-paper-aibbf0hk` | La que inyecta `.github/workflows/deploy.yml` desde el secret de GitHub `DATABASE_URL` |
 | **Dev** | Neon `ep-divine-bonus-ai05bdy3` | La `DATABASE_URL` de los `workers/*/.dev.vars`. 1 tenant, sin fila de clase de wallet |
-| **Migrado** | Supabase `mysrgtsuoxhpsyfhdnsp` | Proyecto anterior, ya no en uso. Vacía, sin schema |
+| **Migrado** | Supabase `mysrgtsuoxhspyfhdnsp` | Proyecto anterior, ya no en uso. Vacía, sin schema |
+
+> ⚠️ **La producción NO es `polished-firefly-68401534`.** Ese nombre es un **project id**, no un
+> endpoint, y ninguna versión anterior lo comprobó contra un servidor. Se lee el endpoint real del
+> secret `DATABASE_URL` de producción. Detalle y método:
+> [`docs/18-Verificacion-y-Seguridad-Operativa.md`](docs/18-Verificacion-y-Seguridad-Operativa.md) §4.
 
 > ⚠️ **`.dev.vars` NO es producción.** Es la que se usa cuando corrés `wrangler dev` en local, pero contiene credenciales reales de una base Neon real. Antes de aplicar una migración, confirmá contra cuál base estás escribiendo.
 >
@@ -75,7 +85,12 @@ un comensal llegue solo hasta la tarjeta — están en [`docs/14-Backlog.md`](do
 |---|---|---|
 | **Base de datos** | **Docker** (`docker compose -f docker/docker-compose.yml up -d`) | **Neon** |
 | **`DATABASE_URL`** | `docker/postgres`, o el `.dev.vars` si necesitás tocar datos reales | Secret de GitHub |
-| **Migraciones** | `pnpm --filter @vyloop/db db:migrate` | **A mano.** Ningún job de CI las aplica, y el deploy sale `success` igual |
+| **Migraciones** | `pnpm --filter @vyloop/db db:migrate` | **A mano**, pero el deploy **falla** si hay drift no registrado |
+
+> El gate de drift (`scripts/check-migration-drift.mjs`) corre como dependencia del deploy. El
+> deploy puede salir `success` con una migración sin aplicar si nadie corrió `db:migrate` primero —
+> el gate verifica que la base **coincida** con el schema versionado, no que se haya aplicado lo
+> último. Detalle: [`docs/18-Verificacion-y-Seguridad-Operativa.md`](docs/18-Verificacion-y-Seguridad-Operativa.md).
 
 ---
 
@@ -83,16 +98,30 @@ un comensal llegue solo hasta la tarjeta — están en [`docs/14-Backlog.md`](do
 
 | App | URL | Descripción |
 |-----|-----|-------------|
-| Dashboard | [vyloop.juancode.dev](https://vyloop.juancode.dev) | Login + gestión del comercio |
+| Dashboard | [vyloop.juancode.dev](https://vyloop.juancode.dev) | Login + gestión del comercio. **También el alta**: `/login?signup=true` |
 | Customer Web | [vyloop-customer-web.pages.dev](https://vyloop-customer-web.pages.dev) | Tarjeta de puntos del cliente |
 | API Gateway | `gateway.cl-jmunoz.workers.dev` | Backend API (8 workers) |
 | Gateway (dominio propio) | `media.juancode.dev` | Sirve `/p/{slug}`, `/brand/*`, `robots.txt` y el callback de Google. Sin path raíz: responde 404, y es lo esperado |
 | Página del comercio | [media.juancode.dev/p/cafe-central](https://media.juancode.dev/p/cafe-central) | Página pública que Google revisa como `homepageUri` |
 | Callback de Google Wallet | `POST media.juancode.dev/v1/wallet/google/callback` | Recibe los eventos `save`/`del` del pase. Responde 400 a un POST sin firma válida, que es lo correcto |
 
+### El link del cliente lo define el comercio, no la app
+
+```
+https://vyloop-customer-web.pages.dev/register?biz=<slug>
+```
+
+**Sin `?biz=` no hay login ni registro**, y eso es deliberado: un teléfono no es único entre
+comercios — la misma persona es cliente de varios cafés, con una fila por comercio en `customers`
+— así que sin el slug la pregunta no tiene respuesta. Cada comercio ve el suyo al terminar el
+alta, y es lo mismo que imprime como QR.
+
+> `vyloop.juancode.dev` **no** es el customer-web: es el dashboard. El `/c/<uuid>` del QR es el
+> `global_id` del cliente y lo resuelve el POS con `/v1/customers/by-global-id/:globalId`.
+
 ### Demo: Tarjeta del Cliente
 
-1. Entrá a [vyloop-customer-web.pages.dev](https://vyloop-customer-web.pages.dev)
+1. Entrá a [vyloop-customer-web.pages.dev/register?biz=cafe-central](https://vyloop-customer-web.pages.dev/register?biz=cafe-central)
 2. Iniciá sesión con teléfono `+56956789012`
 3. Ves el perfil de Lucía Fernández con:
    - **Avatar con glow** y animación de puntos
@@ -121,6 +150,46 @@ un comensal llegue solo hasta la tarjeta — están en [`docs/14-Backlog.md`](do
 1. Entrá a [vyloop.juancode.dev](https://vyloop.juancode.dev)
 2. Login con email `demo@cafecentral.com` / contraseña `demo123`
 3. Navegá clientes, niveles, configuración de lealtad
+
+### Alta de un comercio desde cero
+
+1. [vyloop.juancode.dev/login?signup=true](https://vyloop.juancode.dev/login?signup=true)
+2. Nombre del comercio, email y contraseña
+3. Entrás al dashboard, y la pantalla te muestra **tu enlace de registro**:
+   `/register?biz=<slug>`. Ese link es lo que comparten tus clientes y lo que se imprime como QR
+
+El slug se deriva del nombre del comercio, así que conviene elegir un nombre que ya exista en la
+base como `cafe-central`. Si el slug choca, la pantalla te dice **cuál** chocó.
+
+### Cuando el cliente no puede recibir su tarjeta
+
+Un cliente cuyo registro falló **no tiene cuenta** — el registro es justo lo que falló — así que
+no hay a dónde mandarlo a iniciar sesión. Por eso el canal de soporte vive **en la pantalla del
+error**, no en una página `/contact`: no hay navegación extra y no hay nada que identificarlo.
+
+`POST /v1/support` es público, con rate limit, honeypot y Turnstile. **Falla cerrado:** sin token
+devuelve `403`, y si el secret no está configurado devuelve `503` y no manda nada.
+
+El texto libre llega a **un solo lugar**: el cuerpo del email. No va a un log, no a un atributo
+DOM, no a la respuesta. El cuerpo del error de Resend nunca se lee — en un 422 devuelve el payload
+enviado, y leerlo es exactamente cómo ese texto terminaría en un log.
+
+---
+
+## Lo que los cuatro gates NO cubren
+
+`lint`, `typecheck`, `test` y `scripts` en verde **no significan que el producto funcione**. Hay
+dos categorías que se escaparon:
+
+**El build es su propio check.** `wrangler.jsonc` no lo valida ningún gate — un flag de
+compatibility inventado pasó los cuatro y el deploy lo rechazó con `No such compatibility flag`.
+Lo mismo con `useSearchParams()` fuera de un boundary de Suspense: cuatro gates en verde, el
+build del dashboard roto. **Ningún test del repo construye el sitio.**
+
+**Un mock que reemplaza el valor que viaja por el cable no está probando el cable.** Cuatro bugs
+de producción llegaron a `main` con los cuatro gates verdes — entre ellos un formulario que
+mandaba token vacío siempre, con **todos** sus tests mockeando la función que lo recibe. La lista
+está en [`TASKS.md`](TASKS.md).
 
 ---
 
