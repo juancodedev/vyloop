@@ -77,7 +77,7 @@ Dos endpoints, porque son dos momentos distintos y no deben ser un endpoint solo
 **A. Resolver el pase.** Sucede al principio, cuando el cajero escanea. No crea nada.
 
 ```
-POST /v1/passes/resolve
+POST /v1/loyalty/passes/resolve
 { "member_code": "ABC-1234" }
 
 → 200 { "known": true,  "customer_id": "...", "display_name": "..." }
@@ -89,7 +89,7 @@ Siempre 200. Un `known: false` es información para el cajero, no un veto.
 **B. Registrar la venta.** Sucede al final, cuando el pago se concreta.
 
 ```
-POST /v1/checkins
+POST /v1/loyalty/checkins
 {
   "payment_id":    "1234567890",  // opcional — lo manda el terminal. Ausente en la vía manual.
   "member_code":   "ABC-1234",    // obligatorio
@@ -214,6 +214,163 @@ saber la semántica de reintento del otro lado, así que **no se diseña todaví
 debe olvidarse: si aparece, es una etapa propia y va antes que las estadísticas.
 
 ---
+
+## Hecho — el terminal ya tiene credencial, y el limitador ya sabe qué plan estácobrando
+
+**Estado:** implementado. Dos números de producto sin dueño, señalados abajo.
+
+### Lo que se construyó
+
+| | |
+|---|---|
+| `pos_terminals` | La credencial que sostiene al mostrador. `key_hash` es el secreto hasheado, `revoked_at` es `NULL` hasta que se revoca. Migración `0012`, **sin aplicar**. |
+| `POST /v1/auth/pos/token` | Canjea esa credencial por un JWT con `sub: 'pos:<id>'`. Público, porque una caja no tiene sesión. |
+| Claim `plan` | El token lo lleva para que el limitador pueda mirar el plan y no el rol. |
+| `DEFAULT_LIMITS` | Ahora son `{ free: 60, premium: 600 }`, y el limitador keyea por plan. |
+
+### El hallazgo: dos claves muertas y un cliente de pago cobrando como gratis
+
+El limitador leía `config.limits[jwt.role]` y la tabla era `{ free, pro, business }`.
+
+| | |
+|---|---|
+| `role` nunca fue una clave | Los roles reales son `admin`, `staff`, `cashier`, `customer`. El `??` se disparaba en **toda** request autenticada del sistema. |
+| `pro` y `business` no existen | Los planes reales en `tenants.plan` son `free` (5 tenants) y `premium` (1 tenant). Ninguna otra fila del país podía tener esos planes. |
+| El único tenant de pago pagaba como gratis | Resolvía por el `??` a `free`: **60 req/min, idéntico a un tenant que nunca ha pagado.** |
+
+Eso último es el defecto por el que existe el cambio, y es el que `apps/gateway/src/rate-limit.test.ts`
+atrapa por nombre: con el límite de `premium` bajado a 60, la suite se pone roja diciendo
+`premium was refused at request 61`.
+
+`premium` ahora tiene su propio número en una constante con nombre,
+`PREMIUM_PLAN_LIMIT_PER_WINDOW = 600`, y **no está confirmado**. 600 es defendible — es el mismo
+número que `WALLET_CALLBACK_LIMIT_PER_WINDOW`, elegido para una máquina en un comercio de pago, y
+un terminal es eso — pero nadie lo decidió. Lo que sí está decidido es que es mayor que 60: cualquier
+número mayor cierra el defecto. Si algún día se vende "API sin límite", este número es el que hay
+que cambiar.
+
+### Un token sin `plan` no vale más que un plan
+
+`plan` es un claim **opcional**, a propósito. Agregarlo a la lista de claims requeridos de
+`apps/gateway/src/middleware/auth.ts` respondería 401 a todos los tokens emitidos antes del deploy
+—que son válidos por una hora— con un código de error que dice "token inválido", no "token viejo".
+
+El costo de que sea opcional es que hay que hacerlo seguro en vez de imposible: un plan ausente o
+desconocido resuelve a `UNKNOWN_PLAN_LIMIT_PER_WINDOW = 30`, **por debajo** de `free`. Si resolviera a
+60, omitir el claim valdría exactamente lo mismo que ser el plan más barato, y omitir es gratis. Nunca
+sin límite.
+
+### Un mostrador no comparte contador con una persona
+
+La clave del contador ahora incluye el `sub` para los sujetos `pos:`:
+
+```
+contador:     ratelimit:<businessId>:pos:<sub>:<endpoint>
+todo lo demás: ratelimit:<businessId>:<endpoint>          ← igual que antes, byte por byte
+```
+
+Un comercio con dos cajas y un operador no tiene un presupuesto: tiene tres clientes distintos. Los
+humanos de un mismo comercio **siguen compartiendo un contador**, y eso es deliberado — es un techo por
+tenant, y partirlo por usuario multiplicaría por el tamaño del staff la cantidad de presupuesto que un
+tenant puede gastar.
+
+### `POS_PLANS` — decisión de producto, no confirmada
+
+Definido en `workers/identity/src/auth.ts` como una constante sola, para que cambiarla sea una línea:
+
+```ts
+export const POS_PLANS: readonly string[] = ['premium'];
+```
+
+**Sin confirmar.** La hipótesis es la del enunciado: un plan avanzado puede incluir POS, el básico no.
+`['premium']` y no `[]` a propósito: una lista vacía sería la respuesta prudente y también volvería
+todo el feature inalcanzable — ningún tenant podría emitir un `pos:`, el exchange no se podría probar
+de punta a punta, y el guard de las dos rutas de mostrador nunca tendría caso positivo. **Una puerta
+que no se puede abrir no se puede probar.**
+
+El gate se evalúa **en cada canje**, no al crear la terminal: un tenant degradado deja de poder renovar
+su credencial de inmediato, sin que nadie tenga que acordarse de qué filas revocar.
+
+### Secretos: hasheados, mostrados una vez
+
+`key_hash` se escribe con `hashPassword` y se verifica con `verifyPassword` — **el mismo mecanismo de
+`users.password_hash`**, no una segunda implementación. `password.ts` existe exactamente porque tres
+copias de un PBKDF2 son tres lugares donde un parámetro se deriva. Canje una credencial cuesta una
+PBKDF2 de 100k iteraciones, que es más trabajo del que necesita un secreto aleatorio de alta entropía,
+y se paga igual: un esquema de credenciales, no dos.
+
+Un secreto desconocido y una terminal revuelta responden **el mismo status y el mismo código**. Una
+respuesta distinta para "revocada" responde también "este id existe", que es la mitad del trabajo de
+enumerar terminales. El refusal por plan sí tiene código propio (`POS_PLAN_REQUIRED`), porque no es un
+secreto —el comercio sabe en qué plan está— y "por qué no me funciona mi terminal" es una pregunta que
+una persona va a hacer en voz alta.
+
+### Lo que NO está, y hay que saber
+
+- **El registro de una terminal no existe.** Nada en el repositorio crea una fila en `pos_terminals`.
+  El camino de verificación está completo, así que cuando aparezca el escritor el canje funciona sin
+  tocarlo; pero hoy `POST /v1/auth/pos/token` es inalcanzable en la práctica.
+- **Una terminal de un tenant degradado conserva su token hasta que expira.** Aceptado. El canje
+  siguiente ya es rechazado, así que la ventana es el TTL del token (1 hora), no un agujero. No se
+  implementó revocación de tokens ya emitidos, y no se nota: es exactamente lo que ya hace el resto del
+  sistema con sus JWT.
+- **El exchange no tiene límite anónimo todavía.** `/v1/auth/*` es prefijo público y el limitador no
+  limita lo que no está en `ANONYMOUS_LIMITS`, así que esto es un endpoint público que corre una PBKDF2
+  por intento. La entrada falta en `apps/gateway/src/index.ts:184`, fuera de la superficie de este
+  cambio.
+- **`pos_terminals` no tiene índice.** La única consulta es el canje, que busca por primary key. La
+  consulta que lo pediría —"qué terminales tiene este comercio"— no la ejecuta nadie todavía. Cuando
+  exista, el índice va en `schema.ts` **y** la tabla entra en `INDEXED_TABLES` en `indexes.ts`, en el
+  mismo cambio: `migration-sql.test.ts` exige que los `CREATE INDEX` de la historia sean exactamente lo
+  que ese registro reporta.
+- **Hueco conocido en growth, no arreglado aquí.** `requireOperatorRole` rechazaba solo el rol
+  `customer`, así que el token de una terminal lo satisfacía en `POST /v1/loyalty/points/assign`: una
+  caja podía asignar puntos directo y saltarse la regla de acumulación que `POST /v1/loyalty/checkins`
+  existe para aplicar. **Resuelto** — ver "Un token de mostrador ya no es un operador" más abajo.
+
+## Resuelto — un token de mostrador ya no es un operador
+
+> Estado: cerrado. Se conserva el registro de la decisión, no la pregunta.
+
+**Origen:** el hueco que `POST /v1/auth/pos/token` dejó abierto al emitir `sub: 'pos:<terminalId>'`.
+
+`requireOperatorRole` denegaba por **exclusión**: rechazaba `isCustomerRole(auth)` y pasaba todo lo
+demás. Un sujeto mostrador no es un customer, así que pasaba. Con el canje de token ya existente, ese
+token no era hipotético — una caja se autenticaba una vez por arranque y quedaba con una credencial
+que `POST /v1/loyalty/points/assign` aceptaba. El resultado era una escalada de privilegio: la
+terminal mandaba `points` y el saldo se acreditaba sin pasar por la regla de acumulación del tenant.
+
+### Qué se decidió
+
+**Dos preguntas, no una lista de roles permitidos.** `requireOperatorRole` ahora pregunta dos cosas —
+`isCustomerRole(auth) || isCounterSubject(auth)`— y sigue sin ser una allow-list.
+
+Eso es lo que hay que justificar, porque "preguntar en vez de listar" era el argumento del guard
+original y ahora hay dos preguntas. La segunda no lo debiuta:
+
+- **El marcador es el subject, no el rol.** `role` es texto libre que `issueToken` nunca enumera, así
+  que preguntar por `role === 'pos'` sería exactamente la allow-list que este archivo evita. Se usa el
+  `isCounterSubject` que ya existe, tal cual: una segunda definición de "qué es un mostrador" escrita
+  al lado sería la forma de que las dos mitades del archivo dejen de coincidir.
+- **La respuesta es idéntica para las dos clases de sujeto.** Mismo status, mismo
+  `OPERATOR_ROLE_REQUIRED`, mismo mensaje. Un código por clase de sujeto convertiría el rechazo en un
+  inventario de qué clases existen y cuáles no — lo único que una guarda sobre una credencial que no
+  reconoce no puede filtrar. Se lee cero, se escribe cero, y el guard corre antes del parseo del body.
+- **Dos preguntas siguen fallando *abiertas*.** Un cuarto tipo de sujeto que nadie pensó en preguntar
+  pasa, donde una lista fallaría *cerrada*. Es un costo real y se paga a propósito: un tipo nuevo
+  necesita su pregunta agregada, y el mostrador es lo que ese costo compró.
+
+### Lo que NO cambió
+
+`requireCounterSubject`, `isCounterSubject`, `COUNTER_SUBJECT_PREFIX` y `COUNTER_SUBJECT_REQUIRED`
+intactos, y `POST /v1/loyalty/checkins` y `POST /v1/loyalty/passes/resolve` siguen aceptando
+mostradores con sus status codes de siempre. La negación es en las rutas de operador; las dos rutas
+de mostrador no se tocan.
+
+### Lo que hay que arreglar aparte
+
+El docblock de `POS_SCOPES` en `workers/identity/src/index.ts` sigue describiendo este hueco como
+"deliberadamente no resuelto aquí". Ya es falso y ningún test lo detecta, porque nadie lo afirma.
 
 ## Resuelto — bajo `visit`, una visita es un conteo (no un monto en pesos)
 
@@ -355,11 +512,236 @@ Ninguna de las dos rompe nada hoy. Lo que **no** hay que hacer es bumpear `pg` a
 `node scripts/check-migration-drift.mjs` y cualquier worker que imprima el warning. Si desaparece
 el warning sin que haya cambiado la cadena, alguien ya lo migro — volver a revisar acá.
 
+---
+
+## Hecho — el backlog de créditos ya se puede ver
+
+**Estado:** `scripts/check-checkin-backlog.mjs` + `pnpm db:checkin-backlog`.
+
+Mientras haya una venta registrada sin acreditar, el número existía en la base pero nadie lo miraba.
+Ahora es un comando.
+
+```
+  Vyloop checkin credit backlog
+  ------------------------------------------------------------
+  [PENDING] 3 sale(s) recorded without points
+     oldest: 2 d
+     money on hold: $259.00
+
+     terminal path (self-heals on retry): 2
+     manual path  (nothing retries it)  : 1
+
+     by merchant
+       Café Central                3 pending     1 stuck  $259.00  oldest 2 d
+
+     manual entries needing a human (no retry will ever arrive)
+       177f463a-…  Café Central  BK-MANUAL-1  $99.00  40 min
+```
+
+Sale con `1` si hay algo pendiente (`--report` fuerza `0`), así que sirve directo como alarma.
+
+### Lo que el script NO hace, y por qué
+
+**No acredita nada.** No es una omisión: `POST /v1/loyalty/checkins` ya drena el backlog. Cuando una
+request choca por `(business_id, payment_id)` y encuentra una fila con `points` en `NULL`, vuelve a
+correr el crédito (`workers/growth/src/routes.ts`, rama del retry). Un terminal que cumpla su
+contrato de reintento vacía el backlog solo.
+
+Así que la respuesta correcta a un backlog no vacío **no es "drenarlo a mano"** — es
+*"averiguar por qué no llegan los reintentos"*.
+
+Agregar un segundo camino de acreditación sería además un riesgo de corrección, no una simple
+redundancia: `creditCheckin` resuelve la config del programa y el tier del cliente **en el momento
+del cargo**, y una copia se liberaría a divergir del original igual que el preview del POS divergió
+del cargo una vez. Un camino que es dueño del crédito vale más que dos que cada uno dice serlo.
+
+### Las dos clases de pendiente no son la misma falla
+
+| | Qué la resuelve |
+|---|---|
+| `payment_id IS NOT NULL` — el terminal reportó una venta cobrada | Un reintento, por contrato |
+| `payment_id IS NULL` — una persona la registró desde el dashboard | **Nada.** No hay parte externo que reenvíe, y la vía manual tampoco tiene clave de dedupe |
+
+La segunda es la que justifica que el script exista: la primera se cura sola, así que contarla como
+problema entrenaría al operador a ignorar el reporte.
+
+### Read-only como hecho, no como supuesto
+
+Mismo contrato que el gate de drift: pone `default_transaction_read_only = on` y después lo
+**verifica** con `SHOW`, porque una sesión que aceptara escrituras en silencio volvería "este script
+nunca escribe" una suposición en vez de un hecho. Y una base inalcanzable es un **fallo**, no un
+reporte vacío: un backlog limpio leído de una base que no se pudo abrir es indistinguible de uno
+real.
+
+### Lo que falta para cerrar esto del todo
+
+El script ve los créditos que **no se acreditaron**. No ve las ventas que **nunca llegaron** — para eso
+haría falta un poll contra Mercado Pago, y **no hay cliente de MP en el repo todavía**: eso depende
+de la integración que se está haciendo aparte. Es la mitad que falta, y es la que hace falta.
+
+---
+
+### Corregido — los endpoints eran inalcanzables por el gateway
+
+**Estado:** cerrado. Los dos endpoints se movieron bajo `/v1/loyalty/`.
+
+La primera versión de esta etapa los registró como `POST /v1/checkins` y `POST /v1/passes/resolve`.
+Funcionaban — handler completo, 24 tests en verde, deploy a producción — y **no los llamaba nadie**,
+porque `routerMiddleware` responde **404** para cualquier `/v1/*` que ningún prefijo de `ROUTE_MAP`
+reclame. No hace fall-through: es un 404 duro servido por el gateway. `ROUTE_MAP` solo tenía
+`/v1/loyalty` y `/v1/growth`, así que ninguna de las dos rutas matcheaba.
+
+El síntoma es indistinguible de "la ruta no existe", que es por lo que el worker no lo puede ver:
+**sus tests pasan igual.**
+
+Es la tercera vez que esta clase de bug aparece en este repo, y las dos anteriores están escritas en
+`apps/gateway/src/router.ts:39-43` y `apps/gateway/src/support.ts:126`.
+
+**Decisión:** mover bajo el prefijo existente, no agregar entradas a `ROUTE_MAP`. Agregarlas habría
+sido un arreglo que deja la fragilidad intacta y suma dos prefijos más donde esconderse.
+
+**Guard:** `apps/gateway/src/wrangler-route-reachability.contract.test.ts` lee
+`workers/growth/src/routes.ts` como texto y exige que toda ruta registrada resuelva a `growth` vía
+`matchRoute`. Falla nombrando el path y el motivo, porque "inalcanzable" a secas manda al próximo a
+mirar el worker en vez de `ROUTE_MAP`.
+
+Verificado: reintroducir el bug pone el guard en rojo nombrando `/v1/checkins`; restaurado, en verde.
+
+#### El guard ahora cubre los siete workers con rutas
+
+La primera versión miraba solo `workers/growth`, que es donde había pasado el bug. Eso cubre el
+siguiente bug **por suerte**, no por diseño — y `identity` tiene **tres** prefijos en `ROUTE_MAP`,
+más superficie alcanzable que `growth`.
+
+La regla ahora es por worker: `matchRoute(path)?.binding === <ese worker>`. Si un worker gana un
+segundo prefijo después, el guard sigue funcionando sin editarlo.
+
+| Worker | Prefijos en `ROUTE_MAP` | Rutas |
+|---|---|---|
+| `identity` | `/v1/auth`, `/v1/me`, `/v1/businesses` | 7 |
+| `customer` | `/v1/customers` | 8 |
+| `growth` | `/v1/loyalty`, `/v1/growth` | 16 |
+| `wallet` | `/v1/wallet` | 5 |
+| `communication` | `/v1/communication` | 6 |
+| `analytics` | `/v1/analytics` | 2 |
+| `automation` | `/v1/automation` | 1 |
+
+`compliance` tiene worker y binding pero **cero rutas** — queda fuera de la tabla, no afirmado como
+vacío, porque un conjunto vacío vuelve verdadero cualquier "todo es alcanzable" sin comprobar nada.
+
+#### Tres cosas que aparecieron al generalizarlo
+
+**El registro se hace con dos nombres distintos.** `identity` y `analytics` registran con
+`app.<method>`, el resto con `router.<method>`. Un extractor que matchee un solo nombre lee **cero
+rutas** en la mitad de la flota — y un guard que lee cero rutas pasa en verde. Por eso hay una
+asercion que verifica que el extractor leyó algo, por worker.
+
+**Dos rutas quedan fuera de `/v1/` y no están rotas.** `/health` de `automation` y dos `/webhook` de
+`communication`. `routerMiddleware` se monta en `app.use('/v1/*', …)`, así que nunca llegan a
+`matchRoute` — son endpoints directos del worker. El de Meta tiene que ser la URL con la que se
+configuró a Meta, no una ruta del gateway. La regla se limita a `/v1/` y el conjunto excluido se
+afirma explícitamente, en vez de filtrarse en silencio.
+
+**El conjunto guardado se re-deriva del disco en cada corrida.** La única forma en que un guard de
+alcance se encoge en silencio es una tabla a la que le falta un worker nuevo.
+
+Verificado: inyectar una ruta sin enrutar en `analytics` pone el guard en rojo nombrando el path;
+restaurada, en verde. Ninguna ruta de ningún worker falla hoy.
+
+#### Lo que el guard todavía no cubre
+
+| | |
+|---|---|
+| Colisión de prefijos | `matchRoute` hace `startsWith` **sin frontera de segmento**: `/v1/loyalty-admin` matchea `/v1/loyalty`. Hoy no existe tal ruta y **no hay ningún prefijo que sea prefijo de otro**, así que es riesgo latente, no bug. Endurecer `matchRoute` a frontera de segmento es una decisión aparte: cambiaría el matching de toda la superficie `/v1/`. |
+| `/v1/automation` no sirve nada | El prefijo enruta a `automation`, que solo registra `/health`. Un 404 ahí es el `app.notFound` del worker, no el del gateway — mismo código, otro archivo. |
+
+---
+
+### Corregido — las dos rutas del mostrador no tenían guarda
+
+**Estado:** cerrado. `requireCounterSubject` en `workers/growth/src/helpers.ts`, en las dos rutas.
+
+`POST /v1/loyalty/passes/resolve` y `POST /v1/loyalty/checkins` llamaban a **ninguna** guarda. Las otras
+ocho rutas de escritura de Growth llaman a `requireOperatorRole`; estas dos, no.
+
+No es una omisión menor: `POST /v1/auth/customer/token` es **público** y emite `role: 'customer'`, así que
+cualquier cliente podía resolver un `member_code` arbitrario y después reportar una venta inventada
+contra él — con `amount_cents` elegido por el cliente y convertido en puntos por la regla del tenant. La
+misma clase de agujero que `requireOperatorRole` cerró en `points/assign`, cerrado aquí por el mismo
+método: en la ruta, no solo en la que se explotó.
+
+#### El mostrador es un tercer sujeto, no "un operador que no es cliente"
+
+`requireOperatorRole` habría sido la guarda equivocada por una razón de producto antes que de seguridad:
+el terminal **nunca manda puntos**, manda `amount_cents` y la regla del tenant decide cuánto vale. Y el
+dashboard —que sí manda puntos— llama a `points/assign`, no a estas rutas. Así que las dos rutas nunca
+tienen un llamador legítimo en el navegador del cajero, y los dos sujetos tienen que quedar distinguibles
+en las dos direcciones.
+
+#### La identidad del mostrador es un prefijo en el `sub`, porque el terminal autentica una vez
+
+`issueToken` se reutiliza **sin cambios**: sin claim nuevo, sin tocar `JwtClaims`. El terminal recibe
+`sub: 'pos:<uuid>'` y `role: 'terminal'`.
+
+| | |
+|---|---|
+| Regla | `userId.startsWith('pos:')` **y** el resto no vacío |
+| Código | `COUNTER_SUBJECT_REQUIRED` (403) |
+
+El separador es la decisión: un `startsWith('pos')` a secas lo cumplirían `postmaster-3`, `pos-7` y
+`POS-2`, así que la guarda le entregaría el sujeto del mostrador a cualquier emisor que por casualidad
+eligiera una palabra que empieza con esas tres letras. `:` no puede aparecer en un uuid, y hoy **todo**
+sujeto que emite el issuer es un uuid (`customers.global_id` del cliente, `users.id` del staff), así que
+el espacio de nombres es inalcanzable por accidente. `pos:` solo, sin terminal detrás, también se
+rechaza.
+
+La pregunta es una sola —"¿es un sujeto mostrador?"— y no una lista de roles permitidos, por el motivo
+que el docblock de `requireOperatorRole` ya da: `role` es texto libre que el issuer no enumera, así que
+preguntar por el rol `terminal` sería inventar un vocabulario y negarle el paso a todo rol que una
+integración futura trajera.
+
+Lee cero, escribe cero, y responde igual haya programa o no, exista el `member_code` o no: no hay oráculo
+de existencia para sondear el tenant. Va **antes** del parseo del body, así que un llamador no autorizado
+no hace que la ruta trabaje en su nombre.
+
+#### Lo que sigue abierto a propósito
+
+- **La tabla `pos_terminals` y el endpoint de identidad no existen todavía.** No hay registro de terminales:
+  lo que sigue al prefijo es opaco, no se busca ni se compara con nada. La guarda no puede distinguir un
+  terminal real de uno inventado, y por eso el prefijo solo lo emite el issuer. El canje de token por uno
+  de mostrador llega cuando existan terminales reales.
+- **La vía manual del §"La vía manual (el emulador de hoy)"** dice que un cajero autenticado en el
+  dashboard registra un checkin sin `payment_id`. Con esta guarda eso ya no es posible por esta ruta: el
+  dashboard llama `points/assign`, que sigue siendo de operador. El texto de arriba describe el diseño
+  original, no la superficie actual.
+
+---
+
 ### Sigue abierto
 
-- La **Etapa 0b**: implementada y en `main` (PR #202). Migración `0011` aplicada a mano en la rama
-  `production` de Neon, con su fila en `drizzle.__drizzle_migrations`. Gate de drift en verde.
-- La semántica de reintento del terminal, y la reconciliación que depende de ella — diferida a
-  propósito en la Etapa 0b, con el riesgo anotado ahí. **Sigue siendo la falla más cara del diseño.**
+- La **Etapa 0b**: implementada y en `main` (PR #202), con los endpoints bajo `/v1/loyalty/` y el
+  guard de alcanzabilidad. Migración `0011` aplicada a mano en la rama `production` de Neon, con su
+  fila en `drizzle.__drizzle_migrations`. Gate de drift en verde.
+- **El emisor de los tokens de mostrador.** Hoy el prefijo `pos:` existe solo como contrato; nadie lo
+  emite todavía, así que `requireCounterSubject` es una guarda sin llamador legítimo. Cuando haya
+  terminales reales llegan la tabla `pos_terminals`, el canje por token y la decisión de qué hace el
+  gateway con un sujeto mostrador.
+- **Docblock obsoleto en `workers/identity/src/index.ts:414-422`.** Encabezado *"Known gap, deliberately
+  not solved here"*, y la frase *"A till could therefore assign points directly, bypassing the earn
+  rule that `POST /v1/loyalty/checkins` exists to apply"*. **Las dos son falsas desde hoy:** la
+  escalada está cerrada en growth, y `requireOperatorRole` ya niega también al sujeto mostrador. El
+  cierre de esa brecha pertenece a growth, no a identity. No hay test que afirme ese texto, así que
+  nada falla — lo que lo hace peor: miente sin delatar que miente. Editar ese archivo está aprobado;
+  queda para después porque es un comentario, no una decisión.
+- **Decidir si `matchRoute` exige frontera de segmento.** Hoy `startsWith` sin frontera no causa
+  ningún bug —no hay prefijos que colisionen entre sí— pero `/v1/loyalty-admin` matchearía
+  `/v1/loyalty`. Endurecerlo cambia el matching de toda la superficie `/v1/`, así que no se hizo
+  junto con el guard; queda como decisión.
+- **El poll contra Mercado Pago** — la mitad que falta del backlog. Depende del cliente de MP.
+- **Límite de tasa para un sujeto mostrador.** `DEFAULT_LIMITS` tiene `free`/`pro`/`business`, y un rol
+  `terminal` cae en `?? config.limits.free ?? 60` — 60 requests/min. Un mostrador real con la cola de
+  gente esperando lo supera en un momento. Hay que decidir el límite por rol `terminal` cuando exista el
+  emisor, o el rate limiter va a frenar mostradores reales.
 - `sslmode=require` y el bumpee a `pg` v9 — lo de arriba.
+- Dependabot #198 (vitest 5), #199 (next vs overrides), #201 (pin de react) — esperando decisión.
 - Los límites logísticos del `verify` — sin relación con lo anterior.

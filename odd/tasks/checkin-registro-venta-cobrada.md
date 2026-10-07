@@ -31,7 +31,7 @@ evento**, disponible en el momento en que la venta se cobra. `unique(business_id
 |---|---|
 | Tabla | `checkins` en `packages/db/src/schema.ts` |
 | Migración | `packages/db/drizzle/0011_checkins.sql` — generada con drizzle-kit, encabezado a mano |
-| Rutas | `POST /v1/passes/resolve` y `POST /v1/checkins` en `workers/growth/src/routes.ts` |
+| Rutas | `POST /v1/loyalty/passes/resolve` y `POST /v1/loyalty/checkins` en `workers/growth/src/routes.ts` |
 | Refactor | Extraer el cálculo de `POST /v1/loyalty/points/assign` a un helper compartido |
 | Tests | `workers/growth/src/index.test.ts` + contrato del dashboard si cambia la ruta del archivo |
 
@@ -88,14 +88,14 @@ el test falla. Hay que actualizar la ruta que lee el test — **sin cambiar qué
 `uq_points_tx_reference` y 409 `DUPLICATE_REFERENCE`. El checkin reusa ese patrón con
 `reference_id = payment_id`.
 
-### T3 — `POST /v1/passes/resolve`
+### T3 — `POST /v1/loyalty/passes/resolve`
 
 Resuelve `member_code` → cliente. **Siempre 200**, con `known: true|false`. No crea filas, no tiene
 estado. Nunca veta una venta: un `known: false` es información para el cajero, no un rechazo.
 
 `business_id` sale del header, nunca del body.
 
-### T4 — `POST /v1/checkins`
+### T4 — `POST /v1/loyalty/checkins`
 
 1. Resolver `business_id` del header.
 2. Resolver `member_code` → `customer_id`. Si no existe, `404` y no se escribe nada.
@@ -115,8 +115,8 @@ el hueco del doc en un backlog visible en vez de una pérdida silenciosa.
 
 - `checkins` tiene que entrar en el `vi.mock('@vyloop/db')` (`index.test.ts:5-52`) o los
   predicados cross-tenant se renderizan opacos y la aserción pasa sola.
-- Igualar `member_code` conocido y desconocido en `/v1/passes/resolve`; ambos 200.
-- `POST /v1/checkins` primera vez → 201. Mismo `payment_id` de nuevo → 200, sin segundo insert.
+- Igualar `member_code` conocido y desconocido en `/v1/loyalty/passes/resolve`; ambos 200.
+- `POST /v1/loyalty/checkins` primera vez → 201. Mismo `payment_id` de nuevo → 200, sin segundo insert.
 - Mismo `payment_id` con `points IS NULL` → 200 **y** reintenta la acreditación.
 - `amount_cents` ausente o inválido → 400, sin escribir.
 - `member_code` inexistente → 404, sin escribir.
@@ -138,11 +138,11 @@ assertions por nombre, que es lo que debieron ser siempre.
 > Quedó en `routes.ts`, junto a `resolveEarnRate` / `parseEarnUnitAmount` / `isEarnBy` — donde ya
 > están sus otras tres entradas.
 
-**T3 — `/v1/passes/resolve`.** ✅ `routes.ts:1754`. Siempre 200. `display_name` es
+**T3 — `/v1/loyalty/passes/resolve`.** ✅ `routes.ts:1753`. Siempre 200. `display_name` es
 `customers.fullName`, la columna real.
 
-**T4 — `/v1/checkins`.** ✅ `routes.ts:2048`, con `resolveMemberCode` en `:1711` y `creditCheckin`
-en `:1823`. `ON CONFLICT DO NOTHING` sobre `(business_id, payment_id)`, read-back, `points IS NULL`
+**T4 — `/v1/loyalty/checkins`.** ✅ `routes.ts:2047`, con `resolveMemberCode` en `:1710` y `creditCheckin`
+en `:1822`. `ON CONFLICT DO NOTHING` sobre `(business_id, payment_id)`, read-back, `points IS NULL`
 → re-acredita → 200, ya acreditado → 200 intacto, nuevo → 201.
 
 > **El read-back tiene una salida honesta:** si la fila existe pero no se puede leer, responde
@@ -187,7 +187,7 @@ La migración está en disco, **sin aplicar**.
   copia que se vuelve mentira en el instante en que renombran algo.
 - **`items` es `jsonb` best-effort**, `amount_cents` autoritativo. El medio de pago transporta el
   total, no el carrito — es probable que `items` sea `null` la mayoría de las veces.
-- **Nuestro failure no puede costar una venta al comercio.** Por eso `/v1/passes/resolve` nunca
+- **Nuestro failure no puede costar una venta al comercio.** Por eso `/v1/loyalty/passes/resolve` nunca
   veta y siempre responde 200.
 
 ## Deferred (no en esta etapa, con el riesgo anotado)
