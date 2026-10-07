@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { Suspense, useState, type FormEvent } from 'react';
 
 import { signupBusiness } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -201,25 +201,58 @@ function SignupCard({ onDone }: { onDone: () => void }) {
   );
 }
 
-export default function LoginPage() {
+/**
+ * Which form this URL asks for.
+ *
+ * Isolated into its own component so it is the only thing inside the Suspense
+ * boundary. `useSearchParams` suspends during prerendering, and a static export of
+ * this page fails the build with "useSearchParams() should be wrapped in a suspense
+ * boundary at page /login" — which it did, on `deploy-dashboard`, before this split.
+ */
+function WhichForm() {
   const searchParams = useSearchParams();
-  // `signup=true` is the only spelling that opens it. Anything else is the login,
-  // so a stray query parameter cannot replace one form with the other.
-  const signingUp = searchParams.get('signup') === 'true';
 
-  if (signingUp) return <SignupCardOnSignup />;
-
-  return <LoginCard />;
+  // `signup=true` is the only spelling that opens the signup form. Anything else is
+  // the login, so a stray query parameter cannot replace one form with the other.
+  return searchParams.get('signup') === 'true' ? <SignupCard onDone={goToLogin} /> : <LoginCard />;
 }
 
-function SignupCardOnSignup() {
-  const router = useRouter();
+/**
+ * `replace` rather than `push`: the signup form is a state of this page rather than
+ * a place, and backing out of it should not return to the form the merchant just
+ * completed.
+ */
+function goToLogin() {
+  useRouter().replace('/login');
+}
+
+export default function LoginPage() {
   return (
-    <SignupCard
-      onDone={() => {
-        router.replace('/login');
-      }}
-    />
+    <Suspense fallback={<LoginFallback />}>
+      <WhichForm />
+    </Suspense>
+  );
+}
+
+/**
+ * What shows while the query string resolves.
+ *
+ * The login card's own chrome rather than a spinner: the boundary is only reached on
+ * a static export where the param is unknown at build time, and a blank screen there
+ * reads as a broken page rather than a loading one.
+ */
+function LoginFallback() {
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <h1>
+            <span className="brand-accent">V</span>yloop
+          </h1>
+          <p>Panel de administración</p>
+        </div>
+      </div>
+    </div>
   );
 }
 
