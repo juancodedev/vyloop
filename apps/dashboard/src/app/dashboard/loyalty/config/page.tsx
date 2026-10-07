@@ -3,12 +3,31 @@
 import { useState, useEffect } from 'react';
 
 import { api } from '@/lib/api';
-import type { LoyaltyConfig } from '@/lib/api';
+import type { EarnBy, LoyaltyConfig } from '@/lib/api';
+import { describeEarnRule } from '@/lib/loyalty-earn-rule';
+
+const EARN_BY_OPTIONS: Array<{ value: EarnBy; label: string; hint: string }> = [
+  {
+    value: 'visit',
+    label: 'Por visita / conteo',
+    hint: 'Cada visita, chequeo o conteo válido otorga puntos. No depende del monto.',
+  },
+  {
+    value: 'purchase',
+    label: 'Por monto de compra',
+    hint: 'Los puntos se calculan a partir del monto en pesos, según la tasa y el monto base de abajo.',
+  },
+];
 
 export default function LoyaltyConfigPage() {
   const [config, setConfig] = useState<LoyaltyConfig | null>(null);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ earnRate: 1, programName: '' });
+  const [form, setForm] = useState({
+    earnRate: 1,
+    earnBy: 'visit' as EarnBy,
+    earnUnitAmount: 1000,
+    programName: '',
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ type: string; message: string } | null>(null);
@@ -16,7 +35,12 @@ export default function LoyaltyConfigPage() {
   useEffect(() => {
     api.getLoyaltyConfig().then((data) => {
       setConfig(data);
-      setForm({ earnRate: data.earnRate, programName: data.programName });
+      setForm({
+        earnRate: data.earnRate,
+        earnBy: data.earnBy,
+        earnUnitAmount: data.earnUnitAmount,
+        programName: data.programName,
+      });
       setLoading(false);
     });
   }, []);
@@ -28,14 +52,24 @@ export default function LoyaltyConfigPage() {
 
   function handleEdit() {
     if (!config) return;
-    setForm({ earnRate: config.earnRate, programName: config.programName });
+    setForm({
+      earnRate: config.earnRate,
+      earnBy: config.earnBy,
+      earnUnitAmount: config.earnUnitAmount,
+      programName: config.programName,
+    });
     setEditing(true);
   }
 
   function handleCancel() {
     setEditing(false);
     if (config) {
-      setForm({ earnRate: config.earnRate, programName: config.programName });
+      setForm({
+        earnRate: config.earnRate,
+        earnBy: config.earnBy,
+        earnUnitAmount: config.earnUnitAmount,
+        programName: config.programName,
+      });
     }
   }
 
@@ -43,8 +77,13 @@ export default function LoyaltyConfigPage() {
     if (!config) return;
     setSaving(true);
     try {
+      // The unit travels with the mechanic. The worker refuses
+      // `earn_by: 'purchase'` without one (INVALID_EARN_UNIT_AMOUNT), because
+      // paying out against its default would be a rate the merchant never chose.
       const updated = await api.updateLoyaltyConfig({
         earnRate: form.earnRate,
+        earnBy: form.earnBy,
+        earnUnitAmount: form.earnUnitAmount,
         programName: form.programName,
       });
       setConfig(updated);
@@ -75,6 +114,12 @@ export default function LoyaltyConfigPage() {
     );
   }
 
+  const rule = describeEarnRule({
+    earnBy: config.earnBy,
+    earnRate: config.earnRate,
+    earnUnitAmount: config.earnUnitAmount,
+  });
+
   return (
     <>
       <div className="card">
@@ -99,12 +144,13 @@ export default function LoyaltyConfigPage() {
                 <div className="text-xs text-muted" style={{ marginBottom: '0.25rem' }}>
                   TASA DE ACUMULACIÓN
                 </div>
+                {/* Built from the configured mechanic, so this sentence can never
+                    describe a rule the worker is not running. */}
                 <div style={{ fontSize: '1rem', fontWeight: 500 }}>
-                  {config.earnRate} punto por cada $1.000
+                  {rule.headline}
                 </div>
                 <div className="text-xs text-muted" style={{ marginTop: '0.25rem' }}>
-                  Por cada $1.000 pesos de compra, el cliente recibe {config.earnRate} punto
-                  {config.earnRate !== 1 ? 's' : ''} (multiplicado por el nivel)
+                  {rule.detail}
                 </div>
               </div>
             </div>
@@ -121,18 +167,60 @@ export default function LoyaltyConfigPage() {
                 />
               </div>
               <div className="form-group">
-                <label htmlFor="earnRate">Tasa de acumulación (puntos por $1.000)</label>
+                <label htmlFor="earnBy">Los puntos se acumulan por</label>
+                <select
+                  id="earnBy"
+                  className="form-control"
+                  value={form.earnBy}
+                  onChange={(e) => setForm({ ...form, earnBy: e.target.value as EarnBy })}
+                >
+                  {EARN_BY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="hint">
+                  {EARN_BY_OPTIONS.find((option) => option.value === form.earnBy)?.hint}
+                </div>
+              </div>
+              {form.earnBy === 'purchase' && (
+                <div className="form-group">
+                  <label htmlFor="earnUnitAmount">Monto base por unidad (pesos)</label>
+                  <input
+                    id="earnUnitAmount"
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    className="form-control"
+                    value={form.earnUnitAmount}
+                    onChange={(e) =>
+                      setForm({ ...form, earnUnitAmount: Number(e.target.value) })
+                    }
+                  />
+                  <div className="hint">
+                    Cada pesos de este monto equivalen a {form.earnRate}{' '}
+                    {Math.abs(form.earnRate - 1) < 1e-9 ? 'punto' : 'puntos'} base para el
+                    cliente
+                  </div>
+                </div>
+              )}
+              <div className="form-group">
+                <label htmlFor="earnRate">
+                  Tasa de acumulación (puntos base por {form.earnBy === 'purchase' ? 'unidad de monto' : 'visita'})
+                </label>
                 <input
                   id="earnRate"
                   type="number"
                   step="0.1"
                   min="0.1"
+                  max="1000"
                   className="form-control"
                   value={form.earnRate}
                   onChange={(e) => setForm({ ...form, earnRate: Number(e.target.value) })}
                 />
                 <div className="hint">
-                  Por cada $1.000 pesos de compra, el cliente recibe esta cantidad de puntos base
+                  El total se multiplica por el nivel del cliente y se redondea hacia abajo
                 </div>
               </div>
               <div className="inline-edit-actions">

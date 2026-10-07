@@ -17,11 +17,117 @@ const router = new Hono<{ Bindings: Bindings }>();
 // Loyalty Program Config
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// The accumulation rule
+// ---------------------------------------------------------------------------
+
+/**
+ * How a program turns what a customer did into points.
+ *
+ * Two strategies inside one engine, not two models: `visit` counts, `purchase`
+ * converts money. `docs/17-Estrategia-Competitiva.md` §7.5 settles who holds the
+ * rule — "A. El Growth, con la regla en config del tenant" — so the merchant
+ * controls their program by editing configuration rather than by us forking
+ * code. That decision is what makes `purchase` possible here at all: if the POS
+ * computed the points, a TUU integration and a Mercado Pago one would each ship
+ * a different program.
+ */
+export const EARN_BY_VALUES = ['visit', 'purchase'] as const;
+export type EarnBy = (typeof EARN_BY_VALUES)[number];
+
+/** What a program earns by when it has never been configured. */
+export const DEFAULT_EARN_BY: EarnBy = 'visit';
+
+/**
+ * `earnRate` past this is a typo, not a promotion.
+ *
+ * It is a multiplier on a customer's lifetime accrual, so an absurd value does
+ * not merely mis-price one sale — it inflates every balance the moment it lands,
+ * and the number is what every Google Wallet pass then renders. The column is
+ * `numeric(10,4)`, so 1000 is the widest sane reading of "points per visit" or
+ * "points per $1.000".
+ */
+export const MAX_EARN_RATE = 1000;
+
+/**
+ * The money unit past this is a typo.
+ *
+ * 10 million pesos "per point" would pay out one point on a large purchase, which
+ * is a number nobody means. Kept well inside the column's `numeric(12,2)` so an
+ * absurd unit cannot round into an absurd one at the database.
+ */
+export const MAX_EARN_UNIT_AMOUNT = 10_000_000;
+
+/** Stable, specific codes. Callers branch on these rather than parsing prose. */
+export const INVALID_EARN_RATE = 'INVALID_EARN_RATE';
+export const INVALID_EARN_BY = 'INVALID_EARN_BY';
+export const INVALID_EARN_UNIT_AMOUNT = 'INVALID_EARN_UNIT_AMOUNT';
+
+/**
+ * Read a rate the program can actually be run with, or fall back to 1.
+ *
+ * Two jobs, and the second is the one that protects balances:
+ *
+ *   1. Validation on write. `Number('abc')` is `NaN`, and a `NaN` written into
+ *      `points_transactions.points` produces a balance nobody can spend, with no
+ *      error raised anywhere in the request. A zero or negative rate is the same
+ *      defect wearing a plausible number: `0` earns nothing forever, and a
+ *      negative rate *subtracts* from the customer's balance on every sale.
+ *   2. Tolerating rows written before this guard existed. The write path is not
+ *      the only way a bad value reaches the column — it is the way the API can
+ *      do it. Falling back to 1.0 keeps the ledger integral and the sale
+ *      completable, which is strictly better than refusing the sale over a
+ *      cosmetic misconfiguration, and strictly better than writing `NaN`.
+ *
+ * `undefined` means "the caller sent no rate", which is different from a sent
+ * rate of `undefined` and must not be judged by this. Callers check for that
+ * first.
+ */
+export function resolveEarnRate(value: unknown): number {
+  const rate = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(rate) || rate <= 0 || rate > MAX_EARN_RATE) {
+    return 1;
+  }
+  return rate;
+}
+
+/** Is this a rate a program can be run with? The same rule `resolveEarnRate` applies. */
+export function isUsableEarnRate(value: unknown): boolean {
+  const rate = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(rate) && rate > 0 && rate <= MAX_EARN_RATE;
+}
+
+/**
+ * The money amount one point-group is worth, or `null` when it is unusable.
+ *
+ * Separate from `resolveEarnRate` because the fallback differs: a rate falls back
+ * to 1 because 1 point per unit is the cheapest sane program, but a money unit
+ * has no such safe default — paying out against the wrong unit pays real money's
+ * worth of points, so the caller refuses the request instead of guessing.
+ */
+export function parseEarnUnitAmount(value: unknown): number | null {
+  const unit = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(unit) || unit <= 0 || unit > MAX_EARN_UNIT_AMOUNT) {
+    return null;
+  }
+  return unit;
+}
+
+export function isEarnBy(value: unknown): value is EarnBy {
+  return typeof value === 'string' && (EARN_BY_VALUES as readonly string[]).includes(value);
+}
+
 /**
  * GET /v1/loyalty/config
  *
  * Read the loyalty program configuration for the current business.
  * Returns the program record or a default skeleton if none exists.
+ *
+ * The default skeleton is a real program, not a placeholder: it names the
+ * accumulation rule and the money unit, because this response is what the
+ * merchant-facing screen renders its promise from. An absent rule here is what
+ * let that screen claim "1 punto por cada $1.000" for a program with no money
+ * anywhere in it.
  */
 router.get('/v1/loyalty/config', async (c) => {
   const { businessId } = extractAuthHeaders(c);
@@ -38,6 +144,8 @@ router.get('/v1/loyalty/config', async (c) => {
     return c.json({
       data: {
         earn_rate: '1.0',
+        earn_by: DEFAULT_EARN_BY,
+        earn_unit_amount: '1000.00',
         program_name: 'Programa de beneficios',
         is_active: true,
       },
@@ -47,6 +155,8 @@ router.get('/v1/loyalty/config', async (c) => {
   return c.json({
     data: {
       earn_rate: program.earnRate,
+      earn_by: program.earnBy ?? DEFAULT_EARN_BY,
+      earn_unit_amount: program.earnUnitAmount ?? '1000.00',
       program_name: program.name,
       points_currency: program.pointsCurrency,
       min_redeem_points: program.minRedeemPoints,
@@ -71,8 +181,72 @@ router.put('/v1/loyalty/config', async (c) => {
   const { businessId } = auth;
   const body = await c.req.json<{
     earn_rate?: string | number;
+    earn_by?: string;
+    earn_unit_amount?: string | number;
     program_name?: string;
   }>();
+
+  // -----------------------------------------------------------------------
+  // Validate the accumulation rule before any write
+  // -----------------------------------------------------------------------
+  // Both branches of this handler write, so the guard has to sit in front of
+  // both rather than inside the update branch: a program created with an
+  // unusable rate is a program the earn route cannot run.
+  if (body.earn_rate !== undefined && !isUsableEarnRate(body.earn_rate)) {
+    return c.json(
+      {
+        error: {
+          code: INVALID_EARN_RATE,
+          message: `earn_rate must be a number greater than 0 and at most ${MAX_EARN_RATE}`,
+        },
+      },
+      400,
+    );
+  }
+
+  if (body.earn_by !== undefined && !isEarnBy(body.earn_by)) {
+    return c.json(
+      {
+        error: {
+          code: INVALID_EARN_BY,
+          message: `earn_by must be one of: ${EARN_BY_VALUES.join(', ')}`,
+        },
+      },
+      400,
+    );
+  }
+
+  // Switching to `purchase` without saying what a unit of money is would start
+  // paying out against the $1.000 default the merchant never chose. Requiring
+  // the unit in the same request is the only way that default can never be
+  // mistaken for a decision.
+  if (body.earn_by === 'purchase' && body.earn_unit_amount === undefined) {
+    return c.json(
+      {
+        error: {
+          code: INVALID_EARN_UNIT_AMOUNT,
+          message:
+            'earn_unit_amount is required when earn_by is "purchase": it is the money amount, in pesos, that earn_rate points are worth',
+        },
+      },
+      400,
+    );
+  }
+
+  if (
+    body.earn_unit_amount !== undefined &&
+    parseEarnUnitAmount(body.earn_unit_amount) === null
+  ) {
+    return c.json(
+      {
+        error: {
+          code: INVALID_EARN_UNIT_AMOUNT,
+          message: `earn_unit_amount must be a number greater than 0 and at most ${MAX_EARN_UNIT_AMOUNT} pesos`,
+        },
+      },
+      400,
+    );
+  }
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
@@ -86,6 +260,10 @@ router.put('/v1/loyalty/config', async (c) => {
   if (existing) {
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
     if (body.earn_rate !== undefined) updateData.earnRate = String(body.earn_rate);
+    if (body.earn_by !== undefined) updateData.earnBy = body.earn_by;
+    if (body.earn_unit_amount !== undefined) {
+      updateData.earnUnitAmount = String(body.earn_unit_amount);
+    }
     if (body.program_name !== undefined) updateData.name = body.program_name;
 
     const [updated] = await db
@@ -94,7 +272,14 @@ router.put('/v1/loyalty/config', async (c) => {
       .where(eq(loyaltyPrograms.id, existing.id))
       .returning();
 
-    return c.json({ data: { earn_rate: updated.earnRate, program_name: updated.name } });
+    return c.json({
+      data: {
+        earn_rate: updated.earnRate,
+        earn_by: updated.earnBy,
+        earn_unit_amount: updated.earnUnitAmount,
+        program_name: updated.name,
+      },
+    });
   }
 
   // Insert new program config
@@ -104,11 +289,22 @@ router.put('/v1/loyalty/config', async (c) => {
       businessId,
       name: body.program_name ?? 'Programa de beneficios',
       earnRate: body.earn_rate !== undefined ? String(body.earn_rate) : '1.0',
+      ...(body.earn_by !== undefined ? { earnBy: body.earn_by } : {}),
+      ...(body.earn_unit_amount !== undefined
+        ? { earnUnitAmount: String(body.earn_unit_amount) }
+        : {}),
     })
     .returning();
 
   return c.json(
-    { data: { earn_rate: inserted.earnRate, program_name: inserted.name } },
+    {
+      data: {
+        earn_rate: inserted.earnRate,
+        earn_by: inserted.earnBy,
+        earn_unit_amount: inserted.earnUnitAmount,
+        program_name: inserted.name,
+      },
+    },
     201,
   );
 });
@@ -475,9 +671,29 @@ router.delete('/v1/loyalty/tiers/:id', async (c) => {
  *
  * Assign points to a customer.
  *
- * Atomic: balance_after = previous balance + (points × earn_rate × tier_multiplier)
+ * Atomic: balance_after = previous balance + the points this route computes.
  * Dedup: referenceId unique per customer → 409
  * After success, publishes a PointsAssigned event.
+ *
+ * ## Who computes the points: this route, from the tenant's rule
+ *
+ * `docs/17-Estrategia-Competitiva.md` §7.5 settles the open question as "A. El
+ * Growth, con la regla en config del tenant" — the merchant controls their
+ * program. So which body field is the *input* depends on the program's
+ * `earn_by`, and the two are not interchangeable:
+ *
+ *   earn_by = 'visit'    → the caller sends `points`: a qualifying count. There
+ *                           is no amount to convert, and inventing one would be a
+ *                           lie about what the cashier saw.
+ *   earn_by = 'purchase' → the caller sends `amount_pesos`, and the points are
+ *                           derived here: floor(amount / unit × earnRate × tier).
+ *                           A `points` value in the body is refused rather than
+ *                           trusted, because a caller-supplied count next to a
+ *                           money amount is precisely the hole §7.5 describes —
+ *                           whoever sends it decides the customer's balance.
+ *
+ * Both formulas floor. Flooring a money conversion rounds in the merchant's
+ * favour, which is the direction that does not generate a support ticket.
  */
 router.post('/v1/loyalty/points/assign', async (c) => {
   const auth = extractAuthHeaders(c);
@@ -492,22 +708,20 @@ router.post('/v1/loyalty/points/assign', async (c) => {
   const { businessId } = auth;
   const body = await c.req.json<{
     customer_id: string;
-    points: number;
+    points?: number;
+    amount_pesos?: string | number;
     branch_id?: string;
     note?: string;
     reference_id: string;
   }>();
 
-  if (!body.customer_id || !body.points || !body.reference_id) {
+  // `customer_id` and `reference_id` are required under either mechanic. The
+  // third field is not, and asserting it here would assert the wrong one: which
+  // field the program consumes is a fact about the tenant's config, so it can
+  // only be judged after the program is read below.
+  if (!body.customer_id || !body.reference_id) {
     return c.json(
-      { error: { code: 'VALIDATION_ERROR', message: 'customer_id, points, and reference_id are required' } },
-      400,
-    );
-  }
-
-  if (body.points < 1) {
-    return c.json(
-      { error: { code: 'VALIDATION_ERROR', message: 'points must be a positive integer' } },
+      { error: { code: 'VALIDATION_ERROR', message: 'customer_id and reference_id are required' } },
       400,
     );
   }
@@ -516,7 +730,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
   await withRls(db, businessId);
 
   // -----------------------------------------------------------------------
-  // Resolve earn rate from loyalty program config
+  // Resolve the accumulation rule from loyalty program config
   // -----------------------------------------------------------------------
   const [program] = await db
     .select()
@@ -524,7 +738,93 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     .where(eq(loyaltyPrograms.businessId, businessId))
     .limit(1);
 
-  const earnRate = Number(program?.earnRate ?? '1.0');
+  const earnBy = isEarnBy(program?.earnBy) ? program.earnBy : DEFAULT_EARN_BY;
+  // Never `Number(program?.earnRate)` directly: `NaN` from a rate the write path
+  // predates would reach `points_transactions.points` and produce a balance no
+  // customer can spend and no redemption can move.
+  const earnRate = resolveEarnRate(program?.earnRate ?? '1.0');
+
+  /**
+   * What this request is worth, expressed in the program's unit and *before* the
+   * rate and the tier bonus are applied. It is the single input the shared
+   * formula below multiplies, so the two mechanics differ only in how this
+   * number is arrived at:
+   *
+   *   visit    → the caller's qualifying count, used as-is. There is no amount
+   *              to convert: with a manual scanner the honest fact is "a visit
+   *              happened", not "the customer spent $4.500".
+   *   purchase → the money amount divided by the tenant's unit, so `base` is how
+   *              many units of `earn_rate` the amount bought.
+   */
+  let base: number;
+
+  if (earnBy === 'purchase') {
+    const amount = parseEarnUnitAmount(body.amount_pesos);
+
+    if (amount === null) {
+      return c.json(
+        {
+          error: {
+            code: body.amount_pesos === undefined ? 'AMOUNT_REQUIRED' : 'INVALID_AMOUNT',
+            message:
+              'This program earns by purchase, so amount_pesos is required and must be a number greater than 0. Points are derived from it by the program rule, not taken from the request.',
+          },
+        },
+        400,
+      );
+    }
+
+    const unit = parseEarnUnitAmount(program?.earnUnitAmount ?? '1000.00');
+    if (unit === null) {
+      // A purchase program whose unit cannot be read. Refusing the sale is the
+      // honest answer: paying out against a guessed unit pays real money's worth
+      // of points, and no fallback unit is safe by default.
+      return c.json(
+        {
+          error: {
+            code: INVALID_EARN_UNIT_AMOUNT,
+            message:
+              'This program earns by purchase but its earn_unit_amount is unusable. Set it to the money amount, in pesos, that earn_rate points are worth.',
+          },
+        },
+        409,
+      );
+    }
+
+    base = amount / unit;
+  } else {
+    // A visit program has no money rule. If an amount arrived alongside, silently
+    // dropping it would credit the count the caller happened to also send and
+    // report a number the merchant's own rule never produced.
+    if (body.amount_pesos !== undefined) {
+      return c.json(
+        {
+          error: {
+            code: 'VISIT_COUNT_REQUIRED',
+            message:
+              'This program earns by visit, so it has no money rule. Send the qualifying count as points, and switch the program to earn_by "purchase" to earn from a purchase amount.',
+          },
+        },
+        400,
+      );
+    }
+
+    const points = Number(body.points);
+    if (!Number.isInteger(points) || points < 1) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message:
+              'This program earns by visit, so points is required and must be a positive integer',
+          },
+        },
+        400,
+      );
+    }
+
+    base = points;
+  }
 
   // -----------------------------------------------------------------------
   // Resolve tier multiplier from customer's current tier
@@ -546,11 +846,33 @@ router.post('/v1/loyalty/points/assign', async (c) => {
       .limit(1);
 
     if (tier) {
-      tierMultiplier = Number(tier.multiplier);
+      // Same reason as `earnRate`: `Number('N/A')` is `NaN`, and the tier bonus is
+      // multiplied straight into the ledger row.
+      tierMultiplier = resolveEarnRate(tier.multiplier);
     }
   }
 
-  const effectivePoints = Math.floor(body.points * earnRate * tierMultiplier);
+  // One formula, one place. `earnRate` and `tierMultiplier` are both read from
+  // columns this route did not write, and `resolveEarnRate` on each keeps them
+  // finite and positive — so this is the last line before a `NaN` would be stored
+  // as `points_transactions.points`. The shape of the expression is pinned by
+  // `apps/dashboard/src/__tests__/loyalty-points.contract.test.ts`, which
+  // transcribes it to keep the POS preview and this ledger from drifting apart.
+  //
+  // Flooring rounds in the merchant's favour, which is the direction that does
+  // not generate a support ticket.
+  const effectivePoints = Math.floor(base * earnRate * tierMultiplier);
+  if (!Number.isFinite(effectivePoints)) {
+    return c.json(
+      {
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'The loyalty program rule produced a non-finite points value',
+        },
+      },
+      500,
+    );
+  }
 
   // -----------------------------------------------------------------------
   // Atomic insert with balance calculation

@@ -290,6 +290,472 @@ describe('Growth Worker', () => {
   });
 
   // ==========================================================================
+  // earn_by — the accumulation rule (§7.5 "Mecánica de acumulación")
+  // ==========================================================================
+
+  describe('PUT /v1/loyalty/config — earn_rate validation', () => {
+    /**
+     * An `earn_rate` the program cannot be run with. Every one of these has to
+     * be refused at the door: `Number('abc')` is `NaN`, and `NaN` multiplied
+     * into `points_transactions.points` corrupts the customer's balance with no
+     * error anywhere in the request.
+     */
+    const UNUSABLE_RATES = [
+      { label: 'not a number', value: 'abc' },
+      { label: 'the literal string NaN', value: 'NaN' },
+      { label: 'Infinity', value: 'Infinity' },
+      { label: 'negative', value: '-1.0' },
+      { label: 'zero', value: '0' },
+      { label: 'absurd (above the ceiling)', value: '1000.01' },
+    ] as const;
+
+    it.each(UNUSABLE_RATES)('rejects an earn_rate that is $label', async ({ value }) => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios' }]),
+      );
+
+      const res = await PUT('/v1/loyalty/config', { earn_rate: value });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_EARN_RATE');
+      // Nothing written: a rejected rate leaves the stored program as it was.
+      expect(mockDb.update).not.toHaveBeenCalled();
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('rejects an absurd earn_rate on the insert path too', async () => {
+      // The create path is a different branch of the same handler, so a guard
+      // that only covered the update branch would leave a brand new program
+      // able to hold a rate the earn route cannot use.
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      const res = await PUT('/v1/loyalty/config', { earn_rate: 'abc', program_name: 'Nuevo' });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_EARN_RATE');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('accepts a usable earn_rate and stores it', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios' }]),
+      );
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '2.5', name: 'Programa de beneficios' }]),
+      );
+
+      const res = await PUT('/v1/loyalty/config', { earn_rate: '2.5' });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.data.earn_rate).toBe('2.5');
+      expect(mockDb.update).toHaveBeenCalledOnce();
+    });
+
+    it('accepts the earn_rate at the ceiling', async () => {
+      // The boundary belongs to the program: 1000 is refused as absurd and 1000
+      // exactly is a number a merchant could plausibly mean.
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios' }]),
+      );
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1000.0000', name: 'Programa de beneficios' }]),
+      );
+
+      const res = await PUT('/v1/loyalty/config', { earn_rate: '1000' });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.data.earn_rate).toBe('1000.0000');
+    });
+  });
+
+  describe('PUT /v1/loyalty/config — earn_by and the purchase unit', () => {
+    it('rejects an earn_by the program cannot run', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios' }]),
+      );
+
+      const res = await PUT('/v1/loyalty/config', { earn_by: 'money' });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_EARN_BY');
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { label: 'zero', value: 0 },
+      { label: 'negative', value: -1000 },
+      { label: 'absurd', value: 10_000_001 },
+    ])('rejects an earn_unit_amount that is $label', async ({ value }) => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios' }]),
+      );
+
+      const res = await PUT('/v1/loyalty/config', { earn_unit_amount: value });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_EARN_UNIT_AMOUNT');
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('switches the program to purchase with its money unit', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios' }]),
+      );
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'prog-1',
+            earnRate: '1.0000',
+            earnBy: 'purchase',
+            earnUnitAmount: '500.00',
+            name: 'Programa de beneficios',
+          },
+        ]),
+      );
+
+      const res = await PUT('/v1/loyalty/config', {
+        earn_by: 'purchase',
+        earn_unit_amount: 500,
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.data.earn_by).toBe('purchase');
+      expect(json.data.earn_unit_amount).toBe('500.00');
+    });
+
+    it('refuses to switch to purchase without saying how much money a unit is', async () => {
+      // `earn_by: 'purchase'` with the default $1.000 would silently start
+      // paying out against a unit the merchant never chose.
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0', name: 'Programa de beneficios' }]),
+      );
+
+      const res = await PUT('/v1/loyalty/config', { earn_by: 'purchase' });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_EARN_UNIT_AMOUNT');
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /v1/loyalty/config — reports the rule it is actually running', () => {
+    it('names the accumulation rule in the default skeleton', async () => {
+      const res = await GET('/v1/loyalty/config');
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      // Not a placeholder: the dashboard renders this sentence verbatim, so an
+      // absent rule here is what let it promise "1 punto por cada $1.000" to a
+      // program that had no money in it.
+      expect(json.data.earn_by).toBe('visit');
+      expect(json.data.earn_unit_amount).toBe('1000.00');
+    });
+
+    it('reports the stored rule', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'prog-1',
+            earnRate: '2.5000',
+            earnBy: 'purchase',
+            earnUnitAmount: '250.00',
+            name: 'Premium',
+            pointsCurrency: 'puntos',
+            minRedeemPoints: 200,
+            pointsExpiryDays: 365,
+            isActive: true,
+          },
+        ]),
+      );
+
+      const res = await GET('/v1/loyalty/config');
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.data.earn_by).toBe('purchase');
+      expect(json.data.earn_unit_amount).toBe('250.00');
+    });
+  });
+
+  // ==========================================================================
+  // POST /v1/loyalty/points/assign — the accumulation rule
+  // ==========================================================================
+
+  describe('POST /v1/loyalty/points/assign — earning by purchase', () => {
+    /**
+     * `withRls` eats the first `execute`, so the ledger INSERT is the second.
+     * Read back through the real dialect because the number that matters is a
+     * bound parameter, not a string in the SQL.
+     */
+    function mockPurchaseEarn(overrides: {
+      program?: Record<string, unknown>;
+      customer?: Record<string, unknown>;
+      tier?: Record<string, unknown>;
+    } = {}) {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'prog-1',
+            earnRate: '1.0000',
+            earnBy: 'purchase',
+            earnUnitAmount: '1000.00',
+            ...overrides.program,
+          },
+        ]),
+      );
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'cust-1', currentTierId: null, ...overrides.customer }]),
+      );
+      if (overrides.tier) {
+        mockDb.select.mockReturnValueOnce(createBuilder([overrides.tier]));
+      }
+      // withRls
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({
+        rows: [{ id: 'tx-1', customer_id: 'cust-1', balance_after: 0, points: 0 }],
+      });
+    }
+
+    /** The `points` value the ledger INSERT was asked to write. */
+    function insertedPoints(): unknown {
+      const statement = mockDb.execute.mock.calls[1]?.[0];
+      const { params } = new PgDialect().sqlToQuery(statement as never);
+      return params[2];
+    }
+
+    it('derives the points from the money amount, not from a caller point count', async () => {
+      mockPurchaseEarn();
+
+      // $12.500 at 1 point per $1.000, no tier.
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: 12500,
+        reference_id: 'ref-p-1',
+      });
+
+      expect(res.status).toBe(201);
+      expect(insertedPoints()).toBe(12);
+    });
+
+    it('refuses to take the caller point count as the source of truth', async () => {
+      // The whole defect: `points` is caller-computed, so a caller decides the
+      // balance. With `earn_by: 'purchase'` the amount is the input, and its
+      // absence is reported separately from a malformed one so the caller can tell
+      // "wrong field" from "bad value".
+      mockPurchaseEarn();
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        points: 9999,
+        reference_id: 'ref-p-2',
+      });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('AMOUNT_REQUIRED');
+      expectNoLedgerWrite();
+    });
+
+    it('reports a missing amount even when nothing was sent at all', async () => {
+      mockPurchaseEarn();
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        reference_id: 'ref-p-2b',
+      });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('AMOUNT_REQUIRED');
+      expectNoLedgerWrite();
+    });
+
+    it('applies the tier multiplier on top of the money rule', async () => {
+      mockPurchaseEarn({
+        customer: { currentTierId: 'tier-1' },
+        tier: { id: 'tier-1', multiplier: '1.50' },
+      });
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: 12500,
+        reference_id: 'ref-p-3',
+      });
+
+      expect(res.status).toBe(201);
+      // floor(12500 * 1.0 / 1000 * 1.5) = 18
+      expect(insertedPoints()).toBe(18);
+    });
+
+    it('honours a merchant rule of 3 points per $250', async () => {
+      mockPurchaseEarn({ program: { earnRate: '3.0000', earnUnitAmount: '250.00' } });
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: 1000,
+        reference_id: 'ref-p-4',
+      });
+
+      expect(res.status).toBe(201);
+      // floor(1000 * 3 / 250) = 12
+      expect(insertedPoints()).toBe(12);
+    });
+
+    it('rounds down, so the merchant never loses money to rounding', async () => {
+      mockPurchaseEarn();
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: 1999,
+        reference_id: 'ref-p-5',
+      });
+
+      expect(res.status).toBe(201);
+      expect(insertedPoints()).toBe(1);
+    });
+
+    /**
+     * `withRls` opens the session before any of this is judged, so "no ledger
+     * write" means the INSERT never ran — not that the database was never touched.
+     */
+    function expectNoLedgerWrite() {
+      // `setCurrentBusinessId` is a mock returning undefined, so the withRls call
+      // carries no compilable statement. Only the real ones are inspected.
+      const statements = mockDb.execute.mock.calls
+        .map((call) => call[0])
+        .filter((arg) => arg !== undefined && arg !== null)
+        .map((arg) => new PgDialect().sqlToQuery(arg as never).sql);
+      expect(statements.filter((sql) => /points_transactions/.test(sql))).toEqual([]);
+    }
+
+    it.each([
+      { label: 'zero', value: 0 },
+      { label: 'negative', value: -5000 },
+      { label: 'not a number', value: 'mucho' },
+    ])('refuses an amount that is $label and writes nothing', async ({ value }) => {
+      mockPurchaseEarn();
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: value,
+        reference_id: 'ref-p-6',
+      });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('INVALID_AMOUNT');
+      expectNoLedgerWrite();
+    });
+  });
+
+  describe('POST /v1/loyalty/points/assign — earning by visit', () => {
+    it('still takes the caller count, which is the whole mechanic of a visit', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'prog-1', earnRate: '1.0000', earnBy: 'visit', earnUnitAmount: '1000.00' },
+        ]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: 2 }] });
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        points: 2,
+        reference_id: 'ref-v-1',
+      });
+
+      expect(res.status).toBe(201);
+      const statement = mockDb.execute.mock.calls[1]?.[0];
+      const { params } = new PgDialect().sqlToQuery(statement as never);
+      expect(params[2]).toBe(2);
+    });
+
+    it('refuses a money amount it cannot convert into visits', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'prog-1', earnRate: '1.0000', earnBy: 'visit', earnUnitAmount: '1000.00' },
+        ]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: 2 }] });
+
+      // A visit program has no money rule, so silently ignoring the amount would
+      // credit the count the caller happened to also send.
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: 12500,
+        reference_id: 'ref-v-2',
+      });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('VISIT_COUNT_REQUIRED');
+    });
+  });
+
+  describe('POST /v1/loyalty/points/assign — a stored rate that cannot be used', () => {
+    it('never lets NaN reach the ledger when the program holds a broken rate', async () => {
+      // Legacy rows predate the write guard, so a bad rate can still be in the
+      // database. Falling back to the default is the only safe move: the ledger
+      // holds integers, and `NaN` there is a balance nobody can spend.
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: 'abc', earnBy: 'purchase', earnUnitAmount: '1000.00' }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: 12 }] });
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: 12500,
+        reference_id: 'ref-bad-rate',
+      });
+
+      expect(res.status).toBe(201);
+      const statement = mockDb.execute.mock.calls[1]?.[0];
+      const { params } = new PgDialect().sqlToQuery(statement as never);
+      // The broken rate is ignored in favour of 1.0, so the ledger still gets 12.
+      expect(params[2]).toBe(12);
+      expect(Number.isNaN(Number(params[2]))).toBe(false);
+    });
+
+    it('never lets NaN reach the ledger through a broken tier multiplier', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'prog-1', earnRate: '1.0000', earnBy: 'purchase', earnUnitAmount: '1000.00' },
+        ]),
+      );
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'cust-1', currentTierId: 'tier-1' }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'tier-1', multiplier: 'N/A' }]));
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: 12 }] });
+
+      const res = await POST('/v1/loyalty/points/assign', {
+        customer_id: 'cust-1',
+        amount_pesos: 12500,
+        reference_id: 'ref-bad-mult',
+      });
+
+      expect(res.status).toBe(201);
+      const statement = mockDb.execute.mock.calls[1]?.[0];
+      const { params } = new PgDialect().sqlToQuery(statement as never);
+      expect(params[2]).toBe(12);
+    });
+  });
+
+  // ==========================================================================
   // GET /v1/loyalty/tiers
   // ==========================================================================
 

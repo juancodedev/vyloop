@@ -246,7 +246,57 @@ export interface Customer {
 
 export interface LoyaltyConfig {
   earnRate: number;
+  /** What the program counts: `'visit'` is a count, `'purchase'` is money. */
+  earnBy: EarnBy;
+  /** Pesos worth one unit of `earnRate`. Only read when `earnBy` is purchase. */
+  earnUnitAmount: number;
   programName: string;
+}
+
+/**
+ * The two accumulation mechanics. Mirrors `EARN_BY_VALUES` in the growth worker
+ * (`workers/growth/src/routes.ts`); `'visit'` is the fallback for a response that
+ * predates the field, matching the worker's own default.
+ */
+export const EARN_BY_VALUES = ['visit', 'purchase'] as const;
+export type EarnBy = (typeof EARN_BY_VALUES)[number];
+
+function readEarnBy(value: unknown): EarnBy {
+  return EARN_BY_VALUES.includes(value as EarnBy) ? (value as EarnBy) : 'visit';
+}
+
+/**
+ * The wire shape of `/v1/loyalty/config`.
+ *
+ * Every numeric field is `number | string` because `numeric` columns come back
+ * from Postgres as strings and older fixtures wrote numbers. A field is
+ * optional because a worker predating the accumulation rule does not send it, and
+ * a required one would make this a lie about what the API actually guarantees.
+ */
+interface LoyaltyConfigWire {
+  data: {
+    earn_rate: number | string;
+    earn_by?: string;
+    earn_unit_amount?: number | string;
+    program_name: string;
+  };
+}
+
+/**
+ * Normalise the wire shape into what the page renders.
+ *
+ * The fallbacks are the worker's own defaults, not this client's opinion of them
+ * (`DEFAULT_EARN_BY` and `earn_unit_amount`'s `1000.00` in
+ * `workers/growth/src/routes.ts`). Reading them from two places is how a client
+ * ends up describing a program the backend is not running.
+ */
+export function readLoyaltyConfig(d: LoyaltyConfigWire['data']): LoyaltyConfig {
+  return {
+    earnRate: Number(d.earn_rate),
+    earnBy: readEarnBy(d.earn_by),
+    earnUnitAmount: Number(d.earn_unit_amount ?? 1000),
+    programName: d.program_name,
+  };
 }
 
 export interface Tier {
@@ -440,27 +490,24 @@ export const api = {
   },
 
   async getLoyaltyConfig(): Promise<LoyaltyConfig> {
-    const result = await apiFetch('/v1/loyalty/config') as { data: { earn_rate: number; program_name: string } };
-    const d = result.data;
-    return {
-      earnRate: Number(d.earn_rate),
-      programName: d.program_name,
-    };
+    const result = (await apiFetch('/v1/loyalty/config')) as LoyaltyConfigWire;
+    return readLoyaltyConfig(result.data);
   },
 
   async updateLoyaltyConfig(data: Partial<LoyaltyConfig>): Promise<LoyaltyConfig> {
-    const result = await apiFetch('/v1/loyalty/config', {
+    const result = (await apiFetch('/v1/loyalty/config', {
       method: 'PUT',
       body: JSON.stringify({
         earn_rate: data.earnRate,
+        // `earn_by: 'purchase'` without `earn_unit_amount` is refused by the
+        // worker with INVALID_EARN_UNIT_AMOUNT, so a partial edit that switches
+        // the mechanic has to carry the unit it is switching to.
+        earn_by: data.earnBy,
+        earn_unit_amount: data.earnUnitAmount,
         program_name: data.programName,
       }),
-    }) as { data: { earn_rate: number; program_name: string } };
-    const d = result.data;
-    return {
-      earnRate: Number(d.earn_rate),
-      programName: d.program_name,
-    };
+    })) as LoyaltyConfigWire;
+    return readLoyaltyConfig(result.data);
   },
 
   async getTiers(): Promise<Tier[]> {
