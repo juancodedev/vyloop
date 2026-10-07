@@ -5,7 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 
-import { issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
+import { counterSubject, isPosPlan, issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
 import { signupBusiness, SlugNotDerivableError } from './business-signup';
 import { handleTestEvent } from './event-handler';
 import { provisionClassWithRetry } from './wallet-provision';
@@ -318,12 +318,23 @@ app.post('/v1/auth/customer/token', async (c) => {
     // Demo mode: skip OTP verification when absent
     // In production, validate body.otp here before issuing the token
 
+    // The plan comes from the tenant row this route already loaded, next to the
+    // `business_id` the token is scoped to, and never from the body. That matters
+    // more here than anywhere else: a phone number is not unique across tenants,
+    // so the customer row is found *under* a tenant — `tenant.plan` and
+    // `customer.businessId` are describing the same merchant, and a plan read from
+    // the request would let a caller pick the limit its own token gets.
+    //
+    // The gateway's limiter keys on this claim (`DEFAULT_LIMITS` in
+    // `apps/gateway/src/middleware/rate-limit.ts`), so without it every customer
+    // app request is counted as a token whose plan nobody could identify.
     const token = await issueToken(
       secret,
       customer.globalId,
       customer.businessId,
       'customer',
       ['rewards:read', 'rewards:redeem'],
+      tenant.plan,
     );
 
     return c.json({
@@ -340,6 +351,224 @@ app.post('/v1/auth/customer/token', async (c) => {
       { error: { code: 'AUTH_TOKEN_INVALID', message: 'Error al verificar el número' } },
       401,
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/auth/pos/token — a merchant's till exchanging its credential
+//
+// Public, and it has to be: a terminal holds a secret, not a session. The path
+// lives under `/v1/auth/` because that prefix is the exemption the gateway grants
+// in `apps/gateway/src/index.ts` (`isPublicApiPath`), and widening that exemption
+// to reach a new path would hand the whole `/v1/*` surface the same bypass.
+//
+// ## What it closes
+//
+// `requireCounterSubject` in `workers/growth/src/helpers.ts` refuses
+// `POST /v1/loyalty/checkins` and `POST /v1/loyalty/passes/resolve` to anything
+// whose subject is not `pos:<terminalId>` — and nothing in this repository minted
+// a `pos:` subject. Both routes therefore had exactly two reachable states: a
+// counter, of which there were none, and a refusal. They were built for a terminal
+// that had no way to exist, and they are correct as written. This route is the
+// other half: a credential that can be exchanged for the one thing they accept.
+//
+// ## Registration is NOT here
+//
+// Nothing creates a row in `pos_terminals` yet — no route, no script, no
+// dashboard screen. So no terminal can be created through this API and this
+// endpoint is unreachable in practice until a writer lands. What *is* complete is
+// the verification path, because that is the part that has to be right before
+// anything is minted: an unknown id, a wrong secret, a revoked terminal and a
+// tenant whose plan does not include POS are all refused. When the writer arrives
+// it generates a secret, hashes it with `hashPassword`, writes the row and returns
+// the plaintext **once**; nothing here can read it back.
+//
+// ## Two refusal answers, not one
+//
+// The credential failures — unknown id, wrong secret, revoked — all answer the
+// same status and the same code. That is the point: a distinguishable answer for
+// "revoked" is a distinguishable answer for "this id exists", which is half the
+// work of enumerating terminals, and the other half is a login endpoint that will
+// happily run a PBKDF2 on any id you hand it.
+//
+// The plan refusal is a different code on purpose. It is not a secret — the
+// merchant already knows which plan it is on — and "why does my till not work" is
+// a question a human will ask out loud, so it deserves a name it can be answered
+// with.
+// ---------------------------------------------------------------------------
+
+/** The role a counter's token carries. Free-form text; nothing gates on it today. */
+const POS_ROLE = 'pos';
+
+/**
+ * What a counter is allowed to be described as.
+ *
+ * Deliberately not a capability the routes check, and one existing scope. The
+ * counter guard on the two loyalty routes reads the **subject**, not the scope
+ * and not the role (`isCounterSubject`), because role is free-form text this
+ * issuer never enumerates and an allow-list of roles would have to invent a
+ * vocabulary. So this list is documentation carried in the token: it names the one
+ * thing a till does, and if a counter ever needs more it should be a claim with a
+ * check behind it rather than a wider array nobody reads.
+ *
+ * ## Known gap, deliberately not solved here
+ *
+ * `requireOperatorRole` in growth refuses the **customer** role rather than
+ * requiring an operator one, so a counter's token — role `pos` — satisfies that
+ * guard on `POST /v1/loyalty/points/assign`. A till could therefore assign points
+ * directly, bypassing the earn rule that `POST /v1/loyalty/checkins` exists to
+ * apply. The fix belongs in growth, which is out of scope for this change and is
+ * already correct everywhere it is not this one question; it is recorded in
+ * `docs/18-Trabajo-Pendiente.md`.
+ */
+const POS_SCOPES = ['write:loyalty'];
+
+app.post('/v1/auth/pos/token', async (c) => {
+  const secret = c.env.JWT_SECRET;
+  const dbUrl = c.env.DATABASE_URL;
+  if (!secret) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'JWT secret not configured' } }, 500);
+  }
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  let body: { terminal_id?: unknown; secret?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Body must be JSON' } }, 400);
+  }
+
+  const terminalId = typeof body.terminal_id === 'string' ? body.terminal_id.trim() : '';
+  const presented = typeof body.secret === 'string' ? body.secret : '';
+
+  // 400 and not 401, and the same shape the public signup route uses: the request
+  // never described a credential, so there is nothing to authenticate yet. The two
+  // older `/v1/auth/*` routes answer 401 for a missing field, which conflates "you
+  // sent nothing" with "what you sent is wrong".
+  if (!terminalId || !presented) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'terminal_id and secret are required',
+        },
+      },
+      400,
+    );
+  }
+
+  try {
+    const db = createDb(dbUrl);
+
+    const [terminal] = await db
+      .select()
+      .from(schema.posTerminals)
+      .where(eq(schema.posTerminals.id, terminalId))
+      .limit(1);
+
+    // One message for every credential failure below, including the "no such
+    // terminal" case, so this endpoint cannot be used to learn which terminal ids
+    // exist.
+    const refused = () =>
+      c.json({ error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid terminal credential' } }, 401);
+
+    if (!terminal) {
+      return refused();
+    }
+
+    // Verified with the same `verifyPassword` that checks `users.password_hash`,
+    // against the `saltHex:hashHex` in `key_hash`. The plaintext is never stored,
+    // so this is the only comparison that exists — which is why "the secret is
+    // hashed" is a property of the row and not a step this route performs.
+    //
+    // Costs a 100k-iteration PBKDF2 per attempt. That is more work than a
+    // high-entropy random secret needs, and it is paid anyway: one credential
+    // scheme in this system, with one place that answers "how strong is a
+    // credential in this database".
+    const matches = await verifyPassword(presented, terminal.keyHash ?? '');
+    if (!matches) {
+      return refused();
+    }
+
+    // **After** the verification, not before, and that ordering is the reason.
+    // Checking `revoked_at` first would answer 401 in ~1ms for a revoked terminal
+    // and in ~100ms for a live one, so the response time alone would separate "this
+    // id exists and was revoked" from "this id exists and is live" — the exact
+    // thing the identical response bodies are there to prevent. Verifying first
+    // makes the cost of an attempt the same whatever state the row is in.
+    if (terminal.revokedAt) {
+      return refused();
+    }
+
+    const [tenant] = await db
+      .select()
+      .from(schema.tenants)
+      .where(eq(schema.tenants.id, terminal.businessId))
+      .limit(1);
+
+    // `POS_PLANS` is one named constant, so "which plans include POS" is a
+    // one-line change and nothing else. Checked on **every exchange**, not once at
+    // creation: a tenant that is downgraded stops renewing its credential
+    // immediately, without anybody having to remember which rows to revoke.
+    //
+    // A terminal whose tenant row is missing is refused with the same answer. The
+    // cascade in the schema means that should not happen, and a credential whose
+    // merchant no longer exists is not something to mint a token for.
+    if (!tenant || !isPosPlan(tenant.plan)) {
+      return c.json(
+        {
+          error: {
+            code: 'POS_PLAN_REQUIRED',
+            message:
+              'This plan does not include POS terminals. Upgrade the plan to register a counter.',
+          },
+        },
+        403,
+      );
+    }
+
+    // Written only after every check has passed, so `last_seen_at` answers "when
+    // did this terminal last succeed" and never "when did somebody try". Awaited
+    // rather than handed to `waitUntil`: it is one small write on a path a terminal
+    // hits once an hour, and a visit that is not recorded is worth less than a
+    // token that takes a few milliseconds longer to arrive.
+    await db
+      .update(schema.posTerminals)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(schema.posTerminals.id, terminal.id));
+
+    const token = await issueToken(
+      secret,
+      // `pos:<terminalId>` is what `requireCounterSubject` matches. Minted through
+      // the one helper that knows the prefix, so the issuer cannot disagree with
+      // the reader about its spelling.
+      counterSubject(terminal.id),
+      terminal.businessId,
+      POS_ROLE,
+      POS_SCOPES,
+      // Carried so the gateway's limiter counts this terminal at its merchant's
+      // plan rather than as a plan nobody could identify.
+      tenant.plan,
+    );
+
+    // camelCase keys and `expiresIn`, like its sibling
+    // `POST /v1/auth/customer/token`: both are consumer credentials exchanged for
+    // a single token, not the OAuth-shaped pair the staff routes return.
+    return c.json({
+      token,
+      terminal_id: terminal.id,
+      business_id: terminal.businessId,
+      expiresIn: 3600,
+    });
+  } catch (err) {
+    // 500 and not a credential refusal. The sibling customer route answers 401
+    // here, which turns "the database was unreachable" into "your number is not
+    // registered" — a message that sends the customer to re-type a phone number
+    // while the actual fault is on our side and invisible.
+    console.error('POS token issuance error:', err);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500);
   }
 });
 
