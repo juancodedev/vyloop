@@ -29,6 +29,9 @@ describe('Database schema', () => {
     // Counter domain — a sale that already happened
     expect(db.checkins).toBeDefined();
 
+    // Counter domain — the credential that lets a terminal report one
+    expect(db.posTerminals).toBeDefined();
+
     // Automation domain
     expect(db.workflows).toBeDefined();
     expect(db.workflowExecutions).toBeDefined();
@@ -190,6 +193,93 @@ describe('Database schema', () => {
     expect(columns.paymentId.notNull).toBe(false);
   });
 
+  it('should shape pos_terminals so a secret is never readable back', async () => {
+    // The table exists so a merchant's till can hold a credential that mints a
+    // `pos:` token. Everything about its shape follows from one requirement: the
+    // secret is shown once, at creation, and after that the database can only
+    // answer whether a presented secret matches.
+    const db = await import('./index');
+    const columns = db.posTerminals as unknown as Record<string, { name: string; notNull: boolean }>;
+
+    // A secret is never stored, so the column that exists is named for what it
+    // holds. `key_hash`, not `key` and not `secret`.
+    expect(columns.keyHash).toBeDefined();
+    expect(columns.keyHash.name).toBe('key_hash');
+    expect(columns.keyHash.notNull).toBe(true);
+
+    // The terminal's own identity is what a merchant reads when something goes
+    // wrong, so it cannot be nullable.
+    expect(columns.name.name).toBe('name');
+    expect(columns.name.notNull).toBe(true);
+
+    // `revoked_at` NULL until revoked, and `last_seen_at` NULL until the terminal
+    // has used it. Both are the same shape on purpose: NULL is the ordinary state
+    // of a column whose whole content is "has this happened yet", and a sentinel
+    // date would turn "never" into a value that has to be excluded everywhere.
+    expect(columns.revokedAt.name).toBe('revoked_at');
+    expect(columns.revokedAt.notNull).toBe(false);
+    expect(columns.lastSeenAt.name).toBe('last_seen_at');
+    expect(columns.lastSeenAt.notNull).toBe(false);
+
+    expect(columns.createdAt.notNull).toBe(true);
+  });
+
+  it('should cascade pos_terminals from tenants, so deleting a merchant leaves no credential', async () => {
+    const db = await import('./index');
+    const config = getTableConfig(db.posTerminals);
+
+    const foreignKey = config.foreignKeys.find(
+      (entry) => entry.getName() === 'pos_terminals_business_id_tenants_id_fk',
+    );
+    expect(foreignKey, 'pos_terminals_business_id_tenants_id_fk is not declared').toBeDefined();
+
+    // Cascade, like every other `business_id` in this schema. A credential for a
+    // tenant that no longer exists is not a credential; it is a row that would
+    // still answer `verifyPassword` for whoever kept the secret.
+    expect(foreignKey!.onDelete).toBe('cascade');
+
+    const referenced = foreignKey!.reference();
+    expect(referenced.foreignColumns.map((column) => (column as { name: string }).name)).toEqual(['id']);
+    expect(referenced.columns.map((column) => (column as { name: string }).name)).toEqual([
+      'business_id',
+    ]);
+  });
+
+  it('should declare the tenant constraint in the extra-config callback, where drizzle-kit can see it', async () => {
+    const db = await import('./index');
+    const config = getTableConfig(db.posTerminals);
+
+    // A named foreign key has to be written in the callback: `.references()` on
+    // the column mints an unnamed one, and a constraint nobody can name is a
+    // constraint an operator cannot revoke against by name. Asserted on the built
+    // config rather than on the source, where the declaration could live as a
+    // comment and still pass.
+    expect(config.foreignKeys.map((key) => key.getName())).toEqual([
+      'pos_terminals_business_id_tenants_id_fk',
+    ]);
+  });
+
+  it('should declare no index on pos_terminals, because none of its queries need one', async () => {
+    const db = await import('./index');
+    const config = getTableConfig(db.posTerminals);
+
+    // Asserted as `[]` so that adding one is a decision somebody makes on purpose
+    // rather than an index that arrives with a column.
+    //
+    // The exchange looks a terminal up by primary key, which the PK already
+    // serves. The one query that would want an index is "which terminals does this
+    // merchant have", and no code runs it: registration and listing are out of
+    // scope, so it has no reader. An index is paid for on every insert to speed
+    // up a query nobody issues.
+    //
+    // When that reader lands, `posTerminals` has to be added to `INDEXED_TABLES`
+    // in `indexes.ts` in the same change — `migration-sql.test.ts` asserts that
+    // the set of `CREATE INDEX` statements in the history is exactly the set that
+    // registry reports, so an index declared here without being registered there
+    // fails the build rather than drifting.
+    expect(config.indexes).toEqual([]);
+  });
+
   it('should dedupe checkins on (business_id, payment_id)', async () => {
     const db = await import('./index');
     const config = getTableConfig(db.checkins);
@@ -266,6 +356,7 @@ describe('Database schema', () => {
       'membershipTiers',
       'messageLog',
       'pointsTransactions',
+      'posTerminals',
       'referrals',
       'rewardGrants',
       'rewards',
