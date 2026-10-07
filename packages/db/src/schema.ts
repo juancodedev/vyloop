@@ -12,6 +12,7 @@ import {
   unique,
   index,
   uniqueIndex,
+  foreignKey,
   bigserial,
 } from 'drizzle-orm/pg-core';
 
@@ -441,6 +442,94 @@ export const checkins = pgTable('checkins', {
   unique('uq_checkins_business_payment').on(table.businessId, table.paymentId),
 ]);
 
+/**
+ * A merchant's payment terminal — the credential a till holds.
+ *
+ * `checkins` records the sale. This is the thing that is allowed to report one:
+ * `requireCounterSubject` in `workers/growth/src/helpers.ts` refuses both counter
+ * routes to anything whose JWT subject is not `pos:<terminalId>`, and until this
+ * table existed **no issuer in the system minted a `pos:` subject at all**, so
+ * those two routes had no legitimate caller. They were built for a terminal that
+ * had no way to exist.
+ *
+ * ## Why the secret is hashed and only hashed
+ *
+ * Because the secret is shown to the merchant once, at creation, and is never
+ * readable again — so this database has to be able to answer "does this secret
+ * match" without being able to answer "what is the secret". That is what
+ * `users.password_hash` already does, and `POST /v1/auth/pos/token` verifies with
+ * the same `verifyPassword` from the same module rather than a second
+ * implementation: `password.ts` exists precisely because three copies of one KDF
+ * is three places for a parameter to drift, and a terminal credential is a
+ * credential like any other.
+ *
+ * The consequence, stated rather than hidden: an exchange costs a 100k-iteration
+ * PBKDF2, which is more work than a high-entropy random secret needs. It is
+ * paid anyway, because the alternative is a second hash format living next to the
+ * first and every future argument about iteration counts becoming an argument
+ * about two schemes.
+ *
+ * ## Why revocation is a timestamp and not a delete
+ *
+ * Because "this terminal reported a sale at 14:02" has to stay answerable after
+ * somebody revokes the key. Deleting the row would leave a sale whose
+ * `payment_id` cannot be traced back to any credential, and the checkin's whole
+ * value as an audit record depends on that link existing. Revocation therefore
+ * *changes what the credential can do*, never whether it happened.
+ *
+ * `NULL` means live. Not a `revoked` boolean beside a timestamp, which can
+ * disagree with itself, and not a sentinel date, which would have to be excluded
+ * from every query that means "currently valid".
+ *
+ * ## Why there is no unique constraint on `(business_id, name)`
+ *
+ * Considered and rejected: two terminals genuinely can share a name — a merchant
+ * re-numbering their tills, a second counter at the same till for a second
+ * payment method — and refusing the second row would be a product decision about
+ * somebody's counter layout made by a database constraint. A duplicate name is
+ * confusing; a rejected installation is a sale that cannot be reported, and this
+ * table exists so a sale always can be.
+ *
+ * The listing query this table will actually answer one day is "which terminals
+ * does this merchant have", and it is served by a full scan of a table with one
+ * row per till — no index is declared on purpose, and adding one before its
+ * reader exists would be a write cost paid on every terminal installation to
+ * speed up a query nobody issues. The only query here is the exchange, which
+ * looks a terminal up by primary key.
+ *
+ * When the listing route lands it will want `idx_pos_terminals_business`, and
+ * that change has to touch two files: the index here, **and** `INDEXED_TABLES` in
+ * `indexes.ts`. `migration-sql.test.ts` asserts that the set of `CREATE INDEX`
+ * statements across the migration history is exactly what that registry reports,
+ * so an index declared here without being registered there fails the build —
+ * which is the correct outcome, and is why this note exists.
+ */
+export const posTerminals = pgTable('pos_terminals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  // Declared without `.references()` so the constraint can be *named*. Drizzle's
+  // generated name would be identical (`pos_terminals_business_id_tenants_id_fk`),
+  // and writing it out means a future refactor of how this column is declared
+  // cannot silently rename a constraint an operator has already revoked against
+  // by name.
+  businessId: uuid('business_id').notNull(),
+  name: text('name').notNull(),
+  // `saltHex:hashHex` from `hashPassword`. Never the secret.
+  keyHash: text('key_hash').notNull(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  // Declared in the extra-config callback, like every other index and constraint
+  // in this file — see the note at the top of the file for why a module-level
+  // `index()` export here is silently dropped by drizzle-kit and never reaches a
+  // migration.
+  foreignKey({
+    name: 'pos_terminals_business_id_tenants_id_fk',
+    columns: [table.businessId],
+    foreignColumns: [tenants.id],
+  }).onDelete('cascade'),
+]);
+
 // ============================================================================
 // Automation Domain
 // ============================================================================
@@ -858,6 +947,14 @@ export type NewReferral = typeof referrals.$inferInsert;
  */
 export type Checkin = typeof checkins.$inferSelect;
 export type NewCheckin = typeof checkins.$inferInsert;
+
+/**
+ * `keyHash` is a `saltHex:hashHex` string from `@vyloop/db`'s `hashPassword`, so
+ * `revokedAt` and `lastSeenAt` are `Date | null` and there is nothing to redact
+ * here: the column never holds a secret in the first place.
+ */
+export type PosTerminal = typeof posTerminals.$inferSelect;
+export type NewPosTerminal = typeof posTerminals.$inferInsert;
 
 export type Workflow = typeof workflows.$inferSelect;
 export type NewWorkflow = typeof workflows.$inferInsert;

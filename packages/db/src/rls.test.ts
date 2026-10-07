@@ -183,6 +183,38 @@ describe('policy columns match the real schema', () => {
     }
   });
 
+  it('scopes pos_terminals by business_id', () => {
+    // A counter belongs to the merchant that installed it, and the terminal token
+    // exchange mints a credential for it, so reading a terminal by id still has to
+    // be a read of a row this tenant owns. `pos_terminals` has the column and was
+    // simply absent from the list, which is the quiet version of the same bug: it
+    // would have received no policy when the RLS rollout ran.
+    expect(BUSINESS_ID_TABLES as readonly string[]).toContain('pos_terminals');
+
+    // Named explicitly, not only through the `it.each` above, so the intent is
+    // legible at the point someone is tempted to remove it again.
+    const rendered = enableRls().map(renderStatement);
+    expect(rendered).toContain('ALTER TABLE "pos_terminals" ENABLE ROW LEVEL SECURITY;');
+    expect(
+      createRlsPolicies().map(renderStatement),
+    ).toContain(
+      `CREATE POLICY ${RLS_POLICY_NAME} ON "pos_terminals" ` +
+        `USING (business_id = current_setting('${BUSINESS_ID_SETTING}')::UUID);`,
+    );
+  });
+
+  it('leaves the tenant-keyed list alone — pos_terminals is not one of them', () => {
+    // Asserted as a whole value rather than as a membership test, because the
+    // failure this guards against is a table *added* to the wrong list. A counter
+    // is scoped to a merchant, not to a Google tenant, and a policy naming
+    // `tenant_id` on it would fail at creation time.
+    expect([...TENANT_ID_TABLES]).toEqual([
+      'tenant_wallet_programs',
+      'customer_wallet_passes',
+    ]);
+    expect(TENANT_ID_TABLES as readonly string[]).not.toContain('pos_terminals');
+  });
+
   it('casts to uuid only where the scoping column really is a uuid', () => {
     // `::UUID` is a hard requirement for these comparisons. Against a text
     // column Postgres raises "operator does not exist: text = uuid", which a
