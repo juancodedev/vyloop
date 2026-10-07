@@ -71,6 +71,13 @@
       "when": 1791239081980,
       "tag": "0009_worried_onslaught",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791346100124,
+      "tag": "0010_high_kree",
+      "breakpoints": true
     }
   ]
 }

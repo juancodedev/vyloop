@@ -227,6 +227,42 @@ export const loyaltyPrograms = pgTable('loyalty_programs', {
   name: text('name').notNull().default('Programa de beneficios'),
   pointsCurrency: text('points_currency').notNull().default('puntos'),
   earnRate: numeric('earn_rate', { precision: 10, scale: 4 }).notNull().default('1.0'),
+
+  // ---------------------------------------------------------------------------
+  // The accumulation rule (§7.5 "Mecánica de acumulación")
+  // ---------------------------------------------------------------------------
+  //
+  // `earnRate` alone cannot say what a customer earns: it is a rate, and a rate
+  // is meaningless without the thing it is a rate *of*. Until this pair existed
+  // the product's own dashboard told merchants "1 punto por cada $1.000" while
+  // the earn route multiplied a caller-supplied point count by that number —
+  // there was no money anywhere in the path. So the rule is now two columns
+  // that have to agree, and `earnRate` means something different depending on
+  // this one:
+  //
+  //   earn_by = 'visit'    → `earnRate` is points per qualifying visit/count,
+  //                           and the caller supplies the count. "9 cafés y el
+  //                           10 gratis" lives here.
+  //   earn_by = 'purchase' → `earnRate` is points per `earnUnitAmount` pesos of
+  //                           purchase, and the caller supplies the amount.
+  //                           Points are derived here, never sent in.
+  //
+  // `visit` is the default because it is the mechanic the existing endpoint
+  // already implements and the one a manual scanner honestly supports: with
+  // only a scan, there is no amount. A default of `purchase` would have made
+  // every existing caller's request start failing.
+  earnBy: text('earn_by').notNull().default('visit'),
+
+  // The money amount, in pesos, that one unit of `earnRate` is worth. Only read
+  // when `earnBy = 'purchase'`.
+  //
+  // Defaults to 1.000 rather than 1 so that a program which flips to `purchase`
+  // without touching the unit keeps paying what the merchant was already shown
+  // on the config screen. Never NULL: `NULL` here would mean "the program earns
+  // points from money but has not said how much money", which is a division by
+  // zero at the moment of a sale rather than a configuration error at the moment
+  // it was written.
+  earnUnitAmount: numeric('earn_unit_amount', { precision: 12, scale: 2 }).notNull().default('1000.00'),
   minRedeemPoints: integer('min_redeem_points').notNull().default(100),
   pointsExpiryDays: integer('points_expiry_days'),
   // The merchant's own sentence about what the programme is for, shown on the
