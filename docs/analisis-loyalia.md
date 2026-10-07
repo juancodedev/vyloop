@@ -2,7 +2,7 @@
 
 > **Fecha**: 7 de octubre de 2026
 > **Web**: https://loyalia.app/
-> **Alcance**: qué hace el producto y cómo lo hace (secciones 1–14 y apéndice), más un análisis competitivo contrastado contra el estado de Vyloop (sección 15).
+> **Alcance**: qué hace el producto y cómo lo hace (secciones 1–14), análisis competitivo (15), y los ítems que Loyalia tiene y Vyloop no, con referencias al código verificado (16).
 > **Método**: sesión autenticada en el tenant de prueba "Cafe Lawen". Panel completo, alta de tarjeta, alta de cliente final, escaneo real, y descompresión del `.pkpass` en memoria.
 > **Estado del tenant al entrar**: plan `free`, trial de 30 días, 0 tarjetas, 0 clientes.
 
@@ -952,9 +952,97 @@ Es una decisión de producto y negocio, no de ingeniería.
 
 ---
 
-## 16. Apéndice: evidencia cruda
+## 16. Por hacer — cosas que Loyalia tiene y Vyloop no
 
-### 16.1 Rutas del panel
+> Todas las referencias a "tenemos" están verificadas contra el código, no contra los docs. Varios docs están desactualizados respecto del schema real (ver §16.5).
+
+### 16.1 Bloqueantes estructurales — sin esto el producto no existe
+
+| # | Prioridad | Qué tiene Loyalia | Qué tenemos (verificado) | El gap |
+|---|---|---|---|---|
+| 1 | **P0** | N tarjetas por comercio, cada una con motor, config, QR y estadísticas propias | `loyalty_programs.businessId` es `UNIQUE` → **1 programa por tenant** (`packages/db/src/schema.ts:226`). `tenantWalletPrograms.tenantId` es PK → "exactamente una clase por tenant" (`docs/09-Database-Design.md:323`) | El eje del modelo de negocio de Loyalia es *N programas, clientes ilimitados*. Nuestro pricing y nuestro schema dicen lo contrario |
+| 2 | **P0** | Mecánica de sellos: contador por membresía, recompensas escalonadas con umbral de sellos, reinicio al canjear, límite diario | **Cero.** `grep -i stamp packages/db/src/schema.ts` → 0 resultados. El motor es 100% puntos (`earnRate`, `pointsCost`). La palabra "sello" aparece una sola vez en los 8 docs fundacionales, y solo como crítica al problema | Es el tipo de tarjeta #1 de Loyalia y el más usado por negocios locales. Hoy no es construible |
+| 3 | **P0** | Escáner: buscar por nombre o escanear el QR del pase, `POST /merchants/card_scans {qr_token, amount_cents, note}` con confirmación y toast | `workers/growth/src/routes.ts` expone: `loyalty/config` GET/PUT, `loyalty/tiers` CRUD, `loyalty/points/assign`, `loyalty/points/transactions`, `loyalty/rewards` CRUD, `loyalty/rewards/redeem`. **Ningún endpoint de check-in, escaneo, member code ni operador.** `grep -ri "check_in\|scanner"` → 0 resultados reales (los matches son `.scan()` de Postgres) | El verbo diario del negocio no existe. Hoy solo hay `POST /v1/loyalty/points/assign`. El "sellador" está diseñado en `docs/10:232-244` pero no implementado |
+| 4 | **P0** | Membresía como entidad: une cliente + tarjeta, con `stamps`, `goal`, `balance_cents`, `coupon_limit/redeemed`, `expires_at`, `expiration_status`, `reward_ready`, `last_visit_at` | **No existe tabla de membresía.** Lo más cercano: `customers.currentTierId` (schema.ts:128) — un solo nivel por cliente, no una instancia por tarjeta. `customerWalletPasses` (schema.ts) es estado de pase, no saldo acumulado | Sin membresía no hay balance, ni cupón, ni expiración por cliente, ni `reward_ready`. El saldo se deriva de `pointsTransactions.balanceAfter` |
+| 5 | **P0** | Sucursales con Google Places → lat/lng, para geo-notificaciones con radio | `branches` = `id, businessId, name, address, city, country, timezone, isActive` (`schema.ts:80-90`). **Sin lat/lng, sin radio, sin geocerca** | `docs/10:286,445` habla de "restricción por sucursal" y "radio de notificaciones cercanas" sin ningún campo que lo soporte. La función más diferenciadora del competidor es imposible |
+
+### 16.2 Gaps de producto claros
+
+| # | Qué tiene Loyalia | Qué tenemos | El gap |
+|---|---|---|---|
+| 6 | **Apple Wallet** funcionando, con `webServiceURL` para actualizar el pase y `changeMessage: "%@"` en el reverso | Solo Google Wallet. Y hay un **contract test que prohíbe explícitamente** Apple Wallet: `apps/customer-web/app/delivery.contract.test.ts:6` — "The Stage 7 checklist asks for confirmation that there is no Apple Wallet or" | La wallet más usada en iPhone en LatAm. Ver §15.5 |
+| 7 | El merchant **ve y gestiona las tarjetas de sus clientes**: `/merchants/customers` con contadores `total/with_card/direct`, ficha con memberships, y `/merchants/cards/:id/members` + feed de actividad por tarjeta | El backlog ya lo marca: *"El merchant no puede ver ni gestionar las tarjetas de sus clientes."* (`docs/14-Backlog.md:248`) | Sin esto el comercio tiene un panel de clientes sin relación con sus programas. Es el circuito principal de Loyalia |
+| 8 | El botón "Agregar a Apple Wallet / Guardar en Google Wallet" **inmediatamente después del registro**, con el pase real renderizado | **Resuelto.** `apps/customer-web/app/components/wallet-card.tsx` pide `GET /v1/wallet/pass` en mount, con `lib/wallet.ts` mapeando cada rechazo a su propio mensaje. `docs/14:163-168` quedó viejo | Ninguno. Anotado en §16.5 |
+| 9 | El correo del cliente es **obligatorio** y es la llave del sync con POS ("El cliente se identifica con el correo que ya usa en su tarjeta") | El registro no lo pide. **Los 12 clientes en producción tienen `email = NULL`** (`docs/14:147-159`) | El día que el login pase a OTP no hay canal de recuperación. Y bloquea la integración con POS, que es la pieza de mayor valor de Loyalia |
+| 10 | `member_code` se genera en el alta | Se genera **al pedir el pase**; solo 4 de 12 clientes lo tienen (`docs/14:170-176`) | El código es el identificador que el escáner necesita (#3). Sin él en el alta, no hay nada que escanear |
+| 11 | `/c/{slug}` es el **QR del mostrador**: puerta de entrada pública, con 404 explícito si la tarjeta está inactiva | `/p/{slug}` responde 200 con el nombre del comercio pero **no tiene un solo link** (`docs/14:180-188`) | La página pública existe y no tiene puerta. Nadie llega |
+| 12 | 7 automatizaciones configurables **por tarjeta**, con mensaje default escrito y vista previa del push | `workers/automation/src/routes.ts` expone **solo `/health`**. Es un placeholder. Los workflows de cumpleaños e inactividad están en el backlog Fase 3 (`docs/14:114-117`) | El motor de retención es la promesa del marketing y no existe. Ya tenemos la tabla `workflows` + `workflow_executions`: es query sobre tablas que ya existen, no greenfield |
+| 13 | Wizard de 5 pasos con **vista previa Apple/Google en vivo** y check de contraste WCAG calculado en vivo | El dashboard tiene vista de configuración del programa (`docs/14:86`) pero no hay wizard de alta ni preview del pase | Elimina la mitad de los tickets de soporte sin escribir docs. Ya tenemos `packages/design-system` |
+| 14 | Récord de actividad **por tarjeta** con `kind`, `amount_cents`, `purchase_amount_cents`, `member_name`, `at` — y ticket promedio | `pointsTransactions` es un ledger global del tenant: `type, points, balanceAfter, referenceId, note, branchId`. `GET /v1/loyalty/points/transactions` no está filtrado por programa | No hay forma de responder "¿cuánto consumió este cliente en esta tarjeta?". El `purchase_amount_cents` separado es lo que permite ticket promedio |
+| 15 | Kiosco de check-in con alertas de lapse (`active`/`due_soon`/`expired`) y log | No existe | Resuelve el cliente que no vuelve al mostrador. Medio plazo |
+| 16 | OnboardingChecklist "0 DE 2", countdown de trial en banner permanente, tour de 14 pasos re-abrible, "Primeros pasos" en el dashboard | El onboarding guiado está en **Fase 4** del backlog (`docs/14:130`). Hay trial de 30 días en el README pero sin conversión en UI | Con trial de 30 días, el checklist es lo que convierte trial en pago. Es UI pura sobre lo que ya existe |
+| 17 | Gates de plan por límites de recursos con barras de uso ("1 de 1", "0 de 100") | Hay planes Free/Pro/Business/Enterprise en `docs/03` y tablas de consumo, sin enforcement en UI | El gating es el producto: Analítica y Reportes bloqueados con CTA |
+| 18 | Créditos de email prepagados, precio decreciente por volumen (US$12 → US$249) | WhatsApp e IA ya están planteados como add-ons por consumo (`docs/03:32-38`) | El modelo de add-ons ya existe; falta el producto comprable con Stripe |
+| 19 | 12 verticales SEO por giro, cada una un funnel | `docs/02` tiene SEO/contenido como canal pero no hay páginas | Adquisición de bajo costo, sin riesgo legal |
+
+### 16.3 Lo que ya tenemos y ellos no tienen
+
+Para no duplicar trabajo, esto ya está resuelto de nuestro lado:
+
+| Capacidad | Vyloop | Loyalia |
+|---|---|---|
+| Aislamiento multi-tenant | `business_id` + RLS definido con tests (`packages/db/src/rls.ts`) | Sin nada: aislamiento por filtro de aplicación |
+| Event sourcing | `customer_events` inmutable + proyección | Sin eventos: estado en columnas mutables |
+| Schema Registry | KV, valida antes del bus | Sin contrato de eventos |
+| API pública + webhooks | REST + GraphQL, 7 webhooks con HMAC-SHA256 y reintentos | Sin API pública |
+| Idempotencia | Regla explícita de desarrollo + `referenceId` en el ledger | No |
+| SDK publicado | Node.js | No |
+| Analytics cross-tenant | ClickHouse + `benchmarks` | Solo del propio comercio |
+| Consentimiento | Tabla `consents` con tipo, fechas, IP y revocación | No hay consentimiento registrado |
+| Niveles/tiers | `membershipTiers` con multiplicador y beneficios, CRUD completo | En el modelo pero `flag.loyalty_levels: false`, sin lanzar |
+| Recompensas | `rewards` + `rewardGrants` con umbral de auto-otorgamiento e idempotencia | `config.rewards[]` dentro de un JSON blob |
+| Desactivación por inactividad | `workers/wallet/src/inactivity.ts` con análisis de ventana y estados reversibles | Sin equivalente |
+
+**Nota sobre la doc**: `docs/09-Database-Design.md` dice que no hay tabla de recompensas. **Sí existe** (`rewards` y `reward_grants`, `schema.ts:408,436`). El doc está desactualizado respecto del código.
+
+### 16.4 Orden de ataque sugerido
+
+```
+P0  schema      #1 N programas      → migración de loyalty_programs
+P0  schema      #4 membresía        → tabla nueva, PK (customer, program)
+P0  schema      #2 sellos           → stampCounter en la membresía o tabla de hitos
+P0  feature     #3 escáner          → POST /v1/checkins, una fila, un evento
+P0  feature     #10 member_code     → generar en el alta, no al pedir el pase
+P0  feature     #8 botón wallet     → una línea en el post-registro
+P1  feature     #11 puerta pública  → un link en /p/{slug}
+P1  feature     #9 email obligatorio → desbloquea OTP y POS
+P1  feature     #7 panel merchant   → clientes por programa + actividad
+P1  schema      #5 lat/lng          → habilita geo
+P1  feature     #12 automatizaciones→ queries sobre workflows, ya está la tabla
+P2  producto    #6 Apple Wallet     → decisión de negocio, no de ingeniería
+P2  producto    #13 wizard + preview
+P2  producto    #16 onboarding      → UI pura, alto retorno con trial
+```
+
+El orden importa. `#3` sin `#10` no tiene token que escanear; `#3` sin `#4` no tiene dónde escribir el sello; `#7` sin `#1` muestra siempre el mismo programa.
+
+### 16.5 Contradicciones internas que hay que arreglar primero
+
+Estas no vienen de Loyalia, pero bloquean el trabajo:
+
+1. **`loyaltyPrograms` es 1:1** con el negocio, pero `docs/03-Business-Model.md` vende el plan Business con "hasta 5 sucursales" y `docs/04-Product-Requirements.md:113` pone "dashboard multi-sucursal consolidado" fuera del PMV. Se vende algo que el scope no construye.
+2. **Ningún dominio publica `PurchaseCompleted`**. Los docs lo consumen (growth, mapa de comunicación) pero "no somos POS" (docs/01:56) implica que nadie lo emite. Es el evento raíz del sistema y no tiene dueño.
+3. **`branches` sin coordenadas** vs. `docs/10` hablando de radio de notificaciones.
+4. **`docs/09` sin tabla `rewards`** vs. el código que sí la tiene.
+5. **RLS declarado en `docs/07` pero no desplegado**: `createRlsPolicies()` solo se referencia en tests (`packages/db/src/rls.ts:91`), y `packages/db/src/migration-sql.test.ts:215` **falla si la migración contiene `ENABLE ROW LEVEL SECURITY`**. El aislamiento real hoy son filtros explícitos de `businessId` en los handlers.
+6. **Ningún job de CI aplica migraciones**; se aplican a mano (`docs/17:45-46`).
+7. **El build no es un gate**: un flag de compatibility inventado pasó lint, typecheck y tests enteros, y el deploy lo rechazó (`TASKS.md:181-187`).
+
+---
+
+## 17. Apéndice: evidencia cruda
+
+### 17.1 Rutas del panel
 
 ```
 /merchants/dashboard
@@ -981,7 +1069,7 @@ Es una decisión de producto y negocio, no de ingeniería.
 /merchants/settings
 ```
 
-### 16.2 Rutas públicas
+### 17.2 Rutas públicas
 
 ```
 /                              landing
@@ -998,7 +1086,7 @@ Es una decisión de producto y negocio, no de ingeniería.
 /merchants/sign_in  /merchants/sign_up  /merchants/password/new
 ```
 
-### 16.3 Artefactos de la sesión de prueba
+### 17.3 Artefactos de la sesión de prueba
 
 | Artefacto | Valor |
 |---|---|
@@ -1014,6 +1102,6 @@ Es una decisión de producto y negocio, no de ingeniería.
 | Bytes capturados | payload del request de escaneo, `pass.json` completo, manifiesto del `.pkpass` |
 | Contrato Inertia | `X-Inertia-Version: 82943cb2a045b1e4acaff941ee4c1063841a8771` |
 
-### 16.4 Datos de prueba creados
+### 17.4 Datos de prueba creados
 
 Cliente `Analista QA Vyloop` (id 11917) con 2 sellos, y dos tarjetas draft (2166 activa, 2167 sin usar). Se pueden borrar desde el panel: desactivar 2166 y luego "Eliminar tarjeta".
