@@ -1034,6 +1034,7 @@ Estas no vienen de Loyalia, pero bloquean el trabajo:
 2. **Ningún dominio publica `PurchaseCompleted`**. Los docs lo consumen (growth, mapa de comunicación) pero "no somos POS" (docs/01:56) implica que nadie lo emite. Es el evento raíz del sistema y no tiene dueño.
 3. **`branches` sin coordenadas** vs. `docs/10` hablando de radio de notificaciones.
 4. **`docs/09` sin tabla `rewards`** vs. el código que sí la tiene.
+5. **`docs/14:163-168` desactualizado**: afirma que `customer-web` nunca llama a `GET /v1/wallet/pass`. **Es falso.** `apps/customer-web/app/components/wallet-card.tsx` lo pide en mount y `lib/wallet.ts` mapea cada rechazo a su propio mensaje. El gap #8 de §16.2 está cerrado. Verificar antes de confiar en el backlog.
 5. **RLS declarado en `docs/07` pero no desplegado**: `createRlsPolicies()` solo se referencia en tests (`packages/db/src/rls.ts:91`), y `packages/db/src/migration-sql.test.ts:215` **falla si la migración contiene `ENABLE ROW LEVEL SECURITY`**. El aislamiento real hoy son filtros explícitos de `businessId` en los handlers.
 6. **Ningún job de CI aplica migraciones**; se aplican a mano (`docs/17:45-46`).
 7. **El build no es un gate**: un flag de compatibility inventado pasó lint, typecheck y tests enteros, y el deploy lo rechazó (`TASKS.md:181-187`).
