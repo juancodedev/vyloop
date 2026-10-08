@@ -832,11 +832,51 @@ vacío, porque un conjunto vacío vuelve verdadero cualquier "todo es alcanzable
 rutas** en la mitad de la flota — y un guard que lee cero rutas pasa en verde. Por eso hay una
 asercion que verifica que el extractor leyó algo, por worker.
 
-**Dos rutas quedan fuera de `/v1/` y no están rotas.** `/health` de `automation` y dos `/webhook` de
-`communication`. `routerMiddleware` se monta en `app.use('/v1/*', …)`, así que nunca llegan a
-`matchRoute` — son endpoints directos del worker. El de Meta tiene que ser la URL con la que se
-configuró a Meta, no una ruta del gateway. La regla se limita a `/v1/` y el conjunto excluido se
-afirma explícitamente, en vez de filtrarse en silencio.
+**Dos rutas quedan fuera de `/v1/` y no llegan a `matchRoute`.** `/health` de `automation` y dos
+`/webhook` de `communication`. `routerMiddleware` se monta en `app.use('/v1/*', …)`, así que nunca
+llegan a `matchRoute` — son endpoints directos del worker. El de Meta tiene que ser la URL con la
+que se configuró a Meta, no una ruta del gateway. La regla se limita a `/v1/` y el conjunto
+excluido se afirma explícitamente, en vez de filtrarse en silencio.
+
+**Corregido 2026-10-08 — ese párrafo afirmaba además que "no están rotas", y para las dos rutas
+de `/webhook` eso no se sostiene.** Lo de "no llegan a `matchRoute`" queda bien: es cierto, y la
+decisión de diseño es correcta. Lo que no aguanta es la segunda mitad del razonamiento, porque
+mira **uno de dos** middlewares. `routerMiddleware` está en `/v1/*` y por eso no las ve, pero
+`communication` tiene además `workers/communication/src/index.ts:22`, un `app.use('*', …)` que
+llama `extractAuthHeaders(c)` **antes** de rutear. Ese sí las cubre. Una request directo a
+`/webhook` — que es exactamente lo que la decisión de arriba exige — cae ahí y responde **403**.
+
+Las dos rutas existen y son de una integración real: `workers/communication/src/routes.ts:306`
+(verificación de Meta, con `hub.challenge`) y `:337` (callbacks de WhatsApp). Entraron por el PR
+#80, no por este trabajo.
+
+**Sobre `/health` de `automation` el mismo razonamiento aplica, pero no hay nada que concluir.**
+`workers/automation/src/index.ts:23` tiene la misma forma `app.use('*')`, así que el `/health` de
+ese worker tampoco es alcanzable de forma directa. Pero el endpoint público de salud está en el
+gateway, `apps/gateway/src/index.ts:37`, sin auth y con test en `index.test.ts:746`. No hay
+evidencia de que la copia del worker sea un endpoint que alguien vaya a llamar, así que queda
+como pregunta abierta y no como bug afirmado.
+
+**Y los tests pasan igual.** `workers/communication/src/routes.test.ts:77-79` pone `X-User-Id`,
+`X-Business-Id` y `X-User-Role` en **toda** request del archivo, incluidas las de esos dos tests.
+Meta no manda esos headers. El verde no prueba el webhook: lo prueba *con credenciales que el
+medio de pago no tiene*. Es la misma trampa que el writer del receptor de pagos refuseó
+cometer al revés, y por eso el PR #208 exige que su harness pueda hacer requests sin credenciales.
+
+**Decisión del usuario el 2026-10-08: Meta/WhatsApp no entra en Vyloop todavía.** Es superficie
+dormida, no un bug a corregir ya. Queda registrado acá para que nadie asuma que funciona. Cuando se
+retome, el fix son tres cosas y ninguna es cosmética:
+
+1. `PUBLIC_PATHS` en `workers/communication/src/index.ts`, con `/webhook` como entrada exacta,
+   chequeado antes de `extractAuthHeaders` — igual que `wallet` y `growth`.
+2. Declarar `WHATSAPP_VERIFY_TOKEN` en `workers/communication/wrangler.jsonc`. Hoy solo está
+   `WHATSAPP_API_VERSION`, así que aunque se des-obligue el 403 la verificación de token falla.
+3. Sacarle las credenciales al harness de esos dos tests, o el mismo bug vuelve a quedar escondido
+   detrás de verde.
+
+Lo que **no** hay que tocar para esto: `WEBHOOK_PREFIX` en `apps/gateway/src/index.ts` es
+`/v1/communication/webhook` y **no es la ruta de Meta**. Es otro namespace, y la ruta de Meta nunca
+pasa por el gateway.
 
 **El conjunto guardado se re-deriva del disco en cada corrida.** La única forma en que un guard de
 alcance se encoge en silencio es una tabla a la que le falta un worker nuevo.
