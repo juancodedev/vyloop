@@ -51,7 +51,7 @@ import { describe, expect, it } from 'vitest';
 import { WALLET_CALLBACK_PATH } from './robots';
 import { SUPPORT_PATH } from './support';
 
-import { ANONYMOUS_LIMITS, EXACT_PUBLIC_PATHS } from './index';
+import { ANONYMOUS_LIMITS, EXACT_PUBLIC_PATHS, PAYMENT_WEBHOOK_PATH } from './index';
 
 describe('every exact-match public path is rate limited', () => {
   it('has a number in ANONYMOUS_LIMITS', () => {
@@ -76,11 +76,18 @@ describe('every exact-match public path is rate limited', () => {
     }
   });
 
-  it('names the support form and the Google Wallet callback, and no one else', () => {
+  it('names the support form, the Google Wallet callback and the payment receiver, and no one else', () => {
     // Both halves, so a rename cannot quietly empty the set. `[]` would satisfy
     // the rule above just as well as a correct list does, and a set that empties
     // is how a guard stops guarding.
-    expect([...EXACT_PUBLIC_PATHS].sort()).toEqual([WALLET_CALLBACK_PATH, SUPPORT_PATH].sort());
+    //
+    // The payment receiver is the third exact entry. It is exact rather than a
+    // member of `WEBHOOK_PREFIX` for the reason at `EXACT_PUBLIC_PATHS`: a prefix
+    // grows, and this one would also claim a namespace served by a different
+    // worker than the one that registers it.
+    expect([...EXACT_PUBLIC_PATHS].sort()).toEqual(
+      [WALLET_CALLBACK_PATH, SUPPORT_PATH, PAYMENT_WEBHOOK_PATH].sort(),
+    );
   });
 
   it('holds no path that the anonymous limiter cannot see', () => {

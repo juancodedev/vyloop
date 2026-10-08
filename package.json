@@ -19,6 +19,7 @@
     "db:drift": "node scripts/check-migration-drift.mjs",
     "db:drift:baseline": "node scripts/check-migration-drift.mjs --check-baseline",
     "db:checkin-backlog": "node scripts/check-checkin-backlog.mjs",
+  "db:payment-reconciliation": "node scripts/check-payment-reconciliation.mjs",
     "deps:overrides": "node scripts/check-dependency-overrides.mjs"
   },
   "devDependencies": {

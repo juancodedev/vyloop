@@ -360,6 +360,7 @@ describe('Database schema', () => {
       'referrals',
       'rewardGrants',
       'rewards',
+      'settledPayments',
       'tenantWalletPrograms',
       'tenants',
       'users',
