@@ -23,9 +23,8 @@ import { loyaltyPrograms, pointsTransactions, tenantWalletPrograms } from './sch
 //     parses fine and fails at run time.
 //   - Semantic coverage that is possible without a database is covered
 //     separately below: every index declared in the schema is required to
-//     appear in a migration, and the 0004 dependency ordering is asserted
-//     explicitly.
-//   - It does not check the `_journal.json` bookkeeping beyond the file list.
+//     appear in a migration, the 0004 dependency ordering is asserted
+//     explicitly, and the journal is checked for orphaned and missing entries.
 //
 // A real acceptance run is still required against a scratch database before
 // this touches a shared one.
@@ -81,6 +80,71 @@ const migrationFiles = readdirSync(DRIZZLE_DIR)
   .sort();
 
 const BACKLOG_MIGRATION = '0004_chubby_crystal.sql';
+
+/**
+ * The journal's `tag` for each entry, read as the migrator reads it.
+ *
+ * `drizzle-kit migrate` resolves what exists from `_journal.json`, not from the
+ * folder: a `.sql` with no entry is not a migration, it is a file. It is never
+ * applied, the drift gate cannot see it (that gate compares the journal's
+ * watermark against the ledger, so a migration missing from the journal is
+ * missing from both sides of its own comparison), and `db:generate` builds the
+ * next snapshot from the journal, so the chain quietly forks.
+ *
+ * That is not hypothetical. `0012_outstanding_flatman.sql` shipped with its
+ * snapshot and without its journal entry, and the gate answered "safe to
+ * deploy" with it sitting on disk.
+ */
+const journalEntries = (
+  JSON.parse(readFileSync(path.join(DRIZZLE_DIR, 'meta', '_journal.json'), 'utf8')) as {
+    entries: Array<{ idx: number; when: number; tag: string; breakpoints: boolean }>;
+  }
+).entries;
+
+describe('every migration on disk is registered in the journal', () => {
+  it('reads a journal', () => {
+    // The assertions below are all `toEqual([])` against a set difference, and an
+    // empty journal makes every one of them vacuously true — including the one
+    // that would have caught the missing entry. A guard that reports green
+    // because it read nothing is the failure mode the rest of this file exists
+    // to avoid.
+    expect(journalEntries.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('registers no migration file as an orphan', () => {
+    // The direction that bit: a file drizzle will never apply.
+    const registered = new Set(journalEntries.map((entry) => `${entry.tag}.sql`));
+    expect(migrationFiles.filter((file) => !registered.has(file))).toEqual([]);
+  });
+
+  it('registers no journal entry without a file', () => {
+    // The other direction, which would make the journal claim a migration whose
+    // statements are nowhere — the gate would then wait forever for a file that
+    // does not exist.
+    const onDisk = new Set(migrationFiles);
+    expect(journalEntries.map((entry) => `${entry.tag}.sql`).filter((f) => !onDisk.has(f))).toEqual(
+      [],
+    );
+  });
+
+  it('keeps `when` strictly increasing, so the ledger watermark has an order', () => {
+    // `migrate()` applies a migration when the ledger's newest `created_at` is
+    // below its `folderMillis`. Two entries sharing a timestamp make that
+    // comparison ambiguous, and the order the migrations must run in is exactly
+    // what decides whether a foreign key has its table yet.
+    for (let i = 1; i < journalEntries.length; i += 1) {
+      expect(journalEntries[i].when).toBeGreaterThan(journalEntries[i - 1].when);
+    }
+  });
+
+  it('numbers entries consecutively from zero', () => {
+    // `idx` is what drizzle orders by, and a gap means an entry was removed
+    // without the file it named.
+    journalEntries.forEach((entry, position) => {
+      expect(entry.idx).toBe(position);
+    });
+  });
+});
 
 describe('migration SQL parses as PostgreSQL', () => {
   it('finds the migration files', () => {
