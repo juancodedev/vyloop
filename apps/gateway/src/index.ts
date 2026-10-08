@@ -55,7 +55,39 @@ app.route('/', ingestor);
 // ---------------------------------------------------------------------------
 
 /** Webhook paths bypass auth (Meta callbacks don't have X-User-Id etc.) */
-const WEBHOOK_PREFIX = '/v1/communication/webhook';
+export const WEBHOOK_PREFIX = '/v1/communication/webhook';
+
+/**
+ * Where a payment rail delivers a settlement notification.
+ *
+ * Declared here rather than imported, because `apps/gateway` must not take a
+ * runtime dependency on the service behind it — the same reason
+ * `WALLET_CALLBACK_PATH` is declared twice, once here and once in
+ * `workers/wallet/src/routes.ts`. That dependency direction is the right one for a
+ * public face, so the agreement is asserted by reading the worker's source instead
+ * of importing it.
+ *
+ * ## Why this is an exact path and not a member of `WEBHOOK_PREFIX`
+ *
+ * `WEBHOOK_PREFIX` exempts a whole subtree, and the warning at its own
+ * registration is about paths with genuinely different costs behind one name.
+ * Adding the payment receiver there would make every future
+ * `/v1/communication/webhook/*` route public because a payment rail happens to
+ * post to one — which is precisely the "a prefix can grow" argument the exact set
+ * exists to make impossible. And it would hide the receiver inside a namespace
+ * whose worker (`communication`) does not serve it: `/v1/loyalty` routes to
+ * `growth`, so the exemption and the route would be claiming different packages.
+ *
+ * ## What the exemption removes, and what replaces it
+ *
+ * It removes the JWT requirement and the `X-Business-Id` requirement. It does not
+ * remove authentication: the growth worker verifies an HMAC-SHA256 signature over
+ * the raw body before it parses anything, and refuses a delivery that presents a
+ * Vyloop credential with `PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED`. A payment rail
+ * has no JWT for this system and no business id to send, so a token here would be
+ * a credential nobody could present.
+ */
+export const PAYMENT_WEBHOOK_PATH = '/v1/loyalty/webhooks/payments';
 
 /**
  * The Google Wallet pass callback, exempted from auth for the same reason.
@@ -144,6 +176,16 @@ export function isPublicApiPath(path: string, method: string): boolean {
 const WALLET_CALLBACK_LIMIT_PER_WINDOW = 600;
 
 /**
+ * Settlement notifications per window, per client address.
+ *
+ * See the `ANONYMOUS_LIMITS` entry below for why this is 600 and not 3, and why
+ * it is a ceiling on amplification rather than a security control. It is its own
+ * named constant so that changing it is one line and not a search — the same
+ * reason `WALLET_CALLBACK_LIMIT_PER_WINDOW` above is.
+ */
+const PAYMENT_WEBHOOK_LIMIT_PER_WINDOW = 600;
+
+/**
  * The public `/v1/*` paths this gateway names **one by one**, as opposed to the
  * two it names by prefix.
  *
@@ -167,10 +209,23 @@ const WALLET_CALLBACK_LIMIT_PER_WINDOW = 600;
  * costs, and `PUT /v1/customers` is unbounded on purpose. A rule that had to
  * exempt those three would be the same shape as the exemption that hid the last
  * bug. The rule is scoped to what is scoped.
+ *
+ * ## The second half of a public path's contract, and where it is checked
+ *
+ * Being in this set says the gateway does not authenticate the request. It says
+ * nothing about whether the **worker** does, and a path that is public here and
+ * authenticated there answers 403 in every deployment — a route registered
+ * correctly, tested green, and unreachable. That has now happened five times in
+ * this repository, and `wrangler-route-reachability.contract.test.ts` guards the
+ * gateway's half of it (does a prefix forward this path?) without touching this
+ * one. `worker-public-path-auth.contract.test.ts` guards this half: every path
+ * here, and every path under `WEBHOOK_PREFIX`, must be exempted by the worker
+ * that serves it.
  */
 export const EXACT_PUBLIC_PATHS: readonly string[] = Object.freeze([
   WALLET_CALLBACK_PATH,
   SUPPORT_PATH,
+  PAYMENT_WEBHOOK_PATH,
 ]);
 
 /**
@@ -209,6 +264,21 @@ export const ANONYMOUS_LIMITS: Readonly<Record<string, number>> = Object.freeze(
   // of spam is not fixed by anything except a limit, and the real customers stop
   // being read.
   [SUPPORT_PATH]: SUPPORT_LIMIT_PER_WINDOW,
+  // The payment rail's settlement receiver. Same shape as the wallet callback —
+  // unauthenticated, third party, retries with backoff, all deliveries from one
+  // address — and a per-window number per client address is what bounds it.
+  //
+  // Set at the callback's 600 rather than the support form's 3 because the thing
+  // being bounded is CPU and amplification, exactly as it is there, and the
+  // direction of the error is asymmetric: too tight drops real settlements and
+  // leaves a customer's loyalty unrecorded with no error here to explain it, while
+  // too loose bounds a forgery campaign that the signature already stops.
+  //
+  // What this number is **not** is the thing standing between an attacker and a
+  // written row — that is the signature. An unsigned or badly-signed delivery is
+  // refused before any table is touched, so this is a ceiling on what an
+  // unauthenticated caller can spend, not an authorization decision.
+  [PAYMENT_WEBHOOK_PATH]: PAYMENT_WEBHOOK_LIMIT_PER_WINDOW,
 });
 
 // ---------------------------------------------------------------------------

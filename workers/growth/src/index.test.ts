@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // ---------------------------------------------------------------------------
 // Module-level mocks
 // ---------------------------------------------------------------------------
@@ -58,6 +59,23 @@ vi.mock('@vyloop/db', async () => {
     points: integer('points'),
     createdAt: timestamp('created_at').notNull(),
   });
+  // `settled_payments` and `tenants` are real for the same reason. The receiver
+  // resolves the tenant by `slug` — the unique column — and writes a row whose key
+  // is `payment_id`, so both the lookup predicate and the insert target have to be
+  // real columns or the cross-tenant assertion would pass against an opaque chunk.
+  const tenantTable = pgTable('tenants', {
+    id: uuid('id').primaryKey(),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    plan: text('plan').notNull(),
+    status: text('status').notNull(),
+  });
+  const settledPaymentTable = pgTable('settled_payments', {
+    paymentId: text('payment_id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    amountCents: integer('amount_cents').notNull(),
+    receivedAt: timestamp('received_at').notNull(),
+  });
   const table = {};
   // `pos_terminals` is real. Its tenant predicate is the cross-business assertion
   // below: the create route writes `business_id` from the credential's scope and
@@ -87,6 +105,8 @@ vi.mock('@vyloop/db', async () => {
     customers: customerTable,
     pointsTransactions: pointsTable,
     checkins: checkinTable,
+    settledPayments: settledPaymentTable,
+    tenants: tenantTable,
     rewards: table,
     rewardGrants: table,
     // Real, for the reason the other tables are real: every predicate these
@@ -123,15 +143,83 @@ vi.mock('@vyloop/event-bus', () => ({
 // Imports (happen after mock hoisting)
 // ---------------------------------------------------------------------------
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { createDb, verifyPassword } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import type { SQL } from 'drizzle-orm';
-import { PgDialect } from 'drizzle-orm/pg-core';
+import { PgDialect, getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { isCustomerRole, isCounterSubject, requireOperatorRole } from './helpers';
+import { paymentWebhookSignedMessage, verifyPaymentWebhookSignature } from './routes';
 
 import app from './index';
+
+/**
+ * Strip comments, so a regex over source that still contains prose cannot match prose.
+ */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+/**
+ * The body of a function that carries braces in its own signature.
+ *
+ * ## Why this is not the brace counter in `api-openapi.contract.test.ts`
+ *
+ * That helper counts braces from the declaration and works because the guard it
+ * reads — `requireCounterSubject(auth: AuthHeaders)` — has no braces before its body
+ * opens. This verifier's signature does: `input: { body: string; … }`. Counting from
+ * the declaration therefore reaches depth zero on the closing brace of the
+// *parameter type* and returns the signature alone, which is a helper that reports
+ * success while measuring nothing.
+ *
+ * So this counts parentheses and braces **together** and looks for the first brace
+ * at depth zero, which is by definition the one that opens the body. Two properties
+ * make it safe on this file specifically: the message strings contain no unbalanced
+ * braces, and the one template literal that interpolates (`${input.signatureHeader}`)
+ * opens and closes within itself, so the running depth returns to where it was.
+ *
+ * The alternative — bounding by the next top-level declaration — was tried and is
+ * wrong for a different reason: `const` appears on the first line inside a function
+ * body, so the span ended before the first statement.
+ */
+function functionBody(source: string, declaration: string): string {
+  // Stripped first, and every index below is an index into the stripped text:
+  // slicing the original and stripping afterwards would misalign the count.
+  const stripped = withoutComments(source);
+  const start = stripped.indexOf(declaration);
+  expect(start, `${declaration} is not present in routes.ts any more`).toBeGreaterThan(-1);
+
+  const text = stripped.slice(start);
+  let depth = 0;
+  let bodyStart = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '(' || char === '{') {
+      if (depth === 0 && char === '{') bodyStart = index;
+      depth += 1;
+    } else if (char === ')' || char === '}') {
+      depth -= 1;
+      if (depth === 0 && bodyStart !== -1) return text.slice(bodyStart, index + 1);
+    }
+  }
+
+  throw new Error(`no body found for ${declaration} — the source is malformed`);
+}
+
+/** The SQL table name of a Drizzle table object, read off the real table config. */
+function tableNameOf(argument: unknown): string {
+  return getTableConfig(argument as never).name;
+}
+
+/** The `.values(...)` the insert chain was called with, or `undefined`. */
+function insertedValues(db: MockDb, call = 0): unknown {
+  const builder = db.insert.mock.results[call]?.value as { values: MockFn } | undefined;
+  return builder?.values.mock.calls[0]?.[0];
+}
 
 type MockFn = ReturnType<typeof vi.fn>;
 
@@ -4525,6 +4613,600 @@ describe('Growth Worker', () => {
       const revoked = await POST('/v1/loyalty/terminals/term-1/revoke');
 
       expect([created.status, listed.status, revoked.status]).toEqual([201, 200, 200]);
+    });
+  });
+
+  // ==========================================================================
+  // POST /v1/loyalty/webhooks/payments — the payment rail's receiver
+  // ==========================================================================
+
+  describe('POST /v1/loyalty/webhooks/payments', () => {
+    // A payment rail is a third party: no Vyloop account, no JWT, no business id.
+    // What authenticates a delivery is the HMAC signature below. Every refusal
+    // here is asserted by *code*, because the codes are the contract and the
+    // distinctness between them is the point — an operator has to be able to tell
+    // "not configured" from "not signed" from "signed wrong" without reading prose.
+
+    const SECRET = 'whsec_test_secret_not_a_real_credential';
+    const WEBHOOK_PATH = '/v1/loyalty/webhooks/payments';
+
+    /** Sign a body the way the endpoint's documented scheme says to. */
+    async function sign(body: string, timestamp = '1770000000', secret = SECRET): Promise<string> {
+      const key = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(secret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      );
+      const mac = await crypto.subtle.sign(
+        'HMAC',
+        key,
+        new TextEncoder().encode(`${timestamp}.${body}`),
+      );
+      return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    /**
+     * A delivery as the rail sends it: no `X-*` identity, because a third party has
+     * none to send. The signature is computed over the *raw* string, so this
+     * serialises once and signs the same bytes it puts on the wire.
+     */
+    async function webhookRequest(options: {
+      /** Omit when `raw` carries the body verbatim — e.g. a malformed-JSON case. */
+      payload?: unknown;
+      raw?: string;
+      secret?: string | undefined;
+      signature?: string | null;
+      timestamp?: string | null;
+      identity?: TestAuth;
+      bearer?: string;
+    }) {
+      const raw = options.raw ?? JSON.stringify(options.payload);
+      const timestamp = options.timestamp === undefined ? '1770000000' : options.timestamp;
+      const signature =
+        options.signature === undefined
+          ? await sign(raw, timestamp ?? '1770000000', options.secret ?? SECRET)
+          : options.signature;
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // `null` means "the rail did not send this header"; `undefined` means "the test
+      // did not care, so send the real one".
+      if (signature !== null) headers['X-Vyloop-Signature'] = signature;
+      if (timestamp !== null) headers['X-Vyloop-Timestamp'] = timestamp;
+      if (options.identity) {
+        headers['X-User-Id'] = options.identity.userId;
+        headers['X-Business-Id'] = options.identity.businessId;
+        headers['X-User-Role'] = options.identity.userRole;
+      }
+      if (options.bearer) headers.Authorization = `Bearer ${options.bearer}`;
+
+      return app.fetch(
+        new Request(`http://localhost${WEBHOOK_PATH}`, { method: 'POST', headers, body: raw }),
+        {
+          DATABASE_URL: 'postgres://mock',
+          DOMAIN_EVENTS_QUEUE: {} as Queue,
+          SCHEMA_REGISTRY: {} as KVNamespace,
+          ...(options.secret === undefined ? {} : { PAYMENT_WEBHOOK_SECRET: options.secret }),
+        } as Record<string, unknown>,
+      );
+    }
+
+    const PAYMENT = {
+      merchant_reference: 'acme-coffee',
+      payment_id: 'mp-12345',
+      amount_cents: 4500,
+    };
+
+    it('records the payment when the signature is correct', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'biz-1', name: 'Acme Coffee' }]));
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([
+          {
+            paymentId: 'mp-12345',
+            businessId: 'biz-1',
+            amountCents: 4500,
+            receivedAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET });
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data).toMatchObject({ payment_id: 'mp-12345', amount_cents: 4500 });
+
+      // One insert, and it is `settled_payments` and nothing else. Read off the
+      // real table config rather than a property name, so the assertion is about
+      // which table was written and not about how the mock happens to be shaped.
+      expect(mockDb.insert).toHaveBeenCalledTimes(1);
+      expect(tableNameOf(mockDb.insert.mock.calls[0][0])).toBe('settled_payments');
+
+      // The three things this endpoint must never do. Asserted structurally
+      // rather than by reading the handler, so a route that starts crediting is
+      // caught by the shape of the calls it makes.
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    it('refuses a wrong signature with its own code and writes nothing', async () => {
+      const res = await webhookRequest({
+        payload: PAYMENT,
+        secret: SECRET,
+        signature: '00'.repeat(32),
+      });
+
+      expect(res.status).toBe(401);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_SIGNATURE_INVALID');
+      expectNoDbContact();
+    });
+
+    it('refuses a signature made with a different secret', async () => {
+      // The forgery that matters: a well-formed HMAC over the exact bytes, with
+      // the wrong key. Only a real verification catches this, so it is asserted
+      // separately from a garbage digest.
+      const res = await webhookRequest({
+        payload: PAYMENT,
+        secret: SECRET,
+        signature: await sign(JSON.stringify(PAYMENT), '1770000000', 'a-different-secret'),
+      });
+
+      expect(res.status).toBe(401);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_SIGNATURE_INVALID');
+      expectNoDbContact();
+    });
+
+    it('refuses a missing signature header, with a code distinct from a bad one', async () => {
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET, signature: null });
+
+      expect(res.status).toBe(401);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_SIGNATURE_REQUIRED');
+      expectNoDbContact();
+    });
+
+    it('refuses a missing timestamp, because it is part of the signed message', async () => {
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET, timestamp: null });
+
+      expect(res.status).toBe(401);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_SIGNATURE_REQUIRED');
+      expectNoDbContact();
+    });
+
+    it('refuses everything when no secret is configured, with its own code', async () => {
+      // Fails closed, and the state the endpoint is in in every environment today:
+      // no Mercado Pago credential exists anywhere in this repository. An absent
+      // secret must refuse rather than treat every delivery as unverified-but-fine,
+      // because a receiver that accepts when it cannot check is a public write
+      // endpoint with a logging step.
+      const res = await webhookRequest({ payload: PAYMENT, secret: undefined });
+
+      expect(res.status).toBe(503);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_SECRET_UNAVAILABLE');
+      expectNoDbContact();
+    });
+
+    it('distinguishes "not configured" from "signed wrong" in both code and status', async () => {
+      // The whole reason the codes are separate. Collapsing them makes a missing
+      // deployment step indistinguishable from an attack, and the operational
+      // response to each is completely different.
+      const unconfigured = await webhookRequest({ payload: PAYMENT, secret: undefined });
+      const wrong = await webhookRequest({ payload: PAYMENT, secret: SECRET, signature: '00'.repeat(32) });
+
+      const a = (await unconfigured.json()) as Record<string, Record<string, unknown>>;
+      const b = (await wrong.json()) as Record<string, Record<string, unknown>>;
+
+      expect(a.error.code).not.toBe(b.error.code);
+      expect(unconfigured.status).not.toBe(wrong.status);
+    });
+
+    it('refuses a signature that is not hex', async () => {
+      // `Buffer.from('zz', 'hex')` returns an empty buffer rather than failing, so
+      // a lenient decoder would compare a truncated MAC and report a *signature
+      // mismatch* for what is really a malformed header. Asserted so the decoder
+      // cannot be swapped for the built-in one.
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET, signature: 'nothex!!' });
+
+      expect(res.status).toBe(401);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_SIGNATURE_INVALID');
+      expectNoDbContact();
+    });
+
+    it('resolves business_id from the merchant reference against tenants', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'tenant-77', name: 'Acme Coffee' }]));
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([
+          { paymentId: 'mp-12345', businessId: 'tenant-77', amountCents: 4500, receivedAt: new Date() },
+        ]),
+      );
+
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET });
+
+      expect(res.status).toBe(201);
+
+      // The scope comes from the lookup, never from the body: a `business_id` field
+      // in the payload would be the caller choosing its own tenant, and this route
+      // is public by construction.
+      expect(tableNameOf(mockDb.insert.mock.calls[0][0])).toBe('settled_payments');
+      expect(insertedValues(mockDb)).toEqual({
+        paymentId: 'mp-12345',
+        businessId: 'tenant-77',
+        amountCents: 4500,
+      });
+
+      // And the lookup ran against `tenants` on the reference the signature
+      // authenticated. The mock is a thenable that records each call, so the
+      // predicate is read off the recorded call chain rather than reconstructed:
+      // `business_id` would be a body field, and `name` would be ambiguous, and
+      // only `slug` carries the unique index that makes one reference mean one
+      // tenant.
+      const selectChain = mockDb.select.mock.results[0]?.value as {
+        from: MockFn;
+        where: MockFn;
+      };
+      expect(tableNameOf(selectChain.from.mock.calls[0][0])).toBe('tenants');
+      const predicate = new PgDialect().sqlToQuery(
+        selectChain.where.mock.calls[0][0] as SQL,
+      );
+      expect(predicate.sql).toContain('"slug"');
+      expect(predicate.params).toEqual(['acme-coffee']);
+    });
+
+    it('records nothing when the merchant reference resolves to no tenant', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET });
+
+      expect(res.status).toBe(404);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_UNKNOWN_MERCHANT');
+      // The signature was already verified, so the caller holds the shared secret
+      // and is not an unauthenticated prober — there is no existence oracle here to
+      // withhold, and an operator who misconfigured the rail needs an actionable
+      // answer rather than a generic refusal.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed payload after the signature is verified', async () => {
+      for (const payload of [
+        { merchant_reference: 'acme-coffee', payment_id: 'mp-1' },
+        { merchant_reference: 'acme-coffee', payment_id: 'mp-1', amount_cents: 0 },
+        { merchant_reference: 'acme-coffee', payment_id: 'mp-1', amount_cents: 45.5 },
+        { merchant_reference: '', payment_id: 'mp-1', amount_cents: 4500 },
+        { merchant_reference: 'acme-coffee', payment_id: '', amount_cents: 4500 },
+      ]) {
+        const res = await webhookRequest({ payload, secret: SECRET });
+        expect(res.status, JSON.stringify(payload)).toBe(400);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('PAYMENT_WEBHOOK_INVALID_PAYLOAD');
+      }
+
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('rejects a body that is not JSON', async () => {
+      const res = await webhookRequest({ raw: 'not json at all', secret: SECRET });
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('PAYMENT_WEBHOOK_INVALID_PAYLOAD');
+      expectNoDbContact();
+    });
+
+    it('answers 200 without a second write when the payment is already recorded', async () => {
+      // A rail retries with backoff, so this is the ordinary second delivery rather
+      // than an edge case. The insert conflicts on the primary key and the row is
+      // read back — the same arrangement as `POST /v1/loyalty/checkins`.
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'biz-1', name: 'Acme Coffee' }]));
+      mockDb.insert.mockReturnValueOnce(createBuilder([]));
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { paymentId: 'mp-12345', businessId: 'biz-1', amountCents: 4500, receivedAt: new Date() },
+        ]),
+      );
+
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.payment_id).toBe('mp-12345');
+      expect(mockDb.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports rather than claims success when a conflict leaves no readable row', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'biz-1', name: 'Acme Coffee' }]));
+      mockDb.insert.mockReturnValueOnce(createBuilder([]));
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      const res = await webhookRequest({ payload: PAYMENT, secret: SECRET });
+
+      // A 200 here would tell the rail a settlement is recorded when we cannot say
+      // that, which is the same class of false confirmation the checkins route
+      // refuses.
+      expect(res.status).toBe(500);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('CONFLICT_WITHOUT_ROW');
+    });
+
+    describe('a Vyloop credential is refused with the endpoint\'s own code', () => {
+      // Not the middleware's generic `UNAUTHORIZED`. That is what a *missing gateway
+      // header* answers, so a customer or a counter who received it would have no
+      // way to tell that the route was never theirs — and the obvious next move
+      // would be to start sending a JWT. The code has to say what is true.
+      it.each([
+        ['a customer token', CUSTOMER_TOKEN],
+        ['a counter token', COUNTER_AUTH],
+        ['an operator token', OPERATOR_AUTH],
+      ])('refuses %s', async (_name, identity) => {
+        const res = await webhookRequest({ payload: PAYMENT, secret: SECRET, identity });
+
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED');
+        expect(json.error.code).not.toBe('UNAUTHORIZED');
+        expectNoDbContact();
+      });
+
+      it('refuses a bearer token even with no gateway-injected headers', async () => {
+        // The gateway does not inject for a public path, so in practice `X-*` never
+        // arrives — but a credential holder's token *is* in `Authorization`, and the
+        // worker is addressable directly. Both families are checked, so the
+        // response cannot be used to enumerate which kind of subject was sent.
+        const res = await webhookRequest({ payload: PAYMENT, secret: SECRET, bearer: 'a.jwt.token' });
+
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED');
+        expectNoDbContact();
+      });
+
+      it('gives every subject the identical refusal', async () => {
+        // One status, one code, one message. Distinct codes per subject kind would
+        // turn the refusal into an inventory of which credentials exist.
+        const bodies: string[] = [];
+        for (const identity of [CUSTOMER_TOKEN, COUNTER_AUTH, OPERATOR_AUTH]) {
+          bodies.push(await (await webhookRequest({ payload: PAYMENT, secret: SECRET, identity })).text());
+        }
+
+        expect(new Set(bodies).size).toBe(1);
+      });
+
+      it('refuses before reading the body, so an unauthorized caller costs nothing', async () => {
+        const res = await webhookRequest({ payload: PAYMENT, secret: undefined, identity: COUNTER_AUTH });
+
+        // The credential check runs ahead of the secret check, so a caller with a
+        // credential learns nothing about the deployment state either.
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED');
+      });
+    });
+
+    describe('the signing scheme', () => {
+      it('builds the signed message from the timestamp and the raw body, and nothing else', async () => {
+        // Asserted directly, by name, because the construction is the ONE
+        // unconfirmed assumption in this feature: Mercado Pago's scheme could not be
+        // verified against their documentation. Being wrong therefore has to be a
+        // failing test and one edit here — not a receiver that refuses every real
+        // delivery in production.
+        expect(paymentWebhookSignedMessage('{"a":1}', '1770000000')).toBe('1770000000.{"a":1}');
+
+        // The two halves, separated — a concatenation without a separator would let
+        // a timestamp of `1770000000.{"a"` and a body of `:1}` sign identically.
+        expect(paymentWebhookSignedMessage('', '1')).toBe('1.');
+        expect(paymentWebhookSignedMessage('2', '')).toBe('.2');
+        expect(paymentWebhookSignedMessage('', '')).toBe('.');
+
+        // It is a pure function of its two arguments: no hidden clock, no request
+        // object, no header lookup. That is what makes it assertable here at all.
+        expect(paymentWebhookSignedMessage('body', 'ts')).toBe(paymentWebhookSignedMessage('body', 'ts'));
+      });
+
+      it('does not compare digests with ===', async () => {
+        // Constant time is a property of the comparison, so it is asserted on the
+        // source of the comparison. `crypto.subtle.verify` is the primitive designed
+        // for this: it checks the MAC internally without a timing signal that
+        // depends on how many leading bytes matched. `hexA === hexB` leaks, byte by
+        // byte, how much of a forgery was correct — and a signature check is exactly
+        // where an attacker benefits from that oracle.
+        //
+        // Read as text, because there is no behavioural test for "this comparison
+        // takes the same time on every input": the defect is invisible to a passing
+        // functional test by construction, which is why it has to be read.
+        const source = readFileSync(join(__dirname, 'routes.ts'), 'utf8');
+        const body = functionBody(source, 'export async function verifyPaymentWebhookSignature(');
+
+        expect(body, 'the verifier was not found by name — the extraction is broken').toContain(
+          'crypto.subtle.verify',
+        );
+
+        // No digest comparison of any shape. The property is not "the function has
+        // no `===`" — it legitimately compares the *config* against `undefined` and
+        // `''` to decide whether a secret is present at all. The property is that
+        // no **digest** is ever compared, so every equality comparison in the
+        // function is checked to be against `undefined` or the empty string, and
+        // nothing else is allowed to exist.
+        //
+        // `(?<![!=])` before the operator is what keeps `!==` out: without it the
+        // pattern matches the `==` *inside* a negation and reads as a comparison
+        // the function never made.
+        const comparisons = [
+          // The right-hand operand stops at any operator or terminator, so a
+          // `secret === undefined || secret === ''` yields two comparisons rather
+          // than one with a right-hand side of `undefined || secret === ''`.
+          ...body.matchAll(/([A-Za-z0-9_)\]])\s*(?<![!=])===?\s*([^;)\n,}&|?]+)/g),
+        ].map((match) => [match[1].trim(), match[2].trim()] as const);
+
+        // Non-empty, so an extractor that found nothing does not satisfy the loop
+        // below by having nothing to check.
+        expect(comparisons.length).toBeGreaterThan(0);
+        for (const [left, right] of comparisons) {
+          expect(
+            ['undefined', "''", '""'],
+            `${left} === ${right} compares a value, and only a presence check may compare here — a digest compared with === is a timing oracle`,
+          ).toContain(right);
+        }
+
+        // And the digest is never even materialised as a hex string, which is what
+        // makes the `===` question moot rather than merely answered.
+        expect(body).not.toContain('toString(16)');
+        expect(body).not.toContain('timingSafeEqual');
+        expect(body).not.toContain('charCodeAt');
+      });
+
+      it('verifies with crypto.subtle and not a hand-rolled MAC comparison', async () => {
+        // Asserted against the real function rather than the source text, so this
+        // covers behaviour the source assertion cannot: a correct signature passes
+        // and a one-byte mutation of the signed message fails.
+        const body = JSON.stringify(PAYMENT);
+        const good = await sign(body);
+
+        await expect(
+          verifyPaymentWebhookSignature({
+            body,
+            signatureHeader: 'X-Vyloop-Signature',
+            timestampHeader: 'X-Vyloop-Timestamp',
+            signature: good,
+            timestamp: '1770000000',
+            secret: SECRET,
+          }),
+        ).resolves.toEqual({ ok: true });
+
+        // Same digest, different timestamp: the timestamp is inside the signed
+        // message, so replaying a captured MAC under another time must fail.
+        await expect(
+          verifyPaymentWebhookSignature({
+            body,
+            signatureHeader: 'X-Vyloop-Signature',
+            timestampHeader: 'X-Vyloop-Timestamp',
+            signature: good,
+            timestamp: '1770000001',
+            secret: SECRET,
+          }),
+        ).resolves.toMatchObject({ ok: false, code: 'PAYMENT_WEBHOOK_SIGNATURE_INVALID' });
+      });
+
+      it('never throws, and never returns ok for a refusal', async () => {
+        // Every outcome is a value, because the caller is a public endpoint and a
+        // throw becomes a 500 — which is the one answer that makes a rail retry a
+        // message that will never be valid, for ever.
+        for (const attempt of [
+          { body: 'x', signature: undefined, timestamp: '1', secret: SECRET },
+          { body: 'x', signature: 'zz', timestamp: '1', secret: SECRET },
+          { body: 'x', signature: '00', timestamp: undefined, secret: SECRET },
+          { body: 'x', signature: '00', timestamp: '1', secret: undefined },
+          { body: 'x', signature: '00', timestamp: '1', secret: '' },
+        ]) {
+          const outcome = await verifyPaymentWebhookSignature({
+            body: attempt.body,
+            signatureHeader: 'X-Vyloop-Signature',
+            timestampHeader: 'X-Vyloop-Timestamp',
+            signature: attempt.signature,
+            timestamp: attempt.timestamp,
+            secret: attempt.secret,
+          });
+
+          expect(outcome.ok, JSON.stringify(attempt)).toBe(false);
+        }
+      });
+    });
+
+    describe('the endpoint can find out but cannot act', () => {
+      // A webhook carries the payment and the amount. It does NOT carry the fact
+      // that a loyalty pass was scanned — only the terminal knows that. So this
+      // route can record that money moved and can learn nothing about who it
+      // belonged to, and it must have no way to guess: points on somebody's balance
+      // for a purchase they may not have made is worse than a lost attribution.
+      it('does not credit, create a checkin, or resolve a customer', async () => {
+        mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'biz-1', name: 'Acme Coffee' }]));
+        mockDb.insert.mockReturnValueOnce(
+          createBuilder([
+            { paymentId: 'mp-12345', businessId: 'biz-1', amountCents: 4500, receivedAt: new Date() },
+          ]),
+        );
+
+        await webhookRequest({ payload: PAYMENT, secret: SECRET });
+
+        // `createDb` called once, and the only table written is `settled_payments`.
+        // A route that credited would also open a transaction and publish an event,
+        // because `creditCheckin` does both.
+        expect(createDb).toHaveBeenCalledTimes(1);
+        expect(mockDb.insert).toHaveBeenCalledTimes(1);
+        expect(tableNameOf(mockDb.insert.mock.calls[0][0])).toBe('settled_payments');
+        expect(mockDb.update).not.toHaveBeenCalled();
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+      });
+
+      it('has no member_code to read, even if the rail sends one', async () => {
+        // A rail would have no reason to send a pass, but the guarantee is structural
+        // and worth asserting: this handler has no code path that turns one into a
+        // customer, so a payload that carries it changes nothing.
+        mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'biz-1', name: 'Acme Coffee' }]));
+        mockDb.insert.mockReturnValueOnce(
+          createBuilder([
+            { paymentId: 'mp-12345', businessId: 'biz-1', amountCents: 4500, receivedAt: new Date() },
+          ]),
+        );
+
+        const res = await webhookRequest({
+          payload: { ...PAYMENT, member_code: 'ABC-123', points: 9999 },
+          secret: SECRET,
+        });
+
+        expect(res.status).toBe(201);
+        expect(Object.keys(insertedValues(mockDb) as Record<string, unknown>).sort()).toEqual([
+          'amountCents',
+          'businessId',
+          'paymentId',
+        ]);
+      });
+    });
+
+    describe('the path is public at the worker, which is the fifth bug of this class', async () => {
+      it('is reachable with no gateway-injected identity at all', async () => {
+        // Without the `PUBLIC_PATHS` entry in this worker's `index.ts`, the global
+        // middleware calls `extractAuthHeaders`, throws, and answers 403
+        // `UNAUTHORIZED` for every delivery — a route complete, tested and serving
+        // nothing in every environment. Asserted end to end through `app.fetch` with
+        // literally no `X-*` headers, because that is the only way to see it.
+        mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'biz-1', name: 'Acme Coffee' }]));
+        mockDb.insert.mockReturnValueOnce(
+          createBuilder([
+            { paymentId: 'mp-12345', businessId: 'biz-1', amountCents: 4500, receivedAt: new Date() },
+          ]),
+        );
+
+        const res = await webhookRequest({ payload: PAYMENT, secret: SECRET });
+
+        expect(res.status).toBe(201);
+        const raw = await res.text();
+        expect(raw).not.toContain('UNAUTHORIZED');
+      });
+
+      it('leaves its siblings authenticated, so the exemption stayed an exact path', async () => {
+        // The exemption is a `ReadonlySet` compared against the raw pathname, so it
+        // cannot grow into a prefix. A future `/v1/loyalty/webhooks/payments/admin`
+        // would be the accident this catches.
+        const res = await app.fetch(
+          new Request('http://localhost/v1/loyalty/webhooks/payments/admin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }),
+          { DATABASE_URL: 'postgres://mock' } as Record<string, unknown>,
+        );
+
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('UNAUTHORIZED');
+      });
     });
   });
 });

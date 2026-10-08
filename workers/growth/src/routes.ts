@@ -1,4 +1,4 @@
-import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins, posTerminals, hashPassword } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import { eq, and, count, sql, or, isNull, lte, gte, gt, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -12,7 +12,33 @@ import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent,
 // Router
 // ---------------------------------------------------------------------------
 
-const router = new Hono<{ Bindings: Bindings }>();
+/**
+ * The bindings this worker reads, including the payment rail's shared secret.
+ *
+ * `Bindings` comes from `helpers.ts`, which this change does not touch, so the
+ * one binding it needs is declared here — next to the route that reads it, which
+ * is also where the reader is looking when they ask what a binding is for.
+ *
+ * `PAYMENT_WEBHOOK_SECRET` is **not** declared in `wrangler.jsonc`, and there is
+ * no widget, account or key behind it: Mercado Pago has not issued one, and no
+ * credential exists anywhere in this repository for this endpoint to authenticate
+ * against. That is the same state `RESEND_API_KEY` and `TURNSTILE_SECRET_KEY` are
+ * in on the gateway, and it fails the same way — 503 with nothing recorded, which
+ * is the only behaviour that makes the missing step visible. A plausible literal in
+ * the config would satisfy every test and every deployment while refusing every
+ * real delivery for a reason nobody could find, which is the `SCHEMA_REGISTRY` bug
+ * at a different key.
+ *
+ * Declared optional and read as possibly-absent rather than required, so the type
+ * cannot be satisfied by a config that has it and a runtime that does not.
+ */
+export interface PaymentWebhookEnv {
+  PAYMENT_WEBHOOK_SECRET?: string | undefined;
+}
+
+export type GrowthEnv = Bindings & PaymentWebhookEnv;
+
+const router = new Hono<{ Bindings: GrowthEnv }>();
 
 // ============================================================================
 // Loyalty Program Config
@@ -2514,6 +2540,492 @@ router.post('/v1/loyalty/terminals/:id/revoke', async (c) => {
   }
 
   return c.json({ data: { ...terminalResponse(updated), business_id: businessId } });
+});
+
+// ============================================================================
+// The payment rail's webhook
+// ============================================================================
+
+/**
+ * Where a payment rail delivers a settlement notification.
+ *
+ * Declared here, where the route is registered, and re-exported by `index.ts`
+ * because `index.ts` is the file that has to exempt it from auth — the same
+ * arrangement `workers/wallet` uses for `WALLET_CALLBACK_PATH`, and for the same
+ * reason: a public exemption that does not name the route it exempts it for is a
+ * hole, and a hole with a stale name does not fail loudly.
+ *
+ * The gateway declares the same string independently, because `apps/gateway` must
+ * not take a runtime dependency on the service behind it.
+ * `apps/gateway/src/worker-public-path-auth.contract.test.ts` asserts the two
+ * copies agree **and** that the worker exempts the path, because "the gateway
+ * thinks it is public" and "the worker lets it through" are two separate facts
+ * and only the pair of them is a reachable route.
+ */
+export const PAYMENT_WEBHOOK_PATH = '/v1/loyalty/webhooks/payments';
+
+/** The header the rail is assumed to carry its signature in. */
+export const PAYMENT_WEBHOOK_SIGNATURE_HEADER = 'X-Vyloop-Signature';
+
+/** Stable, specific codes. Callers branch on these rather than parsing prose. */
+export const PAYMENT_WEBHOOK_SIGNATURE_REQUIRED = 'PAYMENT_WEBHOOK_SIGNATURE_REQUIRED';
+export const PAYMENT_WEBHOOK_SIGNATURE_INVALID = 'PAYMENT_WEBHOOK_SIGNATURE_INVALID';
+export const PAYMENT_WEBHOOK_SECRET_UNAVAILABLE = 'PAYMENT_WEBHOOK_SECRET_UNAVAILABLE';
+export const PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED = 'PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED';
+export const PAYMENT_WEBHOOK_UNKNOWN_MERCHANT = 'PAYMENT_WEBHOOK_UNKNOWN_MERCHANT';
+export const PAYMENT_WEBHOOK_INVALID_PAYLOAD = 'PAYMENT_WEBHOOK_INVALID_PAYLOAD';
+
+/**
+ * The exact byte string that gets signed.
+ *
+ * ## THE ASSUMPTION, STATED PLAINLY
+ *
+ * **This scheme is UNCONFIRMED against Mercado Pago's documentation.** It could
+ * not be verified during the session that wrote it. What follows is a common and
+ * defensible shape — a separator-delimited timestamp and the raw body, HMAC'd with
+ * a shared secret — but it is *an* HMAC scheme, not *the* HMAC scheme, and it must
+ * be checked against the rail's real documentation before this endpoint is pointed
+ * at anything real. Pointing it at a live rail with this scheme produces a receiver
+ * that refuses every delivery with `PAYMENT_WEBHOOK_SIGNATURE_INVALID`, which is
+ * the correct failure mode (it fails closed) but reads exactly like a misconfigured
+ * secret.
+ *
+ * This function exists so that being wrong is one edit and one test rather than a
+ * change to the verification path. It is asserted directly, by name, in
+ * `index.test.ts` — so the assumption is a **failing test** if it ever has to change,
+ * not a silent divergence between what is signed and what a rail signs.
+ *
+ * ## What is deliberately not in the message
+ *
+ * The path. The timestamp, then a `.`, then the raw body. Some schemes prefix the
+ * path or the request id to bind a signature to one endpoint; if this rail's does,
+ * that is a different function body and the same one place to change it.
+ *
+ * A timestamp belongs in the message so a captured delivery can be replayed at
+ * most until the rail rotates the secret — but **this route does not check the
+ * timestamp**. A signature being fresh is not the property that makes a replay
+ * safe here, and it is a separate decision with a separate failure mode (clock
+ * skew drops real deliveries). `settled_payments.payment_id` is the primary key,
+ * so a replay is idempotent at the database anyway: it re-records nothing.
+ */
+export function paymentWebhookSignedMessage(body: string, timestamp: string): string {
+  return `${timestamp}.${body}`;
+}
+
+/**
+ * Verify a delivery's HMAC-SHA256 signature.
+ *
+ * ## Never throws, and never falls back to accepting
+ *
+ * Every failure is a named code. There is no "verify failed, carry on" path and
+ * no unsigned branch: a receiver that accepts when it cannot check is not a
+ * receiver, it is a public write endpoint with a logging step. So the three
+ * refusals are kept **distinct from each other**, because they are three
+ * different operational problems — an operator has not configured the secret, a
+ * client is not signing, a client is signing with the wrong key — and collapsing
+ * them into one code would make the first two indistinguishable from an attack.
+ *
+ * ## Constant time, and why it is not `===`
+ *
+ * The digest is verified with `crypto.subtle.verify`, which is the primitive
+ * designed for this: it compares the MAC internally without a timing signal that
+ * depends on how many leading bytes matched. `hexA === hexB` on two digests is
+ * not equivalent — an early-exit string comparison leaks, byte by byte, how much
+ * of a forgery was correct, and a signature check is exactly where an attacker
+ * benefits from that oracle. `index.test.ts` asserts this function does not
+ * compare digests with `===`.
+ *
+ * Note this is *not* the wallet's verification: `workers/wallet/src/callbacks.ts`
+ * uses `crypto.subtle.verify` against Google's **asymmetric** ECv2 keys, and a
+ * public-key primitive cannot be reused for a shared secret. See
+ * `callback-handler.ts:14` for that flow, whose order — verify, resolve tenant,
+ * claim nonce — this mirrors.
+ */
+export type PaymentWebhookVerification =
+  | { ok: true }
+  | { ok: false; status: 401 | 503; code: string; message: string };
+
+export async function verifyPaymentWebhookSignature(input: {
+  body: string;
+  /** Lowercased header name, as Hono's `header()` takes it. */
+  signatureHeader: string;
+  /** Lowercased header name for the timestamp that is part of the signed message. */
+  timestampHeader: string;
+  /** Raw header values, or `undefined` when the header was absent. */
+  signature: string | undefined;
+  timestamp: string | undefined;
+  secret: string | undefined;
+}): Promise<PaymentWebhookVerification> {
+  const { body, signature, timestamp, secret } = input;
+
+  // Fails closed on an unconfigured secret, and *first*: a receiver with no secret
+  // must refuse rather than treat every delivery as unverified-but-harmless. This
+  // is the state the route is in today in every environment, and it is reported
+  // rather than worked around — an absent secret is a missing deployment step, and
+  // `src/support.ts` answers 503 for its keys in exactly the same shape.
+  if (secret === undefined || secret === '') {
+    return {
+      ok: false,
+      status: 503,
+      code: PAYMENT_WEBHOOK_SECRET_UNAVAILABLE,
+      message:
+        'The payment webhook secret is not configured, so no delivery can be authenticated. Nothing was recorded.',
+    };
+  }
+
+  // Never accept an unsigned payload. A missing signature is refused with its own
+  // code rather than as "invalid": it is the signature of an integration that was
+  // never pointed at this endpoint correctly, and it wants a different fix from a
+  // forgery.
+  if (signature === undefined || signature === '') {
+    return {
+      ok: false,
+      status: 401,
+      code: PAYMENT_WEBHOOK_SIGNATURE_REQUIRED,
+      message: `This endpoint accepts deliveries from the payment rail only, and a delivery must carry its ${input.signatureHeader} signature.`,
+    };
+  }
+
+  if (timestamp === undefined || timestamp === '') {
+    return {
+      ok: false,
+      status: 401,
+      code: PAYMENT_WEBHOOK_SIGNATURE_REQUIRED,
+      message: `A delivery must carry the ${input.timestampHeader} timestamp its signature was computed over.`,
+    };
+  }
+
+  const presented = decodeHex(signature);
+  if (presented === undefined) {
+    return {
+      ok: false,
+      status: 401,
+      code: PAYMENT_WEBHOOK_SIGNATURE_INVALID,
+      message: 'The signature is not a hex-encoded HMAC-SHA256 digest.',
+    };
+  }
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    utf8(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+
+  // The comparison itself. Everything above is a shape check; this is the one that
+  // decides, and it is the one that has to be constant time.
+  const valid = await crypto.subtle.verify(
+    'HMAC',
+    key,
+    presented,
+    utf8(paymentWebhookSignedMessage(body, timestamp)),
+  );
+
+  if (!valid) {
+    return {
+      ok: false,
+      status: 401,
+      code: PAYMENT_WEBHOOK_SIGNATURE_INVALID,
+      message: 'The signature does not match this delivery. Nothing was recorded.',
+    };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * A byte array backed by a plain `ArrayBuffer`.
+ *
+ * Not a stylistic annotation, and copied from `workers/wallet/src/callbacks.ts` for
+ * the reason recorded there: since TypeScript 5.7 `Uint8Array` is generic over its
+ * buffer, and WebCrypto's `BufferSource` accepts only the `ArrayBuffer` variant — so
+ * a `Uint8Array<ArrayBufferLike>` is rejected at `verify` even though it is
+ * byte-for-byte correct. Pinning the helper keeps the error at the helper rather
+ * than at each call site.
+ */
+type Bytes = Uint8Array<ArrayBuffer>;
+
+/** UTF-8 bytes of the signed message. */
+function utf8(text: string): Bytes {
+  return new TextEncoder().encode(text);
+}
+
+/**
+ * Hex to bytes, or `undefined` for anything that is not hex.
+ *
+ * A hand-rolled parser rather than `Buffer.from(sig, 'hex')` because `Buffer`
+ * silently truncates at the first invalid character — `'ab!!'` decodes to one byte
+ * instead of failing, which would compare a truncated MAC against a real digest and
+ * report `false` for a *length* reason while looking like a signature mismatch.
+ *
+ * Nor `Buffer`: this runs on Workers, and a verification routine should not depend
+ * on `nodejs_compat` being enabled in order to be correct.
+ */
+function decodeHex(value: string): Bytes | undefined {
+  if (value.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(value)) {
+    return undefined;
+  }
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+/**
+ * Resolve the payload's merchant reference to a tenant.
+ *
+ * ## Why the tenant is resolved and never read from the body
+ *
+ * Every other route in this worker takes `business_id` from the credential and
+ * never from the request — that is the tenant-isolation boundary, stated the same
+ * way in `callback-handler.ts` and in `requireOperatorRole`. This route has no
+ * credential to inherit it from, so the boundary has to be a *lookup*: the body
+ * names a merchant reference, and `tenants.slug` is the only column that can turn
+ * that name into an id. A body field called `business_id` would be the caller
+ * choosing its own scope, and this endpoint is public by construction.
+ *
+ * Matching on `slug` rather than `name` because `slug` carries a unique index and
+ * `name` does not. A reference that resolves to two tenants must not pick one.
+ *
+ * An unknown reference is a 404 rather than a refusal, and the distinction from the
+ * codes above is deliberate: the signature has already been verified by the time
+ * this runs, so the caller holds the shared secret and is not an unauthenticated
+ * prober — there is no existence oracle to withhold here, and an operator who has
+ * misconfigured the rail needs "no merchant has that reference", not a generic
+ * refusal they cannot act on.
+ */
+async function resolveMerchantReference(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  reference: string,
+): Promise<{ id: string; name: string } | undefined> {
+  const [tenant] = await db
+    .select({ id: tenants.id, name: tenants.name })
+    .from(tenants)
+    .where(eq(tenants.slug, reference))
+    .limit(1);
+
+  return tenant as { id: string; name: string } | undefined;
+}
+
+/**
+ * POST /v1/loyalty/webhooks/payments
+ *
+ * Record that a payment settled. Nothing else.
+ *
+ * ## What this endpoint can find out, and what it can never do
+ *
+ * It **does not credit points, does not create a checkin, and does not resolve a
+ * customer.** Those are the three things it must not do, and each is refused by
+ * construction rather than by a check: there is no `member_code` on this payload,
+ * `creditCheckin` is not imported by this handler, and the only table it writes is
+ * `settled_payments`. A terminal reports money and the tenant's earn rule decides
+ * what that is worth — a payment rail knows neither the pass that was scanned nor
+ * the rule that would price it.
+ *
+ * ## THE LIMITATION, STATED WHERE AN OPERATOR WILL READ IT
+ *
+ * **A payment webhook detects a lost attribution; it cannot repair one.**
+ *
+ * The webhook carries the payment and the amount. It does **not** carry the fact
+ * that a loyalty pass was scanned — only the terminal knows that. So when
+ * `scripts/check-payment-reconciliation.mjs` finds a settled payment with no
+ * checkin, it knows **that** an attribution was lost, not **whose**. Repair
+ * requires the terminal to resend `POST /v1/loyalty/checkins`, or a human to ask
+ * the cashier. There is no repair button here, and building one would mean
+ * guessing a customer from a payment, which would put points on somebody's balance
+ * for a purchase they may not have made.
+ *
+ * This sentence is here, in the endpoint's own documentation, because the endpoint
+ * is where somebody arrives intending to build that button.
+ *
+ * ## Why it is public, and what replaces the JWT
+ *
+ * A payment rail is a third party with no Vyloop account and no business id to
+ * send. What authenticates the delivery is the signature above — checked before
+ * this handler parses anything, and before any database is opened. `EXACT_PUBLIC_
+ * PATHS` in `apps/gateway/src/index.ts` and `PUBLIC_PATHS` in this worker's
+ * `index.ts` are both required for this route to be reachable, and
+ * `worker-public-path-auth.contract.test.ts` fails if either is missing.
+ *
+ * ## Why a Vyloop credential is refused here, with this route's own code
+ *
+ * `PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED`, not the middleware's generic
+ * `UNAUTHORIZED`. That is the whole reason this check is a few lines of header
+ * reading instead of `extractAuthHeaders`: `UNAUTHORIZED` is what a *missing
+ * gateway header* answers, so a customer or a counter who got it would have no way
+ * to tell that the route was never theirs, and the obvious next move would be to
+ * start sending a JWT. The code has to say what is true — this route is for the
+ * payment rail, and a Vyloop credential does not belong on it.
+ *
+ * Both header families are checked: the gateway-injected `X-*` identity (a direct
+ * call at this worker, or a gateway that injects anyway) and `Authorization` (what
+ * a credential holder actually holds). The same refusal for either, so the
+ * response cannot be used to enumerate which kind of subject was sent.
+ */
+router.post(PAYMENT_WEBHOOK_PATH, async (c) => {
+  // Before the body, before `createDb`, and before the signature check: a caller
+  // who brought a credential to a route that has no use for one is told so without
+  // this route doing any work on their behalf.
+  const presentedIdentity =
+    c.req.header('X-User-Id') ?? c.req.header('X-Business-Id') ?? c.req.header('X-User-Role');
+  if (presentedIdentity !== undefined || c.req.header('Authorization') !== undefined) {
+    return c.json(
+      {
+        error: {
+          code: PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED,
+          message:
+            "This endpoint is for the merchant's payment rail, which authenticates with a webhook signature and not a Vyloop credential. Reporting a sale is POST /v1/loyalty/checkins.",
+        },
+      },
+      403,
+    );
+  }
+
+  // The raw body, read once and used for both the signature and the parse. A
+  // re-serialised body would not be the bytes that were signed, which is the
+  // failure mode a JSON-parse-then-verify receiver always has.
+  const raw = await c.req.text();
+
+  const verified = await verifyPaymentWebhookSignature({
+    body: raw,
+    signatureHeader: PAYMENT_WEBHOOK_SIGNATURE_HEADER,
+    timestampHeader: 'X-Vyloop-Timestamp',
+    signature: c.req.header(PAYMENT_WEBHOOK_SIGNATURE_HEADER.toLowerCase()),
+    timestamp: c.req.header('X-Vyloop-Timestamp'),
+    secret: c.env.PAYMENT_WEBHOOK_SECRET,
+  });
+
+  if (!verified.ok) {
+    return c.json({ error: { code: verified.code, message: verified.message } }, verified.status);
+  }
+
+  let body: {
+    merchant_reference?: unknown;
+    payment_id?: unknown;
+    amount_cents?: unknown;
+  };
+  try {
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: PAYMENT_WEBHOOK_INVALID_PAYLOAD,
+          message: 'The body is not valid JSON.',
+        },
+      },
+      400,
+    );
+  }
+
+  if (
+    typeof body.merchant_reference !== 'string' ||
+    body.merchant_reference.length === 0 ||
+    typeof body.payment_id !== 'string' ||
+    body.payment_id.length === 0 ||
+    typeof body.amount_cents !== 'number' ||
+    !Number.isInteger(body.amount_cents) ||
+    body.amount_cents < 1
+  ) {
+    // One code for every malformed shape, because the caller is a payment rail and
+    // not a person reading a message: it retries or it does not, and the branch
+    // that matters is signed-versus-not.
+    return c.json(
+      {
+        error: {
+          code: PAYMENT_WEBHOOK_INVALID_PAYLOAD,
+          message:
+            'merchant_reference (non-empty string), payment_id (non-empty string) and amount_cents (integer greater than 0) are required.',
+        },
+      },
+      400,
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+
+  // Read before the tenant-scoped session is armed, because `tenants` is the root
+  // table and has no `business_id` to scope against. This is the only read that
+  // happens outside the tenant's scope, and it is a lookup of the reference the
+  // signature already authenticated.
+  const tenant = await resolveMerchantReference(db, body.merchant_reference);
+
+  if (!tenant) {
+    return c.json(
+      {
+        error: {
+          code: PAYMENT_WEBHOOK_UNKNOWN_MERCHANT,
+          message: 'No merchant has that reference. Nothing was recorded.',
+        },
+      },
+      404,
+    );
+  }
+
+  await withRls(db, tenant.id);
+
+  // Idempotent at the database, decided by the primary key in the same statement
+  // — the same arrangement as `POST /v1/loyalty/checkins`, and for the same
+  // reason: a rail retries with backoff, and a read-then-write would let two
+  // concurrent retries of one settlement both proceed.
+  const [recorded] = await db
+    .insert(settledPayments)
+    .values({
+      paymentId: body.payment_id,
+      businessId: tenant.id,
+      amountCents: body.amount_cents,
+    })
+    .onConflictDoNothing({ target: settledPayments.paymentId })
+    .returning();
+
+  // Snake_case on the way out, because this is a wire contract for a third party
+  // and every other route on this worker answers with the database's own column
+  // names. Drizzle's `.returning()` keys the row by the *camelCase property* names,
+  // so a bare `data: row` would make this the only endpoint on the platform that
+  // renames its columns in the response -- and the caller would have to know which
+  // endpoint it is talking to.
+  const asWire = (row: typeof recorded) =>
+    row === undefined
+      ? undefined
+      : {
+          payment_id: row.paymentId,
+          business_id: row.businessId,
+          amount_cents: row.amountCents,
+          received_at: row.receivedAt,
+        };
+
+  // 200 rather than 201 on a duplicate, and the body is the row we already have.
+  // A retry must be able to tell "recorded" from "I am recorded", and must not
+  // have to distinguish them.
+  if (!recorded) {
+    const [existing] = await db
+      .select()
+      .from(settledPayments)
+      .where(eq(settledPayments.paymentId, body.payment_id))
+      .limit(1);
+
+    if (!existing) {
+      // The insert conflicted and the row is unreadable. Reported rather than
+      // claimed as success: a 200 here would tell the rail a settlement is recorded
+      // when we cannot say that.
+      return c.json(
+        {
+          error: {
+            code: 'CONFLICT_WITHOUT_ROW',
+            message: 'A settled payment already exists for this payment_id but could not be read back.',
+          },
+        },
+        500,
+      );
+    }
+
+    return c.json({ data: asWire(existing) }, 200);
+  }
+
+  return c.json({ data: asWire(recorded) }, 201);
 });
 
 export default router;

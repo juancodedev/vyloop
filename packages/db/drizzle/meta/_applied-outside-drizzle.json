@@ -1,4 +1,20 @@
 {
   "version": 1,
-  "migrations": []
+  "migrations": [
+    {
+      "tag": "0013_sour_apocalypse",
+      "when": 1791492057771,
+      "hash": "fa8176d8a45fbfc17d705da81e0d8d99feac1dd82093070573bfe5df51ea320f",
+      "evidence": [
+        {
+          "kind": "table",
+          "name": "settled_payments"
+        },
+        {
+          "kind": "constraint",
+          "name": "settled_payments_business_id_tenants_id_fk"
+        }
+      ]
+    }
+  ]
 }
