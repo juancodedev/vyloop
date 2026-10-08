@@ -19,7 +19,7 @@
     "lucide-react": "^1.52.0",
     "next": "^16.3.8",
     "qrcode.react": "^4.2.0",
-    "react": "19.2.7",
+    "react": "19.3.0",
     "react-dom": "19.2.7"
   },
   "devDependencies": {
@@ -27,7 +27,7 @@
     "@cloudflare/workers-types": "^5.20260722.1",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.4",
-    "@types/react": "^19.2.17",
+    "@types/react": "^19.3.0",
     "@types/react-dom": "^19.2.3",
     "jsdom": "^30.1.2",
     "typescript": "^6.0.3",
