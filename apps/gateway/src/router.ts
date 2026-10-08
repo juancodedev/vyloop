@@ -47,11 +47,33 @@ export const ROUTE_MAP: ServiceBinding[] = [
  * Find the service binding for a given URL path.
  *
  * Returns the first matching prefix (longest-prefix match via sorted order).
+ *
+ * ## Why the match is on a segment boundary and not on `startsWith`
+ *
+ * `/v1/loyalty` is a *namespace*, not the four-character string that happens to
+ * open it. A bare `startsWith` also matches `/v1/loyalty-admin` and
+ * `/v1/loyalty-anything-else`, and forwards them to the growth worker — so a
+ * path that belongs to no service answers as though it belonged to that one,
+ * and the route the worker serves is 404 while the answer comes from the wrong
+ * file.
+ *
+ * No such path exists today, which is why this sat latent: every route in the
+ * fleet is either exactly its prefix or continues with `/`. That is a property
+ * of today's route list, not of the router, and the failure it would produce is
+ * the one this module already has a history of. Two occurrences of it are
+ * recorded above, and the third was `POST /v1/checkins`, which was complete,
+ * tested, merged and deployed before anything could reach it.
+ *
+ * So the boundary is enforced here rather than trusted to the route list, and
+ * `wrangler-route-reachability.contract.test.ts` asserts every worker's routes
+ * still resolve under the stricter rule.
  */
 export function matchRoute(path: string): ServiceBinding | undefined {
   // Sort by prefix length descending for longest-prefix match
   const sorted = [...ROUTE_MAP].sort((a, b) => b.prefix.length - a.prefix.length);
-  return sorted.find((route) => path.startsWith(route.prefix));
+  return sorted.find(
+    (route) => path === route.prefix || path.startsWith(`${route.prefix}/`),
+  );
 }
 
 // ---------------------------------------------------------------------------

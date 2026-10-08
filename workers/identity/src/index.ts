@@ -411,15 +411,20 @@ const POS_ROLE = 'pos';
  * thing a till does, and if a counter ever needs more it should be a claim with a
  * check behind it rather than a wider array nobody reads.
  *
- * ## Known gap, deliberately not solved here
+ * ## Why a counter's token cannot assign points
  *
- * `requireOperatorRole` in growth refuses the **customer** role rather than
- * requiring an operator one, so a counter's token — role `pos` — satisfies that
- * guard on `POST /v1/loyalty/points/assign`. A till could therefore assign points
- * directly, bypassing the earn rule that `POST /v1/loyalty/checkins` exists to
- * apply. The fix belongs in growth, which is out of scope for this change and is
- * already correct everywhere it is not this one question; it is recorded in
- * `docs/18-Trabajo-Pendiente.md`.
+ * This is why the role a counter carries matters even though nothing gates on
+ * it. `requireOperatorRole` in growth refuses two subjects — a customer, and a
+ * counter — using the same `isCounterSubject` predicate that opens the two
+ * loyalty routes, so a till's token is stopped on
+ * `POST /v1/loyalty/points/assign` with the same code and the same message a
+ * customer gets.
+ *
+ * That guard used to refuse the `customer` role alone, which meant the moment a
+ * `pos:` token could exist, it satisfied that guard and could assign points
+ * directly — bypassing the earn rule that `POST /v1/loyalty/checkins` exists to
+ * apply. Issuing the token and closing that were one change, because the second
+ * is what makes the first safe to ship.
  */
 const POS_SCOPES = ['write:loyalty'];
 
