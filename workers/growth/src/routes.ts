@@ -1,4 +1,4 @@
-import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins, posTerminals, hashPassword } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import { eq, and, count, sql, or, isNull, lte, gte, gt, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -2214,6 +2214,306 @@ router.post('/v1/loyalty/checkins', async (c) => {
   });
 
   return c.json({ data: { ...existing, points: retried.points } }, 200);
+});
+
+// ============================================================================
+// The terminal's own credential
+// ============================================================================
+
+/**
+ * Bytes of entropy in a terminal secret. 32.
+ *
+ * `crypto.getRandomValues` rather than `crypto.randomUUID()` for three reasons,
+ * in order of how much each one costs if it is wrong:
+ *
+ *   1. **128 bits is what a UUID carries.** `randomUUID()` is a CSPRNG draw of
+ *      exactly that width, so a UUID secret is four times smaller than the 512
+ *      bits below. Nothing here needs the UUID's shape — the terminal's identity
+ *      is the row's `id`, which the database generates.
+ *   2. **UUIDs are visible everywhere else in this data model.** `pos_terminals.id`
+ *      is a uuid, every `users.id` and `customers.id` is a uuid, and the token's
+ *      subject carries one. A credential that is spelled like every other
+ *      identifier in the system invites the reader to treat it as one: to log it
+ *      at a lower level, to paste it into an id field, to accept it somewhere a
+ *      secret is not meant to travel.
+ *   3. **A UUID's shape is legible.** Four hyphen-separated groups of fixed width
+ *      is enough to tell a real one from a guess, which is exactly the
+ *      distinction a credential must not make easy.
+ *
+ * 32 bytes hex-encoded is 64 hex characters, so the secret is a 68-character
+ * string including its prefix. That is far past anything a human types or a
+ * dictionary enumerates, and it is the same class of value the token exchange's
+ * PBKDF2 protects — which is the point: the exchange is *always* a 100k-iteration
+ * hash, so a weak secret buys an attacker nothing by skipping it, and a strong
+ * one is what makes that cost tolerable for a terminal booting on flaky wifi.
+ *
+ * The prefix is `vylt_`, chosen over the `vyl_` of the unwired
+ * `workers/identity/src/api-keys.ts` so that a secret pasted from one of the two
+ * systems into the other is refused rather than silently becoming a credential.
+ * That dead module is a separate, SHA-256, prefix-rotated design; `pos_terminals`
+ * is PBKDF2 and not prefix-rotated, and the two never met.
+ */
+const TERMINAL_SECRET_BYTES = 32;
+const TERMINAL_SECRET_PREFIX = 'vylt_';
+
+/**
+ * Mint a terminal's plaintext secret.
+ *
+ * Never logged, never stored, never returned by any route other than the one
+ * that mints it. `hashPassword`'s own docblock forbids logging its return
+ * value, and the rule is the same for this: a secret in a log line is a secret in
+ * a log aggregator, in a support ticket, and in whatever backup that line is in.
+ */
+function generateTerminalSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(TERMINAL_SECRET_BYTES));
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `${TERMINAL_SECRET_PREFIX}${hex}`;
+}
+
+/**
+ * The columns a terminal's row is ever read back as, in the shape the API
+ * speaks.
+ *
+ * One projection for the three routes, and `key_hash` is **not in it**. That is
+ * the whole reason this type exists rather than three `select()` calls: the hash
+ * is the one field that must never reach a response, and a list written as
+ * `select()` plus a hand-picked copy is one edit away from shipping it. The
+ * listing names its columns at the query; the create and revoke responses map
+ * this shape.
+ */
+function terminalResponse(row: {
+  id: string;
+  name: string;
+  lastSeenAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+}): Record<string, unknown> {
+  return {
+    id: row.id,
+    // Echoed under the name the exchange route takes, so a client can feed this
+    // response straight into `POST /v1/auth/pos/token` without renaming anything.
+    terminal_id: row.id,
+    name: row.name,
+    last_seen_at: row.lastSeenAt,
+    revoked_at: row.revokedAt,
+    created_at: row.createdAt,
+  };
+}
+
+/**
+ * POST /v1/loyalty/terminals
+ *
+ * Register a merchant's payment terminal and mint its credential.
+ *
+ * ## Guard: `requireOperatorRole`, and why a till may not do this
+ *
+ * Registering hardware is an operator action, which is what that guard is for.
+ * It refuses both a customer **and** a counter subject with the same code and
+ * the same message, and that second half is the part worth stating: without it a
+ * till could register another till. A counter holds one scoped credential, and
+ * what it may do with it is `passes/resolve` and `checkins` — reporting a sale
+ * that happened. Minting a *new* credential is not that, it is fleet
+ * administration, and a token that authenticates a single till should not be
+ * able to grow the fleet. The guard already denies counters everywhere else it
+ * matters (`points/assign`), so this is the same question asked in the third
+ * place it applied.
+ *
+ * ## The secret is returned exactly once, because that is the only time it exists
+ *
+ * `pos_terminals.key_hash` is `hashPassword`'s `saltHex:hashHex` — PBKDF2, the
+ * same scheme and the same storage format as `users.password_hash`, because
+ * `POST /v1/auth/pos/token` verifies against it with `verifyPassword` and a
+ * plain SHA-256 would be incompatible with a route that is already deployed.
+ * The plaintext is therefore not recoverable by anyone, including us: there is no
+ * endpoint that reads it, and there must never be one.
+ *
+ * That is the whole reason the response carries it and no other does. If it were
+ * lost, the terminal is re-registered and the old row revoked — which is what
+ * revoke exists for.
+ */
+router.post('/v1/loyalty/terminals', async (c) => {
+  const auth = extractAuthHeaders(c);
+  // Before the body, before `createDb`, before the secret exists. A guard that
+  // ran after the hash would have spent 100k PBKDF2 iterations on a request it
+  // was going to refuse.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  // From the credential's scope, never from the body. There is no `business_id`
+  // field on this route and adding one would let a caller choose its own tenant.
+  const { businessId } = auth;
+  const body = await c.req.json<{ name?: unknown }>();
+
+  // Trimmed and then length-checked, so `"   "` is refused the same way a missing
+  // name is. A blank name is not a cosmetic problem: it is the only human label a
+  // merchant has for the till they are about to revoke.
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (name.length === 0) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'name is required and must be a non-empty string' } },
+      400,
+    );
+  }
+
+  const secret = generateTerminalSecret();
+  // Hashed before the insert and never written anywhere else. The `saltHex:hashHex`
+  // string is deliberately not logged, per `hashPassword`'s own docblock.
+  const keyHash = await hashPassword(secret);
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // Named columns in the RETURNING clause as well as in the response: the row that
+  // comes back from the database should not even hold the hash for the mapping
+  // below to have to remember to skip.
+  const [inserted] = await db
+    .insert(posTerminals)
+    .values({ businessId, name, keyHash })
+    .returning({
+      id: posTerminals.id,
+      name: posTerminals.name,
+      lastSeenAt: posTerminals.lastSeenAt,
+      revokedAt: posTerminals.revokedAt,
+      createdAt: posTerminals.createdAt,
+    });
+
+  return c.json(
+    {
+      data: {
+        ...terminalResponse(inserted),
+        business_id: businessId,
+        // The one and only time this value exists outside the merchant.
+        secret,
+        // Said in the response rather than only in this docblock, because the one
+        // person who needs to know is whoever is reading the 201 in the dashboard:
+        // copy it now, or revoke this row and register a new terminal.
+        secret_shown_once: true,
+      },
+    },
+    201,
+  );
+});
+
+/**
+ * GET /v1/loyalty/terminals
+ *
+ * List this business's terminals.
+ *
+ * **No `key_hash`, and no way to ask for one.** The columns are named at the
+ * query, so the hash never leaves Postgres for this route — a `select()` with the
+ * fields picked afterwards would work until the first careless edit, and the
+ * whole defence is that there is nothing to leak rather than a filter that could
+ * be forgotten.
+ *
+ * `business_id` is the credential's scope, so this lists one merchant's till and
+ * never another's, and `created_at` descending because the newest till is the one
+ * an operator is looking for.
+ */
+router.get('/v1/loyalty/terminals', async (c) => {
+  const auth = extractAuthHeaders(c);
+  // Not an open read like `GET /v1/loyalty/tiers`: this is a credential inventory,
+  // not merchandising. A customer has no business seeing which hardware a tenant
+  // runs, and a counter has no business seeing it either.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const items = await db
+    .select({
+      id: posTerminals.id,
+      name: posTerminals.name,
+      lastSeenAt: posTerminals.lastSeenAt,
+      revokedAt: posTerminals.revokedAt,
+      createdAt: posTerminals.createdAt,
+    })
+    .from(posTerminals)
+    .where(eq(posTerminals.businessId, businessId))
+    .orderBy(desc(posTerminals.createdAt));
+
+  return c.json({ data: items.map(terminalResponse) });
+});
+
+/**
+ * POST /v1/loyalty/terminals/:id/revoke
+ *
+ * Kill a terminal's credential.
+ *
+ * ## Soft, on purpose
+ *
+ * `revoked_at` is set; the row is never deleted. Two reasons, and the second is
+ * the one that makes the column worth having:
+ *
+ *   1. `checkins.payment_id` reconciliation resolves against a terminal's
+ *      identity, and a hard delete would take that with it — a revoked till
+ *      would become a till whose past sales cannot be attributed.
+ *   2. An operator has to be able to see that a till existed and was killed,
+ *      rather than infer from its absence that it never did. That is the
+ *      difference between "we turned this one off on Tuesday" and "we have never
+ *      heard of it".
+ *
+ * The effect is immediate and needs no other step: `POST /v1/auth/pos/token`
+ * checks `revoked_at` on **every** exchange, so the next renewal fails, and any
+ * token already issued keeps working for at most its one-hour life — which is the
+ * same bound every other credential here has.
+ *
+ * Revoking an already-revoked terminal is accepted and simply re-stamps the
+ * column. It is not a conflict: there is no state to protect here, and a 409
+ * would only teach operators to route around it.
+ */
+router.post('/v1/loyalty/terminals/:id/revoke', async (c) => {
+  const auth = extractAuthHeaders(c);
+  // Before the id is read, for the reason every other `requireOperatorRole` route
+  // does it: a 403 that could be told apart from the 404 below is an existence
+  // oracle for the tenant's hardware list.
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
+  const id = c.req.param('id');
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  // **404, and not a refusal** — the same answer `PUT /v1/loyalty/tiers/:id` and
+  // `PUT /v1/loyalty/rewards/:id` give, and for the same reason. `POST
+  // /v1/auth/pos/token` collapses three failures into one 401 because it is
+  // *public*: an attacker there is probing ids from outside the system entirely,
+  // and the id space is not theirs to enumerate. This route is not public, and
+  // its caller is already an operator of one tenant — so the risk being managed
+  // is not "can a stranger learn that id exists" but "can one merchant learn that
+  // another merchant has a till with that id", which the tenant predicate answers
+  // completely: a row that is not this business's never matches, so the 404 is
+  // byte-for-byte what an id nobody has produces. A 403 here would add a second
+  // answer to say *more* about a row we deliberately cannot see.
+  const [updated] = await db
+    .update(posTerminals)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(posTerminals.id, id), eq(posTerminals.businessId, businessId)))
+    .returning({
+      id: posTerminals.id,
+      name: posTerminals.name,
+      lastSeenAt: posTerminals.lastSeenAt,
+      revokedAt: posTerminals.revokedAt,
+      createdAt: posTerminals.createdAt,
+    });
+
+  if (!updated) {
+    return c.json(
+      { error: { code: 'NOT_FOUND', message: 'Terminal not found' } },
+      404,
+    );
+  }
+
+  return c.json({ data: { ...terminalResponse(updated), business_id: businessId } });
 });
 
 export default router;
