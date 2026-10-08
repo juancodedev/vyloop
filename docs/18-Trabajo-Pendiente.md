@@ -214,6 +214,10 @@ Es la única falla del sistema que le cuesta plata al usuario final. Reconciliar
 saber la semántica de reintento del otro lado, así que **no se diseña todavía** — pero tampoco
 debe olvidarse: si aparece, es una etapa propia y va antes que las estadísticas.
 
+**Cerrado a medias.** Ver "Hecho — una atribución perdida ya se puede ver" más abajo. Lo que se
+puede ver, sí; lo que falta es la semántica de reintento del otro lado, que sigue sin investigarse
+y sigue siendo la parte cara.
+
 ---
 
 ## Hecho — el terminal ya tiene credencial, y el limitador ya sabe qué plan estácobrando
@@ -515,6 +519,65 @@ el warning sin que haya cambiado la cadena, alguien ya lo migro — volver a rev
 
 ---
 
+## Hecho — una atribución perdida ya se puede ver
+
+**Estado:** `POST /v1/loyalty/webhooks/payments` + `settled_payments` +
+`scripts/check-payment-reconciliation.mjs` + `pnpm db:payment-reconciliation`.
+
+`check-checkin-backlog.mjs` ve la mitad del problema: ventas **registradas** sin puntos. No ve las
+ventas que nunca llegaron, porque una venta que nadie reportó no deja fila que mirar. El cliente
+pagaba, no acumulaba nada, y nada en el sistema lo sabía.
+
+Ahora el medio de pago reporta el pago liquidado a `settled_payments`, y el chequeo pregunta lo que
+`payment_id` siempre hizo posible: **¿hay un checkin con este `payment_id`?**
+
+```
+  Vyloop payment reconciliation
+  ------------------------------------------------------------
+  [LOST] 2 settled payment(s) with no checkin
+     oldest: 3 h   newest: 0 min
+     money with no attribution: $75.00
+
+     A webhook detects a lost attribution. It cannot repair one: the
+     payment carries no pass, so this says THAT an attribution was lost,
+     never WHOSE. Recovery is the terminal resending the checkin, or a
+     person asking the cashier. There is no repair from here.
+```
+
+**Lo que sigue sin poder repaired, y es el punto.** La webhook trae el pago y el monto. No trae el
+hecho de que se escaneó un pase — sólo el terminal lo sabe. El reporte dice **que** se perdió una
+atribución, nunca **de quién**. Por eso esa frase está en el reporte, en el docblock del script y en
+el docblock del endpoint: un operador que lea "atribución perdida" sin ella va a buscar un botón de
+reparación que no debe existir.
+
+### Lo que esta etapa NO hizo, a propósito
+
+- **No hay cliente de Mercado Pago, ni poll.** Un receptor que además consulta tiene dos fuentes de
+  verdad para "nos enteramos de este pago", y sólo una de las dos escribe la tabla. El otro
+  desarrollador está construyendo la integración del medio de pago; el poll sigue diferido.
+- **No repara nada.** Ni puntos, ni checkin, ni resolución de cliente. La ruta no tiene `member_code`
+  que leer y no importa `creditCheckin`, así que la garantía es estructural y no un chequeo.
+- **El esquema de firma está sin confirmar.** Fallo cerrado ante secreto ausente, firma ausente y
+  firma inválida, con tres códigos distintos porque son tres problemas operativos distintos.
+- **La migración `0013_sour_apocalypse.sql` queda sin aplicar**, como las anteriores.
+
+### El sexto bug de esta misma clase, y el guard que lo cierra
+
+Cinco bugs del repo eran la misma forma: una ruta bien registrada, con tests en verde, e
+**inalcanzable porque una capa delante la rechaza**. Faltaba un `ROUTE_MAP`, faltaba una ruta para
+un binding, `POST /v1/checkins` no tenía prefijo que lo reenviara, `matchRoute` matcheaba de más, y el
+middleware de auth de growth habría rechazado 403 a la webhook de MP — un tercero no manda cabeceras
+`X-*`, y no hay credencial que pueda mandar.
+
+`wrangler-route-reachability.contract.test.ts` cubría la mitad del gateway y estuvo verde en los
+cinco. **Nada cubría la mitad del worker**, y por eso el quinto era alcanzable. El guard nuevo
+comprueba lo que ese no: todo path que el gateway declara público tiene que estar exento en el
+worker que lo sirve, y el mensaje de falla nombra el path **y** el worker que va a rechazarlo —
+porque "inalcanzable" a secas manda al próximo a abrir el archivo equivocado, que es el que está
+correcto.
+
+---
+
 ## Hecho — el backlog de créditos ya se puede ver
 
 **Estado:** `scripts/check-checkin-backlog.mjs` + `pnpm db:checkin-backlog`.
@@ -638,8 +701,18 @@ por endpoint. Eso necesita un parser y una librería de esquema. Un verde es nec
   string-match tiene que seguir funcionando.
 - **El registro de terminales.** Cerrado — ver "El registro de terminales ya se puede hacer" arriba. El
   README dice esto de frente en vez de dejarlo adivinarse.
-- **La webhook de MP.** No hay endpoint en el repo y el spec lo dice explícitamente. Hay un test que
-  falla si alguna vez alguien documenta una ruta de webhook sin registrarla. Falta el cliente de MP.
+- **La webhook de MP.** Hay receptor (`POST /v1/loyalty/webhooks/payments`) pero **no hay cliente de
+  MP**: el endpoint existe, la integración del otro lado la está construyendo el otro desarrollador,
+  y el poll sigue diferido explícitamente. El receptor **falla cerrado** mientras no haya secreto
+  configurado, que es el estado real hoy. El test de openapi sigue fallando si alguien documenta una
+  ruta de webhook sin registrarla, y ahora hay una cuarta cosa que lo protege:
+  `apps/gateway/src/worker-public-path-auth.contract.test.ts` falla si un path público en el gateway
+  no está exento en el worker que lo sirve — que es exactamente el bug que dejó al receptor de pago
+  muerto en todos los entornos hasta que se escribió.
+- **El esquema de firma del receptor de MP no está confirmado.** La construcción del mensaje HMAC no
+  se pudo verificar contra la documentación de Mercado Pago. Está aislada en una función sola con
+  prueba propia para que corregirla sea una edición y una prueba, y hay que verificarla antes de
+  apuntar el endpoint a algo real.
 - **`docs/08-API-Design.md` quedó desalineado a propósito y no se tocó.** El README señala dónde se
   separan y dice que gana el spec. Corregir el `08` es trabajo de otro día: describe OAuth/OIDC,
   GraphQL y una envoltura de error con `request_id` que la API real no tiene.

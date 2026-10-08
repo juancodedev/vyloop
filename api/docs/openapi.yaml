@@ -7,12 +7,36 @@
 #
 # ## Scope, and what is deliberately absent
 #
-# Exactly three endpoints. They are the whole integration-facing surface, and a
-# fourth is not missing from this document — it does not exist. In particular
-# there is **no webhook receiver** in this repository. The reconciliation role a
-# payment rail's webhook plays is described under `POST /v1/loyalty/checkins`
-# because it is the thing most likely to be built wrongly, but no endpoint is
-# documented for it and none is served today.
+# Exactly three endpoints. They are the whole integration-facing surface a
+# terminal integrates against, and a fourth is not missing from this document — it
+# does not exist.
+#
+# ## The webhook receiver is not in this document, and that is not an oversight
+#
+# `POST /v1/loyalty/webhooks/payments` exists in the growth worker and is not
+# documented here, for three reasons that are worth stating rather than leaving to
+# inference.
+#
+# First, **it is not yours to call.** A payment rail posts to it, not a terminal.
+# It authenticates with a signature over the raw body rather than a bearer token,
+# it refuses any Vyloop credential with its own code, and it neither credits points
+# nor creates a checkin nor resolves a customer. A terminal that needs to report a
+# sale calls `POST /v1/loyalty/checkins` below, and nothing else changes.
+#
+# Second, **its signing scheme is unconfirmed.** The HMAC message construction has
+# not been verified against the payment rail's documentation, so the receiver fails
+# closed rather than accept anything, and it must be confirmed before it is pointed
+# at anything real. Documenting an endpoint whose security primitive is still an
+# assumption would be worse than not documenting it.
+#
+# Third, **its scope here would be wrong anyway.** This file is the contract of the
+# terminal integration, and its route set is derived from the two counter-authorization
+# primitives. The receiver is guarded by neither: it is the party that *has* the
+# attestation and is not allowed to originate one.
+#
+# What a receiver is for, and what it cannot do, is described under
+# `POST /v1/loyalty/checkins` below — because it is the thing most likely to be built
+# wrongly.
 #
 # ## A note for editors, enforced by the contract test
 #
@@ -290,8 +314,19 @@ paths:
         opposite one: reconciliation. "The rail says payment X settled and we hold
         no checkin for it" is how a *lost* attribution is detected, and that check
         is only possible because this call carries the rail's own
-        transaction id. A webhook receiver does not exist in this repository
-        yet; nothing on this endpoint assumes one does.
+        transaction id.
+#
+#        **A webhook detects a lost attribution; it cannot repair one.** The
+#        rail's notification carries the payment and the amount and *not* the fact
+#        that a pass was scanned — only the terminal knows that. So when the
+#        reconciliation check reports a settled payment with no checkin, it knows
+#        *that* an attribution was lost and nothing about *whose*. Recovery is this
+#        call being made again by the terminal, or a person asking the cashier.
+#        There is no repair path from the payment side, and building one would mean
+#        guessing a customer from a payment id.
+#
+#        A receiver does exist now, at the path named in the header of this file,
+#        and nothing on this endpoint assumes it does or changes because it does.
 
 
         **`items` is optional, best-effort, and usually absent.** Four decisions,

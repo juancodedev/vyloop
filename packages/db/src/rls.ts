@@ -46,6 +46,13 @@ export const BUSINESS_ID_TABLES = [
   // this tenant owns. Omitted here it would have received no policy when the RLS
   // rollout ran, which is the one thing the rest of this list is for.
   'pos_terminals',
+  // A settled payment belongs to the merchant that was paid, and it is written by
+  // a payment rail rather than by a credential scoped to that merchant — so the
+  // scoping is resolved from the payload's merchant reference, not inherited from
+  // anything the caller sent. It still belongs here: the row's `business_id` is
+  // the isolation boundary, and a reconciliation check that could read another
+  // merchant's sales would be a cross-tenant leak with a report attached.
+  'settled_payments',
 ] as const;
 
 /**
