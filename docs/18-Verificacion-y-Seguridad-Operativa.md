@@ -436,6 +436,91 @@ Esto es lo que separa "el pase funciona en el teléfono del cliente" de "el pase
 
 ---
 
+## 7. Una prueba end-to-end que solo demuestra lo que firma
+
+El 2026-10-08 se ejecutó el circuito completo contra **producción**: gateway → workers → base real,
+por HTTP con cabeceras reales y firma real, en proceso. 14 de 14 pasos.
+
+| Paso | Resultado |
+|---|---|
+| `PUT /v1/loyalty/config` | 201, regla de acumulación por tenant |
+| `POST /v1/loyalty/terminals` | 201, secreto `vylt_…` |
+| `POST /v1/auth/pos/token` | 200, token de counter |
+| `POST /v1/loyalty/passes/resolve` | 200, `known: true` |
+| `POST /v1/loyalty/checkins` | **201** |
+| Puntos acreditados | sí |
+| Reintento del mismo `payment_id` | **200** — idempotente |
+| Webhook firmado | **201**, fila escrita en `settled_payments` |
+| Firma incorrecta | **401** `PAYMENT_WEBHOOK_SIGNATURE_INVALID` |
+| Credencial de Vyloop en la ruta del medio de pago | **403** `PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED` |
+
+Y el escenario que la función entera vino a cerrar:
+
+```
+# el medio de pago liquidó, el terminal nunca lo reportó
+$ node scripts/check-payment-reconciliation.mjs
+  pay-lost-1791499865748   E2E   $25.00   0 min
+
+# el terminal lo reporta después
+$ node scripts/check-payment-reconciliation.mjs
+  [OK] every settled payment we recorded has a checkin
+```
+
+### Qué prueba y qué no
+
+**El firmante fue el mismo verificador.** La entrega se firmó con HMAC-SHA256 sobre
+`` `${timestamp}.${body}` `` en `X-Vyloop-Signature`, que es exactamente lo que
+`verifyPaymentWebhookSignature` acepta. Eso prueba que *nuestro* lado del contrato es coherente
+consigo mismo: que una firma bien calculada pasa, que una mal calculada no, y que todo lo demás
+de la tubería anda.
+
+**No prueba interoperabilidad con Mercado Pago.** No prueba que ellos firmen así, que usen esos
+nombres de cabecera, ni que manden el timestamp en ese formato. El esquema no se pudo contrastar
+contra su documentación y vive en una función con un docblock que lo dice.
+
+Esta es la misma trampa que la sección 2 documenta desde el otro lado: un test que usa las
+credenciales que el actor externo no tiene pasa en verde sin probar el contrato real. Acá el
+actor externo es el medio de pago y la credencial que no tiene es **su formato de firma**.
+
+Mientras eso siga sin verificar, la integración del receptor es correcta contra un emisor que
+hemos inventado, y nada más.
+
+### Tres cosas que hubo que resolver para correrla en local
+
+Ninguna es un defecto de producto; las tres aparecen igual en cualquier corrida local sobre Node
+20 y conviene conocerlas antes de perder una hora con ellas.
+
+1. **`createDb` necesita `WebSocket`.** `drizzle-orm/neon-serverless` se dialea por WebSocket y
+   `createDb(dbUrl)` no acepta `webSocketConstructor`. Node 22 tiene el global; esta máquina
+   corría v20.20.2. Se inyectó `ws` como global en el harness, sin tocar código de producto.
+   Es el mismo desfase que rompe los tests de `customer-web` y `dashboard` con
+   `Iterator is not defined` — **el workspace pide `>=22`**.
+2. **`DOMAIN_EVENTS_QUEUE` es un binding de Cloudflare Queue.** `creditCheckin` llama a
+   `publish()`, que hace `queue.send()`. Sin el binding en el env, `undefined.send` y la ruta
+   responde **500**. En el runtime de Workers existe; fuera hay que stubeanlo, igual que los
+   tests del gateway stubean los service bindings.
+3. **`POS_PLANS = ['premium']`.** Un tenant con `plan: 'free'` —el default— no puede tener
+   terminal: el exchange devuelve 400. Hay que sembrar el plan explícitamente.
+
+### La disciplina de no dejar basura en producción
+
+El tenant se crea con `slug = e2e-<timestamp>`, todo lo que el harness crea cuelga de su
+`business_id`, y el `cleanup()` borra por `business_id` en cascada manual antes de salir. El
+script **afirma** que no quedó nada, y esa aserción es parte de la corrida, no un paso opcional:
+
+```
+PASS  cleanup removed everything from production  -- 0 tenants left
+```
+
+Verificado a mano después: 0 tenants `e2e-%`, 0 checkins del lote, 0 pagos huérfanos, 0
+terminales. Un harness que escribe en producción sin esa aserción es un harness que un día
+deja basura sin que nadie se entere.
+
+El harness **no** está versionado. Era una prueba puntual y las cinco suites que ya existen
+cubren las rutas.
+
+---
+
 ## Documentos relacionados
 
 | Documento | Qué cubre |
