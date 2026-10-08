@@ -581,6 +581,70 @@ de la integración que se está haciendo aparte. Es la mitad que falta, y es la 
 
 ---
 
+## Hecho — el contrato de la integración con el terminal está escrito y con guard anti-drift
+
+**Estado:** `api/docs/` + `apps/gateway/src/api-openapi.contract.test.ts`. Sin commit.
+
+### Qué se escribió
+
+Un contrato externo, en tres archivos, para el desarrollador que va a construir la integración
+Mercado Pago → Vyloop:
+
+| Archivo | Qué es |
+|---|---|
+| `api/docs/openapi.yaml` | OpenAPI 3.1.0. Los tres endpoints, con todos los status codes incluidos los 500 |
+| `api/docs/README.md` | Punto de entrada del integrador, en español |
+| `apps/gateway/src/api-openapi.contract.test.ts` | El guard que impide que el YAML se desincronice del código |
+
+**Es un documento y nada más**: sin runtime, sin build, sin servidor. Es liviano porque un contrato
+que necesita una toolchain para leerse tiene menos readership, no más.
+
+Las descripciones de las operaciones llevan **el porqué** de las partes que parecen raras, no sólo lo
+que hacen. Un developer que sólo lea el spec debería igual no construir el flujo equivocado. Las tres
+que importan: por qué `known: false` **no** es un 404 (un rechazo se vuelve oráculo de existencia),
+por qué las tres fallas de credencial comparten un mensaje (no enumerar terminales), y por qué `items`
+es mejor-esfuerzo (el dinero manda, la metadata nunca bloquea una venta).
+
+### El guard, y por qué vive en `apps/gateway` y no junto al documento
+
+`api/` **no es un paquete del workspace** — `pnpm-workspace.yaml` globea `apps/*`, `packages/*`,
+`services/*`, `tooling/*` y `workers/*` — y CI corre `pnpm -r test` más `npx vitest run --dir scripts`.
+Un test en `api/docs/` lo correría **nada**: se leería como cobertura en review y no afirmaría nada.
+La otra vía era agregar `api/*` al workspace, que es un `package.json`, un script `vitest` y un
+`typecheck` para un directorio con un YAML y un Markdown. El test quedó en el paquete que ya cubre
+esta frontera exacta, que además es el dueño del namespace `/v1/*` y de la exención de ruta pública
+que hace que la ruta del token sea llamable sin token.
+
+**El conjunto de rutas no está escrito a mano en el test.** Se deriva de los dos primitivos de
+autorización —`requireCounterSubject` y `counterSubject`—, así que agregar un endpoint al mostrador
+rompe el test aunque nadie se acuerde de que el documento existe. Esa es la dirección de drift que
+más importa: un documento que se quedó atrás no está incompleto, **parece** completo.
+
+También asserta los códigos en las dos direcciones, y que el conjunto documentado sea igual al enum
+cerrado — que es el invariante del que depende la extracción.
+
+**Lo que NO cubre, dicho en el propio test:** los shapes de request y response, ni los status codes
+por endpoint. Eso necesita un parser y una librería de esquema. Un verde es necesario y no suficiente.
+
+### Lo que sigue abierto
+
+- **Los dos 400 tienen un string mal escrito, y no se corrigió a propósito.** El de `amount_cents`
+  dice *"is required and **must be** an integer greater than 0"*, que está bien. Una versión anterior
+  de la transcripción usada para escribir el spec decía *"and be"*, sin el `must`. Se documentó el
+  string **real**, el del código, y la versión con el typo **nunca llegó al archivo** — no hubo que
+  preservarla. Si alguien compara este docblock contra el spec y ve el `must`, no hay discrepancia.
+  La corrección de redacción, si algún día se quiere, va en un ticket aparte: un cliente que hace
+  string-match tiene que seguir funcionando.
+- **El registro de terminales.** Sigue igual que arriba: la tabla existe, el emisor existe, nadie
+  escribe filas. El README dice esto de frente en vez de dejarlo adivinarse.
+- **La webhook de MP.** No hay endpoint en el repo y el spec lo dice explícitamente. Hay un test que
+  falla si alguna vez alguien documenta una ruta de webhook sin registrarla. Falta el cliente de MP.
+- **`docs/08-API-Design.md` quedó desalineado a propósito y no se tocó.** El README señala dónde se
+  separan y dice que gana el spec. Corregir el `08` es trabajo de otro día: describe OAuth/OIDC,
+  GraphQL y una envoltura de error con `request_id` que la API real no tiene.
+
+---
+
 ### Corregido — los endpoints eran inalcanzables por el gateway
 
 **Estado:** cerrado. Los dos endpoints se movieron bajo `/v1/loyalty/`.
