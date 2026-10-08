@@ -713,6 +713,11 @@ por endpoint. Eso necesita un parser y una librería de esquema. Un verde es nec
   se pudo verificar contra la documentación de Mercado Pago. Está aislada en una función sola con
   prueba propia para que corregirla sea una edición y una prueba, y hay que verificarla antes de
   apuntar el endpoint a algo real.
+  **Nuance que importa al vender:** el 2026-10-08 se probó el circuito completo contra producción
+  (14/14) y el webhook aceptó una entrega firmada — pero la firmó el mismo código que la verifica.
+  Eso prueba que nuestro lado del contrato es coherente consigo mismo, no que Mercado Pago firme
+  así. La verificación pendiente es contra *ellos*, no contra nosotros. Ver
+  `docs/18-Verificacion-y-Seguridad-Operativa.md` §7.
 - **`docs/08-API-Design.md` quedó desalineado a propósito y no se tocó.** El README señala dónde se
   separan y dice que gana el spec. Corregir el `08` es trabajo de otro día: describe OAuth/OIDC,
   GraphQL y una envoltura de error con `request_id` que la API real no tiene.
