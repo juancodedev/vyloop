@@ -1,0 +1,806 @@
+# Vyloop — payment terminal integration contract.
+#
+# A YAML document and nothing else is the source of truth for this file. There is
+# no runtime, no build step and no server behind it, so it cannot disagree with
+# itself, and `openapi-contract.contract.test.ts` in the gateway package reads it
+# as text alongside the worker sources to prove it has not drifted from them.
+#
+# ## Scope, and what is deliberately absent
+#
+# Exactly three endpoints. They are the whole integration-facing surface, and a
+# fourth is not missing from this document — it does not exist. In particular
+# there is **no webhook receiver** in this repository. The reconciliation role a
+# payment rail's webhook plays is described under `POST /v1/loyalty/checkins`
+# because it is the thing most likely to be built wrongly, but no endpoint is
+# documented for it and none is served today.
+#
+# ## A note for editors, enforced by the contract test
+#
+# Every single-quoted token in this file that matches the shape of an error code
+# is one. The contract test extracts the documented set that way, so do not
+# introduce another such string here for any other purpose — not a constant
+# name, not a header, not an enum value. The extraction has to stay unambiguous
+# or the drift guard stops meaning anything.
+openapi: 3.1.0
+
+info:
+  title: Vyloop payment terminal integration
+  version: 1.0.0
+  summary: Report a completed sale to Vyloop's loyalty ledger from a merchant's payment terminal.
+  description: >-
+    A merchant's payment terminal completes a sale. Vyloop does not own the
+    checkout and never takes a payment. This surface lets a terminal report two
+    facts, at two different moments, and that is all it does.
+
+
+    **The one rule that governs every endpoint below:** Vyloop is the source of
+    truth for points. The terminal reports money — `amount_cents` — and the
+    tenant's earn rule decides what that money is worth. A terminal cannot set a
+    point value and cannot assign points; there is no request field for either,
+    and the counter credential is refused outright on the route that can assign
+    them. If an integrator designs a flow in which the terminal computes or sends
+    points, that flow is wrong regardless of what this document says.
+
+
+    **Two moments, two endpoints, and not one.** `passes/resolve` answers "is this
+    pass real?" before the money moves, at the till. `checkins` records the fact
+    after the payment settles. They are not merged because the cashier's scan is
+    not the payment, and forcing them into one call would make a failed
+    reconciliation and a failed scan indistinguishable.
+  contact:
+    name: Vyloop
+  license:
+    name: UNLICENSED
+
+servers:
+  - url: https://api.vyloop.com
+    description: >-
+      Placeholder host. The gateway that serves these paths is the only public
+      entry point; the workers behind it are addressed directly and must not be
+      called by an integration.
+
+tags:
+  - name: Credential
+    description: >-
+      Exchanging a till's stored credential for the bearer token the other two
+      endpoints require. This is the only unauthenticated call in the surface.
+  - name: Loyalty
+    description: >-
+      Reporting what happened at the till. Both require the counter token and both
+      speak for a sale this terminal already collected.
+
+paths:
+  /v1/auth/pos/token:
+    post:
+      tags: [Credential]
+      operationId: exchangePosTerminalCredential
+      summary: Exchange a terminal's stored credential for a counter token.
+      description: >-
+        **Unauthenticated on purpose.** A terminal holds a long-lived secret, not
+        a session, so this is the one call in the surface that must work before
+        the caller has anything. It is public because it sits under the
+        `/v1/auth/` prefix the gateway exempts, and it lives there deliberately:
+        widening that exemption to reach some other path would hand the entire
+        `/v1/` surface the same bypass.
+
+
+        **One refusal for three different credential failures.** An unknown
+        terminal id, a wrong secret and a revoked terminal all answer `401` with
+        the same code and the same message, and that is the design rather than an
+        oversight. A distinguishable answer for "revoked" is half the work of
+        enumerating which terminal ids exist, and the other half is already done:
+        every attempt costs a full password-hash verification regardless of the
+        row's state, so response timing does not separate a live terminal from a
+        revoked one either. Do not read meaning into this 401 beyond "the pair you
+        presented is not a usable credential right now".
+
+
+        **The plan refusal is a different code, also on purpose.** It leaks
+        nothing — the merchant already knows which plan it is on — and "why does
+        my till not work" is a question a human asks out loud, so it deserves a
+        code that can be answered with a name. The plan is checked on every
+        exchange rather than once at terminal creation, so a downgraded tenant
+        stops renewing immediately without anybody remembering to revoke rows.
+
+
+        Rate limited to 5 requests per window per client address, which is
+        separate from and stricter than any plan-based limit.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PosCredentialRequest'
+            examples:
+              bothFields:
+                summary: The ordinary call.
+                value:
+                  terminal_id: 3f1c9a52-7d64-4b0e-9a11-5c2e8f0b6d31
+                  secret: the-plaintext-secret-issued-once-at-registration
+      responses:
+        '200':
+          description: >-
+            The credential is valid, the terminal is not revoked, and the
+            tenant's plan includes POS terminals.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosTokenResponse'
+        '400':
+          description: >-
+            The request did not describe a credential, so there was nothing to
+            authenticate yet. Both variants are `400` and not `401` for that
+            reason; a client that receives either should fix its request shape
+            rather than its credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                bodyNotJson:
+                  summary: The body could not be parsed as JSON.
+                  value:
+                    error:
+                      code: 'VALIDATION_ERROR'
+                      message: Body must be JSON
+                missingField:
+                  summary: Either field was absent or empty.
+                  value:
+                    error:
+                      code: 'VALIDATION_ERROR'
+                      message: terminal_id and secret are required
+        '401':
+          $ref: '#/components/responses/InvalidTerminalCredential'
+        '403':
+          $ref: '#/components/responses/PosPlanRequired'
+        '500':
+          description: >-
+            An unexpected failure on our side. Three distinct causes share this
+            code, and only the message separates them: two are our own
+            configuration (`JWT_SECRET` or `DATABASE_URL` unset on the worker),
+            and the third is any other unhandled fault. Note that this is
+            deliberately *not* a credential refusal — a sibling route answers 401
+            for an unreachable database, which would tell a merchant their secret
+            is wrong while the fault is ours and invisible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unhandled:
+                  value:
+                    error:
+                      code: 'INTERNAL_ERROR'
+                      message: Internal server error
+                jwtSecretMissing:
+                  summary: The worker has no signing secret configured.
+                  value:
+                    error:
+                      code: 'INTERNAL_ERROR'
+                      message: JWT secret not configured
+                databaseMissing:
+                  summary: The worker has no database URL configured.
+                  value:
+                    error:
+                      code: 'INTERNAL_ERROR'
+                      message: Database not configured
+
+  /v1/loyalty/passes/resolve:
+    post:
+      tags: [Loyalty]
+      operationId: resolveLoyaltyPass
+      summary: Ask whether a scanned member code belongs to a customer of this business.
+      description: >-
+        **Our failure must never cost a merchant a sale.** A 500 on this screen
+        would mean we denied somebody their coffee because our side had a
+        problem, which is our outage becoming their lost revenue. So this route
+        creates nothing, holds no state, and answers `200` for both outcomes. A
+        `known: false` is *information* — the cashier proceeds, just without
+        attributing the sale — and never a veto.
+
+
+        **This is why there is deliberately no 404.** An unknown code answers
+        `200` with `known: false` rather than a not-found status, because a
+        refusal shape would become an existence oracle: a caller who could tell
+        "no such member" from "malformed request" could probe the tenant's
+        membership with it. A missing or non-string `member_code` is answered the
+        same way, since nothing is looked up on that path and so nothing can leak.
+
+
+        `POST` is what a terminal's scan reader naturally produces, not because
+        there is anything to write.
+
+
+        The business scope comes from the token and never from the body. A
+        terminal holding one merchant's credential cannot resolve another
+        merchant's pass: member codes are unique per business, so the code it
+        would have to guess is not in its own index.
+      security:
+        - counterToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveRequest'
+            examples:
+              scan:
+                value:
+                  member_code: MP-4839201
+      responses:
+        '200':
+          description: >-
+            The lookup completed. Which of the two shapes you get is the whole
+            answer — there is no status code that distinguishes them.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveResponse'
+              examples:
+                known:
+                  summary: An active customer in this business has that code.
+                  value:
+                    data:
+                      known: true
+                      customer_id: 8c2b1d44-0e9a-4a71-b3f6-2a90d5e7c814
+                      display_name: Ana Ruiz
+                unknown:
+                  summary: >-
+                    No such code, or the field was missing or malformed. The two
+                    are deliberately indistinguishable.
+                  value:
+                    data:
+                      known: false
+        '403':
+          $ref: '#/components/responses/CounterSubjectRequired'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/loyalty/checkins:
+    post:
+      tags: [Loyalty]
+      operationId: recordCheckin
+      summary: Record a sale this terminal already collected, and credit what it earned.
+      description: >-
+        Records a sale that has **already been paid for**. The terminal sends the
+        money amount and never sends points; the tenant's earn rule converts one
+        into the other, server-side, at the moment of the sale. The terminal
+        cannot set a point value and cannot assign points directly.
+
+
+        **The retry contract, which is the load-bearing part of this endpoint.**
+        Idempotency is `unique(business_id, payment_id)`, enforced by the
+        database rather than by a read-then-write, so two concurrent retries of
+        one payment cannot both win. Re-sending a `payment_id` that was already
+        recorded answers `200` and **does not double-credit**. Crucially, a retry
+        does not merely decline to double-credit — it **completes** a credit that
+        never landed, because "sale recorded but points still owed" is an
+        observable state and finishing it is what turns a partial failure into a
+        delay instead of a silent loss. So retrying is always safe, and retrying
+        is the intended recovery from any transient failure: no reconciliation
+        script is needed to repair a half-written checkin.
+
+
+        **`payment_id` is what makes reconciliation possible at all.** Only the
+        terminal knows a loyalty pass was scanned, so this call is the only
+        channel that carries attribution; a webhook from the payment rail carries
+        the payment and its amount but not the fact that a pass was involved, and
+        therefore **cannot replace this call**. The webhook's role is the
+        opposite one: reconciliation. "The rail says payment X settled and we hold
+        no checkin for it" is how a *lost* attribution is detected, and that check
+        is only possible because this call carries the rail's own
+        transaction id. A webhook receiver does not exist in this repository
+        yet; nothing on this endpoint assumes one does.
+
+
+        **`items` is optional, best-effort, and usually absent.** Four decisions,
+        none of which are conveniences. `product_ref` is an opaque string owned
+        by the merchant or the payment rail — not a Vyloop identifier, because
+        copying product identity in would mean maintaining a copy that becomes a
+        lie the moment a merchant renames something. Values are inlined rather
+        than referenced because this is a snapshot: if a product is renamed or
+        deleted later, the historical statistic must still say what was actually
+        sold. `amount_cents` is authoritative and `items` is advisory, so **a
+        sale is never refused over metadata that does not add up**. And expect
+        `items` to be null: a card payment rail carries the total, not the
+        basket, because the line items live in the merchant's own POS. Absence is
+        the normal case, not a defect.
+      security:
+        - counterToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckinRequest'
+            examples:
+              cardPaymentWithItems:
+                summary: A rail that reports both a transaction id and a basket.
+                value:
+                  payment_id: MP-1234567890
+                  member_code: MP-4839201
+                  amount_cents: 12500
+                  note: cafe central
+                  items:
+                    - product_ref: SKU-7781
+                      name: Flat white
+                      qty: 2
+                      unit_price_cents: 3500
+              manualWithoutPaymentId:
+                summary: >-
+                  The manual path. `payment_id` is absent and that is legitimate;
+                  with no payment id there is nothing to deduplicate against.
+                value:
+                  member_code: MP-4839201
+                  amount_cents: 4800
+      responses:
+        '201':
+          description: >-
+            This `payment_id` was recorded for the first time. The status code is
+            the signal that this call, and not some earlier one, opened the
+            record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckinResponse'
+        '200':
+          description: >-
+            This `payment_id` was already recorded — the idempotent retry. Either
+            the credit had already landed, and nothing was touched; or it had not,
+            and this call completed it. Either way the customer was not credited
+            twice and the response is the checkin as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckinResponse'
+        '400':
+          description: >-
+            The request could not be recorded as sent. A `400` means nothing was
+            written, so the same `payment_id` may be sent again unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                badMemberCode:
+                  value:
+                    error:
+                      code: 'INVALID_MEMBER_CODE'
+                      message: member_code is required and must be a non-empty string
+                badAmount:
+                  value:
+                    error:
+                      code: 'INVALID_AMOUNT_CENTS'
+                      message: amount_cents is required and must be an integer greater than 0, in cents
+        '403':
+          $ref: '#/components/responses/CounterSubjectRequired'
+        '404':
+          description: >-
+            The member code does not resolve to an active customer of this
+            business. This is a `404` and not a `known: false` on purpose, and the
+            asymmetry with `passes/resolve` is deliberate: by this point the sale
+            has happened, so the terminal needs to be **told** that its
+            attribution did not land — that is the only useful thing it can do
+            with the answer. A sale with no member has no identity to attach to,
+            and inventing one would credit somebody's balance for a purchase they
+            did not make. Nothing is written.
+
+            Note the difference from the resolve route, where an unknown code is
+            `known: false` because refusing there would be a veto and would create
+            an existence oracle.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unresolved:
+                  value:
+                    error:
+                      code: 'MEMBER_CODE_NOT_FOUND'
+                      message: 'No active customer in this business has that member_code.'
+        '500':
+          description: >-
+            The insert conflicted with an existing `payment_id` **and** the
+            existing row could not be read back. Reported rather than treated as
+            success, because answering `200` here would tell the terminal its
+            sale is recorded when we cannot say so. It is not a data conflict you
+            can retry your way out of blindly — it needs investigating, though
+            re-sending the same `payment_id` is still the safe first step.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unreadable:
+                  value:
+                    error:
+                      code: 'CONFLICT_WITHOUT_ROW'
+                      message: A checkin already exists for this payment_id but could not be read back.
+
+components:
+  securitySchemes:
+    counterToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        The token issued by `POST /v1/auth/pos/token`, sent as
+        `Authorization: Bearer <token>`. Send it in the header of both loyalty
+        calls.
+
+
+        **What it carries, and what it is not checked on.** The subject is
+        `pos:<terminalId>`, the role is `pos`, the scope list is
+        `["write:loyalty"]`, and the tenant's plan is included so the gateway's
+        limiter can key on it. The scope list is documentation carried in the
+        token, not a capability: both loyalty routes authorise on the **subject**
+        prefix, not on the role and not on the scopes. That is why a counter token
+        cannot reach anything it was not meant to by widening an array — and also
+        why the role string itself gates nothing anywhere.
+
+
+        **A counter credential cannot assign points.** It is refused on the route
+        that can, with the same code a customer gets. That guard is what makes it
+        safe to issue this token at all.
+
+
+        Lifetime is one hour. There is no refresh token on this surface: a terminal
+        re-exchanges its stored credential instead, which is the whole point of
+        holding a secret rather than a session.
+      x-issued-by: /v1/auth/pos/token
+
+  schemas:
+    ErrorCode:
+      type: string
+      description: >-
+        Stable, specific codes. Branch on these rather than parsing prose — the
+        `message` is written for humans and may be reworded; the code is the
+        contract.
+      enum:
+        - 'VALIDATION_ERROR'
+        - 'AUTH_TOKEN_INVALID'
+        - 'POS_PLAN_REQUIRED'
+        - 'COUNTER_SUBJECT_REQUIRED'
+        - 'INVALID_MEMBER_CODE'
+        - 'INVALID_AMOUNT_CENTS'
+        - 'MEMBER_CODE_NOT_FOUND'
+        - 'CONFLICT_WITHOUT_ROW'
+        - 'INTERNAL_ERROR'
+      example: 'MEMBER_CODE_NOT_FOUND'
+
+    Error:
+      type: object
+      required: [code, message]
+      additionalProperties: false
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: >-
+            Human-readable. Documented verbatim from the source and **not to be
+            corrected** — a client that string-matches must keep working, so any
+            wording fix belongs in a drift ticket rather than here.
+
+    ErrorResponse:
+      type: object
+      description: >-
+        The envelope every failure on every endpoint uses. There is no
+        success-shaped error and no alternative error shape.
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+
+    PosCredentialRequest:
+      type: object
+      required: [terminal_id, secret]
+      properties:
+        terminal_id:
+          type: string
+          format: uuid
+          description: >-
+            The terminal's identifier. Surrounding whitespace is trimmed, so a
+            pasted value works.
+        secret:
+          type: string
+          minLength: 1
+          description: >-
+            The plaintext secret, shown to the merchant exactly once when the
+            terminal is registered and never readable again — the database holds
+            only a salted hash of it. Because of that, this field cannot be
+            recovered by anyone, including support. If it is lost, the terminal
+            has to be re-registered.
+      additionalProperties: false
+
+    PosTokenResponse:
+      type: object
+      required: [token, terminal_id, business_id, expiresIn]
+      properties:
+        token:
+          type: string
+          description: The bearer token for the two loyalty endpoints.
+        terminal_id:
+          type: string
+          format: uuid
+          description: Echoed back so a terminal holding several identities can confirm which one it got.
+        business_id:
+          type: string
+          format: uuid
+          description: >-
+            The tenant this token is scoped to. Derived from the terminal row,
+            never from the request.
+        expiresIn:
+          type: integer
+          const: 3600
+          description: >-
+            Token lifetime in seconds. Always `3600`; the field exists so a client
+            can read the lifetime rather than hard-code it a second time.
+      additionalProperties: false
+
+    ResolveRequest:
+      type: object
+      properties:
+        member_code:
+          type: string
+          description: >-
+            The scanned code, verbatim. Deliberately not validated: a missing or
+            malformed value is answered `known: false` rather than refused.
+      additionalProperties: false
+
+    ResolveResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/ResolveKnownCustomer'
+            - $ref: '#/components/schemas/ResolveUnknownCustomer'
+          discriminator:
+            propertyName: known
+            mapping:
+              'true': '#/components/schemas/ResolveKnownCustomer'
+              'false': '#/components/schemas/ResolveUnknownCustomer'
+      additionalProperties: false
+
+    ResolveKnownCustomer:
+      type: object
+      required: [known, customer_id, display_name]
+      properties:
+        known:
+          type: boolean
+          const: true
+        customer_id:
+          type: string
+          format: uuid
+          description: >-
+            The customer. Opaque to the terminal — it is only ever echoed onward,
+            and the earn rule is applied server-side from the tenant's
+            configuration.
+        display_name:
+          type: [string, 'null']
+          description: >-
+            The customer's name on file, or `null` when there is none. It is
+            `null` rather than a placeholder because a customer with no name is a
+            gap in our data, and a placeholder here is something a cashier reads
+            aloud to a real person.
+      additionalProperties: false
+
+    ResolveUnknownCustomer:
+      type: object
+      required: [known]
+      properties:
+        known:
+          type: boolean
+          const: false
+          description: >-
+            The only field present. Not an error: proceed with the sale,
+            un-attributed.
+      additionalProperties: false
+
+    CheckinItem:
+      type: object
+      description: >-
+        One line of a basket, snapshotted as sent. Optional metadata, and never
+        authoritative — see the `items` discussion on the operation.
+      required: [product_ref, name, qty, unit_price_cents]
+      properties:
+        product_ref:
+          type: string
+          description: >-
+            An opaque identifier owned by the merchant or the payment rail. **Not
+            a Vyloop identifier.** Vyloop holds no product catalogue and will not
+            create one; there is nothing here to resolve this against.
+        name:
+          type: string
+          description: >-
+            The product name as it read at the moment of sale. Inlined rather than
+            referenced on purpose, so a later rename cannot rewrite history.
+        qty:
+          type: integer
+          description: How many units.
+        unit_price_cents:
+          type: integer
+          description: >-
+            Price of one unit, in cents. Not validated against `amount_cents` and
+            not summed: the money amount is the fact, and this is a label on it.
+      additionalProperties: false
+
+    CheckinRequest:
+      type: object
+      required: [member_code, amount_cents]
+      properties:
+        payment_id:
+          type: string
+          description: >-
+            The payment rail's own transaction id — what Mercado Pago calls its
+            payment id. Optional, and absent on the manual path. **Send it
+            whenever the rail gave you one**: it is the deduplication key that
+            makes retries safe, and it is the only thing that lets a webhook
+            discover later that a sale never arrived. It is not required for the
+            call to succeed.
+        member_code:
+          type: string
+          minLength: 1
+          description: >-
+            The scanned code, stored verbatim as the audit trail of what the
+            terminal actually received — which is the only thing that can answer
+            that question later, once a code has been reassigned.
+        amount_cents:
+          type: integer
+          minimum: 1
+          description: >-
+            The money amount, in cents, as an integer. **This is the only field
+            that determines what the customer earns**, via the tenant's rule.
+
+            It is validated as a positive integer and nothing more. It is not
+            checked against a basket, because there is no basket on this side:
+            Vyloop deliberately holds no product catalogue to disagree with the
+            merchant's.
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CheckinItem'
+          description: >-
+            Optional, advisory, and normally absent. Stored as sent and never
+            parsed into a total.
+        note:
+          type: string
+          description: Free text. Recorded on the checkin and on the ledger row it credits.
+      additionalProperties: false
+
+    Checkin:
+      type: object
+      description: >-
+        A recorded sale. This is also where the credited points appear — read
+        `points` to learn what the sale was worth.
+      required:
+        - id
+        - business_id
+        - customer_id
+        - member_code
+        - amount_cents
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        member_code:
+          type: string
+          description: The scanned string exactly as received, not the resolved id.
+        payment_id:
+          type: [string, 'null']
+          description: >-
+            `null` on the manual path. The unique key this record deduplicates
+            on, together with `business_id`.
+        amount_cents:
+          type: integer
+        items:
+          type: [array, 'null']
+          items:
+            $ref: '#/components/schemas/CheckinItem'
+          description: As sent, or `null` when the rail did not provide a basket.
+        note:
+          type: [string, 'null']
+        points:
+          type: [integer, 'null']
+          description: >-
+            Points credited by the tenant's earn rule, **computed server-side**.
+            `null` means the sale is recorded and the credit is still owed — the
+            observable state a retry is designed to complete, and the reason a
+            `200` response is not by itself proof that points moved.
+        created_at:
+          type: string
+          format: date-time
+      additionalProperties: true
+
+    CheckinResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/Checkin'
+      additionalProperties: false
+
+  responses:
+    InvalidTerminalCredential:
+      description: >-
+        The presented pair is not a usable credential: unknown terminal id,
+        wrong secret, or revoked. **All three answer identically and must stay
+        that way** — see the operation description. A client cannot distinguish
+        them and must not try to.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            refused:
+              value:
+                error:
+                  code: 'AUTH_TOKEN_INVALID'
+                  message: Invalid terminal credential
+
+    PosPlanRequired:
+      description: >-
+        The terminal's tenant is not on a plan that includes POS terminals, or
+        its tenant record no longer exists. Deliberately a different code from the
+        credential refusal: it reveals nothing the merchant does not already
+        know, and it gives "why does my till not work" a name to be answered
+        with. Re-checked on every exchange, so an upgrade takes effect on the next
+        renewal with no revocation step.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            wrongPlan:
+              value:
+                error:
+                  code: 'POS_PLAN_REQUIRED'
+                  message: This plan does not include POS terminals. Upgrade the plan to register a counter.
+
+    CounterSubjectRequired:
+      description: >-
+        The bearer token is valid but its subject is not a counter. This is the
+        answer for a customer token, for a dashboard operator session, and for an
+        expired or wrong-tenant token alike — it reads nothing and writes nothing
+        before refusing, so there is no existence oracle to probe with. The
+        counter-only rule is a product decision before a security one: a terminal
+        reports money, and the dashboard — which does send points — is a different
+        credential on a different route.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            refused:
+              value:
+                error:
+                  code: 'COUNTER_SUBJECT_REQUIRED'
+                  message: >-
+                    This endpoint reports a sale the merchant's payment terminal already
+                    collected, and only a counter credential may report one.
+
+    InternalError:
+      description: >-
+        An unexpected failure on our side. Do not retry blindly on a fixed short
+        schedule; back off and reconcile, because a sale whose fate is unknown is
+        exactly the case a `payment_id` exists to make recoverable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            unhandled:
+              value:
+                error:
+                  code: 'INTERNAL_ERROR'
+                  message: Internal server error
