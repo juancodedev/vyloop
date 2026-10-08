@@ -717,26 +717,70 @@ no hace que la ruta trabaje en su nombre.
 
 ---
 
+---
+
+## Cerrado — docblock obsoleto, y por qué importaba que mintiera
+
+**Estado:** cerrado. `workers/identity/src/index.ts`, el docblock de `POS_SCOPES`.
+
+Decía *"Known gap, deliberately not solved here"*, y que un token de mostrador *"podía asignar puntos
+directamente, salteando la regla del tenant"*. Las dos frases eran falsas desde el día anterior, y el
+problema no era que estuvieran desactualizadas: era que **no había test que afirmara ese texto**, así
+que nada fallaba. Un comentario que miente sin delatar que miente es peor que uno que no existe,
+porque el próximo lo lee como estado del sistema.
+
+Ahora dice por qué un token de mostrador **no** puede asignar puntos, y por qué emitir el token y
+cerrar esa brecha fueron el mismo cambio: la segunda es lo que hace seguro publicar el primero.
+
+---
+
+## Cerrado — `matchRoute` ahora exige frontera de segmento
+
+**Estado:** cerrado. `apps/gateway/src/router.ts` y un `router.test.ts` nuevo.
+
+### La decisión
+
+**Sí, endurecerlo.** El razonamiento:
+
+`/v1/loyalty` es un **namespace**, no la cadena de caracteres que lo abre. Con `startsWith` a secas,
+`/v1/loyalty-admin` resolvía a `growth` y se le reenviaba — así que el 404 venía del archivo
+equivocado y se leía como *"ese servicio no tiene esa ruta"* en vez de *"nada reclama este path"*.
+
+No existe tal ruta hoy, y por eso dormía: cada ruta de la flota es exactamente su prefijo o sigue con
+`/`. Eso es una propiedad de la **lista de rutas de hoy**, no del router. Y el fallo que produciría es
+justo el que este módulo ya tiene en su historial — dos ocurrencias documentadas arriba, y la tercera
+fue `POST /v1/checkins`.
+
+La frontera se impone en el router en vez de confiar en la lista de rutas.
+
+### Lo que el guard de alcanzabilidad NO cubría
+
+**Este es el punto que hizo que la fix necesitara su propio test.** Revertir `matchRoute` a
+`startsWith` deja las 24 aserciones del guard en verde: toda ruta registrada resuelve bajo las dos
+reglas. El guard prueba que no	matchee de más**; la frontera es sobre no matchee de más.
+
+Un guard que solo mira el lado que ya funciona es un guard que no puede ver la mitad del problema.
+
+`router.test.ts` afirma las dos direcciones: los paths que la frontera debe rechazar
+(`/v1/loyalty-admin`, `/v1/authx/login`, `/v1/customers-v2/me`) y los que debe aceptar, más una
+propiedad sobre `ROUTE_MAP` mismo — cada prefijo resuelve en sí y en un hijo, lo que también detecta
+un prefijo con barra final. Revertir el código pone **6 tests en rojo**.
+
+---
+
 ### Sigue abierto
 
-- La **Etapa 0b**: implementada y en `main` (PR #202), con los endpoints bajo `/v1/loyalty/` y el
-  guard de alcanzabilidad. Migración `0011` aplicada a mano en la rama `production` de Neon, con su
-  fila en `drizzle.__drizzle_migrations`. Gate de drift en verde.
-- **El emisor de los tokens de mostrador.** Hoy el prefijo `pos:` existe solo como contrato; nadie lo
-  emite todavía, así que `requireCounterSubject` es una guarda sin llamador legítimo. Cuando haya
-  terminales reales llegan la tabla `pos_terminals`, el canje por token y la decisión de qué hace el
-  gateway con un sujeto mostrador.
-- **Docblock obsoleto en `workers/identity/src/index.ts:414-422`.** Encabezado *"Known gap, deliberately
-  not solved here"*, y la frase *"A till could therefore assign points directly, bypassing the earn
-  rule that `POST /v1/loyalty/checkins` exists to apply"*. **Las dos son falsas desde hoy:** la
-  escalada está cerrada en growth, y `requireOperatorRole` ya niega también al sujeto mostrador. El
-  cierre de esa brecha pertenece a growth, no a identity. No hay test que afirme ese texto, así que
-  nada falla — lo que lo hace peor: miente sin delatar que miente. Editar ese archivo está aprobado;
-  queda para después porque es un comentario, no una decisión.
-- **Decidir si `matchRoute` exige frontera de segmento.** Hoy `startsWith` sin frontera no causa
-  ningún bug —no hay prefijos que colisionen entre sí— pero `/v1/loyalty-admin` matchearía
-  `/v1/loyalty`. Endurecerlo cambia el matching de toda la superficie `/v1/`, así que no se hizo
-  junto con el guard; queda como decisión.
+- La **Etapa 0b**: implementada y en `main` (PR #202 y #203). Migraciones `0011` y `0012` aplicadas a
+  mano en la rama `production` de Neon, cada una con su fila en `drizzle.__drizzle_migrations`. Gate
+  de drift en verde.
+- **El registro de terminales.** El emisor existe (`POST /v1/auth/pos/token`) y la tabla `pos_terminals`
+  ya está aplicada, pero **nadie crea filas**. No hay forma de obtener un token `pos:`: falta la
+  pantalla o el endpoint donde el comercio registra su terminal y recibe el secreto **una sola vez**
+  (queda hasheado en la base). Es lo único que bloquea la prueba de punta a punta.
+- **Docblock obsoleto en `workers/identity/src/index.ts`.** Cerrado — ver "Docblock obsoleto,
+  corregido" arriba.
+- ~~**Decidir si `matchRoute` exige frontera de segmento.~~** Cerrado — ver "`matchRoute` ahora
+  exige frontera de segmento" arriba.
 - **El poll contra Mercado Pago** — la mitad que falta del backlog. Depende del cliente de MP.
 - **Límite de tasa para un sujeto mostrador.** `DEFAULT_LIMITS` tiene `free`/`pro`/`business`, y un rol
   `terminal` cae en `?? config.limits.free ?? 60` — 60 requests/min. Un mostrador real con la cola de
