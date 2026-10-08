@@ -476,6 +476,65 @@ describe('API Gateway', () => {
       expect(res.status).not.toBe(429);
     });
 
+    it('throttles the POS token exchange, which is public and expensive', async () => {
+      // The third `/v1/auth/*` route to reach this treatment, and the same shape
+      // signup was: public by prefix, so it skips auth and arrives at the limiter
+      // with no `jwt` and no `business_id` to key on. Because it was absent from
+      // `ANONYMOUS_LIMITS` it was not "unthrottled by default" — the limiter skips
+      // an endpoint the table does not name, which is *unbounded*. Each call runs a
+      // 100k-iteration key derivation to compare a presented terminal secret, so an
+      // unbounded loop here is an amplifier rather than a leak.
+      requestCount = 5;
+
+      const res = await app.fetch(
+        new Request('https://api.test/v1/auth/pos/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ terminal_id: 't-1', secret: 'nope' }),
+        }),
+        mockEnv({ RATE_LIMITER: rateLimitMock() }),
+      );
+
+      expect(res.status).toBe(429);
+      expect(res.headers.get('Retry-After')).toBeTruthy();
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('throttles the POS token exchange even with no Authorization header', async () => {
+      // The counter is keyed per client address for anonymous callers. A terminal
+      // has no session to send one, so this is the only shape the route ever has —
+      // a limit keyed on anything the caller supplies would be spendable by
+      // rotating a header.
+      requestCount = 5;
+
+      const res = await app.fetch(
+        new Request('https://api.test/v1/auth/pos/token', { method: 'POST' }),
+        mockEnv({ RATE_LIMITER: rateLimitMock() }),
+      );
+
+      expect(res.status).toBe(429);
+    });
+
+    it('leaves a till that authenticates once, alone below the limit', async () => {
+      // The other direction, and the reason this is not login's deliberate
+      // unlimited: a till exchanges its token once per boot, so five a minute is
+      // never a merchant's traffic. Below the ceiling the route must still be
+      // reachable, or the limit is just an outage with a nicer status code.
+      requestCount = 4;
+
+      const res = await app.fetch(
+        new Request('https://api.test/v1/auth/pos/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ terminal_id: 't-1', secret: 'nope' }),
+        }),
+        mockEnv({ RATE_LIMITER: rateLimitMock() }),
+      );
+
+      expect(res.status).not.toBe(429);
+    });
+
     it('returns 429 after exceeding rate limit', async () => {
       // Set the counter to exceed the limit (free tier = 60)
       requestCount = 60;

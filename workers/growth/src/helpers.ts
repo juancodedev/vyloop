@@ -115,8 +115,8 @@ export const OPERATOR_ROLE_REQUIRED = 'OPERATOR_ROLE_REQUIRED';
 export type OperatorRoleGuard = { ok: true } | { ok: false; status: 403; code: string; message: string };
 
 /**
- * Refuse the customer app's token on a route that configures the loyalty
- * program rather than spending the customer's own points.
+ * Refuse the customer app's token, and a counter's, on a route that configures
+ * the loyalty program rather than spending the customer's own points.
  *
  * Rewriting the program, the tier ladder, the earn rate or the reward catalog
  * is a merchant decision, and the customer app has no surface for making one.
@@ -127,27 +127,154 @@ export type OperatorRoleGuard = { ok: true } | { ok: false; status: 403; code: s
  * rather than only the one that was exploited, so the next route added does not
  * have to remember.
  *
- * Deliberately the *same* answer whatever the request would otherwise have
- * done. The guard reads nothing, so it cannot tell an absent program from a
- * present one, a missing tier from an existing one, or a taken reward name from
- * a free one — there is no existence oracle to probe the tenant with, and
- * nothing is written on the way out.
+ * ## The counter, which was the second way in
  *
- * The counterpart to `isCustomerRole`, not a second source of truth about the
- * role: it denies by asking that question rather than by re-reading
- * `X-User-Role` or holding a list of operator roles. `issueToken` types `role`
- * as a free-form string, so an allow-list would have to invent a vocabulary the
- * issuer does not define and would refuse every role added after this was
- * written.
+ * The guard denied one kind of subject and there were two. `POST
+ * /v1/auth/pos/token` is public and mints `sub: 'pos:<terminalId>'`, and a till
+ * authenticates once per boot, so such a token is a credential that exists in the
+ * wild rather than a hypothetical: it passed here, and a terminal could send
+ * `points` to `POST /v1/loyalty/points/assign` and credit an arbitrary balance
+ * outright — bypassing the earn rule that `POST /v1/loyalty/checkins` exists to
+ * apply. A terminal reports that a sale happened and sends `amount_cents`; what
+ * that is worth is the tenant's decision, never the till's.
+ *
+ * Denied through the existing `isCounterSubject`, on the same grounds it was
+ * written: the subject namespace is the only structurally distinct thing here,
+ * `role` is free-form text the issuer never enumerates, and a second predicate
+ * written beside it would be a second definition of what a counter is — which is
+ * how the two halves of this file would come to disagree.
+ *
+ * Deliberately the *same* answer whatever the request would otherwise have
+ * done, and for a counter the same answer as for a customer: one status, one
+ * code, one message, not a code per subject kind. Distinct codes would turn the
+ * refusal into an inventory of which kinds of subject exist and which do not,
+ * which is the one thing a guard on an unrecognised credential must not be. The
+ * guard reads nothing, so it cannot tell an absent program from a present one, a
+ * missing tier from an existing one, or a taken reward name from a free one —
+ * there is no existence oracle to probe the tenant with, and nothing is written
+ * on the way out.
+ *
+ * The counterpart to `isCustomerRole` and `isCounterSubject`, not a second source
+ * of truth about either: it denies by asking those two questions rather than by
+ * re-reading `X-User-Role` or holding a list of operator roles. Two questions is
+ * still not an allow-list. `issueToken` types `role` as a free-form string, so an
+ * allow-list would have to invent a vocabulary the issuer does not define and
+ * would refuse every role added after this was written — and the pair of
+ * questions cannot drift when a role is renamed, which is what the list was for.
+ * The honest cost of the pair is that it fails *open* on a fourth kind of subject
+ * nobody has thought to ask about, where a list fails closed. That is paid here
+ * deliberately: a new kind of subject needs its question added, and the counter is
+ * what that cost bought.
  */
 export function requireOperatorRole(auth: AuthHeaders): OperatorRoleGuard {
-  if (isCustomerRole(auth)) {
+  if (isCustomerRole(auth) || isCounterSubject(auth)) {
     return {
       ok: false,
       status: 403,
       code: OPERATOR_ROLE_REQUIRED,
       message:
         'This endpoint configures the loyalty program for the business. Redeeming your own rewards is done through POST /v1/loyalty/rewards/redeem.',
+    };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * The namespace a counter's token subject lives in: `pos:<terminalId>`.
+ *
+ * `issueToken` (`workers/identity/src/auth.ts`) types `sub` as a free-form string
+ * and every subject it is asked for today is a uuid — `customers.global_id` for
+ * the customer app, `users.id` for staff — so `pos:` is unreachable by accident
+ * and cannot collide with one of those. A uuid cannot begin with it at all.
+ *
+ * ## Why this prefix and not a bare `pos`
+ *
+ * A bare prefix is what makes an authorization marker forgeable by accident.
+ * `pos` alone would be matched by `postmaster-3`, `pos-7` and `POS-2`; a
+ * `startsWith('pos')` guard would therefore hand a counter subject to any issuer
+ * that happened to pick a word beginning with those three letters. The colon is
+ * the separator that makes the namespace unambiguous: it cannot appear in a uuid,
+ * and it is not a character any of those look-alikes contain. Case-sensitive on
+ * top of that, so `POS:` is not a counter.
+ */
+const COUNTER_SUBJECT_PREFIX = 'pos:';
+
+export type CounterSubjectGuard =
+  | { ok: true }
+  | { ok: false; status: 403; code: string; message: string };
+
+/** Stable, specific code. Callers can branch on this without parsing prose. */
+export const COUNTER_SUBJECT_REQUIRED = 'COUNTER_SUBJECT_REQUIRED';
+
+/**
+ * Is this token a counter at the till?
+ *
+ * A counter is a *third* kind of subject, so this is not `!isCustomerRole` and not
+ * its mirror image. It asks one question about the subject and refuses everything
+ * else, which is the same shape `isCustomerRole` gives `requireOperatorRole`: a
+ * check phrased as one question cannot drift when the issuer adds a role, and
+ * cannot go stale when a role is renamed.
+ *
+ * ## Why the subject and not the role
+ *
+ * Because `role` is free-form text the issuer never enumerates, so asking "is the
+ * role `terminal`" is the allow-list this file deliberately avoids — it would
+ * refuse every role a later counter integration might carry, and would pass a
+ * token whose role was mis-set. The subject namespace is decided by the same
+ * issuer and is structurally distinct, and `issueToken` needs no new claim and no
+ * change to `JwtClaims` for it.
+ *
+ * The remainder after the prefix is opaque. It is not looked up, not parsed, and
+ * not compared to anything: there is no `pos_terminals` row behind it yet, so
+ * nothing here can tell a terminal that exists from one that does not.
+ */
+export function isCounterSubject(auth: AuthHeaders): boolean {
+  const sub = auth.userId;
+
+  // The empty remainder is refused on purpose: `pos:` with nothing behind it is a
+  // marker with no terminal in it, and accepting it would make the prefix alone
+  // sufficient to report a merchant's completed sale.
+  return (
+    sub.startsWith(COUNTER_SUBJECT_PREFIX) && sub.length > COUNTER_SUBJECT_PREFIX.length
+  );
+}
+
+/**
+ * Refuse everything that is not a merchant's payment terminal on the two routes
+ * that speak for a sale that already happened.
+ *
+ * `POST /v1/loyalty/passes/resolve` and `POST /v1/loyalty/checkins` had no guard at
+ * all, and the absence *was* the defect: `POST /v1/auth/customer/token` is public
+ * and mints `role: 'customer'`, so any customer could resolve an arbitrary
+ * `member_code` and then report a fabricated sale against it — crediting whatever
+ * the tenant's earn rule made of an `amount_cents` they chose. That is the same
+ * class of hole `requireOperatorRole` was written for on `points/assign`, so it is
+ * closed here the same way: on the route, not only on the one that was exploited.
+ *
+ * `requireOperatorRole` would be the wrong guard, for a product reason before a
+ * security one. A terminal never sends points — it sends `amount_cents` and the
+ * tenant's earn rule decides what that is worth — and the dashboard, which does
+ * send points, calls `points/assign` instead. The two subjects therefore have to
+ * stay distinguishable in both directions: a counter cannot configure the program,
+ * and a customer cannot report a sale.
+ *
+ * Deliberately the *same* answer whatever the request would otherwise have done,
+ * and for the same reason `requireOperatorRole` is: this reads nothing and writes
+ * nothing, so it cannot tell an absent program from a present one, a member code
+ * that exists from one that does not, or a request that would have been credited
+ * from one that would have bounced. There is no existence oracle to probe the
+ * tenant with, and it runs ahead of the body parse so an unauthorized caller
+ * cannot make the route do work on their behalf.
+ */
+export function requireCounterSubject(auth: AuthHeaders): CounterSubjectGuard {
+  if (!isCounterSubject(auth)) {
+    return {
+      ok: false,
+      status: 403,
+      code: COUNTER_SUBJECT_REQUIRED,
+      message:
+        "This endpoint reports a sale the merchant's payment terminal already collected, and only a counter credential may report one.",
     };
   }
 

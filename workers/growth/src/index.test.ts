@@ -25,7 +25,7 @@ vi.mock('@vyloop/db', async () => {
     businessId: uuid('business_id').notNull(),
     currentTierId: uuid('current_tier_id'),
     deletedAt: timestamp('deleted_at'),
-    // Read by `/v1/passes/resolve` and `POST /v1/checkins`. Real columns for the
+    // Read by `/v1/loyalty/passes/resolve` and `POST /v1/loyalty/checkins`. Real columns for the
     // reason the other tables are real: a flat `{}` renders an opaque predicate, so
     // a lookup that ignored `businessId` would pass the same test as one that
     // honoured it.
@@ -101,7 +101,7 @@ import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { isCustomerRole } from './helpers';
+import { isCustomerRole, isCounterSubject, requireOperatorRole } from './helpers';
 
 import app from './index';
 
@@ -124,7 +124,7 @@ function createBuilder(data: unknown = []): Builder {
   builder.offset = vi.fn(() => builder);
   builder.limit = vi.fn(() => builder);
   builder.returning = vi.fn(() => builder);
-  // Needed by `POST /v1/checkins`, whose insert is `ON CONFLICT DO NOTHING`. The
+  // Needed by `POST /v1/loyalty/checkins`, whose insert is `ON CONFLICT DO NOTHING`. The
   // mock cannot enforce the unique index, so the conflict branch of that route is
   // driven by what the insert returns — documented at each such test.
   builder.onConflictDoNothing = vi.fn(() => builder);
@@ -175,6 +175,22 @@ interface TestAuth {
 /** The operator the pre-existing tests were all written against. */
 const OPERATOR_AUTH: TestAuth = { userId: 'user-1', businessId: 'biz-1', userRole: 'admin' };
 
+/**
+ * A merchant's payment terminal — the only subject the two checkin routes accept.
+ *
+ * `userId` is the JWT subject, and a counter's subject is namespaced `pos:<id>`.
+ * The role is `terminal` and is *not* what the guard asks about: `issueToken`
+ * types `role` as a free-form string, so a role allow-list would have to invent a
+ * vocabulary the issuer does not define. The subject namespace is the marker, and
+ * nothing the issuer hands out today can begin with `pos:` — every other subject
+ * is a uuid (`customers.global_id` for the customer app, `users.id` for staff).
+ */
+const COUNTER_AUTH: TestAuth = {
+  userId: 'pos:0f9c1d2e-4a5b-4c6d-8e9f-0a1b2c3d4e5f',
+  businessId: 'biz-1',
+  userRole: 'terminal',
+};
+
 function reqAs(method: string, path: string, auth: TestAuth, body?: unknown) {
   const r = new Request(`http://localhost${path}`, {
     method,
@@ -201,6 +217,14 @@ const GET = (p: string) => req('GET', p);
 const POST = (p: string, b?: unknown) => req('POST', p, b);
 const PUT = (p: string, b?: unknown) => req('PUT', p, b);
 const DELETE = (p: string) => req('DELETE', p);
+
+/**
+ * `POST` as a counter, for the two routes that accept nobody else.
+ *
+ * `POST` itself keeps defaulting to `OPERATOR_AUTH`, so the operator tests across
+ * this file are untouched — only the checkin routes send this instead.
+ */
+const COUNTER_POST = (p: string, b?: unknown) => reqAs('POST', p, COUNTER_AUTH, b);
 
 function setupDb() {
   mockDb = createMockDb();
@@ -2749,6 +2773,182 @@ describe('Growth Worker', () => {
     });
   });
 
+  // ==========================================================================
+  // POST /v1/loyalty/points/assign — a counter is refused, and indistinguishably
+  //
+  // `requireOperatorRole` denied by *exclusion*: it refused the customer role and
+  // passed everything else, so a till's token — `sub: 'pos:<terminalId>'`, minted
+  // by the public `POST /v1/auth/pos/token` — sailed through and could send
+  // `points` directly. That is the escalation: a terminal reports that a sale
+  // happened and sends `amount_cents`; what the sale is worth is the tenant's
+  // earn rule's decision, which is precisely what `POST /v1/loyalty/checkins`
+  // exists to apply. Sending points bypasses it.
+  //
+  // Three properties are asserted here, and the second is the one a per-kind
+  // error code would have quietly broken:
+  //
+  //   1. The counter is refused with `OPERATOR_ROLE_REQUIRED` and nothing is
+  //      written — the guard is ahead of `createDb`, so there is no statement to
+  //      observe at all.
+  //   2. That refusal is byte-identical to the customer's. Same status, same code,
+  //      same message.
+  //   3. The refusal is *narrow*: a subject that merely resembles `pos:` is not a
+  //      counter, so nothing here became a prefix blanket.
+  // ==========================================================================
+
+  describe('POST /v1/loyalty/points/assign — a counter is refused like a customer', () => {
+    /**
+     * Subjects that resemble the counter marker without being one.
+     *
+     * A guard written as `sub.startsWith('pos')` would refuse all of these, and
+     * three of them are things the issuer could plausibly hand out one day. The
+     * marker is `pos:` with something behind it — the colon separates a namespace
+     * a uuid can never occupy, and the empty remainder is refused because a marker
+     * with no terminal in it is not a terminal.
+     */
+    const NEAR_MISS_SUBJECTS: { label: string; userId: string }[] = [
+      { label: 'pos with no separator', userId: 'pos' },
+      { label: 'pos with no terminal behind it', userId: 'pos:' },
+      { label: 'a longer word starting with pos', userId: 'postal-terminal-1' },
+      { label: 'a different separator', userId: 'pos_terminal-1' },
+      { label: 'the same letters in another case', userId: 'POS:terminal-1' },
+      { label: 'an ordinary operator subject', userId: 'user-1' },
+    ];
+
+    /** The body a counter would send: points, no amount, straight to the balance. */
+    const COUNTER_ASSIGN_BODY = {
+      customer_id: 'cust-1',
+      points: 9999,
+      reference_id: 'ref-escalation',
+    };
+
+    it('refuses a counter assigning points and writes nothing', async () => {
+      const res = await reqAs(
+        'POST',
+        '/v1/loyalty/points/assign',
+        COUNTER_AUTH,
+        COUNTER_ASSIGN_BODY,
+      );
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      // Not merely "no points were added": no statement reached the database. The
+      // guard runs ahead of `createDb`, so there is nothing to undo and nothing
+      // for a caller to have observed on the way in.
+      expectNoDbContact();
+    });
+
+    it('answers a counter exactly as it answers a customer — same status, code and message', async () => {
+      // Asserted explicitly rather than by each field separately matching a
+      // literal, because the two refusals must be *indistinguishable*. A distinct
+      // code per subject kind would still pass the first test in this block and
+      // would tell an unauthenticated caller which kinds of subject this system
+      // issues — the one thing a guard on a credential it does not recognise must
+      // not do.
+      const fromCounter = await reqAs(
+        'POST',
+        '/v1/loyalty/points/assign',
+        COUNTER_AUTH,
+        COUNTER_ASSIGN_BODY,
+      );
+      const fromCustomer = await reqAs(
+        'POST',
+        '/v1/loyalty/points/assign',
+        CUSTOMER,
+        COUNTER_ASSIGN_BODY,
+      );
+
+      expect(fromCounter.status).toBe(fromCustomer.status);
+      expect(fromCounter.status).toBe(403);
+
+      // The whole body, byte for byte. This route's error envelope carries only
+      // `code` and `message`, so equality here is the whole refusal and nothing
+      // else can be hiding behind it.
+      expect(await fromCounter.text()).toBe(await fromCustomer.text());
+
+      const body = (await (
+        await reqAs('POST', '/v1/loyalty/points/assign', COUNTER_AUTH, COUNTER_ASSIGN_BODY)
+      ).json()) as Record<string, Record<string, unknown>>;
+      expect(body.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+    });
+
+    it.each(NEAR_MISS_SUBJECTS)(
+      'does not widen into a prefix blanket — $label still assigns',
+      async ({ userId }) => {
+        // These are the subjects a `startsWith('pos')` check would have caught and
+        // this guard must not: a bare `pos`, the same letters inside a longer word,
+        // a different separator, the same letters in another case, and `pos:` with
+        // no terminal behind it. The assertion is made at the route, not at the
+        // predicate, because "still assigns" is the claim that actually matters:
+        // the denial is scoped to the counter namespace rather than to anything
+        // that resembles it.
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([
+            {
+              id: 'prog-1',
+              earnRate: '1.0000',
+              earnBy: 'purchase',
+              earnUnitAmount: '1000.00',
+            },
+          ]),
+        );
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([{ id: 'cust-1', currentTierId: null }]),
+        );
+        mockDb.execute.mockResolvedValueOnce({ rows: [] });
+        mockDb.execute.mockResolvedValueOnce({
+          rows: [{ id: 'tx-1', customer_id: 'cust-1', balance_after: 12, points: 12 }],
+        });
+
+        const res = await reqAs(
+          'POST',
+          '/v1/loyalty/points/assign',
+          { userId, businessId: 'biz-1', userRole: 'terminal' },
+          { customer_id: 'cust-1', amount_pesos: 12500, reference_id: 'ref-near-miss' },
+        );
+
+        expect(res.status).toBe(201);
+        // And the narrowing is the shared predicate's, not a copy of it.
+        expect(
+          isCounterSubject({ userId, businessId: 'biz-1', userRole: 'terminal' }),
+        ).toBe(false);
+        expect(
+          requireOperatorRole({ userId, businessId: 'biz-1', userRole: 'terminal' }),
+        ).toEqual({ ok: true });
+      },
+    );
+
+    it('still lets an ordinary operator assign points', async () => {
+      // The other direction, and the one that would break if the guard had been
+      // written as "refuse anything that is not `user-1`" or as a role allow-list
+      // over subjects. `mockPurchaseEarn` is the same stub the pre-existing
+      // operator cases use, so a pass here is a pass on the real earn path.
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'prog-1', earnRate: '1.0000', earnBy: 'purchase', earnUnitAmount: '1000.00' },
+        ]),
+      );
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'cust-1', currentTierId: null }]),
+      );
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({
+        rows: [{ id: 'tx-1', customer_id: 'cust-1', balance_after: 12, points: 12 }],
+      });
+
+      const res = await reqAs('POST', '/v1/loyalty/points/assign', OPERATOR_AUTH, {
+        customer_id: 'cust-1',
+        amount_pesos: 12500,
+        reference_id: 'ref-operator-ok',
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(201);
+      expect(mockDb.execute).toHaveBeenCalled();
+    });
+  });
+
   describe('read routes — still open to a customer', () => {
     it('lets a customer read the loyalty config', async () => {
       mockDb.select.mockReturnValueOnce(
@@ -3131,17 +3331,17 @@ describe('Growth Worker', () => {
   });
 
   // ==========================================================================
-  // POST /v1/passes/resolve — the scan, at the till, before the money moves
+  // POST /v1/loyalty/passes/resolve — the scan, at the till, before the money moves
   // ==========================================================================
 
-  describe('POST /v1/passes/resolve', () => {
+  describe('POST /v1/loyalty/passes/resolve', () => {
     it('answers known:true with the customer and their real name', async () => {
       mockDb.select.mockReturnValueOnce(
         createBuilder([{ id: 'cust-1', currentTierId: null }]),
       );
       mockDb.select.mockReturnValueOnce(createBuilder([{ fullName: 'Ada Lovelace' }]));
 
-      const res = await POST('/v1/passes/resolve', { member_code: 'ABC-1234' });
+      const res = await COUNTER_POST('/v1/loyalty/passes/resolve', { member_code: 'ABC-1234' });
 
       expect(res.status).toBe(200);
       const json = (await res.json()) as { data: Record<string, unknown> };
@@ -3155,7 +3355,7 @@ describe('Growth Worker', () => {
     it('answers known:false for a code nobody has, and still 200', async () => {
       mockDb.select.mockReturnValueOnce(createBuilder([]));
 
-      const res = await POST('/v1/passes/resolve', { member_code: 'NOPE-0000' });
+      const res = await COUNTER_POST('/v1/loyalty/passes/resolve', { member_code: 'NOPE-0000' });
 
       // The number that matters is this one. A 404 here reads to a terminal as
       // "do not sell", and refusing a merchant's sale because a pass was not
@@ -3175,7 +3375,7 @@ describe('Growth Worker', () => {
       );
       mockDb.select.mockReturnValueOnce(createBuilder([{ fullName: 'Ada Lovelace' }]));
 
-      await POST('/v1/passes/resolve', { member_code: 'ABC-1234' });
+      await COUNTER_POST('/v1/loyalty/passes/resolve', { member_code: 'ABC-1234' });
 
       // Scanning happens before the payment settles. Crediting here would pay for
       // a sale that might still be abandoned at the till.
@@ -3189,7 +3389,7 @@ describe('Growth Worker', () => {
     it('scopes the lookup to the credential, so a code is not global', async () => {
       mockDb.select.mockReturnValueOnce(createBuilder([]));
 
-      const r = await POST('/v1/passes/resolve', { member_code: 'ABC-1234' });
+      const r = await COUNTER_POST('/v1/loyalty/passes/resolve', { member_code: 'ABC-1234' });
 
       // `businessId` in the rendered SQL is the whole tenant boundary: `member_code`
       // is unique per business, so the credential's scope is what makes the lookup
@@ -3212,7 +3412,7 @@ describe('Growth Worker', () => {
     ])('answers 200 with known:false when the code is $label', async ({ body }) => {
       // Answered, not refused. This route does not veto a sale, and a malformed
       // scan is a malformed scan rather than a reason to stop charging.
-      const res = await POST('/v1/passes/resolve', body);
+      const res = await COUNTER_POST('/v1/loyalty/passes/resolve', body);
 
       expect(res.status).toBe(200);
       const json = (await res.json()) as { data: Record<string, unknown> };
@@ -3223,10 +3423,10 @@ describe('Growth Worker', () => {
   });
 
   // ==========================================================================
-  // POST /v1/checkins — the fact, after the money moves
+  // POST /v1/loyalty/checkins — the fact, after the money moves
   // ==========================================================================
 
-  describe('POST /v1/checkins', () => {
+  describe('POST /v1/loyalty/checkins', () => {
     /**
      * A `visit` program with no tier, so the credited number is legible in the
      * assertions below.
@@ -3332,7 +3532,7 @@ describe('Growth Worker', () => {
       );
       stubLedger(3);
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-1',
         member_code: 'ABC-1234',
         amount_cents: 12500,
@@ -3362,7 +3562,7 @@ describe('Growth Worker', () => {
       mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-1', amountCents: 1250000 }]));
       stubLedger(12);
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-2',
         member_code: 'ABC-1234',
         amount_cents: 1250000,
@@ -3383,7 +3583,7 @@ describe('Growth Worker', () => {
       mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-1', amountCents: 5000 }]));
       stubLedger(2);
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-3',
         member_code: 'ABC-1234',
         amount_cents: 5000,
@@ -3404,7 +3604,7 @@ describe('Growth Worker', () => {
         createBuilder([{ id: 'chk-1', paymentId: 'pay-1', points: 1, amountCents: 5000 }]),
       );
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-1',
         member_code: 'ABC-1234',
         amount_cents: 5000,
@@ -3436,7 +3636,7 @@ describe('Growth Worker', () => {
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       stubLedger(4);
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-4',
         member_code: 'ABC-1234',
         amount_cents: 5000,
@@ -3470,7 +3670,7 @@ describe('Growth Worker', () => {
         code: '23505',
       });
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-5',
         member_code: 'ABC-1234',
         amount_cents: 5000,
@@ -3497,7 +3697,7 @@ describe('Growth Worker', () => {
         createBuilder([{ id: 'chk-1', paymentId: 'pay-6', amountCents: 5000, points: null }]),
       );
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-6',
         member_code: 'ABC-1234',
         amount_cents: 5000,
@@ -3523,7 +3723,7 @@ describe('Growth Worker', () => {
       mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-manual', amountCents: 5000 }]));
       stubLedger(1);
 
-      const res = await POST('/v1/checkins', { member_code: 'ABC-1234', amount_cents: 5000 });
+      const res = await COUNTER_POST('/v1/loyalty/checkins', { member_code: 'ABC-1234', amount_cents: 5000 });
 
       expect(res.status).toBe(201);
       expect(insertedValues()).toMatchObject({ paymentId: null });
@@ -3540,7 +3740,7 @@ describe('Growth Worker', () => {
       mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'chk-1', amountCents: 5000 }]));
       stubLedger(1);
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-7',
         member_code: 'ABC-1234',
         amount_cents: 5000,
@@ -3562,7 +3762,7 @@ describe('Growth Worker', () => {
         createBuilder([{ id: 'chk-1', paymentId: 'pay-8', points: 1, amountCents: 5000 }]),
       );
 
-      await POST('/v1/checkins', { payment_id: 'pay-8', member_code: 'ABC-1234', amount_cents: 5000 });
+      await COUNTER_POST('/v1/loyalty/checkins', { payment_id: 'pay-8', member_code: 'ABC-1234', amount_cents: 5000 });
 
       // The dedupe has to be the unique index's, decided by Postgres in the same
       // statement. A read-then-write would let two concurrent retries of one
@@ -3583,7 +3783,7 @@ describe('Growth Worker', () => {
       { label: 'zero', body: { member_code: 'ABC-1234', amount_cents: 0 } },
       { label: 'negative', body: { member_code: 'ABC-1234', amount_cents: -5000 } },
     ])('answers 400 and writes nothing when the amount is $label', async ({ body }) => {
-      const res = await POST('/v1/checkins', body);
+      const res = await COUNTER_POST('/v1/loyalty/checkins', body);
 
       expect(res.status).toBe(400);
       const json = (await res.json()) as Record<string, Record<string, unknown>>;
@@ -3596,7 +3796,7 @@ describe('Growth Worker', () => {
     });
 
     it('answers 400 when there is no member_code to attribute the sale to', async () => {
-      const res = await POST('/v1/checkins', { amount_cents: 5000 });
+      const res = await COUNTER_POST('/v1/loyalty/checkins', { amount_cents: 5000 });
 
       expect(res.status).toBe(400);
       const json = (await res.json()) as Record<string, Record<string, unknown>>;
@@ -3607,7 +3807,7 @@ describe('Growth Worker', () => {
     it('answers 404 and writes nothing when the code belongs to nobody', async () => {
       mockDb.select.mockReturnValueOnce(createBuilder([]));
 
-      const res = await POST('/v1/checkins', {
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
         payment_id: 'pay-9',
         member_code: 'GONE-0000',
         amount_cents: 5000,
@@ -3622,6 +3822,210 @@ describe('Growth Worker', () => {
       // this point, so the claim is about writes rather than about contact.
       expect(mockDb.insert).not.toHaveBeenCalled();
       expect(ledgerStatements()).toEqual([]);
+    });
+  });
+
+  // ==========================================================================
+  // POST /v1/loyalty/passes/resolve and POST /v1/loyalty/checkins — counter only
+  //
+  // These two routes had no role guard at all, and that was the defect: not a
+  // wrong guard, an absent one. `POST /v1/auth/customer/token` is public and mints
+  // `role: 'customer'`, so before this every customer could scan-resolve any
+  // member_code and then report a fabricated sale against an arbitrary
+  // `member_code`, crediting whatever the tenant's earn rule made of it.
+  //
+  // The subject here is a *third* kind, not "not a customer". `requireOperatorRole`
+  // would be wrong here for a product reason, not only a security one: the
+  // terminal never sends points, it sends `amount_cents`, and the earn rule on the
+  // tenant's program decides what that is worth. Refusing the counter the way the
+  // dashboard operator is refused would refuse the only legitimate caller.
+  //
+  // Two properties are asserted, same as the operator guard above:
+  //
+  //   1. Nothing was written, and nothing was read — the guard is ahead of the
+  //      body parse, ahead of `createDb` and ahead of `withRls`.
+  //   2. The answer does not depend on what the request would otherwise have
+  //      done, so the tenant cannot be probed through the refusal.
+  // ==========================================================================
+
+  /** The two routes, paired with a body each accepts. */
+  const COUNTER_ROUTES = [
+    { path: '/v1/loyalty/checkins', body: { payment_id: 'pay-1', member_code: 'ABC-1234', amount_cents: 5000 } },
+    { path: '/v1/loyalty/passes/resolve', body: { member_code: 'ABC-1234' } },
+  ] as const;
+
+  /**
+   * Not one statement was sent. `createDb` is included because that is the
+   * earliest point a guarded route could have reached the database at all.
+   */
+  function expectNoWrite() {
+    expect(createDb).not.toHaveBeenCalled();
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.delete).not.toHaveBeenCalled();
+    expect(mockDb.execute).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  }
+
+  /**
+   * The customer role exactly as the public token endpoint mints it: the subject
+   * is that customer's `global_id`, a uuid — which is also why a customer can
+   * never be mistaken for a counter subject.
+   */
+  const CUSTOMER_TOKEN: TestAuth = {
+    userId: 'c0ffee00-0000-4000-8000-000000000001',
+    businessId: 'biz-1',
+    userRole: 'customer',
+  };
+
+  describe('the counter subject', () => {
+    it('records the sale for a terminal, and credits it', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'prog-1', earnRate: '1.0000', earnBy: 'visit', earnUnitAmount: '1000.00' }]),
+      );
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([{ id: 'chk-1', businessId: 'biz-1', customerId: 'cust-1', amountCents: 5000 }]),
+      );
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: 2 }] });
+
+      const res = await COUNTER_POST('/v1/loyalty/checkins', {
+        payment_id: 'pay-1',
+        member_code: 'ABC-1234',
+        amount_cents: 5000,
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(201);
+      expect(mockDb.insert).toHaveBeenCalledOnce();
+    });
+
+    it('resolves the pass for a terminal', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+      mockDb.select.mockReturnValueOnce(createBuilder([{ fullName: 'Ada Lovelace' }]));
+
+      const res = await COUNTER_POST('/v1/loyalty/passes/resolve', { member_code: 'ABC-1234' });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.known).toBe(true);
+    });
+  });
+
+  describe('a customer token is refused on both', () => {
+    it.each(COUNTER_ROUTES)('refuses $path with the counter code and writes nothing', async ({ path, body }) => {
+      const res = await reqAs('POST', path, CUSTOMER_TOKEN, body);
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('COUNTER_SUBJECT_REQUIRED');
+      // The report of a *completed sale* is the merchant's terminal's to make. A
+      // customer asserting one would be crediting themselves points off a purchase
+      // that never happened, which is exactly the defect `requireOperatorRole` was
+      // written for on `points/assign`.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expectNoWrite();
+    });
+  });
+
+  describe('an operator token is refused on both — the dashboard is not a counter', () => {
+    it.each(COUNTER_ROUTES)('refuses $path, because the gap was the absence of a guard', async ({ path, body }) => {
+      // `requireOperatorRole` would pass this token, so the operator case is the
+      // one that proves the new guard is doing work rather than inheriting the old
+      // one's leniency: a merchant logged into the dashboard cannot report a
+      // terminal's sale. The manual path it would want is `points/assign`, which
+      // the dashboard already calls and which stays operator-guarded.
+      const res = await reqAs('POST', path, OPERATOR_AUTH, body);
+
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('COUNTER_SUBJECT_REQUIRED');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expectNoWrite();
+    });
+  });
+
+  describe('a subject that only looks like a counter is refused on both', () => {
+    // The marker is `pos:` and the prefix must be *exact*: a bare `pos`, a `pos`
+    // with no separator, or the same letters in a different case is not a counter
+    // subject. Every other subject the issuer hands out is a uuid, so there is
+    // nothing legitimate that can begin this way.
+    const NEAR_MISSES: { label: string; userId: string }[] = [
+      { label: 'pos with no separator', userId: 'pos' },
+      { label: 'pos with no terminal behind it', userId: 'pos:' },
+      { label: 'a longer word starting with pos', userId: 'postal-terminal-1' },
+      { label: 'a different separator', userId: 'pos_terminal-1' },
+      { label: 'the same letters in another case', userId: 'POS:terminal-1' },
+      { label: 'a plain operator subject', userId: 'user-1' },
+    ];
+
+    it.each(NEAR_MISSES)(
+      'refuses $label on checkins and on passes/resolve',
+      async ({ userId }) => {
+        const auth: TestAuth = { userId, businessId: 'biz-1', userRole: 'terminal' };
+
+        const checkin = await reqAs(
+          'POST',
+          '/v1/loyalty/checkins',
+          auth,
+          { payment_id: 'pay-1', member_code: 'ABC-1234', amount_cents: 5000 },
+        );
+        const resolve = await reqAs(
+          'POST',
+          '/v1/loyalty/passes/resolve',
+          auth,
+          { member_code: 'ABC-1234' },
+        );
+
+        expect(checkin.status).toBe(403);
+        expect(resolve.status).toBe(403);
+        const checkinJson = (await checkin.json()) as Record<string, Record<string, unknown>>;
+        expect(checkinJson.error.code).toBe('COUNTER_SUBJECT_REQUIRED');
+        expect(mockDb.insert).not.toHaveBeenCalled();
+        expectNoWrite();
+      },
+    );
+  });
+
+  describe('the refusal is the same either way — no existence oracle', () => {
+    it('answers one refusal for a sale that would have been recorded and one that would not', async () => {
+      // A counter recording the first body gets 201 (pinned in the describe above);
+      // a counter sending the second gets 400 INVALID_AMOUNT_CENTS. The operator
+      // gets the same 403 and the same bytes for both, so the guard is ahead of the
+      // body parse and the refusal leaks nothing about what would have happened.
+      const valid = { payment_id: 'pay-1', member_code: 'ABC-1234', amount_cents: 5000 };
+      const rejectedByValidation = { ...valid, amount_cents: 0 };
+
+      const accepted = await reqAs('POST', '/v1/loyalty/checkins', OPERATOR_AUTH, valid);
+      const refused = await reqAs('POST', '/v1/loyalty/checkins', OPERATOR_AUTH, rejectedByValidation);
+
+      expect(accepted.status).toBe(403);
+      expect(refused.status).toBe(403);
+      expect(await accepted.text()).toBe(await refused.text());
+      expectNoWrite();
+    });
+
+    it('answers one refusal on passes/resolve whether or not the code is one anybody has', async () => {
+      // A counter gets 200 `known: false` for a code nobody has (pinned above). The
+      // operator must not be able to tell that answer from the refusal, or the
+      // route becomes a membership oracle for any authenticated token. A body is
+      // readable once, so the three responses are drained before they are compared.
+      const someoneElses = { member_code: 'ABC-1234' };
+      const nobody = { member_code: 'NOPE-0000' };
+      const missing = {};
+
+      const first = await reqAs('POST', '/v1/loyalty/passes/resolve', OPERATOR_AUTH, someoneElses);
+      const second = await reqAs('POST', '/v1/loyalty/passes/resolve', OPERATOR_AUTH, nobody);
+      const third = await reqAs('POST', '/v1/loyalty/passes/resolve', OPERATOR_AUTH, missing);
+
+      const statuses = [first.status, second.status, third.status];
+      const bodies = await Promise.all([first.text(), second.text(), third.text()]);
+
+      expect(statuses).toEqual([403, 403, 403]);
+      expect(new Set(bodies).size).toBe(1);
+      expectNoWrite();
     });
   });
 });

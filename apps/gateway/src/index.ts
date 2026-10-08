@@ -10,7 +10,7 @@ import { authMiddleware } from './middleware/auth';
 import { authInjectMiddleware } from './middleware/auth-inject';
 import { businessIdMiddleware } from './middleware/business-id';
 import {
-  rateLimitMiddleware, SIGNUP_LIMIT_PER_WINDOW,
+  rateLimitMiddleware, SIGNUP_LIMIT_PER_WINDOW, POS_TOKEN_LIMIT_PER_WINDOW,
   DEFAULT_LIMITS,
   DEFAULT_WINDOW,
 } from './middleware/rate-limit';
@@ -182,6 +182,21 @@ export const EXACT_PUBLIC_PATHS: readonly string[] = Object.freeze([
  */
 export const ANONYMOUS_LIMITS: Readonly<Record<string, number>> = Object.freeze({
   '/v1/auth/business/signup': SIGNUP_LIMIT_PER_WINDOW,
+  // The terminal exchange is the same shape signup is and was, for the same
+  // reason: public by prefix, so it arrives at the limiter with no `jwt`, no
+  // `business_id` to key on, and — because it is absent here — no limit at all.
+  // `middleware/rate-limit.ts:81` skips an endpoint the table does not name, which
+  // is not "not throttled by default" but *unbounded*, and each call runs a
+  // 100k-iteration key derivation to compare a presented secret. Five for signup
+  // was enough for that cost on a public form; it is enough here.
+  //
+  // Not login's deliberate unlimited, and the asymmetry is the product. A limit on
+  // login hands a legitimate person a 429 because someone else guessed at their
+  // password, and they cannot tell that apart from being locked out. A till
+  // authenticates once per boot — a loop against this endpoint is a bug at the
+  // terminal, not traffic — so bounding it costs a merchant nothing real and
+  // removes an amplifier from an unauthenticated path.
+  '/v1/auth/pos/token': POS_TOKEN_LIMIT_PER_WINDOW,
   [WALLET_CALLBACK_PATH]: WALLET_CALLBACK_LIMIT_PER_WINDOW,
   // Three a minute for the support form. A person writes one message, and a
   // second attempt after a validation slip is the only legitimate repeat.
