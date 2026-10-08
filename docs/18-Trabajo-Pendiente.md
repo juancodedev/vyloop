@@ -902,10 +902,118 @@ un prefijo con barra final. Revertir el código pone **6 tests en rojo**.
 - ~~**Decidir si `matchRoute` exige frontera de segmento.~~** Cerrado — ver "`matchRoute` ahora
   exige frontera de segmento" arriba.
 - **El poll contra Mercado Pago** — la mitad que falta del backlog. Depende del cliente de MP.
-- **Límite de tasa para un sujeto mostrador.** `DEFAULT_LIMITS` tiene `free`/`pro`/`business`, y un rol
-  `terminal` cae en `?? config.limits.free ?? 60` — 60 requests/min. Un mostrador real con la cola de
-  gente esperando lo supera en un momento. Hay que decidir el límite por rol `terminal` cuando exista el
-  emisor, o el rate limiter va a frenar mostradores reales.
-- `sslmode=require` y el bumpee a `pg` v9 — lo de arriba.
 - Dependabot #198 (vitest 5), #199 (next vs overrides), #201 (pin de react) — esperando decisión.
+  Los tres bumpeos desactivan **silenciosamente** protecciones que existen por advisories: los overrides
+  de Next son rangos `<15.5.21` / `<15.5.24`, y `16.3.8` queda fuera de los seis; los de vitest son
+  `<4.1.11` y `5.0.3` también. Ninguno de los tres falla por eso — el CI sigue verde porque no hay un
+  check que afirme que un override sigue aplicando. Ese check ya existe — ver
+  "hay un check que afirma que el grafo respeta sus overrides" abajo — pero
+  **no** caza este caso: subir por encima de un umbral no es violar.
 - Los límites logísticos del `verify` — sin relación con lo anterior.
+
+---
+
+## Hecho — hay un check que afirma que el grafo respeta sus overrides
+
+**Estado:** cerrado. `scripts/check-dependency-overrides.mjs` y su `.test.mjs`, con
+`pnpm deps:overrides` para correrlo a mano. Sin wiring en
+`.github/workflows/ci.yml`: el step `Test operational scripts` ya corre `npx vitest run --dir scripts`
+y ese `--dir` cubre `scripts/` entero, así que el test nuevo entra solo.
+
+Es la respuesta directa a la nota de arriba. `pnpm.overrides` tiene 46 entradas y 45 nacieron de un
+advisory de seguridad. Nada afirmaba que el grafo las respetara: un lockfile regenerado contra un registry distinto,
+un pin nuevo o una resolución mal hecha podían devolver una versión por debajo del piso y todos los
+checks seguían en verde. La forma es la misma que el rate limiter que se apoyaba en `jwt.role` contra una
+tabla de planes: una declaración y nadie que la lea de vuelta.
+
+### Qué afirma, y por qué el umbral no sale de ninguna base
+
+Para cada override con selector de versión, **toda** resolución de ese paquete que caiga **dentro** del
+selector tiene que estar en o por encima del piso más alto entre los overrides que la seleccionan. El
+umbral ya está escrito en el override — el lado derecho de `postcss@<=8.5.22: ">=8.5.23"` — así que no
+consulta ninguna base de advisories, y no puede quedar vieja: lo que se verifica es el archivo que
+declara el requisito.
+
+Tres formas de override, tres tratos:
+
+| forma | ejemplo | regla |
+|---|---|---|
+| reescritura de versión | `postcss@<=8.5.22: ">=8.5.23"` | piso, solo para las resoluciones que su selector selecciona |
+| pin exacto | `react: "19.2.7"` | igualdad, siempre; no tiene selector, así que no puede estar inerte |
+| override de dependencia | `jsdom>undici: "^7.25.0"` | fuera de alcance; reescribe la copia que resuelve `jsdom`, no la versión del paquete |
+
+`^7.25.0` leído como piso sería leer un rango caret como una versión, y leer el lado izquierdo de la
+clave como nombre de paquete inventaría un requisito contra `jsdom` que nadie declaró.
+
+### **Inerte no es la violación**
+
+Esto es lo que hay que tener claro antes de tocar el gate, y está en el docblock por eso.
+
+Al día de hoy, sobre `main`, **los 45 overrides de versión están inertes**: toda resolución ya pasó por
+encima de todo selector que pudiera acotarla. Un override cuyo selector ya no selecciona ninguna
+resolución no hace nada, y un gate que lo reportara como hallazgo habría pedido 45 borrados el primer
+día, volvería a dispararse después del próximo bumpee de `postcss`, y estaría apagado en un mes.
+Un override que dejó de aplicar no es un hallazgo; es housekeeping.
+
+**La violación es exactamente una cosa:** una resolución que cae dentro del selector de un override y
+queda por debajo del piso que ese mismo override nombra. Nada más en el archivo es hallazgo.
+
+### El umbral se calcula por selector, y por qué
+
+Un override de pnpm es condicional. `undici@>=8.0.0 <8.10.2: ">=8.10.2"` quiere decir *si una resolución
+de undici cae en `>=8.0.0 <8.10.2`, subila a 8.10.2 o más*. No dice nada de `undici@7.30.0`, que está
+fuera del selector y que pnpm nunca reescribe.
+
+El lockfile de este repo es la prueba. `undici` resuelve en `7.30.0` **y** en `8.11.2`, y el piso más alto
+de la tabla es `>=8.10.2`. Leído como máximo por paquete — toda resolución de undici por encima de
+8.10.2 — la copia de 7.30.0 falla. Esa copia es la de `jsdom`, pineada a propósito a la línea 7.x por el
+override `jsdom>undici`, y los advisories de la línea 8.x no aplican a una resolución 7.x. Un gate que
+la marcara solo podría satisfacerse editando un advisory o editando una versión de dependencia, y
+ninguna de las dos cosas está a mano acá.
+
+La regla de "gana el más alto" sigue mordiendo, dentro del selector que selecciona. Con
+`fixture@<2.0.0: ">=1.0.0"`, `fixture@<1.5.0: ">=1.1.0"` y `fixture@<2.0.0 <3.0.0: ">=1.4.0"`, una
+resolución 1.2.5 matchea las tres y queda atada a 1.4.0 — no a la primera, ni a la última escrita.
+
+### Lo que este check NO caza
+
+- **Los tres PRs de Dependabot.** Mueven `postcss`, `nanoid` y `undici` por **encima** de estos umbrales y
+  van a pasar este gate sin cambios, porque subir no es violar y arriba está escrito. Lo que cambia cuando
+  aterrizan es que los overrides correspondientes dejan de ser load-bearing.
+- **Un advisory nuevo** para el que nadie agregó un override. Este gate verifica los overrides que
+  existen; no es un escáner de advisories y no finge serlo. Eso es trabajo de `pnpm audit`, y las dos
+  preguntas son distintas.
+- **Un override cuyo paquete no resuelve en ninguna parte** del grafo. Se reporta como nota, no falla:
+  un paquete fuera del grafo no puede estar por debajo de un piso, y afirmar lo contrario sería afirmar
+  nada.
+
+Un segundo check aparte que reportara qué overrides dejaron de aplicar **sí** valdría la pena — es
+housekeeping, no riesgo — pero acá no se construyó a propósito: sería ruido el primer día y una
+invitación a borrar en cada bumpee. Si alguna vez se limpia la tabla de overrides, tiene sentido como
+reporte informativo que nadie gatea.
+
+### El rojo y el verde, demostrados
+
+El gate acepta `--package-json` y `--lockfile`, así que se puede apuntar a una copia sin tocar el
+lockfile real para probar nada:
+
+- Copia con `postcss@8.5.23` bajado a `8.5.17` → **`EXIT=1`**, nombrando paquete, umbral, versión
+  resuelta y **las dos** líneas de override que aplican (`postcss@<=8.5.22` y `postcss@<=8.5.17`).
+- Copia restaurada → **`EXIT=0`**.
+- `pnpm.overrides` vacío → **`EXIT=1`**. Lockfile ilegible → **`EXIT=1`**. No hay tercer estado, y no hay
+  bandera para suavizarlo.
+
+Los guards de vacuidad son la parte load-bearing: una tabla de overrides que parsea a nada satisface
+todo requisito no teniendo nada que comparar, y reportaría verde para siempre mientras no afirma nada.
+
+### La comparación de versiones está escrita, no importada
+
+`semver` está en el store (`node_modules/.pnpm/semver@7.8.5`) pero no es dependencia declarada de este
+repo y no resuelve desde la raíz. Agarrarlo sería apoyarse en un accidente de hoisting que un install
+futuro cambia, y agregar una dependencia a un gate de seguridad es su propio riesgo de supply chain.
+`packages/db/src/migration-sql.test.ts` escribe su comparación a mano por la misma razón.
+
+El oráculo igual existe: el `.test.mjs` corre `semver.satisfies` y `semver.compareBuild` sobre **todos**
+los selectores de la tabla real y sobre 169 pares de versiones, y falla si la aritmética escrita
+difiere. Si un semver futuro discrepa, lo que se arregla es la aritmética — que es la dirección que
+mantiene al gate sin dependencia.
