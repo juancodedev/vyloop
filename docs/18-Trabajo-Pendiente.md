@@ -2,7 +2,8 @@
 
 ## Etapa 0b — Registro de una venta ya cobrada: el eslabón roto del mostrador
 
-**Estado:** forma decidida, no empezada.
+**Estado:** implementada. Venta registrada, contrato externo documentado y registro de terminales
+cerrado. La prueba de punta a punta ya no está bloqueada.
 **Valor:** máximo. El producto no existe sin esto.
 **Origen:** `docs/17-Estrategia-Competitiva.md` §7 y Etapa 0.
 
@@ -635,13 +636,71 @@ por endpoint. Eso necesita un parser y una librería de esquema. Un verde es nec
   preservarla. Si alguien compara este docblock contra el spec y ve el `must`, no hay discrepancia.
   La corrección de redacción, si algún día se quiere, va en un ticket aparte: un cliente que hace
   string-match tiene que seguir funcionando.
-- **El registro de terminales.** Sigue igual que arriba: la tabla existe, el emisor existe, nadie
-  escribe filas. El README dice esto de frente en vez de dejarlo adivinarse.
+- **El registro de terminales.** Cerrado — ver "El registro de terminales ya se puede hacer" arriba. El
+  README dice esto de frente en vez de dejarlo adivinarse.
 - **La webhook de MP.** No hay endpoint en el repo y el spec lo dice explícitamente. Hay un test que
   falla si alguna vez alguien documenta una ruta de webhook sin registrarla. Falta el cliente de MP.
 - **`docs/08-API-Design.md` quedó desalineado a propósito y no se tocó.** El README señala dónde se
   separan y dice que gana el spec. Corregir el `08` es trabajo de otro día: describe OAuth/OIDC,
   GraphQL y una envoltura de error con `request_id` que la API real no tiene.
+
+---
+
+### Corregido — el registro de terminales ya se puede hacer
+
+**Estado:** cerrado. Tres endpoints en `workers/growth/src/routes.ts`, bajo el prefijo `/v1/loyalty`
+que ya rutea a growth, así que `ROUTE_MAP` no se tocó.
+
+| Ruta | Guard | Status |
+|---|---|---|
+| `POST /v1/loyalty/terminals` | `requireOperatorRole` | `201` |
+| `GET /v1/loyalty/terminals` | `requireOperatorRole` | `200` |
+| `POST /v1/loyalty/terminals/:id/revoke` | `requireOperatorRole` | `200` |
+
+**El secreto es lo nuevo, y es la parte con reglas.** 32 bytes de `crypto.getRandomValues`
+hex-encoded con prefijo `vylt_` — 64 hex, 512 bits. No `randomUUID()`: son 128 bits, y además
+un UUID se parece a todos los demás identificadores del modelo (`pos_terminals.id` es un uuid), así
+que un secreto con esa forma invita a que alguien lo trate como un id. El prefijo es `vylt_` y no el
+`vyl_` del sistema de API keys muerto de `workers/identity/src/api-keys.ts`, para que un secreto
+pegado de un sistema al otro sea rechazado en vez de convertirse en credencial.
+
+`key_hash` sale de `hashPassword` de `packages/db/src/password.ts` — PBKDF2, `saltHex:hashHex` — porque
+`POST /v1/auth/pos/token` ya verifica contra eso con `verifyPassword`. Un SHA-256 sería incompatible
+con una ruta que ya está desplegada, y por el mismo motivo **no** se reutilizó el hashing de
+`api-keys.ts`: ese módulo es un sistema paralelo, sin tabla, sin rutas y sin importadores fuera de su
+propio test. Sigue muerto a propósito.
+
+**El texto plano existe una vez.** Va en la respuesta del create y en ningún otro lado: el listado
+nombra las columnas en la query (no `select()` y después descartar), y `RETURNING` también las nombra,
+así que el hash ni siquiera sale de Postgres para esa ruta. No hay endpoint que lo devuelva, y no
+debe haber uno.
+
+**Revocar es blando y responde 404.** `revoked_at` se marca y la fila no se borra: la conciliación por
+`payment_id` sigue resolviendo contra ese `id`, y el operador puede ver que esa caja existió y fue
+dada de baja. Un id de otro comercio da `404 NOT_FOUND`, idéntico al de un id inexistente, porque el
+`WHERE` lleva `business_id` y la fila ajena nunca coincide.
+
+**Guard: `requireOperatorRole`, y no `requireCounterSubject`.** Registrar hardware es administración
+de flota, no reporte de una venta. El guard ya negaba al mostrador en `points/assign`; esto es la misma
+pregunta en el tercer lugar donde aplicaba, y evita que una caja registre otra caja.
+
+#### Lo que este cambio NO tocó, y por qué
+
+- **`openapi.yaml` sigue con tres endpoints.** El guard de drift deriva el conjunto de rutas de los dos
+  primitivos de autorización de mostrador (`requireCounterSubject` y `counterSubject`), así que estas
+  tres rutas —guardadas con `requireOperatorRole`— quedan fuera del conjunto derivado. Documentarlas
+  ahí pone el test en rojo por una razón distinta a la que el README asumía: no es "una ruta sin
+  documentar", es "una ruta documentada que no está en la superficie del mostrador". Además el enum
+  cerrado de `ErrorCode` exige que cada código documentado lo emita la superficie del mostrador, y
+  `NOT_FOUND` / `OPERATOR_ROLE_REQUIRED` no lo hacen. El contrato del integrador de mostrador describe
+  cómo se reporta una venta; registrar una credencial la llama un operador y se documenta en
+  `api/docs/README.md` § 7.
+- **`ROUTE_MAP`.** `/v1/loyalty` yaclaims las tres rutas. Agregar una entrada habría sido la cuarta
+  vez que ese router se rompe.
+- **Ninguna migración.** La tabla ya está aplicada y con `0012` registrada.
+
+La prueba de punta a punta ya no está bloqueada: `POST /v1/loyalty/terminals` entrega un `terminal_id`
+y un `secret` que `POST /v1/auth/pos/token` acepta.
 
 ---
 
@@ -684,7 +743,7 @@ segundo prefijo después, el guard sigue funcionando sin editarlo.
 |---|---|---|
 | `identity` | `/v1/auth`, `/v1/me`, `/v1/businesses` | 7 |
 | `customer` | `/v1/customers` | 8 |
-| `growth` | `/v1/loyalty`, `/v1/growth` | 16 |
+| `growth` | `/v1/loyalty`, `/v1/growth` | 19 |
 | `wallet` | `/v1/wallet` | 5 |
 | `communication` | `/v1/communication` | 6 |
 | `analytics` | `/v1/analytics` | 2 |
@@ -837,10 +896,7 @@ un prefijo con barra final. Revertir el código pone **6 tests en rojo**.
 - La **Etapa 0b**: implementada y en `main` (PR #202 y #203). Migraciones `0011` y `0012` aplicadas a
   mano en la rama `production` de Neon, cada una con su fila en `drizzle.__drizzle_migrations`. Gate
   de drift en verde.
-- **El registro de terminales.** El emisor existe (`POST /v1/auth/pos/token`) y la tabla `pos_terminals`
-  ya está aplicada, pero **nadie crea filas**. No hay forma de obtener un token `pos:`: falta la
-  pantalla o el endpoint donde el comercio registra su terminal y recibe el secreto **una sola vez**
-  (queda hasheado en la base). Es lo único que bloquea la prueba de punta a punta.
+- **El registro de terminales.** Cerrado — ver "El registro de terminales ya se puede hacer" arriba.
 - **Docblock obsoleto en `workers/identity/src/index.ts`.** Cerrado — ver "Docblock obsoleto,
   corregido" arriba.
 - ~~**Decidir si `matchRoute` exige frontera de segmento.~~** Cerrado — ver "`matchRoute` ahora
