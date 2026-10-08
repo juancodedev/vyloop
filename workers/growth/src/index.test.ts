@@ -59,6 +59,27 @@ vi.mock('@vyloop/db', async () => {
     createdAt: timestamp('created_at').notNull(),
   });
   const table = {};
+  // `pos_terminals` is real. Its tenant predicate is the cross-business assertion
+  // below: the create route writes `business_id` from the credential's scope and
+  // the revoke route matches on it, so a flat `{}` would make every cross-tenant
+  // check pass vacuously.
+  const terminalTable = pgTable('pos_terminals', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    name: text('name').notNull(),
+    keyHash: text('key_hash').notNull(),
+    lastSeenAt: timestamp('last_seen_at'),
+    revokedAt: timestamp('revoked_at'),
+    createdAt: timestamp('created_at').notNull(),
+  });
+  // The real implementation, not a stub. The terminal routes' whole security
+  // property is "the plaintext is unrecoverable from `key_hash`", and a stubbed
+  // `hashPassword` would make that property untestable — the test could only
+  // assert that *something* was written, which is the assertion that matters
+  // least. `verifyPassword` is taken for the same reason: the deployed exchange
+  // route verifies with it, so the only honest check that a generated secret
+  // would authenticate is the function that will actually be called.
+  const actual = await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db');
   return {
     createDb: vi.fn(),
     loyaltyPrograms: table,
@@ -68,6 +89,13 @@ vi.mock('@vyloop/db', async () => {
     checkins: checkinTable,
     rewards: table,
     rewardGrants: table,
+    // Real, for the reason the other tables are real: every predicate these
+    // routes build on it is tenant-scoped on `business_id`, and a flat `{}` would
+    // render an opaque chunk — so a revoke that ignored `businessId` would pass
+    // the same assertion as one that honoured it.
+    posTerminals: terminalTable,
+    hashPassword: actual.hashPassword,
+    verifyPassword: actual.verifyPassword,
     schema: {},
     setCurrentBusinessId: vi.fn(),
   };
@@ -95,7 +123,7 @@ vi.mock('@vyloop/event-bus', () => ({
 // Imports (happen after mock hoisting)
 // ---------------------------------------------------------------------------
 
-import { createDb } from '@vyloop/db';
+import { createDb, verifyPassword } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
@@ -4026,6 +4054,477 @@ describe('Growth Worker', () => {
       expect(statuses).toEqual([403, 403, 403]);
       expect(new Set(bodies).size).toBe(1);
       expectNoWrite();
+    });
+  });
+
+  // ==========================================================================
+  // The terminal's own credential — the row `/v1/auth/pos/token` verifies against
+  // ==========================================================================
+
+  describe('POST /v1/loyalty/terminals', () => {
+    /**
+     * The row the database hands back.
+     *
+     * `keyHash` is deliberately included in the stub. The routes name the columns
+     * in `RETURNING`, so this field is ignored — and if it ever were not, every
+     * assertion below about the response would catch the hash going out.
+     */
+    function stubInsertedTerminal(overrides: Record<string, unknown> = {}) {
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: null,
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+            keyHash: 'never-selected',
+            ...overrides,
+          },
+        ]),
+      );
+    }
+
+    /** The row the route asked the database to insert. */
+    function insertedValues(index = 0): Record<string, unknown> {
+      return mockDb.insert.mock.results[index]?.value?.values?.mock.calls[0]?.[0];
+    }
+
+    /** The columns the INSERT's `RETURNING` named. */
+    function returningColumns(): string[] {
+      const projection = mockDb.insert.mock.results[0]?.value?.returning?.mock.calls[0]?.[0];
+      return Object.keys(projection ?? {});
+    }
+
+    it('registers the terminal and returns its secret once (201)', async () => {
+      stubInsertedTerminal();
+
+      const res = await POST('/v1/loyalty/terminals', { name: 'Caja 1' });
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { data: Record<string, unknown> };
+      expect(json.data.id).toBe('term-1');
+      // Echoed under the name the exchange route takes, so the response can be fed
+      // straight into `POST /v1/auth/pos/token`.
+      expect(json.data.terminal_id).toBe('term-1');
+      expect(typeof json.data.secret).toBe('string');
+      expect(String(json.data.secret).length).toBeGreaterThan(32);
+      expect(String(json.data.secret)).toMatch(/^vylt_[0-9a-f]{64}$/);
+      // And the response says, in the response, that this is the only time.
+      expect(json.data.secret_shown_once).toBe(true);
+    });
+
+    it('stores a PBKDF2 saltHex:hashHex and never the plaintext', async () => {
+      // The property, demonstrated rather than asserted: the value the route
+      // wrote is read back and compared against the value the merchant received.
+      stubInsertedTerminal();
+
+      const res = await POST('/v1/loyalty/terminals', { name: 'Caja 1' });
+      const { data } = (await res.json()) as { data: Record<string, unknown> };
+      const plaintext = String(data.secret);
+      const stored = insertedValues();
+
+      // Same format as `users.password_hash`, because the deployed exchange route
+      // calls `verifyPassword` on it. A plain SHA-256 would pass a route that has
+      // never run.
+      expect(String(stored.keyHash)).toMatch(/^[0-9a-f]{32}:[0-9a-f]{128}$/);
+      expect(stored.keyHash).not.toBe(plaintext);
+      expect(String(stored.keyHash)).not.toContain(plaintext);
+      // Nothing else in the written row carries it either, and `business_id` came
+      // from the credential's scope rather than from the body.
+      expect(JSON.stringify(stored)).not.toContain(plaintext);
+      expect(stored.businessId).toBe('biz-1');
+    });
+
+    it('reads the row back without the hash, so the hash cannot be returned by accident', async () => {
+      // Asserted at the query rather than at the response: the projection is what
+      // makes the leak impossible, and a `select()` plus a hand-picked copy would
+      // pass a response-only assertion until somebody added a field to it.
+      stubInsertedTerminal();
+
+      await POST('/v1/loyalty/terminals', { name: 'Caja 1' });
+
+      expect(returningColumns().sort()).toEqual([
+        'createdAt',
+        'id',
+        'lastSeenAt',
+        'name',
+        'revokedAt',
+      ]);
+    });
+
+    it('mints a secret the exchange route would accept', async () => {
+      stubInsertedTerminal();
+
+      const res = await POST('/v1/loyalty/terminals', { name: 'Caja 1' });
+      const { data } = (await res.json()) as { data: Record<string, unknown> };
+      const plaintext = String(data.secret);
+      const stored = String(insertedValues().keyHash);
+
+      // `verifyPassword` is the deployed check, so the round trip that matters is
+      // "the plaintext the merchant was given passes this function against the
+      // hash this route wrote" — not "the response contains a plausible-looking
+      // string".
+      expect(await verifyPassword(plaintext, stored)).toBe(true);
+      expect(await verifyPassword(`${plaintext}x`, stored)).toBe(false);
+    });
+
+    it('mints a distinct secret every time, and both verify', async () => {
+      stubInsertedTerminal({ id: 'term-1' });
+      const first = await POST('/v1/loyalty/terminals', { name: 'Caja 1' });
+      const firstBody = (await first.json()) as { data: Record<string, unknown> };
+      const firstStored = String(insertedValues().keyHash);
+
+      stubInsertedTerminal({ id: 'term-2' });
+      const second = await POST('/v1/loyalty/terminals', { name: 'Caja 2' });
+      const secondBody = (await second.json()) as { data: Record<string, unknown> };
+      // Read off the *second* insert: two different salts, two different hashes.
+      const secondStored = String(insertedValues(1).keyHash);
+
+      const firstSecret = String(firstBody.data.secret);
+      const secondSecret = String(secondBody.data.secret);
+
+      // Two terminals is a legitimate thing to ask for — three tills, two
+      // counters — so there is no dedupe key here and no conflict status.
+      expect(firstSecret).not.toBe(secondSecret);
+      // And each credential authenticates its own row, not the other's.
+      expect(await verifyPassword(firstSecret, firstStored)).toBe(true);
+      expect(await verifyPassword(secondSecret, secondStored)).toBe(true);
+      expect(await verifyPassword(firstSecret, secondStored)).toBe(false);
+    });
+
+    it.each([
+      { label: 'absent', body: {} },
+      { label: 'not a string', body: { name: 42 } },
+      { label: 'empty', body: { name: '' } },
+      { label: 'whitespace only', body: { name: '   ' } },
+    ])('refuses a name that is $label and writes nothing', async ({ body }) => {
+      const res = await POST('/v1/loyalty/terminals', body);
+
+      // Nothing is written, so a retry is a clean retry — and no secret was minted,
+      // so there is no secret to leak from a refused request.
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('VALIDATION_ERROR');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expectNoDbContact();
+    });
+  });
+
+  describe('GET /v1/loyalty/terminals', () => {
+    /** The columns the SELECT named. `key_hash` must not be among them. */
+    function selectedColumns(): string[] {
+      // The projection is the argument to `db.select(...)`, not a method on the
+      // builder it returns — which is the same call shape the other routes here
+      // read their predicates from.
+      const projection = mockDb.select.mock.calls[0]?.[0];
+      return Object.keys(projection ?? {});
+    }
+
+    it('lists the terminals and never a hash or a secret', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: null,
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+            keyHash: 'a-row-carries-this-column',
+          },
+        ]),
+      );
+
+      const res = await GET('/v1/loyalty/terminals');
+
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      const { data } = JSON.parse(raw) as { data: Record<string, unknown>[] };
+      expect(data).toHaveLength(1);
+      expect(data[0].id).toBe('term-1');
+      // The stub row carries a `keyHash` and the response still has none: the
+      // projection, not the response shape, is what removes it.
+      expect(raw).not.toContain('keyHash');
+      expect(raw).not.toContain('a-row-carries-this-column');
+      expect(selectedColumns().sort()).toEqual([
+        'createdAt',
+        'id',
+        'lastSeenAt',
+        'name',
+        'revokedAt',
+      ]);
+    });
+
+    it('scopes the list to the credential\'s business', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      await GET('/v1/loyalty/terminals');
+
+      // The rendered predicate is the tenant boundary. A list without it would hand
+      // one merchant the whole fleet, which is the whole reason the route is
+      // operator-guarded rather than open like `GET /v1/loyalty/tiers`.
+      const statement = mockDb.select.mock.results[0]?.value?.where?.mock.calls[0]?.[0];
+      const { sql, params } = new PgDialect().sqlToQuery(statement as never);
+      expect(sql).toContain('"pos_terminals"."business_id"');
+      expect(params).toContain('biz-1');
+    });
+  });
+
+  describe('POST /v1/loyalty/terminals/:id/revoke', () => {
+    it('sets revoked_at and keeps the row', async () => {
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: new Date('2026-03-02T09:00:00Z'),
+            revokedAt: new Date('2026-03-03T09:00:00Z'),
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+
+      const res = await POST('/v1/loyalty/terminals/term-1/revoke');
+
+      expect(res.status).toBe(200);
+      const { data } = (await res.json()) as { data: Record<string, unknown> };
+      expect(data.id).toBe('term-1');
+      // JSON carries the timestamp as an ISO string; what is asserted is that it
+      // is the instant of the revoke, not the row's creation.
+      expect(data.revoked_at).toBe('2026-03-03T09:00:00.000Z');
+      expect(data.created_at).toBe('2026-03-01T12:00:00.000Z');
+
+      // Soft. A hard delete would take `payment_id` reconciliation with it, and an
+      // operator would no longer be able to tell a killed till from one that never
+      // existed.
+      const patch = mockDb.update.mock.results[0]?.value?.set?.mock.calls[0]?.[0];
+      expect(patch).toHaveProperty('revokedAt');
+      expect(mockDb.delete).not.toHaveBeenCalled();
+      // And the `RETURNING` still does not name the hash.
+      const returning = mockDb.update.mock.results[0]?.value?.returning?.mock.calls[0]?.[0];
+      expect(Object.keys(returning ?? {}).sort()).toEqual([
+        'createdAt',
+        'id',
+        'lastSeenAt',
+        'name',
+        'revokedAt',
+      ]);
+    });
+
+    it('matches on the id *and* the business, so another tenant\'s terminal cannot be revoked', async () => {
+      // The update is one statement and both predicates are in it: a row that is
+      // not this business's never matches, which is what makes the 404 below
+      // indistinguishable from "no such id".
+      mockDb.update.mockReturnValueOnce(createBuilder([]));
+
+      const someoneElses = await POST('/v1/loyalty/terminals/term-other/revoke');
+      const nobody = await POST('/v1/loyalty/terminals/term-unknown/revoke');
+      const someoneElsesBody = await someoneElses.text();
+      const nobodyBody = await nobody.text();
+
+      const statement = mockDb.update.mock.results[0]?.value?.where?.mock.calls[0]?.[0];
+      const { sql, params } = new PgDialect().sqlToQuery(statement as never);
+      expect(sql).toContain('"pos_terminals"."id"');
+      expect(sql).toContain('"pos_terminals"."business_id"');
+      expect(params).toContain('biz-1');
+
+      // Byte-for-byte identical answers: nothing in the refusal distinguishes a row
+      // that exists under another tenant from one that exists nowhere. A response
+      // that differed here would be a working tenant-enumeration oracle for
+      // terminal ids.
+      expect(someoneElses.status).toBe(404);
+      expect(nobody.status).toBe(404);
+      expect(someoneElsesBody).toBe(nobodyBody);
+      const json = JSON.parse(nobodyBody) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('NOT_FOUND');
+    });
+
+    it('revoking an already-revoked terminal is accepted, not a conflict', async () => {
+      // There is no state here worth protecting: a second revoke re-stamps the
+      // column and leaves the credential dead, which is where it already was.
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: new Date('2026-03-03T09:00:00Z'),
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+
+      const res = await POST('/v1/loyalty/terminals/term-1/revoke');
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('the terminal lifecycle — the plaintext never leaves the create response', () => {
+    /**
+     * The angle the per-route tests do not have: they assert that a *stubbed*
+     * hash is excluded, and this asserts that the **actual secret this handler
+     * generated** — the value a real merchant would copy — appears in no
+     * response afterwards, including the salt and the derived bits.
+     *
+     * Every response is anchored to something first. A `not.toContain` on a
+     * route that answered `{}`, or 500ed, or returned an empty list would pass
+     * without the route having done anything at all — so each one is checked for
+     * the terminal it is supposed to be reporting on before being checked for
+     * what it must not carry.
+     */
+    it('appears in no list and no revoke response', async () => {
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: null,
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+            keyHash: 'irrelevant',
+          },
+        ]),
+      );
+      const created = await POST('/v1/loyalty/terminals', { name: 'Caja 1' });
+      const { data } = (await created.json()) as { data: Record<string, unknown> };
+      const plaintext = String(data.secret);
+
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: null,
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+      const listed = await GET('/v1/loyalty/terminals');
+
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: new Date('2026-03-03T09:00:00Z'),
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+      const revoked = await POST('/v1/loyalty/terminals/term-1/revoke');
+
+      // The anchor. Without these the assertions below pass against a body that
+      // reports nothing, which is the vacuous case this describe exists to avoid
+      // being.
+      expect(listed.status).toBe(200);
+      expect(revoked.status).toBe(200);
+      const listJson = (await listed.json()) as { data: Record<string, unknown>[] };
+      expect(listJson.data).toHaveLength(1);
+      expect(listJson.data[0].id).toBe('term-1');
+      const revokeJson = (await revoked.json()) as { data: Record<string, unknown> };
+      expect(revokeJson.data).toMatchObject({ id: 'term-1' });
+      // The revoke wrote a timestamp rather than answering 200 without doing
+      // anything, which is the other way this test could pass vacuously.
+      const updateSet = mockDb.update.mock.results[0]?.value?.set?.mock.calls[0]?.[0] as
+        | { revokedAt?: unknown }
+        | undefined;
+      expect(updateSet?.revokedAt).toBeInstanceOf(Date);
+
+      const listBody = JSON.stringify(listJson);
+      // Neither the salt nor the derived bits either, since either would be a way
+      // back to the secret for anyone who can read a log.
+      const stored = String(
+        mockDb.insert.mock.results[0]?.value?.values?.mock.calls[0]?.[0]?.keyHash,
+      );
+      const [salt] = stored.split(':');
+      expect(stored).toMatch(/^[0-9a-f]{32}:[0-9a-f]{128}$/);
+      for (const response of [listBody, JSON.stringify(revokeJson)]) {
+        expect(response).not.toContain(plaintext);
+        expect(response).not.toContain(stored);
+        expect(response).not.toContain(salt);
+      }
+    });
+  });
+
+  describe('the terminal lifecycle — operator only, and a counter may not register a till', () => {
+    const LIFECYCLE_ROUTES: { method: string; path: string; body?: unknown }[] = [
+      { method: 'POST', path: '/v1/loyalty/terminals', body: { name: 'Caja nueva' } },
+      { method: 'GET', path: '/v1/loyalty/terminals' },
+      { method: 'POST', path: '/v1/loyalty/terminals/term-1/revoke' },
+    ];
+
+    it.each(LIFECYCLE_ROUTES)('refuses a customer on $method $path and touches nothing', async ({ method, path, body }) => {
+      const res = await reqAs(method, path, CUSTOMER_TOKEN, body);
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expectNoDbContact();
+    });
+
+    it.each(LIFECYCLE_ROUTES)('refuses a counter on $method $path, with the same refusal', async ({ method, path, body }) => {
+      // The half of the guard that is about this route rather than about points:
+      // registering hardware is fleet administration, and a till that holds one
+      // scoped credential must not be able to mint another. The refusal is the same
+      // code and the same message a customer gets — one answer for both, so the
+      // 403 is not an inventory of which kinds of subject exist.
+      const res = await reqAs(method, path, COUNTER_AUTH, body);
+
+      expect(res.status).toBe(403);
+      const raw = await res.text();
+      const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expectNoDbContact();
+
+      const asCustomer = await reqAs(method, path, CUSTOMER_TOKEN, body);
+      expect(await asCustomer.text()).toBe(raw);
+    });
+
+    it('lets an operator register, list and revoke', async () => {
+      mockDb.insert.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: null,
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+      const created = await POST('/v1/loyalty/terminals', { name: 'Caja 1' });
+
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: null,
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+      const listed = await GET('/v1/loyalty/terminals');
+
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([
+          {
+            id: 'term-1',
+            name: 'Caja 1',
+            lastSeenAt: null,
+            revokedAt: new Date('2026-03-03T09:00:00Z'),
+            createdAt: new Date('2026-03-01T12:00:00Z'),
+          },
+        ]),
+      );
+      const revoked = await POST('/v1/loyalty/terminals/term-1/revoke');
+
+      expect([created.status, listed.status, revoked.status]).toEqual([201, 200, 200]);
     });
   });
 });

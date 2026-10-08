@@ -182,22 +182,69 @@ o un poll encontrarían.
 
 ## 7. Cómo obtener `terminal_id` y `secret`
 
-**Nada los crea todavía.** No hay ruta, no hay script, no hay pantalla. La tabla
-`pos_terminals` existe y el emisor de token está completo y desplegado, pero
-**ninguna fila se escribe** por ningún camino de la API.
+**Ya no hay que insertar la fila a mano.** Los tres endpoints del ciclo de vida
+existen, y `pos_terminals` dejó de ser una tabla que nadie escribe.
 
-Mientras tanto hay que acordarlo **por fuera del sistema**. Si necesitás una prueba
-de punta a punta, hay que insertar la fila a mano en la base con `key_hash`
-generado por `hashPassword` (formato `saltHex:hashHex`, el mismo de
-`users.password_hash`), porque el texto plano nunca se guarda ni se puede volver a
-leer.
+Los crea un **operador del comercio** —staff o dashboard—, no el terminal. Viven
+bajo el prefijo `/v1/loyalty` y exigen su token: un token de cliente y un token de
+mostrador reciben `403 OPERATOR_ROLE_REQUIRED`, el mismo código y el mismo mensaje
+que cualquier otra ruta de configuración del programa.
 
-Esto está registrado como pendiente en
-[`docs/18-Trabajo-Pendiente.md`](../../docs/18-Trabajo-Pendiente.md) § Etapa 0b, y
-es lo único que bloquea la prueba de punta a punta.
+| Operación | Ruta | Status |
+|---|---|---|
+| Registrar | `POST /v1/loyalty/terminals` | `201` |
+| Listar | `GET /v1/loyalty/terminals` | `200` |
+| Revocar | `POST /v1/loyalty/terminals/{terminal_id}/revoke` | `200` |
 
-Cuando el endpoint de alta llegue, el secreto se mostrará **una sola vez** en el
-momento de la creación.
+```bash
+curl -X POST https://api.vyloop.com/v1/loyalty/terminals \
+  -H "Authorization: Bearer <token-de-operador>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Caja 1"}'
+```
+
+Después, el intercambio es el de siempre:
+
+```
+→ POST /v1/auth/pos/token  { "terminal_id": "<id>", "secret": "<el de arriba>" }
+```
+
+### El secreto se muestra una sola vez
+
+Es la única vez que existe fuera del comercio. La fila guarda únicamente
+`key_hash`: PBKDF2 en formato `saltHex:hashHex`, el mismo que `users.password_hash`,
+porque es lo que `POST /v1/auth/pos/token` verifica.
+
+**No hay endpoint que devuelva el secreto, y no debe haber uno.** Si se pierde, se
+revoca esa fila y se registra un terminal nuevo. No se recupera.
+
+El listado nunca devuelve `key_hash`, y `business_id` sale siempre del ámbito de la
+credencial, nunca del cuerpo de la petición.
+
+### Revocar es blando
+
+`revoked_at` se marca y la fila **no** se borra: la conciliación por `payment_id`
+sigue resolviendo contra ese `id`, y el operador puede ver que esa caja existió y
+fue dada de baja en vez de inferir de su ausencia que nunca existió. El efecto es
+inmediato —el intercambio comprueba `revoked_at` en cada llamada— y revocar dos
+veces no es conflicto.
+
+Revocar un id de otro comercio responde `404 NOT_FOUND`, **idéntico** a un id que no
+existe: el `WHERE` incluye `business_id`, así que la fila de otro tenant nunca
+coincide y la respuesta no distingue los dos casos.
+
+### Por qué estas tres rutas no están en `openapi.yaml`
+
+`openapi.yaml` es el contrato de **la integración del terminal**, y su conjunto de
+rutas se deriva de los dos primitivos de autorización de mostrador
+(`requireCounterSubject` y `counterSubject`). Estas tres rutas no los usan —los usa
+`requireOperatorRole`— porque las llama un operador y no un mostrador: describen
+cómo se crea una credencial, no cómo se reporta una venta. Por eso viven en este
+README y no en el spec, y por eso el test de drift del spec no las mira.
+
+Los dos códigos que emiten y que no están en el enum de `openapi.yaml` son
+`VALIDATION_ERROR` (nombre ausente o en blanco, y no se escribe nada) y `NOT_FOUND`
+más `OPERATOR_ROLE_REQUIRED`, como arriba.
 
 ---
 
