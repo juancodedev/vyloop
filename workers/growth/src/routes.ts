@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole, requireOperatorRole, schedulePassReconcile } from './helpers';
+import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole, requireOperatorRole, requireCounterSubject, schedulePassReconcile } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -125,7 +125,7 @@ export function isEarnBy(value: unknown): value is EarnBy {
  *
  * Because there is now more than one caller that has to run it, and the second
  * one is not optional. `POST /v1/loyalty/points/assign` runs it for the integrated
- * POS and the manual scanner. `POST /v1/checkins` runs it for the merchant's own
+ * POS and the manual scanner. `POST /v1/loyalty/checkins` runs it for the merchant's own
  * terminal reporting a sale it already completed — and that path cannot call the
  * other route, because the terminal sends a `payment_id` and a money amount and
  * has no idea a loyalty program exists. Two copies of this expression would be two
@@ -926,7 +926,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
 
   // One formula, one place — and it is now literally one place. This route used
   // to hold the arithmetic inline, which made it unreusable: the second caller
-  // (`POST /v1/checkins`, for a merchant's own terminal reporting a completed
+  // (`POST /v1/loyalty/checkins`, for a merchant's own terminal reporting a completed
   // sale) would have had to copy the expression, and two copies of a points rule
   // is two rules.
   //
@@ -1729,7 +1729,7 @@ async function resolveMemberCode(
 }
 
 /**
- * POST /v1/passes/resolve
+ * POST /v1/loyalty/passes/resolve
  *
  * "Does this code belong to someone?" — the question a cashier asks at the till.
  *
@@ -1750,8 +1750,17 @@ async function resolveMemberCode(
  * credential's scope that stops one terminal resolving another merchant's pass,
  * and a body field would be the caller choosing its own scope.
  */
-router.post('/v1/passes/resolve', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+router.post('/v1/loyalty/passes/resolve', async (c) => {
+  const auth = extractAuthHeaders(c);
+  // Before the body, before the lookup, before anything is written. A counter is
+  // the only subject whose scan we answer: a customer could otherwise learn
+  // whether an arbitrary `member_code` is a member of this tenant, and a merchant
+  // dashboard session could answer it on a tenant it merely administers.
+  const gate = requireCounterSubject(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const body = await c.req.json<{ member_code?: unknown }>();
 
   // A missing or non-string code is answered as "unknown" rather than refused,
@@ -1999,14 +2008,14 @@ async function creditCheckin(
 }
 
 /**
- * POST /v1/checkins
+ * POST /v1/loyalty/checkins
  *
  * Record a sale that has already been paid for, and credit what it earned.
  *
  * ## The shape of the flow, and why
  *
  * This is the second half of a two-endpoint contract, and it happens at a
- * different moment than `/v1/passes/resolve`: that one answers "is this pass
+ * different moment than `/v1/loyalty/passes/resolve`: that one answers "is this pass
  * real?" at the till before the money moves, this one records the fact *after* it
  * settles. They are not one endpoint because they are not one moment, and merging
  * them would force the cashier's scan to be the same thing as the payment.
@@ -2044,8 +2053,17 @@ async function creditCheckin(
  * product identity and we deliberately hold no catalogue to disagree with it.
  * `items` is stored as sent and never parsed into a total.
  */
-router.post('/v1/checkins', async (c) => {
+router.post('/v1/loyalty/checkins', async (c) => {
   const auth = extractAuthHeaders(c);
+  // Before the body, before `createDb`, before `withRls`. Without this the route
+  // had no guard at all: the public customer token could report a completed sale
+  // for any `member_code` and have the tenant's earn rule turn `amount_cents` into
+  // spendable points. An operator is refused here too — the manual path it would
+  // want is `POST /v1/loyalty/points/assign`, which the dashboard already calls.
+  const gate = requireCounterSubject(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
   const { businessId } = auth;
   const body = await c.req.json<{
     payment_id?: string;

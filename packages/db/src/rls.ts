@@ -41,6 +41,11 @@ export const BUSINESS_ID_TABLES = [
   'message_log',
   'whatsapp_templates',
   'checkins',
+  // A counter is scoped to the merchant that installed it, and the token exchange
+  // mints a credential for it, so a row read by terminal id still has to be a row
+  // this tenant owns. Omitted here it would have received no policy when the RLS
+  // rollout ran, which is the one thing the rest of this list is for.
+  'pos_terminals',
 ] as const;
 
 /**

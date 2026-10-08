@@ -34,11 +34,121 @@ export interface RateLimitConfig {
 // Default limits
 // ---------------------------------------------------------------------------
 
+/**
+ * The ceiling for a tenant on the `premium` plan.
+ *
+ * ## UNCONFIRMED — this is a guess with a shape, not a decision
+ *
+ * Nobody has decided what a paying tenant gets. What is decided is that the
+ * paying tenant is currently getting `free`'s 60, because the lookup below fell
+ * through to it: that is the defect this file exists to close, and any number
+ * above 60 closes it. So the number here is chosen to be defensible, not to be
+ * right.
+ *
+ * Why 600, and why that is a reasonable shape to argue about:
+ *
+ * - **It exists in this repository already.** `WALLET_CALLBACK_LIMIT_PER_WINDOW`
+ *   in `apps/gateway/src/index.ts:144` is 600, chosen for a machine caller at a
+ *   paying merchant behind a busy address. A till terminal is that shape and
+ *   more so: it is a machine, it is per-merchant, and it asks about the same
+ *   handful of endpoints all day.
+ * - **It is a ceiling, not an entitlement.** 600/min is 10 requests a second. A
+ *   merchant with two tills does not approach it, and the thing it protects
+ *   against is amplification — one stolen terminal key driving a script — not
+ *   honest traffic.
+ * - **It cannot break the one paying tenant in the system.** Raising a ceiling
+ *   for a tenant that has never had one is not a risk to that tenant.
+ *
+ * What would make it wrong: if a premium plan is ever sold on the promise of
+ * *unlimited* API access, this becomes the wrong number and the contract has to
+ * change with it. What would make it too low: bulk imports, if they ever exist.
+ *
+ * One named constant so that changing it is one line and not a search.
+ */
+export const PREMIUM_PLAN_LIMIT_PER_WINDOW = 600;
+
+/**
+ * The ceiling for a token whose `plan` claim is absent, or names a plan this
+ * build has never heard of.
+ *
+ * ## Strictly below `free`, and that ordering is the point
+ *
+ * `plan` is an **optional** claim (see `middleware/auth.ts`), so this number is
+ * live: every token minted before this change carries none, and it has a
+ * one-hour lifetime, so it is a rolling population rather than a permanent one.
+ *
+ * The alternative — resolving an absent plan to `free`'s 60 — makes omission
+ * worth exactly as much as being the cheapest tier, which turns "the caller
+ * forgot to pass the plan" into a free way to be throttled least. A limit is
+ * supposed to fall when you know less about the caller, not rise.
+ *
+ * So: 30, half of `free`. It is a tightening rather than a loosening, so it
+ * cannot weaken any limit in effect today, and it only reaches tokens that a
+ * gateway which has not been told a plan exists could have minted anyway.
+ *
+ * **What it must never be is unlimited.** A plan this build does not know is
+ * more likely to be a future tier than a paying one, and an unknown key must not
+ * be able to fall through to nothing at all.
+ */
+export const UNKNOWN_PLAN_LIMIT_PER_WINDOW = 30;
+
+/**
+ * Rate limits per `tenants.plan`, per window.
+ *
+ * ## The keys are the plans that exist, which is the whole point
+ *
+ * Measured against production rather than assumed: `tenants.plan` holds `free`
+ * (5 tenants) and `premium` (1). This table used to be `{ free, pro, business }`,
+ * so `pro` and `business` were **dead keys** — nothing was ever limited by them,
+ * and the one paying tenant resolved through `?? config.limits.free` to the same
+ * 60 requests a minute a tenant that has never paid gets.
+ *
+ * They were removed rather than renamed, and that is a judgement worth stating
+ * because it is reversible-looking: renaming `pro` to `premium` would have left
+ * `business` behind, and a key nobody can reach is not a harmless leftover. It
+ * is a table that reads as though it describes the product and does not, which
+ * is what makes the *next* plan get added to it without anyone measuring whether
+ * the one before it is real. Two keys, both real, is the honest shape of the
+ * thing today.
+ *
+ * ## Keyed by plan, not by role
+ *
+ * The lookup used to be `config.limits[jwt.role]`, and `role` holds `admin`,
+ * `staff`, `cashier` and `customer` — none of which was ever a key, so the
+ * `??` fired on every authenticated request in the system. A limit table keyed
+ * by something the table does not contain is not a limit; it is one number with
+ * extra words around it.
+ */
 export const DEFAULT_LIMITS: Record<string, number> = {
   free: 60,
-  pro: 300,
-  business: 1000,
+  premium: PREMIUM_PLAN_LIMIT_PER_WINDOW,
 };
+
+/**
+ * The subject namespace a counter's token lives in: `pos:<terminalId>`.
+ *
+ * Declared here rather than imported from `workers/growth`, which owns the
+ * matching `isCounterSubject`: the gateway cannot take a runtime dependency on a
+ * worker, and a worker cannot own a rule the edge has to apply to every request
+ * before it decides which worker to forward to. Two constants, one spelling,
+ * asserted against each other by reading the other file's source — the same
+ * approach `wallet-callback-path.contract.test.ts` uses for the callback path.
+ *
+ * ## Why the colon, and why it is exact
+ *
+ * Copied for the reason `helpers.ts:158-175` gives: a bare `pos` is matched by
+ * `postmaster-3`, `pos-7` and `POS-2`, so a prefix without a separator hands a
+ * counter's bucket to any issuer that happened to pick a word starting with
+ * those letters. A uuid cannot contain a colon, so `pos:` is unreachable by
+ * accident. `pos:` with an empty remainder is not a counter either, for the same
+ * reason growth refuses it.
+ */
+const COUNTER_SUBJECT_PREFIX = 'pos:';
+
+/** Is this token a payment terminal at a merchant's till? */
+function isCounterSubject(sub: string): boolean {
+  return sub.startsWith(COUNTER_SUBJECT_PREFIX) && sub.length > COUNTER_SUBJECT_PREFIX.length;
+}
 
 export const DEFAULT_WINDOW = 60;
 
@@ -53,6 +163,31 @@ export const DEFAULT_WINDOW = 60;
  * route without authentication in front of it later.
  */
 export const SIGNUP_LIMIT_PER_WINDOW = 5;
+
+/**
+ * Token exchanges at a merchant's till allowed per window, per client address.
+ *
+ * Five, which is `SIGNUP_LIMIT_PER_WINDOW` and for the same reason: both routes
+ * are public, both are keyed only by client address because the caller has no
+ * `business_id` to key on yet, and both run a 100k-iteration key derivation before
+ * they can answer. One derivation per request with no ceiling is an amplifier
+ * pointed at us, and five a minute is far more than either legitimate caller
+ * needs.
+ *
+ * ## Deliberately not login's number, which is none
+ *
+ * Login is left unlimited because a limit there hands a legitimate person a 429
+ * because *someone else* guessed at their password, and they cannot tell that
+ * apart from being locked out of their own account. That is the worse failure,
+ * and it is why one number in this file is absent on purpose.
+ *
+ * A till is not that. It authenticates once per boot, so a request loop against
+ * `POST /v1/auth/pos/token` is a bug in the terminal rather than traffic a
+ * merchant is generating — there is no burst of legitimate exchanges for a limit
+ * to break. Bounding it costs a real merchant nothing and removes an
+ * unauthenticated, unthrottled path to a CPU cost.
+ */
+export const POS_TOKEN_LIMIT_PER_WINDOW = 5;
 
 // ---------------------------------------------------------------------------
 // Middleware factory
@@ -96,8 +231,41 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
     }
 
     const businessId = jwt.business_id;
-    const kvKey = `ratelimit:${businessId}:${endpoint}`;
-    const limit = config.limits[jwt.role] ?? config.limits.free ?? 60;
+    // `jwt.plan` is optional, so the key is narrowed before the lookup rather than
+    // after: indexing a `Record<string, number>` with `undefined` is a type error,
+    // and the honest translation of "no plan claim" is "no entry", which the `??`
+    // below turns into a bounded number rather than into `undefined`.
+    const limit =
+      (jwt.plan === undefined ? undefined : config.limits[jwt.plan]) ??
+      UNKNOWN_PLAN_LIMIT_PER_WINDOW;
+
+    // ## The counter key, and why only counters change
+    //
+    // A merchant runs more than one thing against these endpoints: a human at a
+    // dashboard, and one or more tills. Keyed on `business_id` alone they all
+    // spend one bucket, so a busy counter could throttle the person trying to
+    // fix it — and a stolen terminal credential could burn the budget of every
+    // operator at that merchant to get itself a 429.
+    //
+    // A counter therefore gets its own key:
+    //
+    // ```
+    // ratelimit:<businessId>:pos:<sub>:<endpoint>
+    // ```
+    //
+    // Every other subject keeps `ratelimit:<businessId>:<endpoint>` exactly as it
+    // was. That is deliberate and it is not an oversight: humans at one merchant
+    // sharing a bucket is a *tenant-wide ceiling*, which is the property the
+    // limiter is for, and splitting it per user would multiply the buckets one
+    // tenant can spend by the size of its staff. Counters are counted apart
+    // because they are machines with their own traffic shape, not because
+    // operators deserve to be able to exceed a tenant's ceiling between them.
+    //
+    // `business_id` stays in the counter's key too, so a terminal can never read
+    // or exhaust a bucket that belongs to a different merchant.
+    const kvKey = isCounterSubject(jwt.sub)
+      ? `ratelimit:${businessId}:${COUNTER_SUBJECT_PREFIX}${jwt.sub}:${endpoint}`
+      : `ratelimit:${businessId}:${endpoint}`;
 
     return throttle(c, next, config, { kvKey, limit });
   };
