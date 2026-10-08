@@ -18,8 +18,8 @@
   },
   "peerDependencies": {
     "lucide-react": "^1.23.0",
-    "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.11",

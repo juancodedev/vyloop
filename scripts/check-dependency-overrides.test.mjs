@@ -675,8 +675,26 @@ describe('the repository as it stands', () => {
   it('enforces the exact pins, which are unconditional', () => {
     const pins = gate.enforced.filter((e) => e.rule === 'exact');
     expect(pins.map((p) => p.name).sort()).toEqual(['react', 'react-dom']);
+
+    // Asserted against the declared pin, not a literal.
+    //
+    // What this test claims is that an exact pin resolves to exactly what it
+    // declares. Hardcoding `19.2.7` asserted a second, different thing -- that
+    // react happens to sit at some version today -- and the difference matters:
+    // raising a security floor is the *intended* use of these two overrides, so a
+    // literal turned every legitimate bump into a red suite. That is how a guard
+    // starts teaching its reader to edit the guard.
+    //
+    // Reading the declaration keeps the teeth and drops the staleness. If either
+    // pin stops being exact, `selector` stops being null; if a resolution drifts
+    // off its pin, the comparison fails. Both are the failure this test exists to
+    // catch, and neither is about a version number.
     for (const pin of pins) {
-      expect(pin.resolved).toBe('19.2.7');
+      const declared = overrides[pin.overrideKey];
+      expect(declared, `${pin.name} has an enforced pin but declares no override`).toBeDefined();
+      // No selector is what makes the pin unconditional.
+      expect(pin.selector, `${pin.name} is pinned by a selector, so it is not unconditional`).toBeNull();
+      expect(pin.resolved).toBe(declared);
     }
   });
 
