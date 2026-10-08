@@ -18,7 +18,8 @@
     "wallet:inactivity:dry-run": "pnpm --filter @vyloop/db exec tsx ../../scripts/pass-inactivity-dry-run.mjs",
     "db:drift": "node scripts/check-migration-drift.mjs",
     "db:drift:baseline": "node scripts/check-migration-drift.mjs --check-baseline",
-    "db:checkin-backlog": "node scripts/check-checkin-backlog.mjs"
+    "db:checkin-backlog": "node scripts/check-checkin-backlog.mjs",
+    "deps:overrides": "node scripts/check-dependency-overrides.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
