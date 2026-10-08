@@ -215,6 +215,24 @@ describe('policy columns match the real schema', () => {
     expect(TENANT_ID_TABLES as readonly string[]).not.toContain('pos_terminals');
   });
 
+  it('scopes settled_payments by business_id', () => {
+    // A settlement belongs to the merchant that was paid, and the row is written
+    // by a payment rail rather than by a credential scoped to that merchant — so
+    // the scoping is *resolved* from the payload's merchant reference instead of
+    // inherited from a caller. It is registered here for the reason `pos_terminals`
+    // was: a table absent from this list receives no policy when the rollout runs,
+    // and a reconciliation check that could read another merchant's sales is a
+    // cross-tenant leak with a report attached.
+    expect(BUSINESS_ID_TABLES as readonly string[]).toContain('settled_payments');
+
+    const rendered = enableRls().map(renderStatement);
+    expect(rendered).toContain('ALTER TABLE "settled_payments" ENABLE ROW LEVEL SECURITY;');
+    expect(createRlsPolicies().map(renderStatement)).toContain(
+      `CREATE POLICY ${RLS_POLICY_NAME} ON "settled_payments" ` +
+        `USING (business_id = current_setting('${BUSINESS_ID_SETTING}')::UUID);`,
+    );
+  });
+
   it('casts to uuid only where the scoping column really is a uuid', () => {
     // `::UUID` is a hard requirement for these comparisons. Against a text
     // column Postgres raises "operator does not exist: text = uuid", which a

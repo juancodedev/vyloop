@@ -969,30 +969,60 @@ describe('the committed baseline', () => {
     expect(serializeBaseline(baseline)).toBe(committed);
   });
 
-  it('is empty only because the journal now covers every migration', () => {
-    // This file was not always empty. It listed 0004-0008 as applied out of band,
-    // which was true then: they had been applied by hand and the journal had four
-    // entries from 0000-0003. Applying 0009 inserted a journal row whose
-    // `created_at` is 0009's `when`, and because drizzle's watermark is a scalar
-    // (`order by created_at desc limit 1`), that one row moved the mark past all
-    // of them. Nothing is out of band any more, so there is nothing to compensate
-    // and the honest file has zero entries.
+  it('lists exactly what the journal row alone cannot vouch for', () => {
+    // This file was empty once, and the reason it was empty is now the reason it
+    // is not.
     //
-    // Which means the old "a gate satisfiable by an empty baseline is not a gate"
-    // guard cannot be stated as a length on this file. Emptiness here is a fact
-    // about production, not a property this repository can assert, and hardcoding
-    // `toBeGreaterThan(0)` would only survive until the next migration.
+    // It listed 0004-0008 as applied out of band. Applying 0009 *through drizzle*
+    // wrote a row into `drizzle.__drizzle_migrations`, and because the watermark
+    // is a scalar (`order by created_at desc limit 1`), that one row moved the
+    // mark past all of them -- so nothing was out of band any more and the honest
+    // file had zero entries.
     //
-    // The guard itself survives, and the test below it is where it now lives: an
-    // empty baseline must still leave the gate fully capable of failing.
-    expect(baseline.migrations).toEqual([]);
+    // 0013 did not go through drizzle, because `drizzle-kit migrate` is forbidden
+    // here and migrations are applied by hand. `unregisteredMigrations` is
+    // `migrations.filter(m => watermark < m.when)` (check-migration-drift.mjs:346),
+    // so a hand-applied migration sits above the watermark indefinitely: drizzle's
+    // table still reads 0012's `when`. The journal row records the intent and the
+    // baseline records the fact, and emptying this file again would put the gate
+    // back to BLOCKED on a database that is correct.
+    //
+    // So neither length is assertable here -- the old test already said emptiness
+    // "is a fact about production, not a property this repository can assert", and
+    // that was right in both directions. What *is* assertable is that every entry
+    // is one the journal can confirm and the generator would have produced, so a
+    // hand-edited claim cannot pass as a recorded one.
+    for (const entry of baseline.migrations) {
+      const migration = migrations.find((m) => m.tag === entry.tag);
+      expect(
+        migration,
+        `the baseline claims ${entry.tag}, which the journal does not have`,
+      ).toBeDefined();
+      // Byte-identical to what `--write-baseline` derives from the migration file,
+      // so this entry was recorded rather than composed.
+      expect(entry).toEqual(entryFor(migration));
+    }
+
+    // A retried delivery must not append a second claim for one migration.
+    expect(new Set(baseline.migrations.map((e) => e.tag)).size).toBe(
+      baseline.migrations.length,
+    );
   });
 
   it('an empty baseline still fails the gate on real drift', () => {
-    // The guard that `is not empty` used to be a proxy for, stated directly. The
-    // committed baseline is empty and the journal is complete, so the gate passes;
-    // the moment a migration the journal does not cover appears, it must fail, and
-    // with the baseline contributing nothing to hide it.
+    // The guard that `is not empty` used to be a proxy for, stated directly.
+    //
+    // It used to run against the committed baseline, back when that file was
+    // empty. It is not empty now -- 0013 was applied by hand and drizzle's
+    // watermark never moved past 0012 -- so a guard whose subject was "the
+    // committed file happens to be empty right now" stopped being a guard and
+    // became a statement about production. This builds its own empty baseline so
+    // the claim holds whatever the committed file says.
+    //
+    // The claim itself: with nothing to compensate, a complete journal passes, and
+    // the moment a migration the journal does not cover appears, the gate fails and
+    // the empty baseline contributes nothing to hide it.
+    const empty = { version: 1, migrations: [] };
     const completeJournal = migrations.map((m, i) => ({
       id: i + 1,
       hash: m.hash,
@@ -1001,8 +1031,8 @@ describe('the committed baseline', () => {
 
     const clean = runGate({
       migrations,
-      observation: seen(completeJournal, factsFor(baseline.migrations)),
-      baseline,
+      observation: seen(completeJournal, factsFor(empty.migrations)),
+      baseline: empty,
     });
     expect(clean.ok).toBe(true);
     expect(clean.forward).toEqual([]);
@@ -1012,8 +1042,8 @@ describe('the committed baseline', () => {
     const oneShort = completeJournal.slice(0, -1);
     const drifted = runGate({
       migrations,
-      observation: seen(oneShort, factsFor(baseline.migrations)),
-      baseline,
+      observation: seen(oneShort, factsFor(empty.migrations)),
+      baseline: empty,
     });
     expect(drifted.ok).toBe(false);
     expect(drifted.forward.map((m) => m.tag)).toEqual([migrations[migrations.length - 1].tag]);

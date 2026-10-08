@@ -530,6 +530,87 @@ export const posTerminals = pgTable('pos_terminals', {
   }).onDelete('cascade'),
 ]);
 
+/**
+ * A payment the rail says settled, and that we recorded having heard about.
+ *
+ * ## What this table is for, precisely
+ *
+ * It exists so that "the payment rail says payment X settled and no `checkins`
+ * row names it" is a question somebody can answer. `checkins` records the *other*
+ * half — that a pass was scanned and a sale attributed — and nothing in the system
+ * noticed when only one of those two things happened. `scripts/check-checkin-
+ * backlog.mjs` cannot see it either: that script reports sales recorded without
+ * points, and a sale that was never reported at all produces no row for it to
+ * report on. Before this table, a customer could pay and the loss was silent.
+ *
+ * ## What it deliberately does NOT hold
+ *
+ * The raw webhook body. This is a reconciliation key set, not an event log: the
+ * payload is written to `wrangler tail` by whoever is debugging, and a payload
+ * carries the merchant's whole transaction envelope — line items, payer details,
+ * whatever else the rail chooses to send — none of which any check on this table
+ * reads. Storing what the check needs keeps the table small, keeps the PII out
+ * of the row that outlives the incident, and means a rail that adds a field does
+ * not silently start persisting it here.
+ *
+ * ## Why `payment_id` alone is the primary key
+ *
+ * Because a payment id is the rail's own identifier for a settlement and is
+ * unique across the platform. This is deliberately **not** scoped to
+ * `business_id` the way `checkins`' unique index is: `checkins` is written by
+ * whoever reports a sale and needs the tenant in the key to make a tenant's own
+ * retried `payment_id` idempotent against another tenant's. This row is written
+ * once, by the rail, for a payment that belongs to exactly one merchant, so the
+ * rail's identifier alone is already the whole key — and adding `business_id` to
+ * it would make a duplicate delivery for one payment insertable twice, once per
+ * tenant, if the merchant reference in the body were ever resolved wrongly.
+ *
+ * That does make a mis-resolved `business_id` a row attributed to the wrong
+ * merchant. It cannot be defended against here — the constraint that prevents it
+ * is resolving the reference against `tenants` rather than trusting a body field,
+ * which is why the route does that rather than reading a tenant id — and it is
+ * stated rather than papered over.
+ *
+ * ## Why there is no index on this table
+ *
+ * The only queries against it are operational: the reconciliation script's join
+ * against `checkins` and a per-merchant rollup, both of which are `scan`-shaped
+ * over a table that holds one row per settled payment. An index here would be a
+ * write cost paid on every delivery to speed up a query a human runs.
+ *
+ * This is the same reasoning `pos_terminals` records, and it carries the same
+ * consequence: when an index does land it has to touch **two** files — the
+ * extra-config callback below, **and** `INDEXED_TABLES` in `indexes.ts`, because
+ * `migration-sql.test.ts` asserts that the `CREATE INDEX` statements across this
+ * history are exactly what that registry reports. Declaring one here without
+ * registering it there fails the build, which is the correct outcome.
+ */
+export const settledPayments = pgTable('settled_payments', {
+  // The rail's own identifier for the settlement. `text`, not `uuid`: it comes
+  // from the payment processor's namespace, and narrowing it to a uuid would
+  // reject a real id the first time the rail used a non-uuid format. That is a
+  // correctness bug waiting for a format change, and it is not the price of
+  // getting a stricter column type.
+  paymentId: text('payment_id').primaryKey(),
+  // Named constraint, like `pos_terminals`: Drizzle's generated name would be
+  // identical anyway, and writing it out means a refactor of how this column is
+  // declared cannot silently rename a constraint somebody has already revoked
+  // against by name. Cascade, like every other `business_id` in this schema.
+  businessId: uuid('business_id').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  // When *we* heard about it, not when the rail says it settled. The gap between
+  // the two is the interesting number: a settlement sitting in the rail for days
+  // before reaching us is a different failure from one that never arrived, and
+  // collapsing them into a single "settled at" would hide it.
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  foreignKey({
+    name: 'settled_payments_business_id_tenants_id_fk',
+    columns: [table.businessId],
+    foreignColumns: [tenants.id],
+  }).onDelete('cascade'),
+]);
+
 // ============================================================================
 // Automation Domain
 // ============================================================================
@@ -955,6 +1036,15 @@ export type NewCheckin = typeof checkins.$inferInsert;
  */
 export type PosTerminal = typeof posTerminals.$inferSelect;
 export type NewPosTerminal = typeof posTerminals.$inferInsert;
+
+/**
+ * A row the payment rail told us about.
+ *
+ * `receivedAt` is when *we* heard about it and is never null, which is what lets
+ * the reconciliation rollup compute an age without a COALESCE on every row.
+ */
+export type SettledPayment = typeof settledPayments.$inferSelect;
+export type NewSettledPayment = typeof settledPayments.$inferInsert;
 
 export type Workflow = typeof workflows.$inferSelect;
 export type NewWorkflow = typeof workflows.$inferInsert;

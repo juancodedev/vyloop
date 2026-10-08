@@ -159,9 +159,10 @@ Cuatro decisiones, ninguna por conveniencia:
 
 ## 6. La webhook y por qué no reemplaza a esta llamada
 
-**No existe un endpoint de webhook en este repositorio.** No hay receptor
-implementado y esta especificación no documenta ninguno. Lo que sigue es
-arquitectura, no un contrato.
+**Ahora existe un receptor de webhook en este repositorio:**
+`POST /v1/loyalty/webhooks/payments`. Lo que sigue sigue siendo cierto —y es la
+razón por la que el receptor no sustituye a la llamada—, pero la frase "no existe"
+ya no lo es.
 
 - **La llamada al mostrador es el único canal que lleva la atribución.** Sólo el
   terminal sabe que hubo un pase escaneado. Una webhook del medio de pago trae el
@@ -173,10 +174,39 @@ arquitectura, no un contrato.
 - **Por eso la llamada lleva `payment_id`.** Es lo que permite comparar los dos
   lados. Sin esa columna, la conciliación no se puede escribir.
 
-Aclaración importante: `scripts/check-checkin-backlog.mjs` **no** es esto. Ese
-script ve la mitad del problema — las ventas que se registraron y no se
-acreditaron. No ve las ventas que nunca llegaron, que es justo lo que una webhook
-o un poll encontrarían.
+### Lo que el receptor hace, y lo que no puede hacer
+
+Graba el pago en `settled_payments` y nada más. **No acredita puntos, no crea un
+checkin y no resuelve a un cliente**: el webhook no trae el `member_code`, y el
+único que sabe que hubo un pase es el terminal. La ruta vive en el worker de
+growth, es pública en el gateway (`EXACT_PUBLIC_PATHS`) y se autentica con una
+firma HMAC sobre el cuerpo crudo, no con un token de Vyloop. Si llega con una
+credencial de Vyloop —cliente o mostrador— la rechaza con su propio código, que no
+es el `UNAUTHORIZED` del middleware: esa ruta es del medio de pago.
+
+> **Una webhook detecta una atribución perdida; no puede repararla.** El pago
+> entra, el monto entra, el hecho de que se escaneó un pase no. Así que cuando el
+> chequeo encuentre un pago liquidado sin checkin, sabe **que** se perdió una
+> atribución y nada más: no sabe **de quién**. La recuperación es que el terminal
+> reenvíe el checkin, o que una persona le pregunte al cajero. No hay un botón de
+> reparación, y no debe haber uno.
+
+**El esquema de firma todavía no está confirmado contra la documentación de Mercado
+Pago.** Por eso la construcción del mensaje firmado vive en una función sola, con su
+prueba propia, y por eso la ruta falla cerrada ante una firma ausente, inválida o
+ante la ausencia del secreto. Hay que verificarla antes de apuntarla a algo real.
+
+### Los dos chequeos, y por qué no se fusionan
+
+| Script | Pregunta | Qué ve |
+|---|---|---|
+| `scripts/check-checkin-backlog.mjs` | ¿Ventas grabadas y sin puntos? | `checkins` con `points IS NULL` |
+| `scripts/check-payment-reconciliation.mjs` | ¿Pagos liquidados y sin checkin? | `settled_payments` sin fila en `checkins` |
+
+No son la mitad del mismo problema: son dos mitades distintas. El primero necesita
+una fila que mirar —`points IS NULL` es la señal— y una venta que nunca se reportó
+no tiene ninguna. Por eso el segundo existe, y por eso fusionarlos haría que el
+primero reportara como problema algo que no lo es.
 
 ---
 
@@ -245,6 +275,31 @@ README y no en el spec, y por eso el test de drift del spec no las mira.
 Los dos códigos que emiten y que no están en el enum de `openapi.yaml` son
 `VALIDATION_ERROR` (nombre ausente o en blanco, y no se escribe nada) y `NOT_FOUND`
 más `OPERATOR_ROLE_REQUIRED`, como arriba.
+
+### Por qué el receptor de la sección 6 tampoco está en `openapi.yaml`
+
+`POST /v1/loyalty/webhooks/payments` existe y tampoco está en el spec, por la misma
+razón de alcance: el spec es el contrato del **terminal**, y su conjunto de rutas se
+deriva de los dos primitivos de autorización de mostrador. El receptor no usa
+ninguno —lo autentica una firma, no un token— y no lo llama un terminal: lo llama el
+medio de pago. Documentarlo aquí y no en el spec es la misma decisión que la de las
+tres rutas de ciclo de vida, por el mismo motivo.
+
+Los códigos que emite, que tampoco están en el enum:
+
+- `PAYMENT_WEBHOOK_CREDENTIAL_NOT_ALLOWED` — llegó una credencial de Vyloop. No es
+  `UNAUTHORIZED` a propósito: ese es lo que responde una *cabecera del gateway
+  ausente*, y quien lo reciba no podría distinguir que la ruta nunca fue suya —
+  así que intentaría mandar un JWT.
+- `PAYMENT_WEBHOOK_SECRET_UNAVAILABLE` — no hay secreto configurado. Hoy es el
+  estado real en todos los entornos: no existe ninguna credencial de Mercado Pago
+  en este repositorio.
+- `PAYMENT_WEBHOOK_SIGNATURE_REQUIRED` / `PAYMENT_WEBHOOK_SIGNATURE_INVALID` —
+  sin firma, o firma que no calza. Separados a propósito, porque "no configurado",
+  "no firmó" y "firmó mal" son tres problemas operativos distintos.
+- `PAYMENT_WEBHOOK_UNKNOWN_MERCHANT` — la referencia del cuerpo no resuelve contra
+  `tenants`.
+- `PAYMENT_WEBHOOK_INVALID_PAYLOAD` — cuerpo mal formado tras verificar la firma.
 
 ---
 
