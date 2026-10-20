@@ -71,7 +71,7 @@ const { readConsentMap, readPushSubscriptions, upsertPushSubscription, deletePus
 
 const mockEnv = {
   DATABASE_URL: 'postgres://test',
-  DOMAIN_EVENTS_QUEUE: {} as Queue,
+  DELIVERY_QUEUE: {} as Queue,
   SCHEMA_REGISTRY: {} as KVNamespace,
   WHATSAPP_PHONE_ID: 'test-phone-id',
   WHATSAPP_TOKEN: 'test-token',

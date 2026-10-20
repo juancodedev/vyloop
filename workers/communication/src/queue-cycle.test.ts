@@ -60,7 +60,7 @@ vi.mock('@vyloop/event-bus', () => ({
 
 const mockEnv = {
   DATABASE_URL: 'postgres://test',
-  DOMAIN_EVENTS_QUEUE: {} as unknown,
+  DELIVERY_QUEUE: {} as unknown,
   SCHEMA_REGISTRY: {} as unknown,
   WHATSAPP_PHONE_ID: 'test-phone-id',
   WHATSAPP_TOKEN: 'test-token',

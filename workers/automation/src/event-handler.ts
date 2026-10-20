@@ -239,7 +239,7 @@ async function handleCustomerRegistered(
         },
       );
 
-      await publish(env.DOMAIN_EVENTS_QUEUE, whatsappEvent);
+      await publish(env.DELIVERY_QUEUE, whatsappEvent);
 
       // Publish WorkflowTriggered event
       const triggeredEvent = buildWorkflowTriggeredEvent(
@@ -374,7 +374,7 @@ async function handlePointsAssigned(
         },
       );
 
-      await publish(env.DOMAIN_EVENTS_QUEUE, whatsappEvent);
+      await publish(env.DELIVERY_QUEUE, whatsappEvent);
 
       const triggeredEvent = buildWorkflowTriggeredEvent(
         workflow.id,
@@ -510,7 +510,7 @@ async function handleRewardRedeemed(
         },
       );
 
-      await publish(env.DOMAIN_EVENTS_QUEUE, whatsappEvent);
+      await publish(env.DELIVERY_QUEUE, whatsappEvent);
 
       const triggeredEvent = buildWorkflowTriggeredEvent(
         workflow.id,

@@ -44,6 +44,16 @@ export interface WalletWorker {
 export interface Bindings {
   DATABASE_URL: string;
   DOMAIN_EVENTS_QUEUE: Queue;
+  /**
+   * The queue outbound deliveries travel on.
+   *
+   * A delivery is not a domain fact: the domain events queue carries facts
+   * about what happened, and a message to be delivered is an order. The
+   * delivery queue is consumed by the worker that delivers — the communication
+   * worker — and a Cloudflare queue admits exactly one consumer, so the two
+   * cannot be the same queue.
+   */
+  DELIVERY_QUEUE: Queue;
   SCHEMA_REGISTRY: KVNamespace;
   /**
    * The wallet worker, dispatched to from the daily cron.

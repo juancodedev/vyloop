@@ -99,6 +99,7 @@ describe('Birthday cron handler', () => {
       DATABASE_URL: 'postgres://test',
       SCHEMA_REGISTRY: {} as never,
       DOMAIN_EVENTS_QUEUE: {} as never,
+      DELIVERY_QUEUE: {} as never,
     } as never);
 
     expect(mockPublish).not.toHaveBeenCalled();
@@ -151,6 +152,7 @@ describe('Birthday cron handler', () => {
       DATABASE_URL: 'postgres://test',
       SCHEMA_REGISTRY: {} as never,
       DOMAIN_EVENTS_QUEUE: {} as never,
+      DELIVERY_QUEUE: {} as never,
     } as never);
 
     expect(mockPublish).toHaveBeenCalled();
@@ -167,6 +169,7 @@ describe('Inactivity cron handler', () => {
       DATABASE_URL: 'postgres://test',
       SCHEMA_REGISTRY: {} as never,
       DOMAIN_EVENTS_QUEUE: {} as never,
+      DELIVERY_QUEUE: {} as never,
     } as never);
 
     expect(mockPublish).not.toHaveBeenCalled();
@@ -220,6 +223,7 @@ describe('Inactivity cron handler', () => {
       DATABASE_URL: 'postgres://test',
       SCHEMA_REGISTRY: {} as never,
       DOMAIN_EVENTS_QUEUE: {} as never,
+      DELIVERY_QUEUE: {} as never,
     } as never);
 
     expect(mockPublish).toHaveBeenCalled();

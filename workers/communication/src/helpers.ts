@@ -17,7 +17,16 @@ export interface AuthHeaders {
 
 export interface Bindings {
   DATABASE_URL: string;
-  DOMAIN_EVENTS_QUEUE: Queue;
+  /**
+   * The queue outbound deliveries travel on.
+   *
+   * Not the domain events queue: that one already has a consumer — the growth
+   * worker — and a Cloudflare queue admits exactly one. The worker that
+   * delivers a message is the one that consumes the queue the message is
+   * published to, and the messages it delivers are deliveries, not domain
+   * facts.
+   */
+  DELIVERY_QUEUE: Queue;
   SCHEMA_REGISTRY: KVNamespace;
   WHATSAPP_PHONE_ID: string;
   WHATSAPP_TOKEN: string;

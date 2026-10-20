@@ -118,6 +118,7 @@ describe('CustomerRegistered — no matching workflows', () => {
       {
         DATABASE_URL: 'postgres://test',
         DOMAIN_EVENTS_QUEUE: {} as never,
+        DELIVERY_QUEUE: {} as never,
         SCHEMA_REGISTRY: {} as never,
       } as never,
     );
@@ -182,6 +183,7 @@ describe('CustomerRegistered — matching workflow', () => {
       {
         DATABASE_URL: 'postgres://test',
         DOMAIN_EVENTS_QUEUE: {} as never,
+        DELIVERY_QUEUE: {} as never,
         SCHEMA_REGISTRY: {} as never,
       } as never,
     );
@@ -255,6 +257,7 @@ describe('CustomerRegistered — consent', () => {
       {
         DATABASE_URL: 'postgres://test',
         DOMAIN_EVENTS_QUEUE: {} as never,
+        DELIVERY_QUEUE: {} as never,
         SCHEMA_REGISTRY: {} as never,
       } as never,
     );
@@ -316,6 +319,7 @@ describe('CustomerRegistered — consent', () => {
       {
         DATABASE_URL: 'postgres://test',
         DOMAIN_EVENTS_QUEUE: {} as never,
+        DELIVERY_QUEUE: {} as never,
         SCHEMA_REGISTRY: {} as never,
       } as never,
     );
@@ -388,6 +392,7 @@ describe('A workflow condition that reads the consent', () => {
       {
         DATABASE_URL: 'postgres://test',
         DOMAIN_EVENTS_QUEUE: {} as never,
+        DELIVERY_QUEUE: {} as never,
         SCHEMA_REGISTRY: {} as never,
       } as never,
     );
@@ -415,6 +420,7 @@ describe('Unknown event type', () => {
       {
         DATABASE_URL: 'postgres://test',
         DOMAIN_EVENTS_QUEUE: {} as never,
+        DELIVERY_QUEUE: {} as never,
         SCHEMA_REGISTRY: {} as never,
       } as never,
     );
