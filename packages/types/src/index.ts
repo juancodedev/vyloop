@@ -220,3 +220,52 @@ export type ConsentType = (typeof CONSENT_TYPES)[number];
 export function isConsentType(value: unknown): value is ConsentType {
   return typeof value === 'string' && (CONSENT_TYPES as readonly string[]).includes(value);
 }
+
+/** A consent the caller asked for, with whether they granted it. */
+export interface ParsedConsent {
+  consentType: ConsentType;
+  granted: boolean;
+}
+
+export type ConsentParseResult =
+  { ok: true; consents: ParsedConsent[] } | { ok: false; message: string };
+
+/**
+ * Read a `consents` object as the caller sent it.
+ *
+ * An absent object is not an error: it means the caller did not mention any
+ * consent, and a consent nobody mentioned is left alone rather than revoked.
+ *
+ * An **unknown type is an error**, not something to skip. A client that sends a
+ * typo would otherwise be told it recorded a consent, and the platform would
+ * hold a consent nobody can honour — which is worse than a rejected request,
+ * because the request that follows the rejection is the one that matters.
+ */
+export function parseConsentTypes(value: unknown): ConsentParseResult {
+  if (value === undefined || value === null) {
+    return { ok: true, consents: [] };
+  }
+
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return {
+      ok: false,
+      message: `consents must be an object of consent type to boolean. Known types: ${CONSENT_TYPES.join(', ')}.`,
+    };
+  }
+
+  const consents: ParsedConsent[] = [];
+  for (const [key, granted] of Object.entries(value as Record<string, unknown>)) {
+    if (!isConsentType(key)) {
+      return {
+        ok: false,
+        message: `unknown consent type "${key}". Known types: ${CONSENT_TYPES.join(', ')}.`,
+      };
+    }
+    if (typeof granted !== 'boolean') {
+      return { ok: false, message: `consent "${key}" must be true or false.` };
+    }
+    consents.push({ consentType: key, granted });
+  }
+
+  return { ok: true, consents };
+}

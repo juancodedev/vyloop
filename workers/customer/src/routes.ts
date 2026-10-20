@@ -1,7 +1,23 @@
-import { createDb, customers, customerEvents, consents, tenants, loyaltyPrograms, pointsTransactions, membershipTiers, customerWalletPasses } from '@vyloop/db';
+import {
+  createDb,
+  customers,
+  customerEvents,
+  consents,
+  tenants,
+  loyaltyPrograms,
+  pointsTransactions,
+  membershipTiers,
+  customerWalletPasses,
+  upsertConsent,
+} from '@vyloop/db';
 import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
 import { validate } from '@vyloop/schema-registry';
-import { CUSTOMER_PATCH_ERROR, CUSTOMER_PATCHABLE_FIELDS } from '@vyloop/types';
+import {
+  CUSTOMER_PATCH_ERROR,
+  CUSTOMER_PATCHABLE_FIELDS,
+  parseConsentTypes,
+  type ParsedConsent,
+} from '@vyloop/types';
 import { eq, and, isNull, like, or, count, desc, asc, sum, sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
@@ -15,6 +31,36 @@ import { extractAuthHeaders, buildCustomerRegisteredEvent, requireOperatorRole }
 
 const router = new Hono<{ Bindings: Bindings }>();
 
+/**
+ * Record the consents the caller asked for.
+ *
+ * The customer and the consents it was registered with are **one write**. A
+ * customer who agreed to be contacted and a system that forgot to record it is
+ * a customer the business believes it may contact and may not — and the
+ * disagreement is invisible until a message is sent or a campaign is run.
+ *
+ * The consents go in the same transaction as the customer for exactly that
+ * reason: either both land or neither does.
+ */
+async function recordConsents(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  customerId: string,
+  businessId: string,
+  asked: ParsedConsent[],
+  ipAddress: string | null,
+): Promise<void> {
+  for (const consent of asked) {
+    await upsertConsent(db, {
+      businessId,
+      customerId,
+      consentType: consent.consentType,
+      granted: consent.granted,
+      ipAddress,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Upsert: PUT /v1/customers
 // ---------------------------------------------------------------------------
@@ -26,6 +72,7 @@ router.put('/v1/customers', async (c) => {
     email?: string;
     birthDate?: string;
     businessSlug?: string;
+    consents?: Record<string, boolean>;
   }>();
 
   if (!body.fullName || !body.phone) {
@@ -37,6 +84,15 @@ router.put('/v1/customers', async (c) => {
 
   // Normalize phone: strip whitespace so '+569 5678 9012' is stored as '+56956789012'
   body.phone = body.phone.replace(/\s+/g, '');
+
+  // The consent types are checked before anything is written. A client that
+  // sends a type nobody knows is told so, and a rejected registration leaves no
+  // customer and no consent behind — which is the only outcome that leaves the
+  // caller able to fix it.
+  const parsedConsents = parseConsentTypes(body.consents);
+  if (!parsedConsents.ok) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedConsents.message } }, 400);
+  }
 
   const db = createDb(c.env.DATABASE_URL);
 
@@ -103,13 +159,23 @@ router.put('/v1/customers', async (c) => {
     // `500 INTERNAL_ERROR` — while the first-time registration of the same pair
     // answered 409. One route, one index, two opposite answers depending on which
     // branch the customer happened to land in.
-    let updatedRows: typeof customers.$inferSelect[];
+    let updatedRows: (typeof customers.$inferSelect)[];
     try {
-      updatedRows = await db
+      updatedRows = await db.transaction(async (tx) => {
+        const rows = await tx
         .update(customers)
         .set(updateData)
         .where(eq(customers.id, customer.id))
         .returning();
+        await recordConsents(
+          tx,
+          customer.id,
+          businessId,
+          parsedConsents.consents,
+          c.req.header('CF-Connecting-IP') ?? null,
+        );
+        return rows;
+      });
     } catch (err) {
       const conflict = classifyUniqueViolation(
         err,
@@ -144,12 +210,20 @@ router.put('/v1/customers', async (c) => {
   //
   // 409 rather than 400, for the same reason `PATCH` uses it: the request was
   // well-formed and the business's own data is what conflicts with it.
-  let insertedRows: typeof customers.$inferSelect[];
+  let insertedRows: (typeof customers.$inferSelect)[];
   try {
-    insertedRows = await db
-      .insert(customers)
-      .values(insertData)
-      .returning();
+    insertedRows = await db.transaction(async (tx) => {
+      const rows = await tx.insert(customers).values(insertData).returning();
+      const registered = rows[0];
+      await recordConsents(
+        tx,
+        registered.id,
+        businessId,
+        parsedConsents.consents,
+        c.req.header('CF-Connecting-IP') ?? null,
+      );
+      return rows;
+    });
   } catch (err) {
     const conflict = classifyUniqueViolation(
       err,
@@ -202,17 +276,10 @@ router.put('/v1/customers', async (c) => {
   // Ajv stays in place.
   let payloadValid = true;
   try {
-    const schemaResult = await validate(
-      c.env.SCHEMA_REGISTRY,
-      CUSTOMER_REGISTERED,
-      event.payload,
-    );
+    const schemaResult = await validate(c.env.SCHEMA_REGISTRY, CUSTOMER_REGISTERED, event.payload);
     if (!schemaResult.valid) {
       payloadValid = false;
-      console.error(
-        '[customer] Event payload failed schema validation:',
-        schemaResult.errors,
-      );
+      console.error('[customer] Event payload failed schema validation:', schemaResult.errors);
     }
   } catch (err) {
     // Surfaced rather than swallowed. This branch is the current state of this
@@ -248,10 +315,7 @@ router.get('/v1/customers', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
 
   // Base conditions: RLS scope + active customers only
-  const conditions: SQL[] = [
-    eq(customers.businessId, businessId),
-    isNull(customers.deletedAt),
-  ];
+  const conditions: SQL[] = [eq(customers.businessId, businessId), isNull(customers.deletedAt)];
 
   // Apply search if query is provided
   if (q.trim()) {
@@ -351,10 +415,7 @@ router.get('/v1/customers/me', async (c) => {
   const businessId = c.req.header('X-Business-Id');
 
   if (!userId) {
-    return c.json(
-      { error: { code: 'UNAUTHORIZED', message: 'Missing X-User-Id header' } },
-      401,
-    );
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Missing X-User-Id header' } }, 401);
   }
 
   if (!businessId) {
@@ -380,15 +441,21 @@ router.get('/v1/customers/me', async (c) => {
     .limit(1);
 
   if (!customer) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Customer not found' } },
-      404,
-    );
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
   }
 
   // Fetch balance, total earned, events, recent transactions, last-30-days
   // points, and the loyalty "pass" context (business, program, tiers).
-  const [balanceResult, earnedResult, eventsResult, txResult, points30Result, businessResult, programResult, tiersResult] = await Promise.all([
+  const [
+    balanceResult,
+    earnedResult,
+    eventsResult,
+    txResult,
+    points30Result,
+    businessResult,
+    programResult,
+    tiersResult,
+  ] = await Promise.all([
     // Latest balance (uses customer.id PK — matches FK on points_transactions)
     db
       .select({ balance_after: pointsTransactions.balanceAfter })
@@ -558,12 +625,16 @@ router.get('/v1/customers/me', async (c) => {
         });
         await publish(
           c.env.DOMAIN_EVENTS_QUEUE,
-          createEnvelope(PROFILE_VIEWED, {
+          createEnvelope(
+            PROFILE_VIEWED,
+            {
             business_id: businessId,
             timestamp: new Date().toISOString(),
-          }, {
+            },
+            {
             customer_id: customer.globalId,
-          }),
+            },
+          ),
         );
       } catch (err) {
         console.error('[customer] Failed to emit profile_viewed event:', err);
@@ -619,10 +690,7 @@ router.get('/v1/customers/by-global-id/:globalId', async (c) => {
     .limit(1);
 
   if (!customer) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' } },
-      404,
-    );
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' } }, 404);
   }
 
   // Fetch current balance
@@ -950,7 +1018,8 @@ router.get('/v1/customers/:id', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
 
   // Run customer query + events + consents + points in parallel
-  const [customerResult, eventsResult, consentsResult, balanceResult, earnedResult, txResult] = await Promise.all([
+  const [customerResult, eventsResult, consentsResult, balanceResult, earnedResult, txResult] =
+    await Promise.all([
     db
       .select()
       .from(customers)
@@ -966,23 +1035,13 @@ router.get('/v1/customers/:id', async (c) => {
     db
       .select()
       .from(customerEvents)
-      .where(
-        and(
-          eq(customerEvents.customerId, id),
-          eq(customerEvents.businessId, businessId),
-        ),
-      )
+        .where(and(eq(customerEvents.customerId, id), eq(customerEvents.businessId, businessId)))
       .orderBy(desc(customerEvents.createdAt))
       .limit(20),
     db
       .select()
       .from(consents)
-      .where(
-        and(
-          eq(consents.customerId, id),
-          eq(consents.businessId, businessId),
-        ),
-      ),
+        .where(and(eq(consents.customerId, id), eq(consents.businessId, businessId))),
     // Latest balance
     db
       .select({ balance_after: pointsTransactions.balanceAfter })
@@ -1017,10 +1076,7 @@ router.get('/v1/customers/:id', async (c) => {
   ]);
 
   if (customerResult.length === 0) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Customer not found' } },
-      404,
-    );
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
   }
 
   const points = balanceResult[0]?.balance_after ?? 0;
@@ -1170,19 +1226,12 @@ router.patch('/v1/customers/:id', async (c) => {
     .select()
     .from(customers)
     .where(
-      and(
-        eq(customers.id, id),
-        eq(customers.businessId, businessId),
-        isNull(customers.deletedAt),
-      ),
+      and(eq(customers.id, id), eq(customers.businessId, businessId), isNull(customers.deletedAt)),
     )
     .limit(1);
 
   if (existing.length === 0) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Customer not found' } },
-      404,
-    );
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
   }
 
   let parsed: unknown;
@@ -1331,19 +1380,11 @@ router.delete('/v1/customers/:id', async (c) => {
   const existing = await db
     .select()
     .from(customers)
-    .where(
-      and(
-        eq(customers.id, id),
-        eq(customers.businessId, businessId),
-      ),
-    )
+    .where(and(eq(customers.id, id), eq(customers.businessId, businessId)))
     .limit(1);
 
   if (existing.length === 0) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Customer not found' } },
-      404,
-    );
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
   }
 
   // Soft delete: set deleted_at

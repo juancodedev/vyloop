@@ -34,6 +34,7 @@ const {
   resetSelectCalls,
   recordingChain,
   setDialect,
+  consentWrites,
 } = vi.hoisted(() => {
   // NOTE: this factory must stay SYNCHRONOUS. Vitest does not await an async
   // vi.hoisted before running vi.mock factories, so the `tables` object below
@@ -100,6 +101,10 @@ const {
   const mockPublish = vi.fn();
   const mockValidate = vi.fn();
 
+  // The consents a registration recorded, so a test can assert what was
+  // written and not merely that the request was accepted.
+  const consentWrites: Array<Record<string, unknown>> = [];
+
   /** Default chain: records the query and resolves from the table registry. */
   function recordingChain(projection?: Record<string, unknown>) {
     const projectionKey =
@@ -147,6 +152,11 @@ const {
   }
 
   const mockDb = {
+    // The registration writes the customer and the consents it was registered
+    // with in one transaction, so a consent that cannot be recorded leaves no
+    // customer behind. The mock runs the callback against the same instance,
+    // which is what a transaction does.
+    transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => work(mockDb)),
     select: vi.fn((projection?: Record<string, unknown>) => recordingChain(projection)),
     insert: vi.fn(() => ({
       values: vi.fn(() => ({
@@ -223,6 +233,7 @@ const {
     mockPublish,
     mockValidate,
     mockDb,
+    consentWrites,
     recordingChain,
     tables,
     selectCalls,
@@ -335,6 +346,9 @@ vi.mock('@vyloop/db', async () => {
   return {
     createDb: vi.fn(() => mockDb),
     setCurrentBusinessId: vi.fn(() => ({})),
+    upsertConsent: vi.fn(async (_db: unknown, input: Record<string, unknown>) => {
+      consentWrites.push(input);
+    }),
     tenants,
     loyaltyPrograms,
     membershipTiers,
@@ -443,6 +457,7 @@ function resetMocks() {
   setTableResults({});
   resetSelectCalls();
   updateCalls.length = 0;
+  consentWrites.length = 0;
   mockPublish.mockReset();
   mockValidate.mockReset();
   mockValidate.mockResolvedValue({ valid: true });
@@ -802,6 +817,121 @@ describe('CRUD Routes', () => {
   // -----------------------------------------------------------------------
 
   describe('Upsert (PUT /)', () => {
+    // -----------------------------------------------------------------------
+    // Consents
+    //
+    // A consent is recorded in the same transaction as the customer it belongs
+    // to, and the types are checked before anything is written. Both halves
+    // matter: an unknown type must not leave a customer behind, and a consent
+    // that cannot be recorded must not leave a customer behind either.
+    // -----------------------------------------------------------------------
+
+    it('records the consents the caller asked for', async () => {
+      mockDb.select.mockImplementationOnce(() => {
+        const chain: any = {};
+        chain.from = vi.fn(() => chain);
+        chain.where = vi.fn(() => chain);
+        chain.limit = vi.fn(() => chain);
+        chain.offset = vi.fn(() => chain);
+        chain.orderBy = vi.fn(() => chain);
+        chain.leftJoin = vi.fn(() => chain);
+        chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+        return chain;
+      });
+
+      const res = await request('PUT', '/v1/customers', {
+        body: {
+          fullName: 'Alice Smith',
+          phone: '+56912345678',
+          consents: { whatsapp: true, nearby_notifications: false },
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(consentWrites).toEqual([
+        expect.objectContaining({ consentType: 'whatsapp', granted: true }),
+        expect.objectContaining({ consentType: 'nearby_notifications', granted: false }),
+      ]);
+    });
+
+    it('leaves a consent alone when the caller did not mention it', async () => {
+      mockDb.select.mockImplementationOnce(() => {
+        const chain: any = {};
+        chain.from = vi.fn(() => chain);
+        chain.where = vi.fn(() => chain);
+        chain.limit = vi.fn(() => chain);
+        chain.offset = vi.fn(() => chain);
+        chain.orderBy = vi.fn(() => chain);
+        chain.leftJoin = vi.fn(() => chain);
+        chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+        return chain;
+      });
+
+      const res = await request('PUT', '/v1/customers', {
+        body: { fullName: 'Alice Smith', phone: '+56912345678' },
+      });
+
+      expect(res.status).toBe(201);
+      // Absent means "not mentioned", which is not the same as revoked.
+      expect(consentWrites).toEqual([]);
+    });
+
+    it('rejects an unknown consent type without registering the customer', async () => {
+      mockDb.select.mockImplementationOnce(() => {
+        const chain: any = {};
+        chain.from = vi.fn(() => chain);
+        chain.where = vi.fn(() => chain);
+        chain.limit = vi.fn(() => chain);
+        chain.offset = vi.fn(() => chain);
+        chain.orderBy = vi.fn(() => chain);
+        chain.leftJoin = vi.fn(() => chain);
+        chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+        return chain;
+      });
+
+      const res = await request('PUT', '/v1/customers', {
+        body: {
+          fullName: 'Alice Smith',
+          phone: '+56912345678',
+          consents: { email: true },
+        },
+      });
+
+      expect(res.status).toBe(400);
+      const data = await res.json() as any;
+      expect(data.error.code).toBe('VALIDATION_ERROR');
+      expect(data.error.message).toContain('email');
+      // Nothing was written: a client that sent a typo is told so, and does not
+      // leave a half-registered customer behind.
+      expect(consentWrites).toEqual([]);
+      expect(mockPublish).not.toHaveBeenCalled();
+    });
+
+    it('rejects a consent whose value is not a boolean', async () => {
+      mockDb.select.mockImplementationOnce(() => {
+        const chain: any = {};
+        chain.from = vi.fn(() => chain);
+        chain.where = vi.fn(() => chain);
+        chain.limit = vi.fn(() => chain);
+        chain.offset = vi.fn(() => chain);
+        chain.orderBy = vi.fn(() => chain);
+        chain.leftJoin = vi.fn(() => chain);
+        chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
+        return chain;
+      });
+
+      const res = await request('PUT', '/v1/customers', {
+        body: {
+          fullName: 'Alice Smith',
+          phone: '+56912345678',
+          consents: { whatsapp: 'yes' },
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(consentWrites).toEqual([]);
+    });
+
     it('creates customer and publishes event on first registration', async () => {
       // Select returns empty → no existing customer
       mockDb.select.mockImplementationOnce(() => {
