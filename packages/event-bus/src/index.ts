@@ -13,6 +13,13 @@ export const QR_DISPLAYED = 'QRDisplayed';
 export const WHATSAPP_OUTBOUND_REQUESTED = 'WhatsAppOutboundRequested';
 export const PUSH_NOTIFICATION_REQUESTED = 'PushNotificationRequested';
 export const WORKFLOW_TRIGGERED = 'WorkflowTriggered';
+// A campaign a business composed: a target (a venue, or a centre and a radius)
+// and the message to carry. The audience is resolved server-side, when the
+// event is consumed — never by the caller, which never names a customer.
+export const PUSH_CAMPAIGN_REQUESTED = 'PushCampaignRequested';
+// A customer interacted with a venue. This is the fact a proximity audience is
+// built from: there is no other record of a customer having been at a place.
+export const CUSTOMER_CHECKED_IN = 'CustomerCheckedIn';
 
 // ---------------------------------------------------------------------------
 // Event envelope format

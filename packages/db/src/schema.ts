@@ -269,6 +269,14 @@ export const customerEvents = pgTable('customer_events', {
     sql`${table.eventType}`,
     sql`${table.createdAt} DESC`,
   ),
+  // Proximity audiences: "the customers who interacted at this venue". The
+  // branch is the leading filter after the tenant, and the timestamp is
+  // third so the "since" bound of a recency window rides the same index.
+  index('idx_customer_events_branch').on(
+    sql`${table.businessId}`,
+    sql`${table.branchId}`,
+    sql`${table.createdAt} DESC`,
+  ),
 ]);
 
 export const consents = pgTable(
@@ -353,6 +361,10 @@ export const pushSubscriptions = pgTable(
     uniqueIndex('uq_push_subscriptions_endpoint').on(table.endpoint),
     index('idx_push_subscriptions_business').on(table.businessId),
     index('idx_push_subscriptions_customer').on(table.customerId),
+    // The pruning sweep reads the subscriptions that have not been seen for a
+    // long time. Without this index the sweep is a sequential scan of every
+    // subscription in the table, on a table that only grows.
+    index('idx_push_subscriptions_last_seen').on(table.lastSeenAt),
   ],
 );
 
@@ -560,6 +572,14 @@ export const checkins = pgTable('checkins', {
   id: uuid('id').primaryKey().defaultRandom(),
   businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
   customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+  // The venue the sale happened at, when the caller says so.
+  //
+  // Nullable, and `ON DELETE SET NULL`: a sale outlives the venue it happened
+  // at, and a venue that goes away takes its history with it only as a fact
+  // that a local existed once. It is also the column that makes a proximity
+  // audience possible at all — without a venue on the interaction, "the
+  // customers who were at this branch" cannot be answered.
+  branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'set null' }),
   // What the terminal received, kept verbatim as the audit trail of the scan.
   memberCode: text('member_code').notNull(),
   paymentId: text('payment_id'),
