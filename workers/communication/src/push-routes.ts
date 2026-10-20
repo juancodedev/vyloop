@@ -46,6 +46,46 @@ const router = new Hono<{ Bindings: Bindings }>();
 const PUSH_CONSENT_TYPE = 'nearby_notifications';
 
 /**
+ * The longest endpoint a subscription may carry.
+ *
+ * The endpoint is a `text` column and `text` is unbounded, so a caller could
+ * hand this route a ten megabyte "endpoint" and make the platform store it.
+ * A real push endpoint is a service URL with a token in it; two thousand
+ * characters is already generous for one.
+ */
+export const MAX_ENDPOINT_LENGTH = 2048;
+
+/**
+ * The number of subscriptions a customer may hold before a new one is refused.
+ *
+ * The subscribe route is attacker-controlled input — the endpoint, the keys and
+ * the count all come from the caller — and unbounded registration is a
+ * storage-abuse vector: one caller could fill the table with registrations
+ * that were never going to receive anything.
+ *
+ * A customer may hold several browsers: a phone and a laptop, or one browser
+ * with two accounts, or the same browser in a normal and a private window. A
+ * customer who already holds more than this many is refused, because the next
+ * registration is more likely to be abuse than a browser.
+ */
+export const MAX_SUBSCRIPTIONS_PER_CUSTOMER = 10;
+
+/**
+ * Is this an `https` URL?
+ *
+ * A push service is reached over TLS, and a scheme that is not `https` is not
+ * a push service. The endpoint is also a capability, so it is refused before
+ * it is stored rather than after.
+ */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the customer behind the request.
  *
  * Returns the customer's internal id, which is what the subscription row
@@ -123,6 +163,37 @@ router.post('/v1/communication/push/subscribe', async (c) => {
     );
   }
 
+  // -----------------------------------------------------------------------
+  // The endpoint is attacker-controlled input
+  // -----------------------------------------------------------------------
+  // Both checks are here, before the database, because both are about the
+  // shape of the request rather than about the customer: a refusal that
+  // needed a round trip would still have to refuse, and a refusal that
+  // reached the database could have written something on the way.
+  if (endpoint.length > MAX_ENDPOINT_LENGTH) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `subscription.endpoint must be at most ${MAX_ENDPOINT_LENGTH} characters.`,
+        },
+      },
+      400,
+    );
+  }
+
+  if (!isHttpsUrl(endpoint)) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'subscription.endpoint must be an https URL.',
+        },
+      },
+      400,
+    );
+  }
+
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, auth.businessId);
 
@@ -147,6 +218,29 @@ router.post('/v1/communication/push/subscribe', async (c) => {
         },
       },
       403,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // How many browsers this customer already holds
+  // -----------------------------------------------------------------------
+  // A customer may hold a few: a phone and a laptop, or one browser with two
+  // accounts. Past the cap it is not a browser any more, it is a caller
+  // filling a table.
+  const existing = await readPushSubscriptions(db, {
+    businessId: auth.businessId,
+    customerId,
+  });
+
+  if (existing.length > MAX_SUBSCRIPTIONS_PER_CUSTOMER) {
+    return c.json(
+      {
+        error: {
+          code: 'TOO_MANY_SUBSCRIPTIONS',
+          message: `This customer already holds more than ${MAX_SUBSCRIPTIONS_PER_CUSTOMER} push subscriptions.`,
+        },
+      },
+      429,
     );
   }
 
