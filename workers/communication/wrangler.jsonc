@@ -18,6 +18,14 @@
         "binding": "DOMAIN_EVENTS_QUEUE",
         "queue": "vyloop-domain-events"
       }
+    ],
+    "consumers": [
+      {
+        "queue": "vyloop-domain-events",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3
+      }
     ]
   }
 }

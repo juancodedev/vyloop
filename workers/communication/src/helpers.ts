@@ -23,6 +23,18 @@ export interface Bindings {
   WHATSAPP_TOKEN: string;
   WHATSAPP_API_VERSION: string;
   WHATSAPP_VERIFY_TOKEN: string;
+  /**
+   * The VAPID identity this server pushes with.
+   *
+   * The public key is public and is served to the browser that subscribes. The
+   * private key signs every delivery and is a secret: it is the difference
+   * between "a push service accepted this message" and "anyone could send this
+   * customer a message".
+   */
+  VAPID_PUBLIC_KEY: string;
+  VAPID_PRIVATE_KEY: string;
+  /** Who to contact about this sender, as a `mailto:` URL. */
+  VAPID_SUBJECT: string;
 }
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: AuthHeaders } };

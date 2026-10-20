@@ -5,6 +5,7 @@ import { eq, and } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
 import { withRls, callMetaApi, isRetryableError } from './helpers';
+import { deliverPushNotification, type PushNotificationPayload } from './push-delivery';
 
 // ---------------------------------------------------------------------------
 // Queue consumer dispatcher
@@ -24,6 +25,8 @@ export async function handleEvent(
   switch (event.type) {
     case 'WhatsAppOutboundRequested':
       return handleWhatsAppOutboundRequested(event, message, env);
+    case 'PushNotificationRequested':
+      return handlePushNotificationRequested(event, env);
     default:
       console.warn(`[communication] Unknown event type: ${event.type} — acking and skipping`);
       return;
@@ -188,4 +191,33 @@ async function handleWhatsAppOutboundRequested(
     );
     throw err; // Triggers queue retry
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// PushNotificationRequested handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle a PushNotificationRequested event.
+ *
+ * The delivery itself, the classification of what the push service answers,
+ * and the consent check that runs again at the moment of the delivery, all
+ * live in `push-delivery.ts`. This handler is the seam: it takes the event
+ * apart and hands the payload over.
+ */
+async function handlePushNotificationRequested(
+  event: EventEnvelope,
+  env: Bindings,
+): Promise<void> {
+  const payload = event.payload as PushNotificationPayload;
+  const businessId = event.header.business_id;
+
+  const outcome = await deliverPushNotification(payload, businessId, env);
+
+  console.log(
+    `[communication] Push to ${payload.customer_id}: ${outcome.delivered} delivered, ` +
+      `${outcome.failed} failed, ${outcome.removed} dead subscriptions removed ` +
+      `of ${outcome.subscriptions}`,
+  );
 }

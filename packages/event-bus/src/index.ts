@@ -11,6 +11,7 @@ export const REWARD_AUTO_GRANTED = 'RewardAutoGranted';
 export const PROFILE_VIEWED = 'ProfileViewed';
 export const QR_DISPLAYED = 'QRDisplayed';
 export const WHATSAPP_OUTBOUND_REQUESTED = 'WhatsAppOutboundRequested';
+export const PUSH_NOTIFICATION_REQUESTED = 'PushNotificationRequested';
 export const WORKFLOW_TRIGGERED = 'WorkflowTriggered';
 
 // ---------------------------------------------------------------------------
