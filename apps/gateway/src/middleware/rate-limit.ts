@@ -1,4 +1,5 @@
 import type { KVNamespace } from '@cloudflare/workers-types';
+import { COUNTER_SUBJECT_PREFIX, isCounterSubject } from '@vyloop/types';
 import type { Context, Next } from 'hono';
 
 import type { JwtClaims } from './auth';
@@ -125,30 +126,32 @@ export const DEFAULT_LIMITS: Record<string, number> = {
 };
 
 /**
- * The subject namespace a counter's token lives in: `pos:<terminalId>`.
+ * The subject namespace a counter's token lives in: `pos:<terminalId>`, and the
+ * question of whether a subject is one, are both owned by `@vyloop/types` and
+ * imported here.
  *
- * Declared here rather than imported from `workers/growth`, which owns the
- * matching `isCounterSubject`: the gateway cannot take a runtime dependency on a
- * worker, and a worker cannot own a rule the edge has to apply to every request
- * before it decides which worker to forward to. Two constants, one spelling,
- * asserted against each other by reading the other file's source — the same
- * approach `wallet-callback-path.contract.test.ts` uses for the callback path.
+ * They used to be declared twice — once in this file and once in
+ * `workers/growth/src/helpers.ts` — with a contract test that read the other
+ * file's source to prove the two spellings agreed. That worked, and it was the
+ * only thing holding them together: the dependency runs the wrong way for a
+ * shared rule (growth reads the value, it does not own it), and a worker cannot
+ * own a rule the edge has to apply to every request before it decides which
+ * worker to forward to.
+ *
+ * A package both sides depend on is the dependency direction that can. The
+ * gateway still cannot take a runtime dependency on a **worker**, and it still
+ * does not need to: `@vyloop/types` is a leaf with no runtime dependencies of
+ * its own, and it is already on this worker's dependency list.
  *
  * ## Why the colon, and why it is exact
  *
- * Copied for the reason `helpers.ts:158-175` gives: a bare `pos` is matched by
- * `postmaster-3`, `pos-7` and `POS-2`, so a prefix without a separator hands a
- * counter's bucket to any issuer that happened to pick a word starting with
- * those letters. A uuid cannot contain a colon, so `pos:` is unreachable by
- * accident. `pos:` with an empty remainder is not a counter either, for the same
- * reason growth refuses it.
+ * The reason `@vyloop/types` gives: a bare `pos` is matched by `postmaster-3`,
+ * `pos-7` and `POS-2`, so a prefix without a separator hands a counter's bucket
+ * to any issuer that happened to pick a word starting with those letters. A
+ * uuid cannot contain a colon, so `pos:` is unreachable by accident. `pos:` with
+ * an empty remainder is not a counter either, for the same reason growth
+ * refuses it.
  */
-const COUNTER_SUBJECT_PREFIX = 'pos:';
-
-/** Is this token a payment terminal at a merchant's till? */
-function isCounterSubject(sub: string): boolean {
-  return sub.startsWith(COUNTER_SUBJECT_PREFIX) && sub.length > COUNTER_SUBJECT_PREFIX.length;
-}
 
 export const DEFAULT_WINDOW = 60;
 

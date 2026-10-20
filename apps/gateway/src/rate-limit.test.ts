@@ -36,6 +36,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { COUNTER_SUBJECT_PREFIX, isCounterSubject } from '@vyloop/types';
 import { describe, expect, it } from 'vitest';
 
 import type { JwtClaims } from './middleware/auth';
@@ -158,7 +159,7 @@ describe('DEFAULT_LIMITS is keyed by plans that exist', () => {
 // ---------------------------------------------------------------------------
 
 describe('a premium tenant is not throttled as a free one', () => {
-  it('serves a premium caller past free\'s ceiling', async () => {
+  it("serves a premium caller past free's ceiling", async () => {
     const kv = memoryKv();
     const jwt = claims({ plan: 'premium' });
 
@@ -310,7 +311,7 @@ describe('counter subjects are counted apart from humans at the same merchant', 
     expect(first.key).toBe(second.key);
   });
 
-  it('does not let one terminal spend the other\'s bucket', async () => {
+  it("does not let one terminal spend the other's bucket", async () => {
     const kv = memoryKv();
 
     // Exhaust A completely.
@@ -326,7 +327,7 @@ describe('counter subjects are counted apart from humans at the same merchant', 
     expect(b.limited).toBe(false);
   });
 
-  it('does not let a terminal spend the operator\'s bucket, or the reverse', async () => {
+  it("does not let a terminal spend the operator's bucket, or the reverse", async () => {
     const kv = memoryKv();
     const operator = claims({ sub: 'user_1', role: 'admin', plan: 'premium' });
 
@@ -424,20 +425,28 @@ function probeFor(jwt: JwtClaims) {
 
 describe('the counter prefix agrees with the reader that gates the routes', () => {
   // `requireCounterSubject` in `workers/growth/src/helpers.ts` decides which
-  // requests may report a merchant's completed sale, and it matches a private
-  // constant in its own file. This gateway has to build the same string to give a
-  // counter its own counter. Two constants, one spelling — and nothing in either
-  // package can enforce that on its own, because the dependency runs the wrong
-  // way: growth reads the value, it does not own it.
+  // requests may report a merchant's completed sale, and this gateway has to
+  // build the same string to give a counter its own bucket.
   //
-  // So it is enforced here, by reading the other file's source. Same approach as
-  // `wallet-callback-path.contract.test.ts`, for the same reason: importing across
-  // the boundary is what created the drift in the first place.
+  // The two used to declare the prefix **twice** — once in each file — and the
+  // only thing keeping the spellings together was this test, reading the other
+  // file's source. It worked, because a test can read a file it may not import.
+  // But it was a test holding together two definitions, which is the shape of
+  // problem that a test is the wrong tool for: the dependency runs the wrong way
+  // (growth reads the value, it does not own it) and neither package could
+  // enforce the agreement on its own.
+  //
+  // The prefix now lives in `@vyloop/types`, which both sides import. The
+  // assertions below therefore check two different things: that the shared
+  // definition behaves the way both sides need, and that **neither side kept a
+  // private copy** — because a copy is how the two would drift apart again,
+  // and a copy is invisible to a test that only reads the shared value.
   const GROWTH_SRC = join(__dirname, '..', '..', '..', 'workers', 'growth', 'src');
-  const helpersSource = readFileSync(join(GROWTH_SRC, 'helpers.ts'), 'utf8');
+  const growthSource = readFileSync(join(GROWTH_SRC, 'helpers.ts'), 'utf8');
+  const gatewaySource = readFileSync(join(__dirname, 'middleware', 'rate-limit.ts'), 'utf8');
 
   it('is the prefix growth refuses everything else for', () => {
-    expect(helpersSource).toContain("const COUNTER_SUBJECT_PREFIX = 'pos:'");
+    expect(COUNTER_SUBJECT_PREFIX).toBe('pos:');
   });
 
   it('is the prefix growth requires a non-empty remainder behind', () => {
@@ -445,6 +454,27 @@ describe('the counter prefix agrees with the reader that gates the routes', () =
     // token with no terminal in it — and growth would refuse that same token on
     // the routes it exists for. The two halves have to agree about the remainder,
     // not only about the letters.
-    expect(helpersSource).toContain('sub.length > COUNTER_SUBJECT_PREFIX.length');
+    expect(isCounterSubject('pos:')).toBe(false);
+    expect(isCounterSubject('pos:0f9c1d2e')).toBe(true);
+    // And a subject that merely starts with the letters is not a counter: `pos`
+    // on its own would be matched by `postmaster-3` and `POS-2`.
+    expect(isCounterSubject('postmaster-3')).toBe(false);
+    expect(isCounterSubject('POS-2')).toBe(false);
+  });
+
+  it('is not copied into the gateway', () => {
+    // The gateway needs the literal — it builds the bucket key out of it — so
+    // it imports it rather than declaring it.
+    expect(gatewaySource).toContain('COUNTER_SUBJECT_PREFIX');
+    expect(gatewaySource).not.toContain("'pos:'");
+  });
+
+  it('is not copied into growth either', () => {
+    // Growth does not need the literal at all: it delegates the whole
+    // question to the shared predicate, so a private copy here would be a
+    // second answer to a question that now has one owner. Growth's own suite
+    // covers what its exported predicate does with these inputs.
+    expect(growthSource).not.toContain("'pos:'");
+    expect(growthSource).toContain('isCounterSubjectValue');
   });
 });
