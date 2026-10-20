@@ -1,5 +1,7 @@
 # Tasks: message_log Schema Alignment
 
+> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+
 ## Review Workload Forecast
 
 | Field                   | Value                                                              |
@@ -36,7 +38,7 @@ Chain strategy: stacked-to-main
 ## Unit 2: The migration
 
 - [ ] 2.1 Read production's current types of `message_log.payload` and `message_log.error` (`information_schema.columns`, read-only) and record them in the migration header for the rollback.
-- [ ] 2.2 `packages/db/drizzle/<next>_message_log_alignment.sql` (next free number; `tenant-isolation-rls` also adds migrations) — header with the reason, the pre-flight query and the rollback statements; body: `ALTER COLUMN "customer_id" SET NOT NULL`, `ALTER COLUMN "channel" SET DEFAULT 'whatsapp'`, `ALTER COLUMN "status" SET DEFAULT 'queued'`, `ALTER COLUMN "created_at" SET DATA TYPE timestamp with time zone USING "created_at" AT TIME ZONE 'UTC'`, `DROP COLUMN "payload"`, `DROP COLUMN "error"`, separated by `--> statement-breakpoint`; add the journal entry in `packages/db/drizzle/meta/_journal.json`.
+- [ ] 2.2 `packages/db/drizzle/<next>_message_log_alignment.sql` (next free number, reserved per `docs/18-Trabajo-Pendiente.md`; `tenant-isolation-rls` also adds migrations) — header with the reason, the pre-flight query and the rollback statements; body: `ALTER COLUMN "customer_id" SET NOT NULL`, `ALTER COLUMN "channel" SET DEFAULT 'whatsapp'`, `ALTER COLUMN "status" SET DEFAULT 'queued'`, `ALTER COLUMN "created_at" SET DATA TYPE timestamp with time zone USING "created_at" AT TIME ZONE 'UTC'`, `DROP COLUMN "payload"`, `DROP COLUMN "error"`, separated by `--> statement-breakpoint`; add the journal entry in `packages/db/drizzle/meta/_journal.json`.
 - [ ] 2.3 `packages/db/src/migration-sql.test.ts` — the new file parses (the existing `pg-query-emscripten` parser), contains no `DROP TABLE`, and its header carries the pre-flight query.
 - [ ] 2.4 Run the pre-flight on production; apply by hand only if it returns zeros; register with `--write-baseline`; `pnpm db:drift` green.
 - [ ] 2.5 `workers/communication/src/*.test.ts` — no change expected; run `pnpm --filter @vyloop/communication-worker test` to confirm nothing read `payload`/`error`.

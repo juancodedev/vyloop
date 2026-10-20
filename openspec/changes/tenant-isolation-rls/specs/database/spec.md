@@ -39,7 +39,7 @@ The policy predicate MUST NOT pass `missing_ok` to `current_setting`. A query th
 
 ### Requirement: Transaction-Scoped Tenant Context
 
-The tenant context MUST be set with `set_config(name, value, true)` inside the same transaction as the queries it scopes. `@vyloop/db` MUST export one helper, `withTenantTransaction`, that opens a transaction, sets `app.current_business_id` and/or `app.current_tenant_id` on it, and runs the caller's queries on that transaction handle. Workers MUST NOT set the tenant context with a statement executed on the pool outside a transaction, and MUST NOT use a session-level `SET`, because the production connection goes through Neon's transaction pooler and a pooled client may serve the next statement.
+The tenant context MUST be set with `set_config(name, value, true)` inside the same transaction as the queries it scopes. `@vyloop/db` MUST export one helper, `withTenantTransaction`, that opens a transaction, sets `app.current_business_id` and/or `app.current_tenant_id` on it, and runs the caller's queries on that transaction handle. Workers and `apps/gateway` MUST NOT set the tenant context with a statement executed on the pool outside a transaction, and MUST NOT use a session-level `SET`, because the production connection goes through Neon's transaction pooler and a pooled client may serve the next statement.
 
 #### Scenario: Every statement in the callback sees the tenant
 
@@ -53,11 +53,12 @@ The tenant context MUST be set with `set_config(name, value, true)` inside the s
 - WHEN the same pool runs another query outside any tenant transaction
 - THEN `current_setting('app.current_business_id', true)` is empty for that query
 
-#### Scenario: No worker sets the context outside a transaction
+#### Scenario: No runtime sets the context outside a transaction
 
-- GIVEN the source of every worker under `workers/`
-- WHEN it is searched for `withRls(db` or `openTenantSession(`
+- GIVEN the source of every worker under `workers/` and of `apps/gateway/src/`
+- WHEN it is searched for `withRls(db`, `openTenantSession(`, or a raw `setCurrentBusinessId(`/`setCurrentTenantId(` outside `packages/db/src/rls.ts`
 - THEN no call site is found
+- AND `workers/analytics` and `apps/gateway/src/merchant-store.ts` are included in the search
 
 ### Requirement: Non-Owner Application Role
 

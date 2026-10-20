@@ -8,7 +8,7 @@ The gateway MUST establish one request id per inbound request before any other m
 
 The gateway MUST forward the id to the worker it routes to in the `X-Request-Id` header, replacing any value the client sent, and MUST set `X-Request-Id` on every response it returns, including error responses and responses produced by a worker.
 
-Every error body the gateway produces — `onError`, `notFound`, the router's `NOT_FOUND`, `SERVICE_UNAVAILABLE` and `SERVICE_ERROR`, the events ingestor and the support endpoint — MUST carry the request's id in `error.request_id`, and MUST NOT generate a second id. Every gateway log line on an error path MUST include `request_id=<id>`.
+Every error body the gateway produces — `onError`, `notFound`, the router's `NOT_FOUND`, `SERVICE_UNAVAILABLE` and `SERVICE_ERROR`, the events ingestor while that route exists, and the support endpoint — MUST carry the request's id in `error.request_id`, and MUST NOT generate a second id. Every gateway log line on an error path MUST include `request_id=<id>`.
 
 An event the ingestor publishes MUST carry the request's id in `header.request_id`, overwriting any value the client put there.
 

@@ -53,7 +53,9 @@ boundary.
 2. The id forwarded to every worker in `X-Request-Id`, and echoed in the
    `X-Request-Id` response header of every gateway response.
 3. Every gateway error body (`onError`, `notFound`, router errors, ingestor
-   errors, support) uses **that** id instead of a fresh `crypto.randomUUID()`.
+   errors while the route exists, support) uses **that** id instead of a fresh
+   `crypto.randomUUID()`. If `api-surface-cleanup` has already retired the
+   ingestor, that item is a no-op; check before applying.
 4. A small shared package, `@vyloop/request-context`: the header name, the
    validator, a Hono middleware that reads or generates the id, and a log
    prefix helper.

@@ -40,7 +40,7 @@ schema and the worker error body. Unit 4's schema change gets its own commit.
 - [ ] 2.1 `apps/gateway/package.json` — depend on `@vyloop/request-context`
 - [ ] 2.2 `apps/gateway/src/index.ts` — register `requestIdMiddleware()` as the first `app.use('*', …)` (before `cors()` at line 31); `onError` (line 482) and `notFound` (line 428) read `c.get('requestId')` instead of `crypto.randomUUID()`
 - [ ] 2.3 `apps/gateway/src/router.ts` — the three error bodies (lines 201, 225, 244) use the context id; the `console.error` at line 238 gains the prefix
-- [ ] 2.4 `apps/gateway/src/ingestor.ts` — error bodies (lines 70, 86, 105, 118) use the context id; the published envelope's `header.request_id` is overwritten with it
+- [ ] 2.4 `apps/gateway/src/ingestor.ts` — error bodies (lines 70, 86, 105, 118) use the context id; the published envelope's `header.request_id` is overwritten with it. Skip if `api-surface-cleanup` already retired the ingestor
 - [ ] 2.5 `apps/gateway/src/support.ts` — the request id at line 475 is read from the context (keep `deps.newId` only as the fallback the tests inject), so the support log and the body agree with the response header
 - [ ] 2.6 `apps/gateway/src/index.test.ts`, `router.test.ts`, `error-log.test.ts` — generated id forwarded and echoed; well-formed client id kept; malformed replaced; `404`, `502` and `500` bodies equal the response header; the error log contains the same id
 
