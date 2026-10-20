@@ -1173,11 +1173,19 @@ clave como nombre de paquete inventaría un requisito contra `jsdom` que nadie d
 
 Esto es lo que hay que tener claro antes de tocar el gate, y está en el docblock por eso.
 
-Al día de hoy, sobre `main`, **los 45 overrides de versión están inertes**: toda resolución ya pasó por
-encima de todo selector que pudiera acotarla. Un override cuyo selector ya no selecciona ninguna
-resolución no hace nada, y un gate que lo reportara como hallazgo habría pedido 45 borrados el primer
-día, volvería a dispararse después del próximo bumpee de `postcss`, y estaría apagado en un mes.
-Un override que dejó de aplicar no es un hallazgo; es housekeeping.
+Al día de hoy `package.json` tiene **12 overrides**: 9 reescrituras de versión, 2 pins (`react`,
+`react-dom`) y un override de dependencia (`jsdom>undici`). Los 9 restantes están inertes: toda
+resolución ya pasó por encima de todo selector que pudiera acotarla. Un override cuyo selector ya no
+selecciona ninguna resolución no hace nada, y un gate que lo reportara como hallazgo habría pedido 43
+borrados el primer día, volvería a dispararse después del próximo bumpee de `postcss`, y estaría apagado
+en un mes. Un override que dejó de aplicar no es un hallazgo; es housekeeping.
+
+**Inerte no significa removible**, y esto se aprendió a la mala el 2026-10-20. Los overrides se solapan:
+`sharp@<0.35.0` y `sharp@<0.35.4` son inertes cada uno por separado y cada uno cubre al otro — sacá los
+dos y `sharp` vuelve a 0.34.5. De las 43 entradas inertes se quitaron 34 y quedaron 9, porque sacarlas
+de a una y volver a chequear después de cada una cambiaba alguna resolución. La prueba que sirve no es
+`git diff --quiet pnpm-lock.yaml` — el lockfile registra la tabla de overrides en sí, así que cualquier
+borrado lo toca — sino que el conjunto de claves de `packages:` y `snapshots:` no cambie.
 
 **La violación es exactamente una cosa:** una resolución que cae dentro del selector de un override y
 queda por debajo del piso que ese mismo override nombra. Nada más en el archivo es hallazgo.

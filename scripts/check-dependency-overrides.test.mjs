@@ -632,42 +632,41 @@ describe('the repository as it stands', () => {
   });
 
   it('accounts for every version rewrite, enforced or inert', () => {
-    // The whole table is 46 entries: 45 version rewrites or pins plus
-    // `jsdom>undici`. Every one of the 45 must appear in exactly one of these
-    // two lists, or the gate is skipping something it should have judged.
+    // Every entry in the real table must land in exactly one of these lists, or
+    // be one of the dependency overrides the gate skips on purpose. The total is
+    // read from `package.json` rather than written here: the table shrinks (34
+    // entries were removed on 2026-10-20) and a literal would turn every cleanup
+    // into a red suite, which is how a guard teaches its reader to edit the
+    // guard.
+    const declared = Object.keys(JSON.parse(REAL_OVERRIDES).pnpm.overrides);
     const accounted = new Set([
       ...gate.enforced.map((e) => e.overrideKey),
       ...gate.inert.map((i) => i.overrideKey),
       ...gate.unresolvedOverrides.map((u) => u.overrideKey),
     ]);
-    expect(accounted.size).toBe(45);
+    expect(accounted.size + gate.skippedDependencies.length).toBe(declared.length);
     expect(gate.skippedDependencies).toHaveLength(1);
   });
 
-  it('reads the ten packages the brief names, and the eight it does not', () => {
-    // `ws`, `fast-uri`, `next`, `js-yaml`, `vitest`, `@vitest/mocker`,
-    // `source-map-js` and `shell-quote` carry version rewrites too; they are
-    // absent from the brief's table. None of them is below its floor.
+  it('judges every package the table still names', () => {
+    // The 2026-10-20 cleanup removed 34 inert entries, including every
+    // `next`, `postcss`, `js-yaml`, `vitest`, `drizzle-orm`, `source-map-js`
+    // and `shell-quote` rewrite, so this list is what is left. It is asserted
+    // against the real table on purpose: the gate must read the shapes that are
+    // actually declared — scoped names, two exact pins and one dependency
+    // override among them.
     const judged = new Set([...gate.enforced.map((e) => e.name), ...gate.inert.map((i) => i.name)]);
     for (const name of [
       'brace-expansion',
       'cookie',
-      'drizzle-orm',
       'esbuild',
+      'fast-uri',
       'nanoid',
-      'postcss',
       'react',
       'react-dom',
       'sharp',
       'undici',
       'ws',
-      'fast-uri',
-      'next',
-      'js-yaml',
-      'vitest',
-      '@vitest/mocker',
-      'source-map-js',
-      'shell-quote',
     ]) {
       expect(judged, `${name} was never judged`).toContain(name);
     }
