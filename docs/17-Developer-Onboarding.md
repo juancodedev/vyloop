@@ -86,7 +86,7 @@ wrangler secret put <NOMBRE> --config workers/<worker>/wrangler.jsonc
 | Secret de GitHub `DATABASE_URL`, inyectado por `.github/workflows/deploy.yml` a `identity`, `wallet` y `gateway` | Neon `ep-shiny-paper-aibbf0hk` (proyecto `polished-firefly-68401534`, rama `br-delicate-paper-aitqyq9y`) | **PRODUCCIÓN.** Los secrets de GitHub son write-only: esta URL no se puede leer de vuelta |
 | `apps/gateway/.dev.vars` y `workers/*/.dev.vars` (8 archivos, gitignored) | Neon `ep-shiny-paper-aibbf0hk`, la misma de arriba | **PRODUCCIÓN, y así está bien** (comprobado el 2026-10-20). Todo lo que corras con estos archivos escribe en producción |
 | Rama de dev del mismo proyecto | Neon `ep-divine-bonus-ai05bdy3` (rama `br-still-mud-aik526qf`) | Dev. Ningún `.dev.vars` la usa hoy; inactiva desde el 2026-10-07 |
-| Proyecto Supabase `mysrgtsuoxhpsyfhdnsp` | Proyecto migrado, ya no en uso | Vacía, sin schema |
+| Proyecto Supabase `mysrgtsuoxhspyfhdnsp` | Proyecto migrado, ya no en uso | Vacía, sin schema |
 
 El `.dev.vars` no se commitea, pero **sí contiene credenciales reales**, así que no se imprime: enmascaralo antes de mostrarlo. Ver [`docs/18`](18-Verificacion-y-Seguridad-Operativa.md) §3 y §4.
 
