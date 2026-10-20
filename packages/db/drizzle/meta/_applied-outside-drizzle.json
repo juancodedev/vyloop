@@ -153,6 +153,17 @@
           "name": "message_log.metadata"
         }
       ]
+    },
+    {
+      "tag": "0020_pos_terminals_business",
+      "when": 1792518328359,
+      "hash": "bad31019f30ec10544315b1b828d66c33c2eb0f28fde761456c326b2bf7ebc94",
+      "evidence": [
+        {
+          "kind": "index",
+          "name": "idx_pos_terminals_business"
+        }
+      ]
     }
   ]
 }
