@@ -8,7 +8,7 @@ import {
   readConsentMap,
   readPushSubscriptions,
 } from '@vyloop/db';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
 import { withRls } from './helpers';
@@ -203,6 +203,29 @@ export async function deliverPushNotification(
     const referenceId = payload.reference_id
       ? `${payload.reference_id}:${subscription.id}`
       : subscription.id;
+
+    // A delivery already decided is not made again. A queue retry redelivers
+    // the whole event — a campaign whose tenth subscriber answered `429` comes
+    // back for all ten — and an operator can compose the same campaign twice
+    // before the first one's rows exist. Either way, a browser that already
+    // received this reference, or refused it for good, is skipped. A row still
+    // `queued` is an attempt that never finished, and is attempted again.
+    if (payload.reference_id) {
+      const [decided] = await db
+        .select({ id: messageLog.id })
+        .from(messageLog)
+        .where(
+          and(
+            eq(messageLog.businessId, businessId),
+            eq(messageLog.channel, 'push'),
+            sql`${messageLog.content}->>'reference_id' = ${referenceId}`,
+            inArray(messageLog.status, ['sent', 'failed']),
+          ),
+        )
+        .limit(1);
+
+      if (decided) continue;
+    }
 
     // One row per delivery. The message is delivered once per browser, and
     // each of those has its own outcome, so each of those is its own row.

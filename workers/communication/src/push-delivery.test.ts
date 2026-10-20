@@ -167,6 +167,13 @@ function updateChainFor(table: unknown): {
 }
 
 /** The row the delivery wrote to `message_log`. */
+/** The customer lookup finds `cust-1`, and no decided delivery exists yet. */
+function noDecidedDelivery(): void {
+  dbMock.select
+    .mockImplementationOnce(() => createQueryChain([{ id: 'cust-1' }]))
+    .mockImplementationOnce(() => createQueryChain([]));
+}
+
 function insertedMessageLog(): Record<string, any> {
   const chain = dbMock.insert.mock.results[0]?.value;
   return (chain as { values: { mock: { calls: unknown[][] } } }).values.mock.calls[0]?.[0] as Record<
@@ -382,6 +389,7 @@ describe('deliverPushNotification', () => {
 
   it('writes the producer reference scoped by the subscription', async () => {
     const fetcher = vi.fn(async () => response(201));
+    noDecidedDelivery();
 
     await deliverPushNotification(
       { ...PAYLOAD, reference_id: 'campaign-7' },
@@ -452,5 +460,57 @@ describe('deliverPushNotification', () => {
     const update = updateChainFor(messageLogTable);
     expect(update).not.toBeNull();
     expect(update!.set.mock.calls[0]?.[0]).toMatchObject({ status: 'failed' });
+  });
+});
+
+describe('deliverPushNotification — a reference is delivered once per browser', () => {
+  it('skips a browser that already received or refused this reference', async () => {
+    // A queue retry redelivers the whole campaign; the browsers that already
+    // have it must not get it twice.
+    const fetcher = vi.fn(async () => response(201));
+    dbMock.select
+      .mockImplementationOnce(() => createQueryChain([{ id: 'cust-1' }]))
+      .mockImplementationOnce(() => createQueryChain([{ id: 'log-earlier' }]));
+
+    const outcome = await deliverPushNotification(
+      { ...PAYLOAD, reference_id: 'campaign-7' },
+      'biz-1',
+      mockEnv,
+      fetcher as unknown as typeof fetch,
+    );
+
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+    expect(outcome.delivered).toBe(0);
+  });
+
+  it('looks for a sent or failed row with this exact delivery reference', async () => {
+    const fetcher = vi.fn(async () => response(201));
+    noDecidedDelivery();
+
+    await deliverPushNotification(
+      { ...PAYLOAD, reference_id: 'campaign-7' },
+      'biz-1',
+      mockEnv,
+      fetcher as unknown as typeof fetch,
+    );
+
+    // A `queued` row is an attempt that never finished, so it does not count.
+    const { sql, params } = renderedPredicate(dbMock.select.mock.results[1].value);
+    expect(sql).toContain('reference_id');
+    expect(params).toEqual(
+      expect.arrayContaining(['biz-1', 'push', `campaign-7:${SUBSCRIPTION.id}`, 'sent', 'failed']),
+    );
+    expect(params).not.toContain('queued');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not look for an earlier delivery when the producer named no reference', async () => {
+    const fetcher = vi.fn(async () => response(201));
+
+    await deliverPushNotification(PAYLOAD, 'biz-1', mockEnv, fetcher as unknown as typeof fetch);
+
+    expect(dbMock.select).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

@@ -280,8 +280,25 @@ describe('POST /v1/communication/push/campaigns', () => {
     // nothing else.
     const { sql, params } = renderedDuplicateProbe();
     expect(sql).toContain('reference_id');
-    expect(sql).toContain('LIKE');
-    expect(params).toContain('campaign-7:%');
+    expect(params).toContain('campaign-7:');
+  });
+
+  it('compares the reference literally, so `_` and `%` are not wildcards', async () => {
+    // As a `LIKE` pattern, `promo_2026` would match the rows of `promo-2026`
+    // and refuse a campaign that was never sent.
+    dbMock.select.mockImplementation(() => createQueryChain([{ id: 'log-1' }]));
+
+    await mockFetch({
+      path: '/v1/communication/push/campaigns',
+      method: 'POST',
+      headers: operatorHeaders(),
+      body: { ...VALID_BRANCH_BODY, reference_id: 'promo_2026%' },
+    });
+
+    const { sql, params } = renderedDuplicateProbe();
+    expect(sql).not.toContain('like');
+    expect(sql).not.toContain('LIKE');
+    expect(params).toContain('promo_2026%:');
   });
 
   it('gives a campaign with no reference of its own one', async () => {

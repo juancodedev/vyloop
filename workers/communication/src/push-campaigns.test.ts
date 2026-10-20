@@ -304,9 +304,10 @@ describe('handlePushCampaignRequested', () => {
 
     await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
 
-    // `<campaign reference id>:<subscription id>`: the campaign's own
-    // reference does not block the other subscribers of that campaign.
+    // The campaign's own reference, unsuffixed: the delivery appends each
+    // browser's subscription id, which makes `<campaign>:<subscription>`.
+    // Suffixing it here as well would store `campaign-7:sub-1:sub-1`.
     const [delivered] = deliverPushNotification.mock.calls[0] as [Record<string, unknown>];
-    expect(delivered.reference_id).toBe('campaign-7:sub-1');
+    expect(delivered.reference_id).toBe('campaign-7');
   });
 });
