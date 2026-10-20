@@ -41,6 +41,14 @@ export interface WalletWorker {
   deactivateInactivePasses(options?: { dryRun?: boolean }): Promise<unknown>;
 }
 
+/**
+ * The communication worker's RPC surface, as this worker calls it: the push
+ * subscription maintenance sweep, behind its `scheduled` export.
+ */
+export interface CommunicationWorker {
+  scheduled(controller: unknown): Promise<void>;
+}
+
 export interface Bindings {
   DATABASE_URL: string;
   DOMAIN_EVENTS_QUEUE: Queue;
@@ -64,6 +72,11 @@ export interface Bindings {
    * through this worker's request path.
    */
   WALLET: WalletWorker;
+  /**
+   * The communication worker, dispatched to from the daily cron for the push
+   * subscription sweep. A service binding for the reason `WALLET` is one.
+   */
+  COMMUNICATION: CommunicationWorker;
 }
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: AuthHeaders } };

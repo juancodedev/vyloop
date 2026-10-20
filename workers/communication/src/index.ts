@@ -4,11 +4,14 @@ import type { EventEnvelope } from '@vyloop/event-bus';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
+import campaignRouter from './campaign-routes';
+import deliveryStatsRouter from './delivery-stats';
 import { handleEvent } from './event-handler';
 import type { Bindings } from './helpers';
 import { extractAuthHeaders } from './helpers';
 import pushRouter from './push-routes';
 import router from './routes';
+import { handleSubscriptionMaintenance } from './subscription-maintenance';
 
 // ---------------------------------------------------------------------------
 // Hono app
@@ -43,6 +46,8 @@ app.use('*', async (c, next) => {
 
 app.route('/', router);
 app.route('/', pushRouter);
+app.route('/', campaignRouter);
+app.route('/', deliveryStatsRouter);
 
 // ---------------------------------------------------------------------------
 // 404 handler
@@ -84,8 +89,24 @@ async function queue(batch: MessageBatch<EventEnvelope>, env: Bindings): Promise
 }
 
 // ---------------------------------------------------------------------------
+// Scheduled
+// ---------------------------------------------------------------------------
+
+/**
+ * The subscription maintenance sweep.
+ *
+ * This worker has no cron trigger of its own — the account's five are taken.
+ * The automation worker calls this export over a service binding from its
+ * daily cron, the way it dispatches the wallet sweep. The sweep never throws.
+ */
+async function scheduled(_controller: unknown, env: Bindings): Promise<void> {
+  await handleSubscriptionMaintenance(env);
+}
+
+// ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
 export { queue };
-export default { fetch: app.fetch.bind(app), queue };
+export { scheduled };
+export default { fetch: app.fetch.bind(app), queue, scheduled };

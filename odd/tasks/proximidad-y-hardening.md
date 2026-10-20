@@ -277,3 +277,34 @@ OpenAPI público), Q4 180 días, Q5 fuera de alcance.
    asociación en lugar de consultarla. Sin eso, la campaña de F3 no llegaría a nadie.
 3. El barrido de F4 **no** usa un cron trigger propio: la cuenta está en 5/5. Se despacha desde
    el cron del `automation`, con el precedente del sweep de la wallet.
+
+### L2 — 2026-10-20 (retoma desde Claude Code)
+
+La sesión de OpenCode `ses_eaa55c095ffeLUW2oJKw14J8ly` quedó en un loop de compactación sin
+escribir el cableado. Las unidades T3–T8, T10–T12 estaban en el árbol, verdes. Se retomó desde
+este documento (no desde el resumen de OpenCode, que había derivado a nombres de eventos fuera
+de la spec).
+
+**Estado por tarea (commit como evidencia):**
+
+| ID | Estado | Commit |
+|---|---|---|
+| T1, T2 | hecha | `4bf2bc9`; fix del mock del test de registro en `47d355c` |
+| T4 | hecha | `eef2461` |
+| T6 | hecha | `51c85f9` (incluye `branch_id` y los códigos en `api/docs/openapi.yaml`) |
+| T3, T5 | hecha | `af3973c` |
+| T10 | hecha | ver `git log`: `feat(communication): push deliveries are visible to operators` |
+| T7, T12 | hecha | `feat(communication): refresh live subscriptions and skip deleted customers` |
+| T11 | hecha | `fix(communication): bound the subscription endpoint an attacker controls` |
+| T8 | hecha | `feat(communication): sweep stale and orphaned push subscriptions` |
+| T9, T13 | hecha | `feat(communication): wire campaigns, delivery stats and the subscription sweep` |
+
+**Verificación observada:** typecheck limpio en todo el monorepo; lint sin errores; tests verdes
+en todos los paquetes salvo `apps/dashboard`, que no arranca en Node 20 (`Iterator is not
+defined`; el repo exige Node ≥22, sin relación con el cambio). `packages/db` 247/247 corrido
+desde su paquete: `secret-material.contract.test.ts` falla si se corre con `--root` desde la
+raíz, y falla igual en la base.
+
+**Pendiente del usuario:** `pnpm db:drift` bloquea porque `0017_venue_interactions` y
+`0018_subscription_freshness` no están aplicadas en la base de `apps/gateway/.dev.vars`. Se
+aplican a mano antes del deploy, como dice `4bf2bc9`.
