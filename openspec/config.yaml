@@ -6,7 +6,7 @@ context: |
     PostgreSQL + ClickHouse (data), Kafka/Queues (event bus).
   Architecture: Event-first, DDD bounded contexts (Identity, Customer, Growth,
     Communication, Automation, Analytics, Compliance), microservices on Workers.
-  Testing: No test runner detected (pre-implementation phase).
+  Testing: Vitest, with lint, typecheck and format as the quality gates.
   Style: TypeScript, strict typing, Edge-first, multi-tenant with RLS.
 
 rules:
@@ -24,26 +24,27 @@ rules:
     - Group by phase, use hierarchical numbering
     - Keep tasks completable in one session
   apply:
-    - Follow existing code patterns
+    guidelines:
+      - Follow existing code patterns
     tdd: false
-    test_command: ""
+    test_command: 'pnpm -r test'
   verify:
-    test_command: ""
-    build_command: "npm run build || npx tsc --noEmit"
+    test_command: 'pnpm -r test'
+    build_command: 'pnpm -r typecheck'
     coverage_threshold: 0
   archive:
     - Warn before merging destructive deltas
 
 testing:
   strict_tdd: false
-  note: "No test runner detected. Project is in pre-implementation (documentation) phase. Strict TDD disabled until a test framework is established."
-  runner: null
+  note: 'The project has a test framework. Strict TDD is not enabled as a policy, but the commands below are what CI runs, and a change is not done until they pass.'
+  runner: vitest
   layers:
-    unit: { available: false, tool: null }
-    integration: { available: false, tool: null }
+    unit: { available: true, tool: vitest }
+    integration: { available: true, tool: vitest }
     e2e: { available: false, tool: null }
   coverage: { available: false, command: null }
   quality:
-    linter: { available: false, command: null }
-    type_checker: { available: false, command: null }
-    formatter: { available: false, command: null }
+    linter: { available: true, command: 'pnpm -r lint' }
+    type_checker: { available: true, command: 'pnpm -r typecheck' }
+    formatter: { available: true, command: 'pnpm format' }
