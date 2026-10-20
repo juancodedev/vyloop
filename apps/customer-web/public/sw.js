@@ -9,11 +9,9 @@
  * the platform sent, already in the clear.
  */
 
-/* The version is bumped to make a new worker take over the old one. */
-const VERSION = 'v1';
-const CACHE = `vyloop-${VERSION}`;
-
-self.addEventListener('install', (event) => {
+self.addEventListener('install', () => {
+  // A new worker takes over from the old one without waiting for every tab to
+  // close.
   self.skipWaiting();
 });
 

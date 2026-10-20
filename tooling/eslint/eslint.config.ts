@@ -45,6 +45,21 @@ const config = tseslint.config(
       },
     },
   },
+  {
+    // A service worker runs in its own global scope, where `self` is the
+    // worker itself rather than the window. Without this the file reads as a
+    // script full of undefined identifiers.
+    //
+    // It is linted rather than ignored: a service worker that throws is a
+    // service worker that never shows a message, and nothing else in the
+    // repository would notice.
+    files: ['**/sw.js'],
+    languageOptions: {
+      globals: {
+        self: 'readonly',
+      },
+    },
+  },
   prettier,
   {
     ignores: [
