@@ -23,6 +23,18 @@ vi.mock('../src/index.ts', () => ({
     type: 'object',
     properties: {},
   },
+  pushNotificationRequestedSchema: {
+    $id: 'https://schema.vyloop.app/events/PushNotificationRequested/v1.0.0',
+    type: 'object',
+    title: 'PushNotificationRequested',
+    description: 'Envelope schema for PushNotificationRequested events',
+    required: ['header', 'payload'],
+    properties: {
+      header: { type: 'object' },
+      payload: { type: 'object' },
+    },
+    additionalProperties: false,
+  },
   whatsappOutboundRequestedSchema: {
     $id: 'https://schema.vyloop.app/events/WhatsAppOutboundRequested/v1.0.0',
     title: 'WhatsAppOutboundRequested',
@@ -102,9 +114,9 @@ describe('registerAllSchemas', () => {
     );
   });
 
-  it('should register all five schemas', async () => {
+  it('should register all six schemas', async () => {
     await registerAllSchemas(kv);
 
-    expect(registerSchemaMock).toHaveBeenCalledTimes(5);
+    expect(registerSchemaMock).toHaveBeenCalledTimes(6);
   });
 });

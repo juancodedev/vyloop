@@ -336,6 +336,38 @@ export const whatsappOutboundRequestedSchema = {
 };
 
 /**
+ * JSON Schema v1.0.0 for PushNotificationRequested events (envelope format).
+ *
+ * Validates the full envelope with header + payload. The payload is what the
+ * platform chose to say; the customer identifier is the global id, like every
+ * other customer event.
+ */
+export const pushNotificationRequestedSchema = {
+  $id: 'https://schema.vyloop.app/events/PushNotificationRequested/v1.0.0',
+  type: 'object',
+  title: 'PushNotificationRequested',
+  description: 'Envelope schema for PushNotificationRequested events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['customer_id', 'business_id', 'title', 'body'],
+      properties: {
+        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
+        business_id: { type: 'string', format: 'uuid', description: 'Business scoping identifier' },
+        title: { type: 'string', minLength: 1, description: 'Notification title' },
+        body: { type: 'string', description: 'Notification body' },
+        url: { type: 'string', description: 'Where the notification leads' },
+        reference_id: { type: 'string', description: 'Dedup key for the message' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
+/**
  * JSON Schema v1.0.0 for WorkflowTriggered events (envelope format).
  *
  * Validates the full envelope with header + payload.

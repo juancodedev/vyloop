@@ -1,0 +1,26 @@
+{
+  "name": "Vyloop — Tu loyalty, en el bolsillo",
+  "short_name": "Vyloop",
+  "description": "Tus puntos, tus recompensas y los lugares que te quedan cerca.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf7f0",
+  "theme_color": "#17150f",
+  "lang": "es-CL",
+  "icons": [
+    {
+      "src": "/brand/default.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/brand/cafe-central.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}

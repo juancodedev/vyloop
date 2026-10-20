@@ -364,6 +364,14 @@ jobs:
                 args+=(--var WHATSAPP_TOKEN:"$WHATSAPP_TOKEN")
                 args+=(--var WHATSAPP_VERIFY_TOKEN:"$WHATSAPP_VERIFY_TOKEN")
                 args+=(--var DATABASE_URL:"$DATABASE_URL")
+                # The VAPID identity this worker signs push deliveries with.
+                # The public half is public by design — the browser subscribes
+                # with it — and the private half is the difference between "a
+                # push service accepted this message" and "anyone could send
+                # this customer a message".
+                args+=(--var VAPID_PUBLIC_KEY:"$VAPID_PUBLIC_KEY")
+                args+=(--var VAPID_PRIVATE_KEY:"$VAPID_PRIVATE_KEY")
+                args+=(--var VAPID_SUBJECT:"$VAPID_SUBJECT")
                 ;;
               analytics | automation | customer | growth | wallet)
                 args+=(--var DATABASE_URL:"$DATABASE_URL")
@@ -385,6 +393,9 @@ jobs:
           deploy_worker wallet workers/wallet
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
           # The secrets arrive through the environment, not through the shell
           # parser. A value interpolated into a command line is a value the
           # shell will interpret.
@@ -546,6 +557,9 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL || 'https://gateway.cl-jmunoz.workers.dev' }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ secrets.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+          # The VAPID public key is public by design: the browser subscribes
+          # with it. The private half never reaches the client.
+          NEXT_PUBLIC_VAPID_PUBLIC_KEY: ${{ secrets.NEXT_PUBLIC_VAPID_PUBLIC_KEY }}
 
       - name: Deploy customer-web to Cloudflare Pages
         run: >-

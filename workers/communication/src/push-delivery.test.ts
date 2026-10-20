@@ -84,7 +84,7 @@ describe('attemptDelivery', () => {
   });
 
   it('sends the encryption headers the push service expects', async () => {
-    const fetcher = vi.fn(async () => response(201));
+    const fetcher = vi.fn(async (_url: string, _init: RequestInit) => response(201));
 
     await attemptDelivery(
       'https://fcm.googleapis.com/fcm/send/abc',
@@ -97,7 +97,7 @@ describe('attemptDelivery', () => {
       fetcher as unknown as typeof fetch,
     );
 
-    const [, init] = fetcher.mock.calls[0] as [string, RequestInit];
+    const [, init] = fetcher.mock.calls[0];
     const headers = init.headers as Record<string, string>;
     expect(headers['Content-Encoding']).toBe('aes128gcm');
     expect(headers['Content-Type']).toBe('application/octet-stream');

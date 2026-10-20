@@ -30,6 +30,7 @@ const EVENT_TYPES = [
   'RewardRedeemed',
   'WhatsAppOutboundRequested',
   'WorkflowTriggered',
+  'PushNotificationRequested',
 ];
 
 /**
@@ -107,6 +108,20 @@ const REPRESENTATIVE_PAYLOADS: Record<string, unknown> = {
       partial: false,
       reference_id: 'ref-002',
       redemption_id: 'c4d5e6f7-8a9b-0c1d-2e3f-456789abcdef',
+    },
+  },
+  PushNotificationRequested: {
+    header: {
+      business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      timestamp: '2026-07-02T12:00:00Z',
+      localization: { language: 'es-CL', timezone: 'America/Santiago' },
+    },
+    payload: {
+      customer_id: '123e4567-e89b-12d3-a456-426614174000',
+      business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      title: 'Tenés 500 puntos',
+      body: 'Pasá por el local y canjealos.',
+      url: '/profile/rewards',
     },
   },
   WhatsAppOutboundRequested: {
@@ -251,7 +266,7 @@ describe('every schema the deploy publishes', () => {
     }
   });
 
-  it('accepts a representative payload for each of the five event types', async () => {
+  it('accepts a representative payload for each of the event types', async () => {
     // End to end through the real reader: the payload the deploy writes, loaded
     // into a namespace, then `validate` called exactly as `ingestor.ts` calls
     // it. This is the assertion that a populated registry actually fixes the

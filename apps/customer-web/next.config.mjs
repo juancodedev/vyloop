@@ -44,4 +44,22 @@ if (process.env.NODE_ENV === 'production') {
   }
 }
 
+// A production build with no VAPID public key ships a bundle that cannot
+// subscribe anybody to push messages. It builds cleanly and passes every test;
+// the failure appears in a browser, as a button that does nothing.
+//
+// The key is public by design — the browser subscribes with it — so this is a
+// missing-configuration check and not a secret check. The private half is the
+// secret, and it never reaches this bundle.
+if (process.env.NODE_ENV === 'production') {
+  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  if (typeof vapidPublicKey !== 'string' || vapidPublicKey.trim() === '') {
+    throw new Error(
+      'NEXT_PUBLIC_VAPID_PUBLIC_KEY is required for a production build. ' +
+        'Without it the client cannot subscribe to push messages, and the ' +
+        'failure only shows up in a browser.',
+    );
+  }
+}
+
 export default nextConfig;
