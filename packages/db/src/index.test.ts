@@ -76,8 +76,9 @@ describe('Database schema', () => {
     expect(db.idxCustomerEventsType).toBeDefined();
     expect(db.allIndexes).toBeDefined();
     expect(Array.isArray(db.allIndexes)).toBe(true);
-    // 12 pre-existing plus the three wallet indexes plus the venue geohash.
-    expect(db.allIndexes.length).toBe(16);
+    // 12 pre-existing plus the three wallet indexes plus the venue geohash
+    // plus the consent uniqueness.
+    expect(db.allIndexes.length).toBe(17);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -98,6 +99,7 @@ describe('Database schema', () => {
     // configs rather than declared a second time.
     const expectedNames: Record<string, string> = {
       idxBranchesGeohash: 'idx_branches_geohash',
+      uqConsentsCustomerType: 'uq_consents_customer_type',
       idxCustomersPhone: 'idx_customers_phone',
       idxCustomersLastVisit: 'idx_customers_last_visit',
       idxPointsBalance: 'idx_points_balance',
@@ -173,10 +175,7 @@ describe('Database schema', () => {
     // tempting shape and it would make the failure state unrepresentable, and
     // therefore invisible.
     const db = await import('./index');
-    const columns = db.checkins as unknown as Record<
-      string,
-      { name: string; notNull: boolean }
-    >;
+    const columns = db.checkins as unknown as Record<string, { name: string; notNull: boolean }>;
 
     expect(columns.points.name).toBe('points');
     expect(columns.points.notNull).toBe(false);
@@ -200,7 +199,10 @@ describe('Database schema', () => {
     // secret is shown once, at creation, and after that the database can only
     // answer whether a presented secret matches.
     const db = await import('./index');
-    const columns = db.posTerminals as unknown as Record<string, { name: string; notNull: boolean }>;
+    const columns = db.posTerminals as unknown as Record<
+      string,
+      { name: string; notNull: boolean }
+    >;
 
     // A secret is never stored, so the column that exists is named for what it
     // holds. `key_hash`, not `key` and not `secret`.
@@ -240,7 +242,9 @@ describe('Database schema', () => {
     expect(foreignKey!.onDelete).toBe('cascade');
 
     const referenced = foreignKey!.reference();
-    expect(referenced.foreignColumns.map((column) => (column as { name: string }).name)).toEqual(['id']);
+    expect(referenced.foreignColumns.map((column) => (column as { name: string }).name)).toEqual([
+      'id',
+    ]);
     expect(referenced.columns.map((column) => (column as { name: string }).name)).toEqual([
       'business_id',
     ]);

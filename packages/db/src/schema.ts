@@ -84,7 +84,9 @@ export const branches = pgTable(
   'branches',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    businessId: uuid('business_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     address: text('address'),
     city: text('city'),
@@ -122,7 +124,9 @@ export const branches = pgTable(
     // have. This one says exactly what it means: the position was set at this
     // moment.
     locatedAt: timestamp('located_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
   },
   (table) => [
     // The nearby-venues lookup is a prefix match on the geohash, which is a
@@ -267,17 +271,44 @@ export const customerEvents = pgTable('customer_events', {
   ),
 ]);
 
-export const consents = pgTable('consents', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
-  consentType: text('consent_type').notNull(),
-  granted: boolean('granted').notNull(),
-  grantedAt: timestamp('granted_at', { withTimezone: true }),
-  revokedAt: timestamp('revoked_at', { withTimezone: true }),
-  ipAddress: text('ip_address'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
-});
+export const consents = pgTable(
+  'consents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+    consentType: text('consent_type').notNull(),
+    granted: boolean('granted').notNull(),
+    grantedAt: timestamp('granted_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    ipAddress: text('ip_address'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (table) => [
+    // One row per customer per consent type.
+    //
+    // The table is written by more than one path, so "one row per consent"
+    // cannot be a convention — it has to be a constraint. With two rows for
+    // one consent, a gate that asks "has this customer agreed" gets two
+    // answers for one question, and which one it reads is an accident of
+    // ordering.
+    //
+    // It is unique over the whole triple rather than partial: a withdrawn
+    // consent keeps its row, and a partial index would let a second row for
+    // the same type be written the moment the first was withdrawn.
+    //
+    // A unique **index** and not a unique constraint, because that is how this
+    // repository registers a uniqueness rule: `packages/db/src/indexes.ts`
+    // derives the registry from `getTableConfig(table).indexes`, and a
+    // `unique()` constraint is not in that list. `uq_customers_business_member_code`
+    // is the precedent.
+    uniqueIndex('uq_consents_customer_type').on(
+      table.businessId,
+      table.customerId,
+      table.consentType,
+    ),
+  ],
+);
 
 // ============================================================================
 // Growth Domain

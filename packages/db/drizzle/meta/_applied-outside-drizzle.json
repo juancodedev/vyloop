@@ -54,6 +54,17 @@
           "name": "branches_coordinates_range_chk"
         }
       ]
+    },
+    {
+      "tag": "0015_consent_uniqueness",
+      "when": 1792465150264,
+      "hash": "f127be3f3181e569afb7a196b697b809ea5e57097ecd44e97cadf3ab608a4b16",
+      "evidence": [
+        {
+          "kind": "index",
+          "name": "uq_consents_customer_type"
+        }
+      ]
     }
   ]
 }

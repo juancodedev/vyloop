@@ -2,6 +2,7 @@ import { getTableConfig, Index as DrizzleIndex, type PgTable } from 'drizzle-orm
 
 import {
   branches,
+  consents,
   customers,
   customerEvents,
   pointsTransactions,
@@ -36,6 +37,7 @@ import {
  */
 const INDEXED_TABLES: readonly PgTable[] = [
   branches,
+  consents,
   customers,
   pointsTransactions,
   customerEvents,
@@ -61,6 +63,7 @@ export const allIndexes: readonly DrizzleIndex[] = INDEXED_TABLES.flatMap(
  */
 const INDEX_NAMES = {
   idxBranchesGeohash: 'idx_branches_geohash',
+  uqConsentsCustomerType: 'uq_consents_customer_type',
   idxCustomersPhone: 'idx_customers_phone',
   idxCustomersLastVisit: 'idx_customers_last_visit',
   idxPointsBalance: 'idx_points_balance',
@@ -97,6 +100,7 @@ export function indexByName(name: string): DrizzleIndex {
 }
 
 export const idxBranchesGeohash = indexByName(INDEX_NAMES.idxBranchesGeohash);
+export const uqConsentsCustomerType = indexByName(INDEX_NAMES.uqConsentsCustomerType);
 export const idxCustomersPhone = indexByName(INDEX_NAMES.idxCustomersPhone);
 export const idxCustomersLastVisit = indexByName(INDEX_NAMES.idxCustomersLastVisit);
 export const idxPointsBalance = indexByName(INDEX_NAMES.idxPointsBalance);

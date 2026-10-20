@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
+    "@vyloop/types": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "pg": "^8.23.1"
   },

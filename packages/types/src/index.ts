@@ -198,3 +198,25 @@ export function requireOperatorRole(
 
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// Consent types
+// ---------------------------------------------------------------------------
+// A name that two processes spell differently is a name that means nothing, and
+// a consent is exactly the kind of thing that is written by one process and
+// read by another: the customer app records it, the communication worker
+// refuses a message without it, the automation engine filters on it.
+//
+// The list is closed on purpose. A type nobody recognises is a consent nobody
+// can honour, so an unknown one is rejected rather than stored: a client that
+// sends a typo should be told, not left believing it recorded something.
+
+/** The consents this platform knows how to ask for and honour. */
+export const CONSENT_TYPES = ['whatsapp', 'nearby_notifications'] as const;
+
+export type ConsentType = (typeof CONSENT_TYPES)[number];
+
+/** Is this a consent type the platform knows? */
+export function isConsentType(value: unknown): value is ConsentType {
+  return typeof value === 'string' && (CONSENT_TYPES as readonly string[]).includes(value);
+}

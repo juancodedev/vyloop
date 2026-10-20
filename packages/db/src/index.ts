@@ -103,6 +103,15 @@ export {
 // Re-export slug derivation
 export { slugify } from './slug';
 
+// Re-export consent helpers
+export {
+  readConsents,
+  readConsentMap,
+  upsertConsent,
+  type ConsentState,
+  type ConsentScope,
+} from './consents';
+
 // Re-export geohash encoding
 export {
   encodeGeohash,
@@ -134,6 +143,7 @@ export {
 // Re-export index definitions
 export {
   idxBranchesGeohash,
+  uqConsentsCustomerType,
   idxCustomersPhone,
   idxCustomersLastVisit,
   idxPointsBalance,
