@@ -352,8 +352,9 @@ quedaron borradas.
 
 **Seguimientos (no bloqueantes, advertencias de la revisión):**
 
-- **Decisión de producto:** `INTERACTION_WINDOW_DAYS = 90` en `push-campaigns.ts` acota la
-  audiencia a las interacciones de los últimos 90 días y no está en la spec. Confirmarla o sacarla.
+- ~~**Decisión de producto:** `INTERACTION_WINDOW_DAYS = 90`.~~ **Resuelta el 2026-10-20:** la
+  spec (`docs/19`) sí pide "a recent interaction" y deja el número abierto; el usuario eligió
+  **180 días** (#229).
 - **Tope de suscripciones:**
   - `> 10` deja crear la suscripción número 11.
   - Un cliente en el tope no puede refrescar un endpoint existente.
