@@ -144,7 +144,7 @@ JWT_SECRET=<hex de 64 caracteres>
 DATABASE_URL=postgresql://neondb_owner:<contraseña>@ep-...-pooler.c-4.us-east-1.aws.neon.tech/neondb?...
 ```
 
-Los secrets de GitHub Actions son **write-only**: la `DATABASE_URL` de producción no se puede leer de vuelta, ni con `gh secret list` ni por la API. Esa asimetricidad es una protección. El `.dev.vars` no la tiene, y por eso es el que hay que tratar con más cuidado, no con menos.
+Los secrets de GitHub Actions son **write-only**: la `DATABASE_URL` de producción no se puede leer de vuelta, ni con `gh secret list` ni por la API. Esa asimetricidad es una protección. El `.dev.vars` no la tiene, y por eso es el que hay que tratar con más cuidado, no con menos: **hoy los `.dev.vars` apuntan a producción** (ver §4).
 
 ### El enmascarado correcto
 
@@ -156,7 +156,7 @@ sed -E 's#^[^:]+://[^@]+@([^/?]+).*#     host: \1#' <<< "$DATABASE_URL"
 ```
 
 ```
-     host: ep-divine-bonus-ai05bdy3-pooler.c-4.us-east-1.aws.neon.tech
+     host: ep-shiny-paper-aibbf0hk-pooler.c-4.us-east-1.aws.neon.tech
 ```
 
 Alternativa sin `sed`, cuando el secreto está en una variable de shell y se quiere evitar el shell por completo:
@@ -188,9 +188,16 @@ Sí se loguea: el **código** de error, el `request_id`, y el nombre del recurso
 
 | | Qué es | Estado |
 |---|---|---|
-| Neon `ep-divine-bonus-ai05bdy3` | La `DATABASE_URL` de los `.dev.vars` de los workers | **DEV.** 10 clientes, sin pases, sin clases de wallet |
-| Neon `ep-shiny-paper-aibbf0hk` | **PRODUCCIÓN** | La que inyecta `deploy.yml` desde el secret `DATABASE_URL` |
+| Neon `ep-shiny-paper-aibbf0hk` (proyecto `polished-firefly-68401534`, rama `br-delicate-paper-aitqyq9y`) | **PRODUCCIÓN** | La que inyecta `deploy.yml` desde el secret `DATABASE_URL`, **y a la que apuntan hoy todos los `.dev.vars`** (`apps/gateway` y los 7 workers) |
+| Neon `ep-divine-bonus-ai05bdy3` (mismo proyecto, rama `br-still-mud-aik526qf`) | **DEV.** Ningún `.dev.vars` la usa hoy | 10 clientes, sin pases, sin clases de wallet. Inactiva desde el 2026-10-07 |
 | Supabase `mysrgtsuoxhspyfhdnsp` | Proyecto migrado, ya no en uso | **Vacía, sin schema** |
+
+> **Actualizado el 2026-10-20.** Los `.dev.vars` dejaron de apuntar a dev: los 8 (`apps/gateway` y
+> los 7 workers) usan `ep-shiny-paper-aibbf0hk`, que **es producción, y así está bien**. Se comprobó
+> con datos y no con nombres: 6 tenants, 24 clientes, 9 pases de wallet, 6 programas de wallet y 11
+> entregas de callback, contra 0 pases en dev. El MCP de Neon confirma que las dos bases son ramas
+> del mismo proyecto. **Consecuencia práctica: cualquier script que lea `.dev.vars` escribe y lee
+> en producción.** Ese día se aplicaron ahí las migraciones `0017` y `0018`, y `pnpm db:drift` pasó.
 
 Comprobado contra producción el 2026-10-05: **5 tenants, 13 clientes, 5 pases, 5 filas de clase
 de wallet, 7 entregas de callback registradas.**
@@ -277,15 +284,16 @@ sigue siendo aplicar a mano, revisando, y después re-derivar el baseline.
 > nunca se aplicaron.
 
 Ese contraste ya produjo un falso positivo: `node scripts/check-wallet-readiness.mjs` lee
-`apps/gateway/.dev.vars`, o sea **la base de dev**, y reporta sobre ella. En producción la fila de
-clase de wallet existe. El script acierta al declarar la base que leyó en la primera línea, y por
-eso esa línea hay que leerla antes que el veredicto.
+`apps/gateway/.dev.vars`, que cuando pasó apuntaba a **la base de dev**, y reportó sobre ella
+mientras en producción la fila de clase de wallet existía. Hoy ese `.dev.vars` apunta a producción
+(ver la tabla de §4), así que el script y `pnpm db:drift` reportan sobre producción. Igual hay que
+leer la primera línea, que declara la base leída, antes que el veredicto.
 
 ### La regla
 
 **Antes de aplicar una migración, confirmar contra cuál base se está.**
 
-`.dev.vars` **no es producción**. En una sesión de integración se estuvo a punto de aplicar una migración a la base equivocada y el reporte habría dicho "listo" — la migración habría quedado aplicada donde nadie la mira, y el mismo bug habría seguido vivo en producción.
+`.dev.vars` **hoy es producción** (comprobado el 2026-10-20, ver la tabla de arriba): escribir con lo que hay en `.dev.vars` es escribir en producción. Antes no lo era, y esa diferencia es justamente la razón de la regla: en una sesión de integración se estuvo a punto de aplicar una migración a la base equivocada y el reporte habría dicho "listo" — la migración habría quedado aplicada donde nadie la mira, y el mismo bug habría seguido vivo en producción.
 
 La pregunta que hay que responder antes de escribir en cualquier base:
 
@@ -299,10 +307,12 @@ echo "$DATABASE_URL" | sed -E 's#^[^:]+://[^@]+@([^/?]+).*#host: \1#'
 El MCP de Neon funciona pasando `project_id` explícito en cada llamada:
 
 ```
-project_id: polished-firefly-68401534      # producción
+project_id: polished-firefly-68401534      # el proyecto: contiene producción Y dev
 ```
 
-`list_projects` no sirve para esto: devuelve todos los proyectos de la organización, no solo los de Vyloop, y no resuelve una dirección de endpoint. Para el proyecto de dev hace falta el `project_id` completo, y `ep-divine-bonus-ai05bdy3` es un **endpoint**, no un project id — el MCP responde 404 a ese valor.
+`polished-firefly-68401534` es el **proyecto**, no una base: tiene dos ramas. `list_postgres_endpoints` con ese `project_id` las devuelve a las dos: `ep-shiny-paper-aibbf0hk` (rama `br-delicate-paper-aitqyq9y`, **producción**) y `ep-divine-bonus-ai05bdy3` (rama `br-still-mud-aik526qf`, dev). Por eso decir "polished-firefly es producción" es a medias cierto: para apuntar a producción hay que nombrar la rama o el endpoint, no solo el proyecto.
+
+`list_projects` no sirve para esto: devuelve todos los proyectos de la organización, no solo los de Vyloop, y no resuelve una dirección de endpoint. `ep-divine-bonus-ai05bdy3` es un **endpoint**, no un project id — el MCP responde 404 a ese valor.
 
 Los secrets de GitHub son write-only: para saber a qué base apunta `DATABASE_URL` en producción hay que saberlo de antemano (esta tabla), no leerlo.
 

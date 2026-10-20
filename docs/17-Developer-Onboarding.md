@@ -43,7 +43,7 @@ Los Workers que consumen eventos del bus pueden recibir el mismo evento más de 
 Una herramienta que imprimió algo no es evidencia de que ese algo sea cierto. Antes de afirmar que falta un símbolo en el código, confirmá con `git log --all -S'<símbolo>'` que existió alguna vez. Antes de confiar en un `sed` o un `perl` que filtra un secreto, comprobá que el patrón matchea: uno que no matchea sale 0 y deja pasar el texto entero. Detalle y comandos en [`docs/18-Verificacion-y-Seguridad-Operativa.md`](18-Verificacion-y-Seguridad-Operativa.md).
 
 ### 7. El schema se despliega a mano, y el pipeline no lo comprueba
-**Ningún job de CI aplica migraciones.** Se aplican a mano, y el deploy sale `success` aunque el schema destino esté atrasado. Antes de escribir en una base, confirmá cuál es: `.dev.vars` **no es producción**. Y nunca corras `drizzle-kit migrate` sobre una base con drift — el ledger miente. Ver [`docs/18`](18-Verificacion-y-Seguridad-Operativa.md) §4 y §5.
+**Ningún job de CI aplica migraciones.** Se aplican a mano, y el deploy sale `success` aunque el schema destino esté atrasado. Antes de escribir en una base, confirmá cuál es: **hoy `.dev.vars` apunta a producción** (`ep-shiny-paper-aibbf0hk`), así que lo que corras con él escribe en producción. Y nunca corras `drizzle-kit migrate` sobre una base con drift — el ledger miente. Ver [`docs/18`](18-Verificacion-y-Seguridad-Operativa.md) §4 y §5.
 
 ---
 
@@ -63,7 +63,7 @@ Una herramienta que imprimió algo no es evidencia de que ese algo sea cierto. A
   npm run db:migrate
   npm run db:verify-rls
   ```
-  Contra **Docker local**, no contra la base de `.dev.vars`. Ver `18-Verificacion-y-Seguridad-Operativa.md` §4.
+  Contra **Docker local**, no contra la base de `.dev.vars`, que es producción. Ver `18-Verificacion-y-Seguridad-Operativa.md` §4.
 - [ ] **Tu primera tarea:** Crea un evento nuevo en el Schema Registry, publícalo al bus desde el Event Ingestor, y suscríbete a él desde el Worker del dominio `Customer`. Haz que el Worker loguee el payload recibido. Esto valida que tu entorno local funciona de extremo a extremo.
 - [ ] **Lee la `00-Product-Vision.md`:** Es la única fuente de verdad sobre qué estamos construyendo.
 
@@ -83,8 +83,9 @@ wrangler secret put <NOMBRE> --config workers/<worker>/wrangler.jsonc
 
 | Dónde vive | Qué es | Estado |
 |---|---|---|
-| `workers/*/.dev.vars` (7 archivos, gitignored) | Neon `ep-divine-bonus-ai05bdy3` | 1 tenant, sin fila de clase de wallet. Es de desarrollo. **No es producción.** |
-| Secret de GitHub `DATABASE_URL`, inyectado por `.github/workflows/deploy.yml` a `identity`, `wallet` y `gateway` | Neon `polished-firefly-68401534` | **PRODUCCIÓN.** Los secrets de GitHub son write-only: esta URL no se puede leer de vuelta |
+| Secret de GitHub `DATABASE_URL`, inyectado por `.github/workflows/deploy.yml` a `identity`, `wallet` y `gateway` | Neon `ep-shiny-paper-aibbf0hk` (proyecto `polished-firefly-68401534`, rama `br-delicate-paper-aitqyq9y`) | **PRODUCCIÓN.** Los secrets de GitHub son write-only: esta URL no se puede leer de vuelta |
+| `apps/gateway/.dev.vars` y `workers/*/.dev.vars` (8 archivos, gitignored) | Neon `ep-shiny-paper-aibbf0hk`, la misma de arriba | **PRODUCCIÓN, y así está bien** (comprobado el 2026-10-20). Todo lo que corras con estos archivos escribe en producción |
+| Rama de dev del mismo proyecto | Neon `ep-divine-bonus-ai05bdy3` (rama `br-still-mud-aik526qf`) | Dev. Ningún `.dev.vars` la usa hoy; inactiva desde el 2026-10-07 |
 | Proyecto Supabase `mysrgtsuoxhpsyfhdnsp` | Proyecto migrado, ya no en uso | Vacía, sin schema |
 
 El `.dev.vars` no se commitea, pero **sí contiene credenciales reales**, así que no se imprime: enmascaralo antes de mostrarlo. Ver [`docs/18`](18-Verificacion-y-Seguridad-Operativa.md) §3 y §4.
