@@ -1,5 +1,52 @@
 # Trabajo pendiente
 
+## Diferido post-PMV — índice
+
+**Estado:** documentado el 2026-10-20, sin agenda. Nada de esto bloquea el PMV.
+**Origen:** inventario de la deuda técnica del 2026-10-20 (este documento, `docs/14-Backlog.md` y el
+trabajo de proximidad). Los pendientes que ya estaban resueltos en el código se marcaron así en su
+lugar.
+
+### Cambios especificados en OpenSpec
+
+Cada uno tiene `proposal.md`, deltas de spec y `tasks.md` en `openspec/changes/<id>/`, con el detalle
+de lo que hay que implementar.
+
+| Cambio | Qué resuelve | Tamaño | Riesgo si se ignora |
+|---|---|---|---|
+| `tenant-isolation-rls` | RLS desplegado: el aislamiento entre comercios deja de depender de que cada ruta filtre por `business_id`; los barridos sin tenant tienen un camino explícito. **Hallazgo:** `withRls` hoy no tiene efecto (`set_config(…, true)` fuera de una transacción) y los workers conectan como dueño de las tablas | Grande | Alto |
+| `campaign-delivery-idempotency` | Un push de campaña llega una sola vez aunque dos consumidores o dos POST compitan | Grande | Alto |
+| `message-log-schema-alignment` | `message_log` de producción igual al schema, y el gate de drift aprende a verificar `ALTER COLUMN` y `DROP` | Mediano | Bajo |
+| `pages-opennext-migration` | `customer-web` y `dashboard` dejan `@cloudflare/next-on-pages` (en desuso) por OpenNext | Grande | Medio |
+| `branch-reward-trigger` | El trigger `RewardAvailableAtBranch`, con la dimensión de local en `rewards` | Mediano | Bajo |
+| `wallet-pass-correctness` | Saldo entero hacia Google, `member_code` al registrarse, y el comercio gestiona los pases | Mediano–Grande | Medio |
+| `request-tracing` | El `request_id` viaja del gateway a los workers y a los eventos de la cola | Mediano | Medio |
+| `supply-chain-hardening` | `pnpm audit` en CI, `sslmode` explícito antes de `pg` v9, overrides inertes | Chico | Medio |
+| `api-surface-cleanup` | `/v1/automation` (la página "Flujos" del dashboard llama rutas que no existen), el ingestor de eventos, el webhook de Meta dormido y el índice de `pos_terminals`. **Hallazgo:** `POST /v1/events/:type` se monta antes de la autenticación y publica en la cola de dominio con el `business_id` del body; no fabrica puntos (growth relee el saldo real), pero es una escritura pública | Chico–Mediano | Medio |
+
+### Decisiones de producto abiertas
+
+No hay nada que implementar hasta que alguien decida; cambiar cualquiera de las dos es una línea.
+
+- **`POS_PLANS = ['premium']`** (`workers/identity/src/auth.ts`): qué planes incluyen el terminal de
+  mostrador. Ver "`POS_PLANS` — decisión de producto, no confirmada" más abajo.
+- **`PREMIUM_PLAN_LIMIT_PER_WINDOW = 600`** (`apps/gateway/src/middleware/rate-limit.ts`): el
+  límite del plan premium. Defendible, sin dueño. Ver "El hallazgo: dos claves muertas" más abajo.
+
+### Pendientes de documentación
+
+- **`docs/08-API-Design.md`** describe GraphQL y OAuth/OIDC que la API no tiene.
+- **La "vía manual" de la Etapa 0b** (más abajo) describe un flujo que la guarda de mostrador hoy
+  bloquea.
+- **Las casillas de las fases 1–4 de `docs/14-Backlog.md`** están sin marcar aunque la mayor parte está
+  construida; marcarlas pide una verificación ítem por ítem.
+
+### Proyecto futuro: Mercado Pago
+
+Fuera de la deuda técnica por decisión del 2026-10-20: es un proyecto a futuro, no se profundiza por
+ahora. Queda registrado para cuando arranque: la firma del webhook de pagos sin verificar contra el
+esquema real de MP, el cliente y el poll de MP, y si el terminal reintenta una venta perdida.
+
 ## Etapa 0b — Registro de una venta ya cobrada: el eslabón roto del mostrador
 
 **Estado:** implementada. Venta registrada, contrato externo documentado y registro de terminales
