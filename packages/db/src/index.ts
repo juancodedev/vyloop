@@ -177,6 +177,7 @@ export {
   idxCustomersMemberCode,
   idxCustomerWalletPassesTenant,
   idxWalletCallbackDeliveriesReceived,
+  idxPosTerminalsBusiness,
   indexByName,
   allIndexes,
 } from './indexes';
