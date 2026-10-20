@@ -76,8 +76,8 @@ describe('Database schema', () => {
     expect(db.idxCustomerEventsType).toBeDefined();
     expect(db.allIndexes).toBeDefined();
     expect(Array.isArray(db.allIndexes)).toBe(true);
-    // 12 pre-existing plus the three wallet indexes.
-    expect(db.allIndexes.length).toBe(15);
+    // 12 pre-existing plus the three wallet indexes plus the venue geohash.
+    expect(db.allIndexes.length).toBe(16);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -97,6 +97,7 @@ describe('Database schema', () => {
     // no migration, which is why the registry is now derived from the table
     // configs rather than declared a second time.
     const expectedNames: Record<string, string> = {
+      idxBranchesGeohash: 'idx_branches_geohash',
       idxCustomersPhone: 'idx_customers_phone',
       idxCustomersLastVisit: 'idx_customers_last_visit',
       idxPointsBalance: 'idx_points_balance',

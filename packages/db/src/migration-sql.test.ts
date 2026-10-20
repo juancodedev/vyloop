@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { PgDialect, getTableConfig } from 'drizzle-orm/pg-core';
 import PgQueryModule from 'pg-query-emscripten';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { allIndexes, indexByName } from './indexes';
 import { loyaltyPrograms, pointsTransactions, tenantWalletPrograms } from './schema';
@@ -32,11 +32,30 @@ import { loyaltyPrograms, pointsTransactions, tenantWalletPrograms } from './sch
 
 const DRIZZLE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'drizzle');
 
-let pgQuery: PgQueryModule;
-
-beforeAll(async () => {
-  pgQuery = await new PgQueryModule();
-});
+/**
+ * A parser for one migration file.
+ *
+ * The parser is a WebAssembly build of the real PostgreSQL grammar, and it
+ * **keeps what it allocates**: each parse leaves its tree in the module's
+ * heap, and a shared instance eventually cannot produce a complete one. The
+ * symptom is not a Postgres parse error — it is a `JSON.parse` failure on an
+ * empty string, thrown from inside the WebAssembly glue, which reads like a
+ * broken migration and is not one.
+ *
+ * It cost this repository its fourteenth migration before anybody noticed. The
+ * shared instance had been fine for thirteen files and quietly stopped being
+ * able to parse, and the first thing it took down with it was a migration that
+ * had been applied to a database by hand and was being reported as
+ * unparseable. Nothing in the failure pointed at the parser.
+ *
+ * A fresh instance per file costs a few milliseconds, keeps every statement of
+ * every migration checked against the real grammar, and — the part that
+ * matters — does not depend on how many migrations the project happens to
+ * have. The next migration should not be able to break this test.
+ */
+async function parserForFile(): Promise<PgQueryModule> {
+  return new PgQueryModule();
+}
 
 /**
  * Split a drizzle migration into its individual statements. drizzle-kit
@@ -152,9 +171,14 @@ describe('migration SQL parses as PostgreSQL', () => {
     expect(migrationFiles.length).toBeGreaterThanOrEqual(5);
   });
 
-  it.each(migrationFiles)('parses every statement in %s', (file) => {
+  it.each(migrationFiles)('parses every statement in %s', async (file) => {
     const statements = splitStatements(readMigration(file));
     expect(statements.length).toBeGreaterThan(0);
+
+    // Fresh per file: see `parserForFile`. An instance shared with the other
+    // files can run out of heap, and the failure it produces is an exception
+    // from inside the WebAssembly glue rather than a parse error.
+    const pgQuery = await parserForFile();
 
     const errors: string[] = [];
     for (const statement of statements) {
@@ -166,9 +190,14 @@ describe('migration SQL parses as PostgreSQL', () => {
     expect(errors).toEqual([]);
   });
 
-  it('rejects a deliberately broken statement, so the parser is actually load-bearing', () => {
+  it('rejects a deliberately broken statement, so the parser is actually load-bearing', async () => {
     // If the parser silently accepted everything the checks above would be
     // worthless. Prove it discriminates.
+    //
+    // On its own instance, and for the same reason as above: an instance that
+    // has already failed cannot be trusted to report the next failure, and a
+    // poisoned parser fails with an exception rather than with a verdict.
+    const pgQuery = await parserForFile();
     const broken = pgQuery.parse('CREATE TABEL "t" (;');
     expect(broken.error).toBeTruthy();
   });

@@ -103,6 +103,16 @@ export {
 // Re-export slug derivation
 export { slugify } from './slug';
 
+// Re-export geohash encoding
+export {
+  encodeGeohash,
+  decodeGeohash,
+  type DecodedGeohash,
+  DEFAULT_GEOHASH_PRECISION,
+  MIN_GEOHASH_PRECISION,
+  MAX_GEOHASH_PRECISION,
+} from './geohash';
+
 // Re-export RLS helpers
 export {
   enableRls,
@@ -123,6 +133,7 @@ export {
 
 // Re-export index definitions
 export {
+  idxBranchesGeohash,
   idxCustomersPhone,
   idxCustomersLastVisit,
   idxPointsBalance,
