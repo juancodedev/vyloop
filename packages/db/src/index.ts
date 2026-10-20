@@ -2,11 +2,16 @@ import { Pool } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-serverless';
 
 import * as schema from './schema';
+import { assertVerifiedTls } from './tls';
 
 export function createDb(dbUrl: string) {
+  assertVerifiedTls(dbUrl);
   const pool = new Pool({ connectionString: dbUrl });
   return drizzle(pool, { schema });
 }
+
+// Re-export the transport-security policy for callers that open their own pool
+export { assertVerifiedTls } from './tls';
 
 // Re-export the full schema object
 export { schema };

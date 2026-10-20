@@ -40,8 +40,9 @@ Chain strategy: pending
 - [x] 2.2 `scripts/lib/database-url.mjs` — `assertVerifiedTls(url)` (throws unless `sslmode=verify-full`) and `isProductionHost(url)` (`ep-shiny-paper-aibbf0hk` endpoints); never prints the URL, only the host, per the masking rule in `docs/18-Verificacion-y-Seguridad-Operativa.md`.
 - [x] 2.3 Call `assertVerifiedTls` before opening the pool in `scripts/check-migration-drift.mjs` (`observeDatabase`), `scripts/check-checkin-backlog.mjs`, `scripts/check-payment-reconciliation.mjs`; in `scripts/check-wallet-readiness.mjs` keep `rejectUnauthorized: false` (line 454) for non-production hosts and refuse it for the production host.
 - [x] 2.4 `scripts/lib/database-url.test.mjs` and the existing script tests — `require`, `prefer`, `verify-ca`, missing `sslmode` and `disable` are refused; `verify-full` passes; the error message contains the host and not the password.
-- [ ] 2.5 **(secret done 2026-10-20; `.dev.vars` pending)** Rewrite the `DATABASE_URL` GitHub secret with `sslmode=verify-full`; run the `migration-drift` job of `.github/workflows/deploy.yml` to confirm; update each worker's local `.dev.vars` (gitignored, not committed).
+- [x] 2.5 Rewrite the `DATABASE_URL` GitHub secret with `sslmode=verify-full`; run the `migration-drift` job of `.github/workflows/deploy.yml` to confirm; update each worker's local `.dev.vars` (gitignored, not committed). Done 2026-10-20: secret rotated 19:34 UTC, `migration-drift` green on the next deploy, 8 `.dev.vars` normalized (only the `sslmode` token changed).
 - [x] 2.6 `docs/18-Trabajo-Pendiente.md` — close the "`sslmode=require` se va a debilitar en silencio" entry, pointing at the guard.
+- [x] 2.7 `packages/db/src/tls.ts` — `assertVerifiedTls` ported from the scripts helper (the script runs on plain Node and cannot import the package), called by `createDb` before the `Pool` is constructed; `packages/db/src/tls.test.ts` covers `verify-full`, `require`, `prefer`, `verify-ca`, `disable`, `no-verify`, a missing `sslmode`, a non-URL, an empty value, loopback, and a message that names the host but never the password.
 
 ## Unit 3: Override cleanup
 
