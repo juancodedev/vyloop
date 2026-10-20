@@ -19,7 +19,7 @@
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
     "drizzle-orm": "^0.45.4",
-    "pg": "^8.0.0"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.10",
