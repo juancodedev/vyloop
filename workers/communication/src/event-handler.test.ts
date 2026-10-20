@@ -40,6 +40,12 @@ vi.mock('@vyloop/db', () => ({
   customers: 'customers',
 }));
 
+const handlePushCampaignRequested = vi.hoisted(() =>
+  vi.fn(async () => ({ audience: 2, delivered: 2, failed: 0, skipped: 0 })),
+);
+
+vi.mock('./push-campaigns', () => ({ handlePushCampaignRequested }));
+
 // ---------------------------------------------------------------------------
 // Mock queue message
 // ---------------------------------------------------------------------------
@@ -174,5 +180,44 @@ describe('Unhandled event type', () => {
     const event = makeEvent({ type: 'SomeUnknownEvent' });
 
     await handleEvent(event, mockMsg() as never, mockEnv as never);
+  });
+});
+
+describe('PushCampaignRequested', () => {
+  it('delivers the campaign for the tenant named in the envelope header', async () => {
+    const { handleEvent } = await import('./event-handler');
+    const payload = {
+      business_id: 'biz-1',
+      title: 'Hi',
+      body: 'Come by',
+      reference_id: 'camp-1',
+      target: { branch_id: 'branch-1' },
+    };
+    const event = makeEvent({ type: 'PushCampaignRequested', payload });
+
+    await handleEvent(event, mockMsg() as never, mockEnv as never);
+
+    expect(handlePushCampaignRequested).toHaveBeenCalledTimes(1);
+    expect(handlePushCampaignRequested).toHaveBeenCalledWith(payload, 'biz-1', mockEnv);
+  });
+
+  it('lets a delivery failure reach the queue, so the batch retries it', async () => {
+    const { handleEvent } = await import('./event-handler');
+    handlePushCampaignRequested.mockRejectedValueOnce(new Error('429'));
+    const event = makeEvent({ type: 'PushCampaignRequested', payload: { target: { branch_id: 'b' } } });
+
+    await expect(handleEvent(event, mockMsg() as never, mockEnv as never)).rejects.toThrow('429');
+  });
+});
+
+describe('CustomerCheckedIn', () => {
+  it('is acked without sending anything', async () => {
+    const { handleEvent } = await import('./event-handler');
+    const event = makeEvent({ type: 'CustomerCheckedIn', payload: { branch_id: 'branch-1' } });
+
+    await handleEvent(event, mockMsg() as never, mockEnv as never);
+
+    expect(handlePushCampaignRequested).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
   });
 });

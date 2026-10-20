@@ -1,10 +1,12 @@
 import type { Message } from '@cloudflare/workers-types';
 import { createDb, messageLog, customers } from '@vyloop/db';
+import { CUSTOMER_CHECKED_IN, PUSH_CAMPAIGN_REQUESTED } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { eq, and } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
 import { withRls, callMetaApi, isRetryableError } from './helpers';
+import { handlePushCampaignRequested, type PushCampaignPayload } from './push-campaigns';
 import { deliverPushNotification, type PushNotificationPayload } from './push-delivery';
 
 // ---------------------------------------------------------------------------
@@ -27,6 +29,11 @@ export async function handleEvent(
       return handleWhatsAppOutboundRequested(event, message, env);
     case 'PushNotificationRequested':
       return handlePushNotificationRequested(event, env);
+    case PUSH_CAMPAIGN_REQUESTED:
+      return handlePushCampaignRequestedEvent(event, env);
+    case CUSTOMER_CHECKED_IN:
+      // Recorded for the venue association; no message is owed for a check-in.
+      return;
     default:
       console.warn(`[communication] Unknown event type: ${event.type} — acking and skipping`);
       return;
@@ -219,5 +226,24 @@ async function handlePushNotificationRequested(
     `[communication] Push to ${payload.customer_id}: ${outcome.delivered} delivered, ` +
       `${outcome.failed} failed, ${outcome.removed} dead subscriptions removed ` +
       `of ${outcome.subscriptions}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PushCampaignRequested handler
+// ---------------------------------------------------------------------------
+
+async function handlePushCampaignRequestedEvent(
+  event: EventEnvelope,
+  env: Bindings,
+): Promise<void> {
+  const payload = event.payload as PushCampaignPayload;
+  const businessId = event.header.business_id;
+
+  const outcome = await handlePushCampaignRequested(payload, businessId, env);
+
+  console.log(
+    `[communication] Push campaign ${payload.reference_id ?? '(no reference)'}: ` +
+      `${outcome.delivered} delivered, ${outcome.failed} failed, ${outcome.skipped} skipped`,
   );
 }
