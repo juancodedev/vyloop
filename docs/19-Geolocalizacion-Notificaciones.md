@@ -1,8 +1,16 @@
 # 19 — Venue Geolocation and Push Notifications
 
-> **Status:** Plan only. No code, schema, or worker changes are included in this document.
+> **Status:** Phase **F1** is implemented and open as [PR #221](https://github.com/juancodedev/vyloop/pull/221). Phases F2–F4 are not started.
 > **Scope:** Let venues (_locales_) register their geographic position, and let notifications — including push — be driven by that position.
 > **Baseline:** `8ef0af7` (working tree clean at the time of writing).
+
+## What F1 changed
+
+- `branches` gained `latitude`, `longitude`, `geohash`, `geohash_precision` and `located_at`, with two check constraints, in migration `0014`.
+- `workers/identity` replaced the venues stub with four authenticated, tenant-scoped routes: list, register, update and deactivate.
+- The subject-kind predicates (`isCustomerRole`, `isCounterSubject`, `requireOperatorRole`) moved to `@vyloop/types`, so the growth, gateway and identity workers answer "is this an operator?" from one definition.
+
+Migration `0014` has **not** been applied to production by hand. The drift gate reports it as pending until someone applies it, which is the gate doing its job.
 
 ---
 
