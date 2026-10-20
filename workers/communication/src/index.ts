@@ -7,6 +7,7 @@ import { HTTPException } from 'hono/http-exception';
 import { handleEvent } from './event-handler';
 import type { Bindings } from './helpers';
 import { extractAuthHeaders } from './helpers';
+import pushRouter from './push-routes';
 import router from './routes';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ app.use('*', async (c, next) => {
 // ---------------------------------------------------------------------------
 
 app.route('/', router);
+app.route('/', pushRouter);
 
 // ---------------------------------------------------------------------------
 // 404 handler
