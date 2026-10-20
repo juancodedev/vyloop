@@ -38,13 +38,22 @@
 // Inert is not the violation
 // ---------------------------------------------------------------------------
 //
-// As of this commit all 45 version rewrites and pins are inert: every resolution
-// in the lockfile has already moved past every selector that could constrain it.
-// That is the normal, healthy state. An override whose selector no longer
-// contains any resolution does nothing, and a gate that reported it as a finding
-// would have asked for 45 removals on day one, would re-fire after the next
-// `postcss` bump, and would be switched off within a month — which is how a gate
-// stops being one.
+// As of this commit all 9 remaining version rewrites and 2 pins are inert: every
+// resolution in the lockfile has already moved past every selector that could
+// constrain it. That is the normal, healthy state. An override whose selector no
+// longer contains any resolution does nothing, and a gate that reported it as a
+// finding would have asked for 43 removals on day one, would re-fire after the
+// next `postcss` bump, and would be switched off within a month — which is how a
+// gate stops being one.
+//
+// **Inert does not mean removable.** Overrides overlap: `sharp@<0.35.0` and
+// `sharp@<0.35.4` are each inert on their own and each covers for the other —
+// drop both and sharp falls back to 0.34.5. On 2026-10-20, 43 entries were inert,
+// 34 were removed, and 9 stayed because removing them one at a time and
+// re-checking after each changed a resolution. The check that means something is
+// not `git diff --quiet pnpm-lock.yaml` — the lockfile records the override table
+// itself, so any removal touches it — but that the set of `packages:` and
+// `snapshots:` keys is unchanged.
 //
 // **Inert is not the violation; below-threshold is.** A violation is exactly one
 // thing: a resolution that falls *inside* an override's selector range while
@@ -395,8 +404,7 @@ function readOverrideKey(key, value) {
  * `/mocker` with a selector of `@vitest/mocker`.
  *
  * Errors carry the key, because an error naming `Unsupported semver comparator:
- * "^1.0.0"` tells the reader nothing about which of 46 overrides to go and look
- * at.
+ * "^1.0.0"` tells the reader nothing about which override to go and look at.
  */
 export function classifyOverride(key, value) {
   try {

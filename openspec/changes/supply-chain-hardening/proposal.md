@@ -24,12 +24,13 @@ database connections, each of which fails silently today:
    semantics: encrypted, certificate not verified. Nothing in the code would
    notice the change.
 3. **`pnpm.overrides` carries entries that may no longer do anything.** The root
-   `package.json` holds 46 overrides; the override gate already classifies 45 of
+   `package.json` held 46 overrides; the override gate already classified 43 of
    them as inert (`checkOverrides` returns an `inert` list,
    `check-dependency-overrides.mjs:555-640`). After Dependabot #198 and #199 were
-   merged (`docs/18-Trabajo-Pendiente.md:1076-1078`) more may have become inert.
+   merged (`docs/18-Trabajo-Pendiente.md:1076-1078`) more had become inert.
    An inert override is not a risk, but a table of 46 entries nobody can explain
-   hides the few that are load-bearing.
+   hides the few that are load-bearing. Cleanup result: 34 removed, 12 left —
+   inert does not mean removable, because the entries overlap.
 
 ## Scope
 

@@ -1,6 +1,7 @@
 # Tasks: Supply-Chain Hardening
 
-> Status: deferred — post-PMV. Units 1–2 and 3.1/3.2 implemented 2026-10-20; 2.5 (secret rotation) and 3.3–3.5 (override removal) still open.
+> Status: done — all three units implemented 2026-10-20. Unit 3 removed 34 of the 43 inert overrides;
+> 9 stayed because removing them changes a resolution (see 3.3).
 
 ## Review Workload Forecast
 
@@ -23,7 +24,7 @@ Chain strategy: pending
 | ---- | -------------------------------------- | --------- | ----- | ------------------------------------------- |
 | 1    | Advisory audit and allowlist in CI     | PR #1     | ~220  | Independent.                                |
 | 2    | `sslmode=verify-full` and its guard    | PR #2     | ~150  | Independent; includes a secret rotation.    |
-| 3    | Inert override cleanup                 | PR #3     | ~80   | Independent; lockfile must stay identical.  |
+| 3    | Inert override cleanup                 | PR #3     | ~80   | Independent; 34 removed, resolutions unchanged. |
 
 ## Unit 1: Advisory audit
 
@@ -48,6 +49,6 @@ Chain strategy: pending
 
 - [x] 3.1 `scripts/check-dependency-overrides.mjs` — `--list-inert` prints `gate.inert` (already computed by `checkOverrides`) one per line with its key and selector; exit code unchanged.
 - [x] 3.2 `scripts/check-dependency-overrides.test.mjs` — `--list-inert` lists exactly the inert entries of a fixture and does not change the exit code.
-- [ ] 3.3 For each listed override except `react`, `react-dom` and `jsdom>undici`: remove it from `package.json` `pnpm.overrides`, run `pnpm install --lockfile-only`, keep the removal only if `git diff --quiet pnpm-lock.yaml`. Record the removed and the kept entries in the PR description.
-- [ ] 3.4 `pnpm deps:overrides` and `pnpm -r test` green after the cleanup.
-- [ ] 3.5 `docs/18-Trabajo-Pendiente.md` — update the override count stated in the "Hecho — hay un check que afirma que el grafo respeta sus overrides" section and in the header comment of `scripts/check-dependency-overrides.mjs`.
+- [x] 3.3 For each listed override except `react`, `react-dom` and `jsdom>undici`: remove it from `package.json` `pnpm.overrides`, run `pnpm install --lockfile-only`, keep the removal only if it changes no resolution. Done 2026-10-20: 34 of 43 removed, 9 kept (`brace-expansion@<1.1.18`, `cookie@<0.7.0`, `esbuild@<=0.24.2`, `fast-uri@>=3.0.0 <3.1.7`, `nanoid@<3.3.18`, `sharp@<0.35.4`, `undici@<6.27.0`, `undici@>=7.28.0 <7.29.1`, `ws@>=8.0.0 <8.21.0`). **The criterion as written could not work:** `pnpm-lock.yaml` records the `overrides:` table itself, so every removal — inert or not — edits the lockfile, and `git diff --quiet pnpm-lock.yaml` rejects all 43. The criterion used instead: the set of `packages:`/`snapshots:` keys is identical before and after (`git diff` outside the `overrides:` block is empty). Removals were applied one at a time and re-checked after each, because inert entries overlap: `sharp@<0.35.0` and `sharp@<0.35.4` are each inert alone and each covers for the other — dropping both drags sharp to 0.34.5.
+- [x] 3.4 `pnpm deps:overrides` and `pnpm -r test` green after the cleanup. `deps:overrides` PASS with 12 overrides; full suite green on Node 22.23.1 (`pnpm -r --workspace-concurrency=1 --no-bail test`, 14 projects, 2,883 tests). On the default Node 20.20.2 the two Next apps cannot start a jsdom worker (`ReferenceError: Iterator is not defined`, `jsdom@30.1.2`), which is the pre-existing environmental failure, not the cleanup.
+- [x] 3.5 `docs/18-Trabajo-Pendiente.md` — override count updated to 12, with the "inert is not removable" finding; header comment of `scripts/check-dependency-overrides.mjs` updated to the 9 remaining rewrites plus the same caveat.

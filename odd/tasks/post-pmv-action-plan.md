@@ -98,9 +98,9 @@ migration is applied and registered.
 |---|---|---|
 | `supply-chain-hardening` | 1 (audit gate) | hecho — `scripts/check-audit.mjs`, allowlist con #124, `deps:audit`, paso en CI |
 | `supply-chain-hardening` | 2 (TLS) | hecho — `scripts/lib/database-url.mjs` en los cuatro scripts; secret y los 8 `.dev.vars` en `verify-full`; `packages/db/src/tls.ts` + guard en `createDb` |
-| `supply-chain-hardening` | 3 (overrides) | parcial — `--list-inert` hecho; la remoción (3.3–3.5) no, necesita ~45 corridas de `--lockfile-only` |
-| `api-surface-cleanup` | 1 (automation `/health`) | hecho — `PUBLIC_PATHS` + tests; producción todavía contesta 403 hasta el deploy |
-| `api-surface-cleanup` | 4 (`pos_terminals` index) | hecho salvo 4.6 — migración `0020` generada, aplicada por mano pendiente |
+| `supply-chain-hardening` | 3 (overrides) | hecho — 34 de 43 inertes removidos; quedan 12 (9 inertes que sí mueven una resolución + 2 pins + `jsdom>undici`). El criterio de "lockfile idéntico" no servía: el lockfile guarda la tabla de overrides. Prueba real: `packages:`/`snapshots:` sin cambios |
+| `api-surface-cleanup` | 1 (automation `/health`) | hecho — `PUBLIC_PATHS` + tests; producción 200 confirmado tras el deploy de #237 |
+| `api-surface-cleanup` | 4 (`pos_terminals` index) | hecho — `0020` aplicada a mano sobre producción (`indisvalid`, 0 scans) y registrada en el ledger por #236; `db:drift` en verde |
 
 **Decisiones tomadas en esta pasada.**
 
