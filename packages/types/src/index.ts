@@ -97,4 +97,104 @@ export const CUSTOMER_PATCH_ERROR = {
   CONFLICT: 'CUSTOMER_CONFLICT',
 } as const;
 
-export type CustomerPatchErrorCode = (typeof CUSTOMER_PATCH_ERROR)[keyof typeof CUSTOMER_PATCH_ERROR];
+export type CustomerPatchErrorCode =
+  (typeof CUSTOMER_PATCH_ERROR)[keyof typeof CUSTOMER_PATCH_ERROR];
+
+// ---------------------------------------------------------------------------
+// Subject kinds
+// ---------------------------------------------------------------------------
+// This lives here, and only here, for the same reason `CUSTOMER_PATCHABLE_FIELDS`
+// does: two processes have to agree on it for a decision to mean anything.
+//
+// `workers/growth` has refused customer and counter tokens on operator routes
+// since PR #203. `workers/identity` needs the same refusal for the routes that
+// manage a business's branches. Both answers have to be the same answer — a
+// policy that two workers compute separately is a policy that will drift, and
+// this one decides who may write a business's configuration.
+//
+// The three kinds of subject are:
+//   - a **customer**, holding the customer app's token;
+//   - a **counter**, a merchant's payment terminal at the till;
+//   - an **operator**, everything else — the staff who administer the business.
+//
+// The predicates below are deliberately phrased as questions rather than as
+// allow-lists of roles. `role` is free-form text the issuer never enumerates,
+// so an allow-list would have to invent a vocabulary the issuer does not define
+// and would refuse every role added after it was written. Asking "is this the
+// customer app's token?" and "is this a counter?" cannot drift that way.
+//
+// The honest cost, which is deliberate: the pair fails **open** on a fourth kind
+// of subject nobody has thought to ask about, where an allow-list fails closed.
+// A new kind of subject needs its question added, and the counter is what that
+// cost bought.
+
+/** The role the customer app's token carries. */
+export const CUSTOMER_ROLE = 'customer';
+
+/**
+ * The namespace a counter's token subject lives in: `pos:<terminalId>`.
+ *
+ * The colon is the separator that makes the namespace unambiguous: it cannot
+ * appear in a uuid, and it is not a character any of the look-alikes contain.
+ * Case-sensitive on top of that, so `POS:` is not a counter.
+ */
+export const COUNTER_SUBJECT_PREFIX = 'pos:';
+
+/** Stable, specific code. Callers can branch on this without parsing prose. */
+export const OPERATOR_ROLE_REQUIRED = 'OPERATOR_ROLE_REQUIRED';
+
+export type OperatorRoleGuard =
+  { ok: true } | { ok: false; status: 403; code: string; message: string };
+
+/**
+ * Is this the customer app's own token?
+ *
+ * Takes the role alone rather than an auth-headers object, so a worker that
+ * reads the role from a JWT claim and a worker that reads it from an injected
+ * header are asking the identical question of the identical value.
+ */
+export function isCustomerRole(userRole: string): boolean {
+  return userRole === CUSTOMER_ROLE;
+}
+
+/**
+ * Is this a merchant's payment terminal?
+ *
+ * A counter is a *third* kind of subject, so this is not `!isCustomerRole` and
+ * not its mirror image. It asks one question about the subject and refuses
+ * everything else.
+ *
+ * The remainder after the prefix is opaque. It is not looked up, not parsed, and
+ * not compared to anything: there is no `pos_terminals` row behind it that
+ * could tell a terminal that exists from one that does not.
+ */
+export function isCounterSubject(userId: string): boolean {
+  // The empty remainder is refused on purpose: `pos:` with nothing behind it is
+  // a marker with no terminal in it, and accepting it would make the prefix
+  // alone sufficient to act as a merchant's terminal.
+  return userId.startsWith(COUNTER_SUBJECT_PREFIX) && userId.length > COUNTER_SUBJECT_PREFIX.length;
+}
+
+/**
+ * Refuse everything that is not an operator.
+ *
+ * The message is a parameter because it is route-specific: the growth routes
+ * that call this are about the loyalty program, and the identity routes that
+ * call it are about a business's branches. What they share is the *decision*,
+ * and a decision shared as prose would be a second thing to drift.
+ */
+export function requireOperatorRole(
+  auth: { userId: string; userRole: string },
+  message: string,
+): OperatorRoleGuard {
+  if (isCustomerRole(auth.userRole) || isCounterSubject(auth.userId)) {
+    return {
+      ok: false,
+      status: 403,
+      code: OPERATOR_ROLE_REQUIRED,
+      message,
+    };
+  }
+
+  return { ok: true };
+}

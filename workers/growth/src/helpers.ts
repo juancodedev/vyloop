@@ -7,6 +7,13 @@ import {
   createEnvelope,
 } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
+import {
+  OPERATOR_ROLE_REQUIRED,
+  isCustomerRole as isCustomerRoleValue,
+  isCounterSubject as isCounterSubjectValue,
+  requireOperatorRole as requireOperatorRoleShared,
+  type OperatorRoleGuard,
+} from '@vyloop/types';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -91,8 +98,14 @@ export function extractAuthHeaders(c: Context): AuthHeaders {
 /**
  * The role the customer app's token carries. Scopes `rewards:read` /
  * `rewards:redeem` to the holder's own loyalty record.
+ *
+ * The value itself now lives in `@vyloop/types`, because `workers/identity`
+ * answers the same question about the same three kinds of subject for the
+ * routes that manage a business's branches. The reason it lives there is the
+ * reason `CUSTOMER_PATCHABLE_FIELDS` lives there: two workers have to agree on
+ * it for a decision to mean anything, and a predicate copied beside its twin
+ * is a predicate that will drift.
  */
-const CUSTOMER_ROLE = 'customer';
 
 /** Stable, specific code. Callers can branch on this without parsing prose. */
 export const CUSTOMER_ID_MISMATCH = 'CUSTOMER_ID_MISMATCH';
@@ -106,13 +119,13 @@ export const CUSTOMER_SELF_NOT_FOUND = 'CUSTOMER_SELF_NOT_FOUND';
  * allowed to touch.
  */
 export function isCustomerRole(auth: AuthHeaders): boolean {
-  return auth.userRole === CUSTOMER_ROLE;
+  return isCustomerRoleValue(auth.userRole);
 }
 
 /** Stable, specific code. Callers can branch on this without parsing prose. */
-export const OPERATOR_ROLE_REQUIRED = 'OPERATOR_ROLE_REQUIRED';
+export { OPERATOR_ROLE_REQUIRED };
 
-export type OperatorRoleGuard = { ok: true } | { ok: false; status: 403; code: string; message: string };
+export type { OperatorRoleGuard };
 
 /**
  * Refuse the customer app's token, and a counter's, on a route that configures
@@ -167,18 +180,19 @@ export type OperatorRoleGuard = { ok: true } | { ok: false; status: 403; code: s
  * what that cost bought.
  */
 export function requireOperatorRole(auth: AuthHeaders): OperatorRoleGuard {
-  if (isCustomerRole(auth) || isCounterSubject(auth)) {
-    return {
-      ok: false,
-      status: 403,
-      code: OPERATOR_ROLE_REQUIRED,
-      message:
-        'This endpoint configures the loyalty program for the business. Redeeming your own rewards is done through POST /v1/loyalty/rewards/redeem.',
-    };
-  }
-
-  return { ok: true };
+  return requireOperatorRoleShared(auth, OPERATOR_ROLE_REQUIRED_MESSAGE);
 }
+
+/**
+ * The message a refused operator route answers with.
+ *
+ * A parameter of the shared guard rather than a fact of it: the growth routes
+ * that call it are about the loyalty program, and the identity routes that call
+ * it are about a business's branches. What they share is the *decision*, and
+ * what must not be shared is prose that names the wrong thing.
+ */
+const OPERATOR_ROLE_REQUIRED_MESSAGE =
+  'This endpoint configures the loyalty program for the business. Redeeming your own rewards is done through POST /v1/loyalty/rewards/redeem.';
 
 /**
  * The namespace a counter's token subject lives in: `pos:<terminalId>`.
@@ -197,12 +211,15 @@ export function requireOperatorRole(auth: AuthHeaders): OperatorRoleGuard {
  * the separator that makes the namespace unambiguous: it cannot appear in a uuid,
  * and it is not a character any of those look-alikes contain. Case-sensitive on
  * top of that, so `POS:` is not a counter.
+ *
+ * The value now lives in `@vyloop/types`, for the reason given at
+ * `CUSTOMER_ROLE` above: `workers/identity` refuses counter tokens on the
+ * routes that manage a business's branches, and it has to refuse exactly the
+ * ones this file refuses.
  */
-const COUNTER_SUBJECT_PREFIX = 'pos:';
 
 export type CounterSubjectGuard =
-  | { ok: true }
-  | { ok: false; status: 403; code: string; message: string };
+  { ok: true } | { ok: false; status: 403; code: string; message: string };
 
 /** Stable, specific code. Callers can branch on this without parsing prose. */
 export const COUNTER_SUBJECT_REQUIRED = 'COUNTER_SUBJECT_REQUIRED';
@@ -230,14 +247,7 @@ export const COUNTER_SUBJECT_REQUIRED = 'COUNTER_SUBJECT_REQUIRED';
  * nothing here can tell a terminal that exists from one that does not.
  */
 export function isCounterSubject(auth: AuthHeaders): boolean {
-  const sub = auth.userId;
-
-  // The empty remainder is refused on purpose: `pos:` with nothing behind it is a
-  // marker with no terminal in it, and accepting it would make the prefix alone
-  // sufficient to report a merchant's completed sale.
-  return (
-    sub.startsWith(COUNTER_SUBJECT_PREFIX) && sub.length > COUNTER_SUBJECT_PREFIX.length
-  );
+  return isCounterSubjectValue(auth.userId);
 }
 
 /**
