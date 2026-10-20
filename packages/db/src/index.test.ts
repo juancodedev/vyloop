@@ -74,11 +74,15 @@ describe('Database schema', () => {
     expect(db.idxCustomersMetadata).toBeDefined();
     expect(db.idxCustomerEventsCustomer).toBeDefined();
     expect(db.idxCustomerEventsType).toBeDefined();
+    expect(db.idxCustomerEventsBranch).toBeDefined();
+    expect(db.idxPushSubscriptionsLastSeen).toBeDefined();
     expect(db.allIndexes).toBeDefined();
     expect(Array.isArray(db.allIndexes)).toBe(true);
     // 12 pre-existing plus the three wallet indexes plus the venue geohash,
-    // the consent uniqueness, and the three push subscription indexes.
-    expect(db.allIndexes.length).toBe(20);
+    // the consent uniqueness, the three push subscription indexes, and the two
+    // the proximity work added: the venue interaction index and the
+    // subscription freshness index.
+    expect(db.allIndexes.length).toBe(22);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -103,12 +107,14 @@ describe('Database schema', () => {
       uqPushSubscriptionsEndpoint: 'uq_push_subscriptions_endpoint',
       idxPushSubscriptionsBusiness: 'idx_push_subscriptions_business',
       idxPushSubscriptionsCustomer: 'idx_push_subscriptions_customer',
+      idxPushSubscriptionsLastSeen: 'idx_push_subscriptions_last_seen',
       idxCustomersPhone: 'idx_customers_phone',
       idxCustomersLastVisit: 'idx_customers_last_visit',
       idxPointsBalance: 'idx_points_balance',
       idxCustomersMetadata: 'idx_customers_metadata',
       idxCustomerEventsCustomer: 'idx_customer_events_customer',
       idxCustomerEventsType: 'idx_customer_events_type',
+      idxCustomerEventsBranch: 'idx_customer_events_branch',
       idxRewardsCategory: 'idx_rewards_category',
       idxRewardsAutoGrant: 'idx_rewards_auto_grant',
       idxRewardGrantsCustomer: 'idx_reward_grants_customer',

@@ -100,6 +100,36 @@
           "name": "idx_push_subscriptions_customer"
         }
       ]
+    },
+    {
+      "tag": "0017_venue_interactions",
+      "when": 1792472491893,
+      "hash": "4653aa43cb4e2acee5e6b00c5398586a1ee417e3e48a866ec26e07827e805561",
+      "evidence": [
+        {
+          "kind": "column",
+          "name": "checkins.branch_id"
+        },
+        {
+          "kind": "constraint",
+          "name": "checkins_branch_id_branches_id_fk"
+        },
+        {
+          "kind": "index",
+          "name": "idx_customer_events_branch"
+        }
+      ]
+    },
+    {
+      "tag": "0018_subscription_freshness",
+      "when": 1792472492893,
+      "hash": "a0e63c46231d98d435d5f6e4dcd8ef19498e8c86ac8b5685a8ce8bf05457e3fe",
+      "evidence": [
+        {
+          "kind": "index",
+          "name": "idx_push_subscriptions_last_seen"
+        }
+      ]
     }
   ]
 }

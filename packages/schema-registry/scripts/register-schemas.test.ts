@@ -47,6 +47,18 @@ vi.mock('../src/index.ts', () => ({
     type: 'object',
     properties: {},
   },
+  pushCampaignRequestedSchema: {
+    $id: 'https://schema.vyloop.app/events/PushCampaignRequested/v1.0.0',
+    title: 'PushCampaignRequested',
+    type: 'object',
+    properties: {},
+  },
+  customerCheckedInSchema: {
+    $id: 'https://schema.vyloop.app/events/CustomerCheckedIn/v1.0.0',
+    title: 'CustomerCheckedIn',
+    type: 'object',
+    properties: {},
+  },
 }));
 
 const { registerAllSchemas } = await import('./register-schemas');
@@ -58,6 +70,20 @@ describe('registerAllSchemas', () => {
     registerSchemaMock.mockReset();
     registerSchemaMock.mockResolvedValue(undefined);
   });
+
+  it.each(['PushCampaignRequested', 'CustomerCheckedIn'])(
+    'should register %s schema',
+    async (eventType) => {
+      await registerAllSchemas(kv);
+
+      expect(registerSchemaMock).toHaveBeenCalledWith(
+        kv,
+        eventType,
+        expect.objectContaining({ title: eventType }),
+        '1.0.0',
+      );
+    },
+  );
 
   it('should register CustomerRegistered schema', async () => {
     await registerAllSchemas(kv);
@@ -114,9 +140,9 @@ describe('registerAllSchemas', () => {
     );
   });
 
-  it('should register all six schemas', async () => {
+  it('should register all eight schemas', async () => {
     await registerAllSchemas(kv);
 
-    expect(registerSchemaMock).toHaveBeenCalledTimes(6);
+    expect(registerSchemaMock).toHaveBeenCalledTimes(8);
   });
 });

@@ -31,6 +31,8 @@ const EVENT_TYPES = [
   'WhatsAppOutboundRequested',
   'WorkflowTriggered',
   'PushNotificationRequested',
+  'PushCampaignRequested',
+  'CustomerCheckedIn',
 ];
 
 /**
@@ -122,6 +124,38 @@ const REPRESENTATIVE_PAYLOADS: Record<string, unknown> = {
       title: 'Tenés 500 puntos',
       body: 'Pasá por el local y canjealos.',
       url: '/profile/rewards',
+    },
+  },
+  PushCampaignRequested: {
+    header: {
+      business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      timestamp: '2026-07-02T12:00:00Z',
+      localization: { language: 'es-CL', timezone: 'America/Santiago' },
+    },
+    payload: {
+      business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      title: 'Estamos en tu centro',
+      body: 'Te esperamos con 20% de descuento en puntos.',
+      url: '/profile/rewards',
+      reference_id: 'camp-001',
+      target: {
+        latitude: -12.0464,
+        longitude: -77.0428,
+        radius_m: 1500,
+      },
+    },
+  },
+  CustomerCheckedIn: {
+    header: {
+      business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      timestamp: '2026-07-02T12:00:00Z',
+      localization: { language: 'es-CL', timezone: 'America/Santiago' },
+    },
+    payload: {
+      customer_id: '123e4567-e89b-12d3-a456-426614174000',
+      business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+      branch_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+      checkin_id: 'c4d5e6f7-8a9b-0c1d-2e3f-456789abcdef',
     },
   },
   WhatsAppOutboundRequested: {

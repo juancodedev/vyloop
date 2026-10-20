@@ -11,7 +11,17 @@
  */
 import type { KVNamespace } from '@cloudflare/workers-types';
 
-import { registerSchema, customerRegisteredSchema, pointsAssignedSchema, pushNotificationRequestedSchema, rewardRedeemedSchema, whatsappOutboundRequestedSchema, workflowTriggeredSchema } from '../src/index.ts';
+import {
+  registerSchema,
+  customerCheckedInSchema,
+  customerRegisteredSchema,
+  pointsAssignedSchema,
+  pushCampaignRequestedSchema,
+  pushNotificationRequestedSchema,
+  rewardRedeemedSchema,
+  whatsappOutboundRequestedSchema,
+  workflowTriggeredSchema,
+} from '../src/index.ts';
 
 const SCHEMAS_TO_REGISTER: Array<{
   eventType: string;
@@ -46,6 +56,16 @@ const SCHEMAS_TO_REGISTER: Array<{
   {
     eventType: 'PushNotificationRequested',
     schema: pushNotificationRequestedSchema as Record<string, unknown>,
+    version: '1.0.0',
+  },
+  {
+    eventType: 'PushCampaignRequested',
+    schema: pushCampaignRequestedSchema as Record<string, unknown>,
+    version: '1.0.0',
+  },
+  {
+    eventType: 'CustomerCheckedIn',
+    schema: customerCheckedInSchema as Record<string, unknown>,
     version: '1.0.0',
   },
 ];

@@ -69,12 +69,14 @@ const INDEX_NAMES = {
   uqPushSubscriptionsEndpoint: 'uq_push_subscriptions_endpoint',
   idxPushSubscriptionsBusiness: 'idx_push_subscriptions_business',
   idxPushSubscriptionsCustomer: 'idx_push_subscriptions_customer',
+  idxPushSubscriptionsLastSeen: 'idx_push_subscriptions_last_seen',
   idxCustomersPhone: 'idx_customers_phone',
   idxCustomersLastVisit: 'idx_customers_last_visit',
   idxPointsBalance: 'idx_points_balance',
   idxCustomersMetadata: 'idx_customers_metadata',
   idxCustomerEventsCustomer: 'idx_customer_events_customer',
   idxCustomerEventsType: 'idx_customer_events_type',
+  idxCustomerEventsBranch: 'idx_customer_events_branch',
   idxRewardsCategory: 'idx_rewards_category',
   idxRewardsAutoGrant: 'idx_rewards_auto_grant',
   idxRewardGrantsCustomer: 'idx_reward_grants_customer',
@@ -109,12 +111,14 @@ export const uqConsentsCustomerType = indexByName(INDEX_NAMES.uqConsentsCustomer
 export const uqPushSubscriptionsEndpoint = indexByName(INDEX_NAMES.uqPushSubscriptionsEndpoint);
 export const idxPushSubscriptionsBusiness = indexByName(INDEX_NAMES.idxPushSubscriptionsBusiness);
 export const idxPushSubscriptionsCustomer = indexByName(INDEX_NAMES.idxPushSubscriptionsCustomer);
+export const idxPushSubscriptionsLastSeen = indexByName(INDEX_NAMES.idxPushSubscriptionsLastSeen);
 export const idxCustomersPhone = indexByName(INDEX_NAMES.idxCustomersPhone);
 export const idxCustomersLastVisit = indexByName(INDEX_NAMES.idxCustomersLastVisit);
 export const idxPointsBalance = indexByName(INDEX_NAMES.idxPointsBalance);
 export const idxCustomersMetadata = indexByName(INDEX_NAMES.idxCustomersMetadata);
 export const idxCustomerEventsCustomer = indexByName(INDEX_NAMES.idxCustomerEventsCustomer);
 export const idxCustomerEventsType = indexByName(INDEX_NAMES.idxCustomerEventsType);
+export const idxCustomerEventsBranch = indexByName(INDEX_NAMES.idxCustomerEventsBranch);
 export const idxRewardsCategory = indexByName(INDEX_NAMES.idxRewardsCategory);
 export const idxRewardsAutoGrant = indexByName(INDEX_NAMES.idxRewardsAutoGrant);
 export const idxRewardGrantsCustomer = indexByName(INDEX_NAMES.idxRewardGrantsCustomer);

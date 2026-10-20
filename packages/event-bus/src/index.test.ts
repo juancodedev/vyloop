@@ -52,6 +52,16 @@ describe('EventBus', () => {
       const mod = await import('./index');
       expect(mod.REWARD_REDEEMED).toBe('RewardRedeemed');
     });
+
+    it('should export PUSH_CAMPAIGN_REQUESTED constant', async () => {
+      const mod = await import('./index');
+      expect(mod.PUSH_CAMPAIGN_REQUESTED).toBe('PushCampaignRequested');
+    });
+
+    it('should export CUSTOMER_CHECKED_IN constant', async () => {
+      const mod = await import('./index');
+      expect(mod.CUSTOMER_CHECKED_IN).toBe('CustomerCheckedIn');
+    });
   });
 
   describe('createEnvelope', () => {

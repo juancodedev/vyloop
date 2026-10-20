@@ -368,6 +368,99 @@ export const pushNotificationRequestedSchema = {
 };
 
 /**
+ * JSON Schema v1.0.0 for PushCampaignRequested events (envelope format).
+ *
+ * Validates the full envelope with header + payload.
+ *
+ * The payload carries a **target**, never an audience. The target is either a
+ * venue (`branch_id`) or a centre and a radius in metres. The audience is
+ * resolved on the server, when the event is consumed: a campaign that named
+ * its recipients would be a campaign a caller could aim at any customer in
+ * any tenant, and the whole point of the target is that the server decides
+ * who is near a place.
+ */
+export const pushCampaignRequestedSchema = {
+  $id: 'https://schema.vyloop.app/events/PushCampaignRequested/v1.0.0',
+  type: 'object',
+  title: 'PushCampaignRequested',
+  description: 'Envelope schema for PushCampaignRequested events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['business_id', 'title', 'body', 'target'],
+      properties: {
+        business_id: { type: 'string', format: 'uuid', description: 'Business scoping identifier' },
+        title: { type: 'string', minLength: 1, description: 'Notification title' },
+        body: { type: 'string', description: 'Notification body' },
+        url: { type: 'string', description: 'Where the notification leads' },
+        reference_id: { type: 'string', description: 'Dedup key for the campaign' },
+        target: {
+          type: 'object',
+          description: 'Where the campaign points. A venue, or a centre and a radius.',
+          oneOf: [
+            {
+              type: 'object',
+              required: ['branch_id'],
+              properties: {
+                branch_id: { type: 'string', format: 'uuid', description: 'The venue' },
+              },
+              additionalProperties: false,
+            },
+            {
+              type: 'object',
+              required: ['latitude', 'longitude', 'radius_m'],
+              properties: {
+                latitude: { type: 'number', minimum: -90, maximum: 90, description: 'Centre latitude' },
+                longitude: { type: 'number', minimum: -180, maximum: 180, description: 'Centre longitude' },
+                radius_m: { type: 'integer', minimum: 1, description: 'Radius in metres' },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
+/**
+ * JSON Schema v1.0.0 for CustomerCheckedIn events (envelope format).
+ *
+ * Validates the full envelope with header + payload.
+ *
+ * The payload carries the customer and the venue they interacted with. It is
+ * the fact a proximity audience is built from: a customer who has been at a
+ * venue is reachable by a campaign aimed at that venue, and no other record of
+ * "having been at a place" exists.
+ */
+export const customerCheckedInSchema = {
+  $id: 'https://schema.vyloop.app/events/CustomerCheckedIn/v1.0.0',
+  type: 'object',
+  title: 'CustomerCheckedIn',
+  description: 'Envelope schema for CustomerCheckedIn events',
+  required: ['header', 'payload'],
+  properties: {
+    header: envelopeHeaderSchema,
+    payload: {
+      type: 'object',
+      required: ['customer_id', 'business_id', 'branch_id'],
+      properties: {
+        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
+        business_id: { type: 'string', format: 'uuid', description: 'Business scoping identifier' },
+        branch_id: { type: 'string', format: 'uuid', description: 'The venue the interaction happened at' },
+        checkin_id: { type: 'string', format: 'uuid', description: 'The interaction itself' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
+/**
  * JSON Schema v1.0.0 for WorkflowTriggered events (envelope format).
  *
  * Validates the full envelope with header + payload.
