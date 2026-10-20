@@ -319,7 +319,10 @@ una persona va a hacer en voz alta.
   siguiente ya es rechazado, así que la ventana es el TTL del token (1 hora), no un agujero. No se
   implementó revocación de tokens ya emitidos, y no se nota: es exactamente lo que ya hace el resto del
   sistema con sus JWT.
-- **El exchange no tiene límite anónimo todavía.** `/v1/auth/*` es prefijo público y el limitador no
+- ~~**El exchange no tiene límite anónimo todavía.**~~ **Resuelto (verificado contra el código el 2026-10-20).** El canje está en
+  `ANONYMOUS_LIMITS` (`apps/gateway/src/index.ts:238-247`), con el mismo límite que el signup. Se
+  conserva el texto original:
+  `/v1/auth/*` es prefijo público y el limitador no
   limita lo que no está en `ANONYMOUS_LIMITS`, así que esto es un endpoint público que corre una PBKDF2
   por intento. La entrada falta en `apps/gateway/src/index.ts:184`, fuera de la superficie de este
   cambio.
@@ -374,8 +377,9 @@ de mostrador no se tocan.
 
 ### Lo que hay que arreglar aparte
 
-El docblock de `POS_SCOPES` en `workers/identity/src/index.ts` sigue describiendo este hueco como
-"deliberadamente no resuelto aquí". Ya es falso y ningún test lo detecta, porque nadie lo afirma.
+~~El docblock de `POS_SCOPES` en `workers/identity/src/index.ts` sigue describiendo este hueco como
+"deliberadamente no resuelto aquí".~~ **Resuelto** — ver "Cerrado — docblock obsoleto, y por qué
+importaba que mintiera" más abajo.
 
 ## Resuelto — bajo `visit`, una visita es un conteo (no un monto en pesos)
 
@@ -559,7 +563,9 @@ reparación que no debe existir.
   que leer y no importa `creditCheckin`, así que la garantía es estructural y no un chequeo.
 - **El esquema de firma está sin confirmar.** Fallo cerrado ante secreto ausente, firma ausente y
   firma inválida, con tres códigos distintos porque son tres problemas operativos distintos.
-- **La migración `0013_sour_apocalypse.sql` queda sin aplicar**, como las anteriores.
+- ~~**La migración `0013_sour_apocalypse.sql` queda sin aplicar**, como las anteriores.~~
+  **Resuelto (verificado contra producción el 2026-10-20):** `settled_payments` y su FK
+  `settled_payments_business_id_tenants_id_fk` existen, y `pnpm db:drift` pasa.
 
 ### El sexto bug de esta misma clase, y el guard que lo cierra
 
@@ -1020,7 +1026,10 @@ un prefijo con barra final. Revertir el código pone **6 tests en rojo**.
 - ~~**Decidir si `matchRoute` exige frontera de segmento.~~** Cerrado — ver "`matchRoute` ahora
   exige frontera de segmento" arriba.
 - **El poll contra Mercado Pago** — la mitad que falta del backlog. Depende del cliente de MP.
-- Dependabot #198 (vitest 5), #199 (next vs overrides), #201 (pin de react) — esperando decisión.
+- ~~Dependabot #198 (vitest 5), #199 (next vs overrides), #201 (pin de react) — esperando decisión.~~
+  **Resuelto (verificado el 2026-10-20):** #198 y #199 se mergearon; #201 se cerró sin mergear. Queda
+  como limpieza menor revisar si alguna entrada de `pnpm.overrides` quedó inerte tras esos bumpeos.
+  Texto original:
   Los tres bumpeos desactivan **silenciosamente** protecciones que existen por advisories: los overrides
   de Next son rangos `<15.5.21` / `<15.5.24`, y `16.3.8` queda fuera de los seis; los de vitest son
   `<4.1.11` y `5.0.3` también. Ninguno de los tres falla por eso — el CI sigue verde porque no hay un

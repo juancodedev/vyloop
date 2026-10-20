@@ -144,7 +144,11 @@ Objetivo: 10 a 15 negocios reales usando el producto. Datos reales para la sigui
 
 ### Identidad del comensal
 
-- [ ] **Ningún comensal tiene email: el registro no lo pide y nadie lo captura.**
+- [x] **Ningún comensal tiene email: el registro no lo pide y nadie lo captura.**
+      **Resuelto en el formulario (verificado contra el código el 2026-10-20):** `email` ahora es
+      un campo visible y opcional del grupo principal (`apps/customer-web/app/register/page.tsx:26-28`),
+      ya no está escondido en el `<details>`. No se volvió a medir cuántos clientes de producción
+      tienen email. Texto original:
       El campo existe en `apps/customer-web/app/register/page.tsx` pero vive dentro de un
       `<details>` de "opcionales", con el texto *"Solo si te resulta cómodo"*. **Verificado
       en producción: los 12 clientes tienen `email = NULL`.**
@@ -160,7 +164,10 @@ Objetivo: 10 a 15 negocios reales usando el producto. Datos reales para la sigui
 
 ### El perfil nunca pide el pase
 
-- [ ] **`profile/page.tsx` nunca llama a `GET /v1/wallet/pass`.**
+- [x] **`profile/page.tsx` nunca llama a `GET /v1/wallet/pass`.**
+      **Resuelto (verificado contra el código el 2026-10-20):** el perfil muestra `<WalletCard />`
+      (`apps/customer-web/app/profile/page.tsx:13,302`), que consulta el pase vía
+      `app/lib/wallet.ts`. Texto original:
       Verificado: no hay una sola referencia a `/v1/wallet` en todo `apps/customer-web`
       (grep sobre `.ts` y `.tsx`, sin resultados). El backend responde bien — hay 3 pases
       en estado `issued` en producción — pero **el frontend no lo consulta**.
@@ -177,7 +184,10 @@ Objetivo: 10 a 15 negocios reales usando el producto. Datos reales para la sigui
 
 ### La página pública del comercio está muerta para las personas
 
-- [ ] **`/p/{slug}` no tiene ningún link. Verificado.**
+- [x] **`/p/{slug}` no tiene ningún link. Verificado.**
+      **Resuelto (verificado contra el código el 2026-10-20):** la página tiene un CTA "Entrá al club
+      de …" que lleva a `/register?biz={slug}` (`apps/gateway/src/merchant-page.ts:182,348`).
+      Texto original:
       La página responde 200 y contiene el nombre del comercio en el `<h1>` — eso es lo que
       la review de Google lee, y por eso se construyó así. Pero `curl` sobre
       `media.juancode.dev/p/cafe-central` devuelve **cero** elementos `<a>`: no hay un CTA,
@@ -308,7 +318,10 @@ Estos ítems están en la visión del producto pero **no entran al PMV**. Se pri
 
       **No construido:**
       - **Apple Wallet.** Sin trabajo en el repositorio. Este ítem sigue abierto en su mitad.
-      - **El barrido programado.** La reconciliación corre dentro de `GET /v1/wallet/pass`, después
+      - ~~**El barrido programado.**~~ **Resuelto (verificado contra el código el 2026-10-20):**
+        el wallet exporta un handler `scheduled` (`workers/wallet/src/index.ts:322`, con
+        `sweep.ts`), y el cron diario del worker `automation` lo despacha por service binding.
+        Texto original: La reconciliación corre dentro de `GET /v1/wallet/pass`, después
         de firmar el link, y sus fallas se registran y se ignoran para no comprometer el 200. No hay
         cron, ni handler `scheduled`, ni worker de barrido: `workers/wallet/src/index.ts` solo exporta
         `fetch`. Por lo tanto **no hay actualización de saldo en tiempo real**: el saldo se proyecta
