@@ -134,6 +134,13 @@
       "when": 1792472492893,
       "tag": "0018_subscription_freshness",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792508993394,
+      "tag": "0019_message_log_shape",
+      "breakpoints": true
     }
   ]
 }

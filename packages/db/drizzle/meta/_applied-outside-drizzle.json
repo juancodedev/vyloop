@@ -130,6 +130,29 @@
           "name": "idx_push_subscriptions_last_seen"
         }
       ]
+    },
+    {
+      "tag": "0019_message_log_shape",
+      "when": 1792508993394,
+      "hash": "1286d56f162a8e082d10d23cdd0293435378538e5b7eff292a32af681765d984",
+      "evidence": [
+        {
+          "kind": "column",
+          "name": "message_log.direction"
+        },
+        {
+          "kind": "column",
+          "name": "message_log.provider_message_id"
+        },
+        {
+          "kind": "column",
+          "name": "message_log.content"
+        },
+        {
+          "kind": "column",
+          "name": "message_log.metadata"
+        }
+      ]
     }
   ]
 }
