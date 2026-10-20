@@ -554,8 +554,11 @@ la fuente de la verdad, y los dos runtimes la leen.
 
 ## Pendiente — `sslmode=require` se va a debilitar en silencio cuando bumpee `pg`
 
-**Estado:** cerrado por el guard de `supply-chain-hardening` (Unidad 2). Falta la parte operativa:
-girar el secreto `DATABASE_URL` y actualizar los `.dev.vars` locales.
+**Estado:** el secreto `DATABASE_URL` de GitHub se giró a `sslmode=verify-full` el 2026-10-20
+19:34 UTC, y `deploy.yml` lo publica a los workers con `--var` en cada deploy, así que producción
+queda con la cadena verificada. El guard de `supply-chain-hardening` (Unidad 2) está en los scripts.
+Falta solo actualizar los 8 `.dev.vars` locales, que siguen en `require`; no son producción y no se
+tocaron.
 
 ### Qué pasa
 
@@ -597,9 +600,15 @@ propia copia de `pg-connection-string` embebida y **sí lee `sslmode`**. En esa 
 `disable` / `no-verify` sí apagan la verificación. O sea: el driver lee el parámetro, pero también
 emite el warning de deprecación.
 
-Por eso el guard **no** se aplicó todavía a `createDb`: todas las cadenas del repo siguen en
-`sslmode=require`, y un guard ahí haría fallar cada worker en producción antes de que el secreto
-esté girado. El orden es: girar el secreto (Unidad 2.5), después agregar el guard a `createDb`.
+Por eso el guard **no** se aplicó todavía a `createDb`, aunque el secreto ya esté girado: los
+`.dev.vars` locales siguen en `require`, y un guard ahí haría fallar cada `wrangler dev` contra
+producción, que es justo lo que los `.dev.vars` hacen. Agregarlo pide primero normalizar esas 8
+cadenas; el orden es ese, no el inverso.
+
+El gate lo demostró solo: el deploy del 2026-10-20 falló en `migration-drift` con `Refusing to
+connect to ep-shiny-paper-aibbf0hk-pooler…: sslmode must be verify-full (found require)` mientras el
+secreto seguía en `require`. Es el comportamiento buscado — falla cerrado y nombra el host, no la
+contraseña — y por eso el secreto se giró antes de volver a deployar.
 
 ### Cómo se detecta
 

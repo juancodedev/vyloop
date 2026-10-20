@@ -333,11 +333,13 @@ mira.
 Por eso la regla es `verify-full` explícito en el connection string, y `scripts/lib/database-url.mjs`
 lo hace cumplir antes de abrir el pool en los scripts operativos.
 
-**Estado de los connection strings del repo:** los 8 `.dev.vars` (`apps/gateway` y los 7 workers)
-todavía dicen `sslmode=require` y apuntan a producción. Están gitignoreados y **no se editaron**: el
-guard corre en los scripts justamente para que ese `require` falle ahí, delante de quien lo mira, en
-vez de degradarse en silencio dentro de un worker. `packages/db/src/index.ts` (`createDb`) todavía no
-tiene el guard, a propósito: aplicarlo antes de rotar el secret de producción tumba los workers.
+**Estado de los connection strings del repo:** el secreto `DATABASE_URL` de GitHub se giró a
+`verify-full` el 2026-10-20, y como `deploy.yml` lo publica a los workers con `--var`, producción usa
+la cadena verificada. Los 8 `.dev.vars` (`apps/gateway` y los 7 workers) siguen en `require` y
+apuntan a producción; están gitignoreados y **no se editaron**: el guard corre en los scripts
+justamente para que ese `require` falle ahí, delante de quien lo mira, en vez de degradarse en
+silencio dentro de un worker. `packages/db/src/index.ts` (`createDb`) todavía no tiene el guard, a
+propósito: con los `.dev.vars` en `require` haría fallar cada `wrangler dev` contra producción.
 
 ---
 
