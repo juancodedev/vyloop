@@ -52,6 +52,11 @@ export interface WalletWorker {
 export interface Bindings {
   DATABASE_URL: string;
   DOMAIN_EVENTS_QUEUE: Queue;
+  /**
+   * The delivery queue, consumed by the communication worker. Optional: a
+   * check-in is not failed over a missing binding (see `DeliveryQueueEnv`).
+   */
+  DELIVERY_QUEUE?: Queue;
   SCHEMA_REGISTRY: KVNamespace;
   /**
    * The wallet worker, so a ledger write can ask for the balance projection

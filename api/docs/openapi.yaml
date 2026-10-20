@@ -408,6 +408,11 @@ paths:
                     error:
                       code: 'INVALID_AMOUNT_CENTS'
                       message: amount_cents is required and must be an integer greater than 0, in cents
+                badBranchId:
+                  value:
+                    error:
+                      code: 'INVALID_BRANCH_ID'
+                      message: branch_id must be a uuid when it is present
         '403':
           $ref: '#/components/responses/CounterSubjectRequired'
         '404':
@@ -434,6 +439,15 @@ paths:
                     error:
                       code: 'MEMBER_CODE_NOT_FOUND'
                       message: 'No active customer in this business has that member_code.'
+                unknownBranch:
+                  summary: >-
+                    A `branch_id` that is not a venue of this business. A venue of
+                    another business answers the same way, so its existence is
+                    not disclosed. Nothing is written.
+                  value:
+                    error:
+                      code: 'BRANCH_NOT_FOUND'
+                      message: 'No branch with that id belongs to this business.'
         '500':
           description: >-
             The insert conflicted with an existing `payment_id` **and** the
@@ -500,6 +514,8 @@ components:
         - 'INVALID_MEMBER_CODE'
         - 'INVALID_AMOUNT_CENTS'
         - 'MEMBER_CODE_NOT_FOUND'
+        - 'INVALID_BRANCH_ID'
+        - 'BRANCH_NOT_FOUND'
         - 'CONFLICT_WITHOUT_ROW'
         - 'INTERNAL_ERROR'
       example: 'MEMBER_CODE_NOT_FOUND'
@@ -694,6 +710,14 @@ components:
             checked against a basket, because there is no basket on this side:
             Vyloop deliberately holds no product catalogue to disagree with the
             merchant's.
+        branch_id:
+          type: string
+          format: uuid
+          description: >-
+            The venue where the sale happened. Optional: a sale without one is
+            recorded exactly as before. When present it must be a venue of this
+            business, and it ties the customer to that venue for venue-targeted
+            notifications.
         items:
           type: array
           items:

@@ -23,6 +23,12 @@
       {
         "binding": "DOMAIN_EVENTS_QUEUE",
         "queue": "vyloop-domain-events"
+      },
+      {
+        // `CustomerCheckedIn` travels to the communication worker, the
+        // delivery queue's one consumer.
+        "binding": "DELIVERY_QUEUE",
+        "queue": "vyloop-notification-deliveries"
       }
     ]
   },

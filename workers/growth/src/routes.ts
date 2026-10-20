@@ -1,5 +1,7 @@
-import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword } from '@vyloop/db';
-import { publish } from '@vyloop/event-bus';
+import type { Queue } from '@cloudflare/workers-types';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword, branches, customerEvents } from '@vyloop/db';
+import { publish, createEnvelope, CUSTOMER_CHECKED_IN } from '@vyloop/event-bus';
+import type { EventEnvelope } from '@vyloop/event-bus';
 import { eq, and, count, sql, or, isNull, lte, gte, gt, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
@@ -36,7 +38,29 @@ export interface PaymentWebhookEnv {
   PAYMENT_WEBHOOK_SECRET?: string | undefined;
 }
 
-export type GrowthEnv = Bindings & PaymentWebhookEnv;
+/**
+ * The queue the delivery events travel on.
+ *
+ * `vyloop-notification-deliveries` — the queue the communication worker
+ * consumes, and the one a `CustomerCheckedIn` is published to. A customer
+ * checked in at a venue is the fact a proximity campaign is built from, and
+ * the campaign lives in the communication worker.
+ *
+ * It is declared here, beside the route that publishes to it, rather than in
+ * `helpers.ts`, which this unit does not touch. The binding itself is the
+ * parent's to add: `workers/growth/wrangler.jsonc` and the `Bindings` in
+ * `helpers.ts` have to name it before a deployment has it.
+ *
+ * Declared optional, and read as possibly-absent, for the reason
+ * `PAYMENT_WEBHOOK_SECRET` above is: the type must not be satisfiable by a
+ * configuration that has the binding and a runtime that does not. A missing
+ * binding is logged, and the sale is not failed over it.
+ */
+export interface DeliveryQueueEnv {
+  DELIVERY_QUEUE?: Queue;
+}
+
+export type GrowthEnv = Bindings & PaymentWebhookEnv & DeliveryQueueEnv;
 
 const router = new Hono<{ Bindings: GrowthEnv }>();
 
@@ -1712,6 +1736,120 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
 export const MEMBER_CODE_NOT_FOUND = 'MEMBER_CODE_NOT_FOUND';
 export const INVALID_MEMBER_CODE = 'INVALID_MEMBER_CODE';
 export const INVALID_AMOUNT_CENTS = 'INVALID_AMOUNT_CENTS';
+export const INVALID_BRANCH_ID = 'INVALID_BRANCH_ID';
+export const BRANCH_NOT_FOUND = 'BRANCH_NOT_FOUND';
+
+/**
+ * The shape of a uuid.
+ *
+ * The same expression the schema registry validates a uuid with, copied
+ * rather than shared: the registry is a different package with a different
+ * dependency, and a validator that both sides can call is a dependency
+ * neither of them can audit alone.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Read the venue a sale happened at.
+ *
+ * `null` means "the caller did not say", and that is a legitimate state: the
+ * venue is optional, and a sale without one is still a sale. A malformed id
+ * is a different thing — it is refused, because the column is a uuid and a
+ * malformed one is a database error rather than an empty result.
+ */
+function parseBranchId(
+  value: unknown,
+): { ok: true; value: string | null } | { ok: false } {
+  if (value === undefined || value === null) {
+    return { ok: true, value: null };
+  }
+
+  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+    return { ok: false };
+  }
+
+  return { ok: true, value };
+}
+
+/**
+ * Build a `CustomerCheckedIn` event envelope.
+ *
+ * The payload carries the customer's **global** id — the convention every
+ * customer event follows, and the id a delivery resolves — and the venue and
+ * the check-in it happened in.
+ */
+function buildCustomerCheckedInEvent(
+  customerGlobalId: string,
+  businessId: string,
+  branchId: string,
+  checkinId: string,
+): EventEnvelope {
+  return createEnvelope(
+    CUSTOMER_CHECKED_IN,
+    { business_id: businessId, timestamp: new Date().toISOString() },
+    {
+      customer_id: customerGlobalId,
+      business_id: businessId,
+      branch_id: branchId,
+      checkin_id: checkinId,
+    },
+  );
+}
+
+/**
+ * Record that a customer was at a venue, and tell the world.
+ *
+ * Two writes, in this order, and both of them are the record rather than a
+ * side effect of it:
+ *
+ *   1. A row in `customer_events`. This is the fact a proximity campaign's
+ *      audience is built from — there is no other record of a customer having
+ *      been at a place — so it is written whether or not anybody is listening
+ *      on the queue today.
+ *   2. The event on the delivery queue, which is what lets a consumer act on
+ *      the interaction as it happens.
+ *
+ * A missing queue binding is logged rather than thrown. A sale that genuinely
+ * happened must not fail because a binding is absent from a deployment: the
+ * row is the record, and the event is the notification about it.
+ */
+async function recordVenueInteraction(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  c: Context<{ Bindings: GrowthEnv }>,
+  args: {
+    businessId: string;
+    customer: { id: string; globalId: string };
+    branchId: string;
+    checkinId: string;
+  },
+): Promise<void> {
+  const { businessId, customer, branchId, checkinId } = args;
+
+  await db.insert(customerEvents).values({
+    businessId,
+    // The internal id: `customer_events.customer_id` references `customers.id`.
+    customerId: customer.id,
+    eventType: 'customer.checked_in',
+    branchId,
+    payload: { checkin_id: checkinId },
+  });
+
+  const queue = c.env?.DELIVERY_QUEUE;
+
+  if (!queue) {
+    console.error(
+      `[growth] No DELIVERY_QUEUE binding, so the check-in at branch ${branchId} in tenant ` +
+        `${businessId} was recorded but not published. The customer_events row is the record.`,
+    );
+    return;
+  }
+
+  await publish(
+    queue,
+    buildCustomerCheckedInEvent(customer.globalId, businessId, branchId, checkinId),
+  );
+}
 
 /**
  * Resolve a scanned `member_code` to a customer of *this* business.
@@ -1732,15 +1870,23 @@ export const INVALID_AMOUNT_CENTS = 'INVALID_AMOUNT_CENTS';
  * this is the row already in hand — the tier is resolved at the moment of the
  * sale, which is the property that makes the server the authority rather than the
  * POS that previewed it.
+ *
+ * `globalId` comes back for the same reason and for one more: it is the id
+ * every customer event carries, and the interaction a sale at a venue records
+ * is published with it.
  */
 async function resolveMemberCode(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
   businessId: string,
   memberCode: string,
-): Promise<{ id: string; currentTierId: string | null } | undefined> {
+): Promise<{ id: string; globalId: string; currentTierId: string | null } | undefined> {
   const [customer] = await db
-    .select({ id: customers.id, currentTierId: customers.currentTierId })
+    .select({
+      id: customers.id,
+      globalId: customers.globalId,
+      currentTierId: customers.currentTierId,
+    })
     .from(customers)
     .where(
       and(
@@ -1751,7 +1897,9 @@ async function resolveMemberCode(
     )
     .limit(1);
 
-  return customer as { id: string; currentTierId: string | null } | undefined;
+  return customer as
+    | { id: string; globalId: string; currentTierId: string | null }
+    | undefined;
 }
 
 /**
@@ -2097,6 +2245,7 @@ router.post('/v1/loyalty/checkins', async (c) => {
     amount_cents?: unknown;
     items?: unknown;
     note?: string;
+    branch_id?: unknown;
   }>();
 
   if (typeof body.member_code !== 'string' || body.member_code.length === 0) {
@@ -2125,6 +2274,26 @@ router.post('/v1/loyalty/checkins', async (c) => {
     );
   }
 
+  // The venue the sale happened at, when the caller says so.
+  //
+  // Optional: a sale without a venue is a sale, and the route accepts it
+  // exactly as it accepted one before the column existed. A malformed id is
+  // refused rather than carried into the query, because the column is a uuid
+  // and a malformed one is a database error rather than an empty result.
+  const branchId = parseBranchId(body.branch_id);
+
+  if (!branchId.ok) {
+    return c.json(
+      {
+        error: {
+          code: INVALID_BRANCH_ID,
+          message: 'branch_id must be a uuid when it is present',
+        },
+      },
+      400,
+    );
+  }
+
   // Optional, and only when it is a non-empty string. Absent is the manual path
   // and is a legitimate state — `payment_id` is NULL there and the unique index
   // does not collide, which is documented on the table rather than worked around.
@@ -2133,6 +2302,34 @@ router.post('/v1/loyalty/checkins', async (c) => {
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
+
+  // The venue has to belong to this tenant. The answer for a venue of another
+  // business is the same as the answer for a venue that does not exist: a 403
+  // would say "it exists, and it is not yours", and the existence of another
+  // tenant's venue is not this caller's to learn.
+  let branch: { id: string } | undefined;
+
+  if (branchId.value !== null) {
+    const [found] = await db
+      .select({ id: branches.id })
+      .from(branches)
+      .where(and(eq(branches.id, branchId.value), eq(branches.businessId, businessId)))
+      .limit(1);
+
+    if (!found) {
+      return c.json(
+        {
+          error: {
+            code: BRANCH_NOT_FOUND,
+            message: 'No branch with that id belongs to this business.',
+          },
+        },
+        404,
+      );
+    }
+
+    branch = found;
+  }
 
   const customer = await resolveMemberCode(db, businessId, body.member_code);
 
@@ -2162,6 +2359,9 @@ router.post('/v1/loyalty/checkins', async (c) => {
     .values({
       businessId,
       customerId: customer.id,
+      // The venue the sale happened at, when the caller said so. NULL when it
+      // did not: the column is nullable, and a sale without a venue is a sale.
+      branchId: branch?.id ?? null,
       // The scanned string, kept verbatim even though `customerId` is resolved
       // from it: it is the audit trail of what the terminal actually received, and
       // the only thing that can still answer that question once a code is
@@ -2179,6 +2379,30 @@ router.post('/v1/loyalty/checkins', async (c) => {
     .returning();
 
   if (inserted) {
+    // -----------------------------------------------------------------------
+    // The interaction with the venue
+    // -----------------------------------------------------------------------
+    // A sale **at a venue** is an interaction with that venue, and it is the
+    // only record there is of a customer having been somewhere. Without it,
+    // "the customers who were at this venue" cannot be answered at all, and a
+    // campaign aimed at a venue has nobody to reach.
+    //
+    // It is written in the same request as the check-in, and only on the path
+    // where the check-in was actually recorded: a retry of a payment that is
+    // already on file did not happen a second time, and counting it again
+    // would inflate the interaction.
+    //
+    // A sale with no venue writes no interaction and publishes nothing: there
+    // was no interaction with a place.
+    if (branch) {
+      await recordVenueInteraction(db, c, {
+        businessId,
+        customer,
+        branchId: branch.id,
+        checkinId: inserted.id,
+      });
+    }
+
     const credited = await creditCheckin(db, c, {
       businessId,
       customer,
