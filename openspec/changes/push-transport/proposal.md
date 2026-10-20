@@ -40,7 +40,8 @@ customer agrees to a category of message, and the platform sends that category.
 6. The encryption (RFC 8291, `aes128gcm`) and the VAPID signing (RFC 8292),
    on WebCrypto.
 7. The client: a web manifest, a service worker, and the subscription helper.
-8. The communication worker becomes a **consumer** of the domain events queue.
+8. The communication worker becomes a **consumer** of a delivery queue of
+   its own, and the producers publish deliveries there.
 9. The VAPID key pair, held as secrets and passed to the deploy.
 
 ### Out of Scope
@@ -103,6 +104,15 @@ declared the queue as a producer only. A worker that exports `queue` and is not
 attached to a queue is not a consumer: it is a function nobody calls. A
 contract test now reads the same files the deploy reads and fails if the
 consumer is removed.
+
+**The deliveries travel on their own queue.** The domain events queue already
+had a consumer — the growth worker — and a Cloudflare queue admits exactly
+one, so a second consumer on it is refused by the API with a message that
+names neither the queue nor the cause. It was not only the push path that was
+dead: the automation worker published `WhatsAppOutboundRequested` to that same
+queue, whose only consumer does not handle it. The WhatsApp dispatch has never
+run. A delivery is not a domain fact, so it now travels on
+`vyloop-notification-deliveries`, consumed by the worker that delivers.
 
 ## Risks
 

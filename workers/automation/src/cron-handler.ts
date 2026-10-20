@@ -127,7 +127,7 @@ export async function handleBirthdayCron(env: Bindings): Promise<void> {
             },
           );
 
-          await publish(env.DOMAIN_EVENTS_QUEUE, whatsappEvent);
+          await publish(env.DELIVERY_QUEUE, whatsappEvent);
 
           // Publish WorkflowTriggered
           const triggeredEvent = buildWorkflowTriggeredEvent(
@@ -263,7 +263,7 @@ export async function handleInactivityCron(env: Bindings): Promise<void> {
             },
           );
 
-          await publish(env.DOMAIN_EVENTS_QUEUE, whatsappEvent);
+          await publish(env.DELIVERY_QUEUE, whatsappEvent);
 
           // Publish WorkflowTriggered
           const triggeredEvent = buildWorkflowTriggeredEvent(

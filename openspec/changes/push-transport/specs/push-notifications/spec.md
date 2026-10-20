@@ -101,17 +101,26 @@ The push service's answers MUST be interpreted as follows. A success MUST be rec
 - THEN the message stays queued
 - AND the delivery is retried
 
-### Requirement: The Worker Consumes the Queue
+### Requirement: The Worker Consumes the Delivery Queue
 
-The communication worker MUST declare a consumer for the domain events queue, and the queue it consumes MUST be the queue it produces to. The worker MUST export the handler Cloudflare calls.
+The communication worker MUST declare a consumer for the delivery queue, and the queue it consumes MUST be the queue it produces to. The worker MUST export the handler Cloudflare calls.
 
 A worker that exports a queue handler and is not attached to a queue is not a consumer: it is a function nobody calls. The wiring MUST be asserted by a test that reads the same files the deploy reads.
+
+The delivery queue MUST NOT be the domain events queue. A Cloudflare queue admits exactly one consumer, and the domain events queue already has one — the growth worker. A second consumer on it is refused by the API, and the refusal names neither the queue nor the cause. A delivery is also not a domain fact: the domain events queue carries facts about what happened, and a message to deliver is an order.
 
 #### Scenario: The consumer is declared
 
 - GIVEN the worker's configuration
 - WHEN the consumer block is inspected
 - THEN a consumer is declared for the queue the worker produces to
+
+#### Scenario: The consumer is not on a queue that already has one
+
+- GIVEN the worker's configuration
+- AND the consumer of the domain events queue
+- WHEN the consumer block is inspected
+- THEN the queue it consumes is not the domain events queue
 
 #### Scenario: The handler is exported
 

@@ -15,6 +15,10 @@
         {
           "binding": "DOMAIN_EVENTS_QUEUE",
           "queue": "vyloop-domain-events"
+        },
+        {
+          "binding": "DELIVERY_QUEUE",
+          "queue": "vyloop-notification-deliveries"
         }
       ]
     },

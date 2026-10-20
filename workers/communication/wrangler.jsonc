@@ -15,13 +15,13 @@
   "queues": {
     "producers": [
       {
-        "binding": "DOMAIN_EVENTS_QUEUE",
-        "queue": "vyloop-domain-events"
+        "binding": "DELIVERY_QUEUE",
+        "queue": "vyloop-notification-deliveries"
       }
     ],
     "consumers": [
       {
-        "queue": "vyloop-domain-events",
+        "queue": "vyloop-notification-deliveries",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "max_retries": 3

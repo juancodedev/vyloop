@@ -158,7 +158,7 @@ router.post('/v1/communication/send', async (c) => {
     phone,
   );
 
-  await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+  await publish(c.env.DELIVERY_QUEUE, event);
 
   return c.json({ data: logEntry }, 202);
 });
