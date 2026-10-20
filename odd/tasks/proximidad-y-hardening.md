@@ -287,17 +287,22 @@ de la spec).
 
 **Estado por tarea (commit como evidencia):**
 
-| ID | Estado | Commit |
-|---|---|---|
-| T1, T2 | hecha | `4bf2bc9`; fix del mock del test de registro en `47d355c` |
-| T4 | hecha | `eef2461` |
-| T6 | hecha | `51c85f9` (incluye `branch_id` y los códigos en `api/docs/openapi.yaml`) |
-| T3, T5 | hecha | `af3973c` |
-| T10 | hecha | ver `git log`: `feat(communication): push deliveries are visible to operators` |
-| T7, T12 | hecha | `feat(communication): refresh live subscriptions and skip deleted customers` |
-| T11 | hecha | `fix(communication): bound the subscription endpoint an attacker controls` |
-| T8 | hecha | `feat(communication): sweep stale and orphaned push subscriptions` |
-| T9, T13 | hecha | `feat(communication): wire campaigns, delivery stats and the subscription sweep` |
+Los hashes de los commits de trabajo cambiaron con el rebase sobre `main` y desaparecieron con el
+squash merge, así que la evidencia estable es el título del commit y el squash en `main` que lo
+contiene (ver L3).
+
+| ID | Estado | Commit de trabajo | En `main` |
+|---|---|---|---|
+| T1, T2 | hecha | `feat(proximity): the data model and the event vocabulary the venue work needs` + `fix(schema-registry): mock the two schemas the registration script now imports` | `f2d0e73` (#224) |
+| T4 | hecha | `feat(proximity): resolve the venues within a radius` | `f2d0e73` (#224) |
+| T6 | hecha | `feat(growth): a check-in can name the venue where the sale happened` (incluye `branch_id` y los códigos en `api/docs/openapi.yaml`) | `f2d0e73` (#224) |
+| T3, T5 | hecha | `feat(communication): push campaigns targeted at a venue or a radius` | `f2d0e73` (#224) |
+| T10 | hecha | `feat(communication): push deliveries are visible to operators` | `4d8cb9b` (#227) |
+| T7, T12 | hecha | `feat(communication): refresh live subscriptions and skip deleted customers` | `4d8cb9b` (#227) |
+| T11 | hecha | `fix(communication): bound the subscription endpoint an attacker controls` | `4d8cb9b` (#227) |
+| T8 | hecha | `feat(communication): sweep stale and orphaned push subscriptions` | `4d8cb9b` (#227) |
+| T9, T13 | hecha | `feat(communication): wire campaigns, delivery stats and the subscription sweep` | `4d8cb9b` (#227) |
+| — | hecha | `fix(communication): a campaign reaches each browser once` (bloqueantes B1–B3 de la verificación) | `4d8cb9b` (#227) |
 
 **Verificación observada:** typecheck limpio en todo el monorepo; lint sin errores; tests verdes
 en todos los paquetes salvo `apps/dashboard`, que no arranca en Node 20 (`Iterator is not
@@ -305,6 +310,60 @@ defined`; el repo exige Node ≥22, sin relación con el cambio). `packages/db` 
 desde su paquete: `secret-material.contract.test.ts` falla si se corre con `--root` desde la
 raíz, y falla igual en la base.
 
-**Pendiente del usuario:** `pnpm db:drift` bloquea porque `0017_venue_interactions` y
-`0018_subscription_freshness` no están aplicadas en la base de `apps/gateway/.dev.vars`. Se
-aplican a mano antes del deploy, como dice `4bf2bc9`.
+**Pendiente del usuario (resuelto en L3):** `pnpm db:drift` bloqueaba porque
+`0017_venue_interactions` y `0018_subscription_freshness` no estaban aplicadas en producción.
+
+### L3 — 2026-10-20 (cierre)
+
+**Verificación independiente.** Un verificador revisó S1–S12 contra el código y encontró tres
+bloqueantes, todos en la campaña:
+
+- **B1:** reenvío en el reintento de la cola o con un doble POST.
+- **B2:** la referencia se sufijaba dos veces.
+- **B3:** `LIKE` sin escapar en la sonda de duplicados.
+
+Se corrigieron en una tanda (`fix(communication): a campaign reaches each browser once`), con
+tests que fallan contra el código anterior. El rechequeo los dio por resueltos.
+
+**Revisión por commit.** La revisión de Gentle AI sobre la rama entera no entra en el presupuesto
+de contexto del revisor (`lens_context_budget_exceeded`). Los cinco commits de riesgo alto se
+revisaron uno por uno, cada uno desde una worktree en ese commit con `--base-ref <commit>~1`.
+Los cinco quedaron aprobados y acknowledged, con advertencias no bloqueantes únicamente (ver
+*Seguimientos*). El usuario salteó las dos revisiones de la rama entera.
+
+**Migraciones.** `0017` y `0018` se aplicaron a mano en producción (`ep-shiny-paper-aibbf0hk`),
+en una sola transacción y después de un dry run revertido. `pnpm db:drift` → `PASS`. Los
+`.dev.vars` apuntan a producción, y así está bien; queda documentado en `docs/17` y `docs/18`
+(#226).
+
+**Entrega.** Estrategia final: dos PRs apilados en vez de `single-pr`. Hubo un incidente:
+
+1. #224 (F3) se mergeó con squash a `main` como `f2d0e73`.
+2. #225 (F4) se mergeó después a su base apilada `feat/proximity-triggers`, no a `main`, así que
+   F4 quedó fuera.
+3. Se re-aterrizó sin cambios en #227 (`4d8cb9b`).
+
+Es la segunda vez que pasa (la primera fue #116). **Con PRs apilados y squash, hay que cambiar la
+base del hijo a `main` antes de mergearlo.**
+
+El deploy de `f2d0e73` lo frenó `migration-drift`, porque las migraciones todavía no estaban
+aplicadas, y no se desplegó nada. El deploy de `4d8cb9b` salió `success`. Las ramas de trabajo
+quedaron borradas.
+
+**Seguimientos (no bloqueantes, advertencias de la revisión):**
+
+- **Decisión de producto:** `INTERACTION_WINDOW_DAYS = 90` en `push-campaigns.ts` acota la
+  audiencia a las interacciones de los últimos 90 días y no está en la spec. Confirmarla o sacarla.
+- **Tope de suscripciones:**
+  - `> 10` deja crear la suscripción número 11.
+  - Un cliente en el tope no puede refrescar un endpoint existente.
+  - El conteo y el upsert no son atómicos.
+- **Barrido:** el `DELETE` no tiene límite por corrida. Con RLS activo en `customers`, el paso de
+  clientes borrados no encontraría filas, sin dar error.
+- **Dedupe de campañas:** es check-then-send. Lo cierra un índice único parcial en
+  `message_log (business_id, content->>'reference_id') WHERE channel = 'push'`.
+- **Sonda de duplicados:** `left()` cuenta caracteres y el largo en JS cuenta unidades UTF-16, así
+  que falla con referencias que llevan emoji. Igual lo frena el dedupe de la entrega.
+- **Deferred:** `RewardAvailableAtBranch` (ver L1).
+
+**Estado:** F3 y F4 cerradas y en producción.
