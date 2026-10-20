@@ -97,7 +97,7 @@ migration is applied and registered.
 | Change | Unidad | Estado |
 |---|---|---|
 | `supply-chain-hardening` | 1 (audit gate) | hecho — `scripts/check-audit.mjs`, allowlist con #124, `deps:audit`, paso en CI |
-| `supply-chain-hardening` | 2 (TLS) | hecho — `scripts/lib/database-url.mjs` en los cuatro scripts; `createDb` sin guard a propósito, hasta rotar el secret (2.5) |
+| `supply-chain-hardening` | 2 (TLS) | hecho — `scripts/lib/database-url.mjs` en los cuatro scripts; secret y los 8 `.dev.vars` en `verify-full`; `packages/db/src/tls.ts` + guard en `createDb` |
 | `supply-chain-hardening` | 3 (overrides) | parcial — `--list-inert` hecho; la remoción (3.3–3.5) no, necesita ~45 corridas de `--lockfile-only` |
 | `api-surface-cleanup` | 1 (automation `/health`) | hecho — `PUBLIC_PATHS` + tests; producción todavía contesta 403 hasta el deploy |
 | `api-surface-cleanup` | 4 (`pos_terminals` index) | hecho salvo 4.6 — migración `0020` generada, aplicada por mano pendiente |

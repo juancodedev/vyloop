@@ -600,15 +600,18 @@ propia copia de `pg-connection-string` embebida y **sí lee `sslmode`**. En esa 
 `disable` / `no-verify` sí apagan la verificación. O sea: el driver lee el parámetro, pero también
 emite el warning de deprecación.
 
-Por eso el guard **no** se aplicó todavía a `createDb`, aunque el secreto ya esté girado: los
-`.dev.vars` locales siguen en `require`, y un guard ahí haría fallar cada `wrangler dev` contra
-producción, que es justo lo que los `.dev.vars` hacen. Agregarlo pide primero normalizar esas 8
-cadenas; el orden es ese, no el inverso.
+Por eso el guard en `createDb` se aplicó recién después de normalizar las 8 cadenas: con los
+`.dev.vars` en `require`, un guard ahí hacía fallar cada `wrangler dev` contra producción, que es
+justo lo que esos archivos hacen. Ese orden se respetó.
 
 El gate lo demostró solo: el deploy del 2026-10-20 falló en `migration-drift` con `Refusing to
 connect to ep-shiny-paper-aibbf0hk-pooler…: sslmode must be verify-full (found require)` mientras el
 secreto seguía en `require`. Es el comportamiento buscado — falla cerrado y nombra el host, no la
 contraseña — y por eso el secreto se giró antes de volver a deployar.
+
+`packages/db/src/tls.ts` repite la política para el runtime: `createDb` llama a `assertVerifiedTls`
+antes de construir el `Pool`. Rechaza también loopback sin TLS, a propósito: sin lista de excepciones
+no hay host que alguien pueda agregar para colar una cadena débil.
 
 ### Cómo se detecta
 
