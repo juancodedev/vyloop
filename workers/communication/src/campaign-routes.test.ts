@@ -301,6 +301,25 @@ describe('POST /v1/communication/push/campaigns', () => {
     expect(params).toContain('promo_2026%:');
   });
 
+  it('compares the prefix without measuring it, so a reference with an emoji still matches', async () => {
+    // `left(text, n)` counts characters and a JavaScript length counts UTF-16
+    // units: for an emoji the two disagree and the probe never matches.
+    dbMock.select.mockImplementation(() => createQueryChain([{ id: 'log-1' }]));
+
+    await mockFetch({
+      path: '/v1/communication/push/campaigns',
+      method: 'POST',
+      headers: operatorHeaders(),
+      body: { ...VALID_BRANCH_BODY, reference_id: 'promo-☕🎉' },
+    });
+
+    const { sql, params } = renderedDuplicateProbe();
+    expect(sql).toContain('starts_with');
+    expect(sql).not.toContain('left(');
+    expect(params).toContain('promo-☕🎉:');
+    expect(params).not.toContain('promo-☕🎉'.length + 1);
+  });
+
   it('gives a campaign with no reference of its own one', async () => {
     const res = await mockFetch({
       path: '/v1/communication/push/campaigns',

@@ -8,7 +8,7 @@ import {
   upsertPushSubscription,
 } from '@vyloop/db';
 import { isCustomerRole } from '@vyloop/types';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import type { Bindings } from './helpers';
@@ -65,8 +65,9 @@ export const MAX_ENDPOINT_LENGTH = 2048;
  *
  * A customer may hold several browsers: a phone and a laptop, or one browser
  * with two accounts, or the same browser in a normal and a private window. A
- * customer who already holds more than this many is refused, because the next
- * registration is more likely to be abuse than a browser.
+ * customer holds at most this many in all: the next new browser is refused,
+ * because it is more likely to be abuse than a browser. A browser the customer
+ * already holds is refreshed whatever the count — it is not a new one.
  */
 export const MAX_SUBSCRIPTIONS_PER_CUSTOMER = 10;
 
@@ -227,31 +228,47 @@ router.post('/v1/communication/push/subscribe', async (c) => {
   // A customer may hold a few: a phone and a laptop, or one browser with two
   // accounts. Past the cap it is not a browser any more, it is a caller
   // filling a table.
-  const existing = await readPushSubscriptions(db, {
-    businessId: auth.businessId,
-    customerId,
+  //
+  // The count and the write happen under one transaction-scoped lock per
+  // customer. Without it, two requests could both count nine and both write,
+  // and the cap would hold only for callers who wait for each other.
+  const record = await db.transaction(async (tx) => {
+    await withRls(tx, auth.businessId);
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`push-subscriptions:${customerId}`}, 0))`,
+    );
+
+    const existing = await readPushSubscriptions(tx, {
+      businessId: auth.businessId,
+      customerId,
+    });
+
+    const others = existing.filter((subscription) => subscription.endpoint !== endpoint);
+    if (others.length >= MAX_SUBSCRIPTIONS_PER_CUSTOMER) {
+      return null;
+    }
+
+    return upsertPushSubscription(tx, {
+      businessId: auth.businessId,
+      customerId,
+      endpoint,
+      p256dh,
+      auth: authSecret,
+      userAgent: c.req.header('User-Agent') ?? null,
+    });
   });
 
-  if (existing.length > MAX_SUBSCRIPTIONS_PER_CUSTOMER) {
+  if (!record) {
     return c.json(
       {
         error: {
           code: 'TOO_MANY_SUBSCRIPTIONS',
-          message: `This customer already holds more than ${MAX_SUBSCRIPTIONS_PER_CUSTOMER} push subscriptions.`,
+          message: `This customer already holds ${MAX_SUBSCRIPTIONS_PER_CUSTOMER} push subscriptions.`,
         },
       },
       429,
     );
   }
-
-  const record = await upsertPushSubscription(db, {
-    businessId: auth.businessId,
-    customerId,
-    endpoint,
-    p256dh,
-    auth: authSecret,
-    userAgent: c.req.header('User-Agent') ?? null,
-  });
 
   // The id and the moment, and nothing else. The endpoint is a capability and
   // the keys are the browser's.
