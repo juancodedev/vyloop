@@ -1,11 +1,19 @@
 import type { MessageBatch } from '@cloudflare/workers-types';
 import { checkPasswordPolicy, createDb, hashPassword, schema, verifyPassword } from '@vyloop/db';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
+import { requireOperatorRole } from '@vyloop/types';
 import { and, eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 
 import { counterSubject, isPosPlan, issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
+import { resolveBranchLocation, type BranchLocation } from './branch-location';
+import {
+  createBranch,
+  deactivateBranch,
+  listBranches,
+  updateBranch,
+} from './branches';
 import { signupBusiness, SlugNotDerivableError } from './business-signup';
 import { handleTestEvent } from './event-handler';
 import { provisionClassWithRetry } from './wallet-provision';
@@ -874,19 +882,386 @@ app.get('/v1/businesses/:id', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// The business's venues
+// ---------------------------------------------------------------------------
+//
+// A venue is a place: a shop, a branch, a counter. Until now the platform had
+// a table for them and no way to write to it, so a business could not register
+// one and the position it would need to be found nearby could not be recorded.
+//
+// The four routes below are that missing capability. They live in this worker
+// because this worker already serves `/v1/businesses`, which is where a
+// business looks for its own places.
+//
+// ## The tenant comes from the token
+//
+// Every route here resolves the tenant from the caller's signed token and
+// refuses a path that names a different business. The path parameter is never
+// the source of the tenant, because a path parameter is something the caller
+// typed.
+//
+// ## The operator question is asked once, in one place
+//
+// A customer token and a payment terminal's token are both refused, through
+// the same guard the loyalty routes use — the predicates themselves live in
+// `@vyloop/types`, so there is one definition of what a counter is rather than
+// one per worker.
+//
+// ## The venue's position is not required
+//
+// A venue can be registered without a position, and the routes say so. A
+// business that has not pinned its branches on a map yet should not have to
+// invent coordinates to create one, and a venue with no position is a real
+// state rather than an incomplete one.
+// ---------------------------------------------------------------------------
+
+/**
+ * The answer a venue route gives when the caller may not have it.
+ *
+ * A refusal is one of three things, and they are not interchangeable: the
+ * request was not authenticated, the request was authenticated and is not
+ * allowed, or the request was allowed and the thing it named is not there.
+ */
+type VenueAuth =
+  | { ok: true; businessId: string }
+  | { ok: false; status: 401 | 403 | 404 | 500; code: string; message: string };
+
+/**
+ * Resolve who is calling a venue route, and which business they are calling
+ * for.
+ *
+ * The token is validated here rather than read from the headers the gateway
+ * injects. Both are the same credential and both are trustworthy, and
+ * validating it again costs one signature check and buys the property that a
+ * venue route cannot be talked into by anything other than a real token —
+ * even if a request reaches this worker without passing through the gateway.
+ */
+async function authorizeVenueRequest(c: Context<AppEnv>): Promise<VenueAuth> {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return {
+      ok: false,
+      status: 401,
+      code: 'AUTH_TOKEN_INVALID',
+      message: 'Missing or invalid Authorization header',
+    };
+  }
+
+  const secret = c.env.JWT_SECRET;
+  if (!secret) {
+    return {
+      ok: false,
+      status: 500,
+      code: 'INTERNAL_ERROR',
+      message: 'JWT secret not configured',
+    };
+  }
+
+  let claims: JwtClaims;
+  try {
+    claims = await validateToken(secret, authHeader.slice(7));
+  } catch {
+    return {
+      ok: false,
+      status: 401,
+      code: 'AUTH_TOKEN_INVALID',
+      message: 'Token invalid or expired',
+    };
+  }
+
+  // The same question the loyalty routes ask, answered by the same predicates.
+  // A customer redeeming their own points and a terminal reporting a sale are
+  // both subjects that exist in the wild and both must not configure a
+  // business's venues.
+  const gate = requireOperatorRole(
+    { userId: claims.sub, userRole: claims.role },
+    'This endpoint manages the venues of your business.',
+  );
+  if (!gate.ok) {
+    return { ok: false, status: gate.status, code: gate.code, message: gate.message };
+  }
+
+  // The token names the tenant; the path only gets to agree with it.
+  //
+  // 404 and not 403: a business that asks about a venue belonging to another
+  // business should not be able to tell the difference between "that venue does
+  // not exist" and "that venue is not yours". Answering 403 would confirm that
+  // the identifier exists.
+  if (c.req.param('id') !== claims.business_id) {
+    return { ok: false, status: 404, code: 'NOT_FOUND', message: 'Business not found' };
+  }
+
+  return { ok: true, businessId: claims.business_id };
+}
+
+/**
+ * Read a string field from a JSON body.
+ *
+ * `undefined` means the caller did not mention the field, which is different
+ * from `null`, which means "clear it". The distinction is what lets a partial
+ * update change a venue's name without blanking its address.
+ */
+function readString(body: Record<string, unknown>, field: string): string | null | undefined {
+  if (!(field in body)) {
+    return undefined;
+  }
+  const value = body[field];
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * The first field that was sent but is not a string.
+ *
+ * `readString` cannot tell those two apart on its own: a field that was not
+ * sent and a field that was sent as a number both come back as "nothing to
+ * write". Left that way, a request that asked to set an address to `12345`
+ * would succeed and write no address — the caller would be told 201 and the
+ * venue would have no address at all.
+ *
+ * `null` is not a wrong type: it is how a field is cleared.
+ */
+function findNonStringField(body: Record<string, unknown>, fields: string[]): string | null {
+  for (const field of fields) {
+    if (!(field in body)) {
+      continue;
+    }
+    const value = body[field];
+    if (value === null || typeof value === 'string') {
+      continue;
+    }
+    return field;
+  }
+  return null;
+}
+
+/**
+ * The position a request is asking for, or the fact that it is not asking.
+ *
+ * `undefined` means the request said nothing about the position, so it is left
+ * alone. `null` means the request asked for it to be removed. An object means
+ * the request asked for it to be set.
+ */
+function readLocation(
+  body: Record<string, unknown>,
+):
+  | { present: false }
+  | { present: true; location: BranchLocation | null; error?: { code: string; message: string } } {
+  const mentionsPosition =
+    'latitude' in body || 'longitude' in body || 'geohash' in body;
+
+  if (!mentionsPosition) {
+    return { present: false };
+  }
+
+  const outcome = resolveBranchLocation({
+    latitude: body.latitude,
+    longitude: body.longitude,
+    geohash: body.geohash,
+  });
+
+  if (!outcome.ok) {
+    if (outcome.code === 'BRANCH_LOCATION_ABSENT') {
+      // Every position field was sent as null. That is a request to clear the
+      // position, which is a thing a venue can do.
+      return { present: true, location: null };
+    }
+    return {
+      present: true,
+      location: null,
+      error: { code: outcome.code, message: outcome.message },
+    };
+  }
+
+  return { present: true, location: outcome.location };
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/businesses/{id}/branches
 // ---------------------------------------------------------------------------
 
 app.get('/v1/businesses/:id/branches', async (c) => {
-  const businessId = c.req.param('id');
+  const auth = await authorizeVenueRequest(c);
+  if (!auth.ok) {
+    return c.json({ error: { code: auth.code, message: auth.message } }, auth.status);
+  }
 
-  // PMV: return empty branch list.
-  // In production: query the database for branches of this tenant.
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  const db = createDb(dbUrl);
+  const venues = await listBranches(db, auth.businessId);
+
   return c.json({
-    branches: [],
-    total: 0,
-    business_id: businessId,
+    branches: venues,
+    total: venues.length,
+    business_id: auth.businessId,
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/businesses/{id}/branches
+// ---------------------------------------------------------------------------
+
+app.post('/v1/businesses/:id/branches', async (c) => {
+  const auth = await authorizeVenueRequest(c);
+  if (!auth.ok) {
+    return c.json({ error: { code: auth.code, message: auth.message } }, auth.status);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Body must be JSON' } }, 400);
+  }
+
+  const wrongType = findNonStringField(body, ['name', 'address', 'city', 'country', 'timezone']);
+  if (wrongType) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: `${wrongType} must be a string` } },
+      400,
+    );
+  }
+
+  const name = readString(body, 'name');
+  if (!name) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'name is required' } }, 400);
+  }
+
+  const country = readString(body, 'country');
+  if (!country) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'country is required' } }, 400);
+  }
+
+  const location = readLocation(body);
+  if (location.present && location.error) {
+    return c.json(
+      { error: { code: location.error.code, message: location.error.message } },
+      400,
+    );
+  }
+
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  const db = createDb(dbUrl);
+  const venue = await createBranch(db, {
+    businessId: auth.businessId,
+    name,
+    address: readString(body, 'address') ?? null,
+    city: readString(body, 'city') ?? null,
+    country,
+    timezone: readString(body, 'timezone') ?? null,
+    location: location.present ? location.location : null,
+  });
+
+  return c.json({ branch: venue }, 201);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /v1/businesses/{id}/branches/{branchId}
+// ---------------------------------------------------------------------------
+
+app.patch('/v1/businesses/:id/branches/:branchId', async (c) => {
+  const auth = await authorizeVenueRequest(c);
+  if (!auth.ok) {
+    return c.json({ error: { code: auth.code, message: auth.message } }, auth.status);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Body must be JSON' } }, 400);
+  }
+
+  const wrongType = findNonStringField(body, ['name', 'address', 'city', 'country', 'timezone']);
+  if (wrongType) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: `${wrongType} must be a string` } },
+      400,
+    );
+  }
+
+  const location = readLocation(body);
+  if (location.present && location.error) {
+    return c.json(
+      { error: { code: location.error.code, message: location.error.message } },
+      400,
+    );
+  }
+
+  const name = readString(body, 'name');
+  if (name === null) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'name cannot be empty' } },
+      400,
+    );
+  }
+
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  const db = createDb(dbUrl);
+  const venue = await updateBranch(db, {
+    businessId: auth.businessId,
+    branchId: c.req.param('branchId'),
+    fields: {
+      name,
+      address: readString(body, 'address'),
+      city: readString(body, 'city'),
+      country: readString(body, 'country') ?? undefined,
+      timezone: readString(body, 'timezone'),
+    },
+    location: location.present ? location.location : undefined,
+  });
+
+  if (!venue) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Venue not found' } }, 404);
+  }
+
+  return c.json({ branch: venue });
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /v1/businesses/{id}/branches/{branchId}
+// ---------------------------------------------------------------------------
+
+app.delete('/v1/businesses/:id/branches/:branchId', async (c) => {
+  const auth = await authorizeVenueRequest(c);
+  if (!auth.ok) {
+    return c.json({ error: { code: auth.code, message: auth.message } }, auth.status);
+  }
+
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  const db = createDb(dbUrl);
+  const venue = await deactivateBranch(db, {
+    businessId: auth.businessId,
+    branchId: c.req.param('branchId'),
+  });
+
+  if (!venue) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Venue not found' } }, 404);
+  }
+
+  return c.json({ branch: venue });
 });
 
 // ---------------------------------------------------------------------------
