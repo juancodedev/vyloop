@@ -1,6 +1,7 @@
 import { getTableConfig, Index as DrizzleIndex, type PgTable } from 'drizzle-orm/pg-core';
 
 import {
+  branches,
   customers,
   customerEvents,
   pointsTransactions,
@@ -34,6 +35,7 @@ import {
  * order and snapshots of it are comparable.
  */
 const INDEXED_TABLES: readonly PgTable[] = [
+  branches,
   customers,
   pointsTransactions,
   customerEvents,
@@ -58,6 +60,7 @@ export const allIndexes: readonly DrizzleIndex[] = INDEXED_TABLES.flatMap(
  * opening `schema.ts`.
  */
 const INDEX_NAMES = {
+  idxBranchesGeohash: 'idx_branches_geohash',
   idxCustomersPhone: 'idx_customers_phone',
   idxCustomersLastVisit: 'idx_customers_last_visit',
   idxPointsBalance: 'idx_points_balance',
@@ -93,6 +96,7 @@ export function indexByName(name: string): DrizzleIndex {
   return found;
 }
 
+export const idxBranchesGeohash = indexByName(INDEX_NAMES.idxBranchesGeohash);
 export const idxCustomersPhone = indexByName(INDEX_NAMES.idxCustomersPhone);
 export const idxCustomersLastVisit = indexByName(INDEX_NAMES.idxCustomersLastVisit);
 export const idxPointsBalance = indexByName(INDEX_NAMES.idxPointsBalance);
@@ -106,9 +110,7 @@ export const idxMessageLogCustomer = indexByName(INDEX_NAMES.idxMessageLogCustom
 export const idxMessageLogStatus = indexByName(INDEX_NAMES.idxMessageLogStatus);
 export const idxWhatsappTemplatesName = indexByName(INDEX_NAMES.idxWhatsappTemplatesName);
 export const idxCustomersMemberCode = indexByName(INDEX_NAMES.idxCustomersMemberCode);
-export const idxCustomerWalletPassesTenant = indexByName(
-  INDEX_NAMES.idxCustomerWalletPassesTenant,
-);
+export const idxCustomerWalletPassesTenant = indexByName(INDEX_NAMES.idxCustomerWalletPassesTenant);
 
 /**
  * Supports pruning old deliveries by age.

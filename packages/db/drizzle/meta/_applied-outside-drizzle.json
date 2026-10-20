@@ -15,6 +15,45 @@
           "name": "settled_payments_business_id_tenants_id_fk"
         }
       ]
+    },
+    {
+      "tag": "0014_branch_geolocation",
+      "when": 1792440724699,
+      "hash": "3916ec5319d8a3b6e075f46f6b5f42f0a0fe3d37e5491899fd390be6c7be6e88",
+      "evidence": [
+        {
+          "kind": "column",
+          "name": "branches.latitude"
+        },
+        {
+          "kind": "column",
+          "name": "branches.longitude"
+        },
+        {
+          "kind": "column",
+          "name": "branches.geohash"
+        },
+        {
+          "kind": "column",
+          "name": "branches.geohash_precision"
+        },
+        {
+          "kind": "column",
+          "name": "branches.located_at"
+        },
+        {
+          "kind": "index",
+          "name": "idx_branches_geohash"
+        },
+        {
+          "kind": "constraint",
+          "name": "branches_coordinates_pair_chk"
+        },
+        {
+          "kind": "constraint",
+          "name": "branches_coordinates_range_chk"
+        }
+      ]
     }
   ]
 }
