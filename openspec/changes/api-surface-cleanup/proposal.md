@@ -133,7 +133,9 @@ validation of the payload rather than the whole body (`ingestor.ts:96` passes
 `body`); rate limiting; and an idempotency key. That is a feature, not a cleanup.
 
 The decision MUST be recorded before implementation. The deltas in this change
-specify Option R.
+specify Option R as a draft; they are not approved scope, and this change MUST
+NOT be archived until the decision and the 30-day log check are recorded in
+`tasks.md` (task 2.1).
 
 ### 3. Meta webhook: what enabling it requires
 
@@ -179,8 +181,9 @@ commit:
 - `packages/db/src/index.test.ts`: the binding → name pair, beside
   `idxPushSubscriptionsBusiness: 'idx_push_subscriptions_business'` (`:107-110`).
 - A generated migration in `packages/db/drizzle/` with the next free number,
-  reviewed. Production migrations are hand-applied, so the applied migration is
-  registered in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with
+  reserved per `docs/18-Trabajo-Pendiente.md`, reviewed. Production migrations
+  are hand-applied, so the applied migration is registered in
+  `packages/db/drizzle/meta/_applied-outside-drizzle.json` with
   `{ "kind": "index", "name": "idx_pos_terminals_business" }` as evidence.
 
 ## Risks

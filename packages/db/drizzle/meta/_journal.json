@@ -141,6 +141,13 @@
       "when": 1792508993394,
       "tag": "0019_message_log_shape",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792518328359,
+      "tag": "0020_pos_terminals_business",
+      "breakpoints": true
     }
   ]
 }

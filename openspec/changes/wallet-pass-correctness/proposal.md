@@ -138,10 +138,17 @@ the date and counts of the run.
 
 ### 4. Operator pass management
 
+**Ordering with `tenant-isolation-rls`.** If `tenant-isolation-rls` lands first,
+its contract test rejects `openTenantSession` and this store MUST be written
+against `withTenantTransaction` from the start. If this change lands first,
+`tenant-isolation-rls` task 2.5 MUST include the three new routes. The execution
+plan (`odd/tasks/post-pmv-action-plan.md`) sequences this change first.
+
 Three routes on the wallet worker, under the existing `/v1/wallet` gateway prefix
 (`apps/gateway/src/router.ts:43`), each guarded by `requireOperatorRole`
 (`workers/wallet/src/helpers.ts:390`) and scoped to `auth.businessId` through the
-tenant session (`openTenantSession`):
+tenant-scoped store (`openTenantSession` today, `withTenantTransaction` in the
+other order):
 
 - `GET /v1/wallet/passes?limit=&cursor=&state=` — rows of
   `customer_wallet_passes` joined to `customers` for the tenant: `customer_id`,

@@ -156,6 +156,8 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 
+import { assertVerifiedTls } from './lib/database-url.mjs';
+
 export const MIGRATIONS_FOLDER = 'packages/db/drizzle';
 export const JOURNAL_PATH = join(MIGRATIONS_FOLDER, 'meta/_journal.json');
 export const BASELINE_PATH = join(MIGRATIONS_FOLDER, 'meta/_applied-outside-drizzle.json');
@@ -870,6 +872,11 @@ const APPLIED_MIGRATIONS_QUERY = DRIFT_QUERY;
  */
 export async function observeDatabase(url, { connectTimeoutMs = 10_000 } = {}) {
   if (!url) return { reachable: false, error: 'DATABASE_URL is not set' };
+
+  // The comment below says this gate runs in CI against production, which is
+  // exactly why it may not rely on the driver's current, soon-to-change reading
+  // of `sslmode`.
+  assertVerifiedTls(url);
 
   // `pg` is a dependency of packages/db, not of the repository root, so a plain
   // dynamic import from a script at the top level does not resolve it.

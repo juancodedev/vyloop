@@ -37,7 +37,7 @@ Chain strategy: stacked-to-main
 
 ## Unit 2: Member code at registration
 
-- [ ] 2.1 `workers/wallet/src/index.ts` — export `ensureCustomerMemberCode({ tenantId, customerId }, env)` beside `reconcileCustomer` (default export at `:496-502`); it opens `openTenantSession`, reads `global_id` and `member_code`, and calls `ensureMemberCode` (`issuance.ts:317`)
+- [ ] 2.1 `workers/wallet/src/index.ts` — export `ensureCustomerMemberCode({ tenantId, customerId }, env)` beside `reconcileCustomer` (default export at `:496-502`); it opens the tenant session (`openTenantSession` today; `withTenantTransaction` if `tenant-isolation-rls` landed first), reads `global_id` and `member_code`, and calls `ensureMemberCode` (`issuance.ts:317`)
 - [ ] 2.2 `workers/growth/src/helpers.ts:48-50` — add `ensureCustomerMemberCode` to `WalletWorker`
 - [ ] 2.3 `workers/growth/src/event-handler.ts` (`handleCustomerRegistered`) — after the ledger initialisation, call the binding; a missing binding or a thrown error is logged and swallowed, as `schedulePassReconcile` does (`helpers.ts:549-580`)
 - [ ] 2.4 `workers/growth/src/event-handler.test.ts` (new; no handler test exists today) — the call is made with the internal customer id; a throwing binding does not fail the event; a missing binding does not fail the event

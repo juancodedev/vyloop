@@ -32,6 +32,7 @@ import {
   satisfiesRange,
   checkOverrides,
   formatReport,
+  formatInertList,
   readOverrideTable,
   LOCKFILE_PATH,
   PACKAGE_JSON_PATH,
@@ -788,5 +789,20 @@ describe('semver is the oracle', () => {
         ).toBe(expected);
       }
     }
+  });
+});
+
+describe('formatInertList', () => {
+  it('prints one line per entry with its key and, when present, its selector', () => {
+    const text = formatInertList([
+      { overrideKey: 'postcss@<=8.5.22', selector: 'postcss@<=8.5.22' },
+      { overrideKey: 'react', selector: null },
+    ]);
+
+    expect(text.split('\n')).toEqual(['postcss@<=8.5.22\tpostcss@<=8.5.22', 'react']);
+  });
+
+  it('prints nothing for an empty list', () => {
+    expect(formatInertList([])).toBe('');
   });
 });

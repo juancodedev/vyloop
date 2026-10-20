@@ -13,6 +13,7 @@ import {
   whatsappTemplates,
   customerWalletPasses,
   walletCallbackDeliveries,
+  posTerminals,
 } from './schema';
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,7 @@ const INDEXED_TABLES: readonly PgTable[] = [
   whatsappTemplates,
   customerWalletPasses,
   walletCallbackDeliveries,
+  posTerminals,
 ];
 
 /**
@@ -86,6 +88,7 @@ const INDEX_NAMES = {
   idxCustomersMemberCode: 'uq_customers_business_member_code',
   idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
   idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
+  idxPosTerminalsBusiness: 'idx_pos_terminals_business',
 } as const satisfies Record<string, string>;
 
 /**
@@ -139,3 +142,8 @@ export const idxCustomerWalletPassesTenant = indexByName(INDEX_NAMES.idxCustomer
 export const idxWalletCallbackDeliveriesReceived = indexByName(
   INDEX_NAMES.idxWalletCallbackDeliveriesReceived,
 );
+
+/**
+ * Serves `GET /v1/loyalty/terminals`: one tenant's tills, newest first.
+ */
+export const idxPosTerminalsBusiness = indexByName(INDEX_NAMES.idxPosTerminalsBusiness);

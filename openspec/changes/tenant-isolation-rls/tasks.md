@@ -6,7 +6,7 @@
 
 | Field                   | Value                                                                                         |
 | ----------------------- | --------------------------------------------------------------------------------------------- |
-| Estimated changed lines | ~1600 (additions + deletions), of which ~600 are mechanical call-site moves                   |
+| Estimated changed lines | ~1650 (additions + deletions), of which ~650 are mechanical call-site moves                   |
 | 400-line budget risk    | High                                                                                          |
 | Chained PRs recommended | Yes                                                                                           |
 | Suggested split         | Unit 1 → Unit 2 → (Unit 3 ∥ Unit 4 ∥ Unit 5) → Unit 6 → Unit 7, one PR each                   |
@@ -22,7 +22,7 @@ Chain strategy: stacked-to-main
 | Unit | Goal                                                       | Likely PR | Lines | Notes                                                    |
 | ---- | ---------------------------------------------------------- | --------- | ----- | -------------------------------------------------------- |
 | 1    | `withTenantTransaction` and complete table lists           | PR #1     | ~250  | Shared code; must land first.                            |
-| 2    | Move every worker call site to the helper                  | PR #2–#3  | ~600  | Mechanical; split growth (`routes.ts`, 20 sites) from the rest. |
+| 2    | Move every runtime call site to the helper                 | PR #2–#3  | ~650  | Mechanical; split growth (`routes.ts`, 20 sites) from the rest, then analytics and the gateway. |
 | 3    | Cross-tenant jobs loop per tenant                          | PR #4     | ~350  | Needs Unit 1.                                            |
 | 4    | `pnpm db:rls` verification script                          | PR #5     | ~250  | Independent of Units 2–3.                                |
 | 5    | Drift gate `rls` / `policy` evidence                       | PR #6     | ~200  | Independent of Units 2–4.                                |
@@ -43,10 +43,12 @@ Chain strategy: stacked-to-main
 - [ ] 2.2 `workers/customer/src/*.ts` — the customer worker defines `withRls` (`helpers.ts:138`) and never calls it, so its routes set no tenant context at all; wrap every tenant-table query in `withTenantTransaction` and delete the unused helper.
 - [ ] 2.3 `workers/communication/src/` (`routes.ts`, `campaign-routes.ts`, `push-routes.ts`, `push-campaigns.ts`, `push-delivery.ts`, `delivery-stats.ts`, `event-handler.ts`) — same, and remove `withRls` from `workers/communication/src/helpers.ts`.
 - [ ] 2.4 `workers/automation/src/event-handler.ts` (lines 138, 288, 424) — same, and remove `withRls` from `workers/automation/src/helpers.ts` (the cron handlers move in Unit 3).
-- [ ] 2.5 `workers/wallet/src/drizzle-store.ts` — replace `openTenantSession` (lines 105-110) with a store whose methods run inside `withTenantTransaction(db, { businessId: tenantId, tenantId }, ...)`; update its 9 callers.
+- [ ] 2.5 `workers/wallet/src/drizzle-store.ts` — replace `openTenantSession` (lines 105-110) with a store whose methods run inside `withTenantTransaction(db, { businessId: tenantId, tenantId }, ...)`; update its callers (9 today; recount if `wallet-pass-correctness` landed first, which adds the operator pass routes).
 - [ ] 2.6 `workers/identity/src/branches.ts` and `business-signup.ts` — switch the existing correct `db.transaction` + `setCurrentBusinessId` blocks to the helper, so there is one pattern.
-- [ ] 2.7 A contract test (e.g. `packages/db/src/rls-call-sites.contract.test.ts`) that reads every `workers/*/src/**/*.ts` (excluding tests) and fails on `withRls(` or `openTenantSession(`.
+- [ ] 2.7 A contract test (e.g. `packages/db/src/rls-call-sites.contract.test.ts`) that reads every `workers/*/src/**/*.ts` and `apps/gateway/src/**/*.ts` (excluding tests) and fails on `withRls(`, `openTenantSession(`, or `setCurrentBusinessId(`/`setCurrentTenantId(` outside `packages/db/src/rls.ts`.
 - [ ] 2.8 Update each touched worker's existing route tests so the mocked `db` exposes `transaction` and assertions run against the transaction handle.
+- [ ] 2.9 `workers/analytics/src/index.ts:68,134` — replace the inline `setCurrentBusinessId` and the queries it scopes with `withTenantTransaction(db, { businessId }, ...)`; add a test that the queries run on the transaction handle.
+- [ ] 2.10 `apps/gateway/src/merchant-store.ts:81` — same for the `/p/{slug}` lookup; record in `docs/09` §4 that the gateway moves to `vyloop_app` with the workers (it consumes the same secret) or that it keeps a separate owner credential, which is the alternative phase 1 MUST resolve.
 
 ## Unit 3: Phase 0 — cross-tenant jobs
 
@@ -73,7 +75,7 @@ Chain strategy: stacked-to-main
 - [ ] 6.1 `docs/09-Database-Design.md` §4 — runbook: create `vyloop_app` (LOGIN, NOBYPASSRLS, owns nothing), `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`, `GRANT USAGE ON ALL SEQUENCES`, `ALTER DEFAULT PRIVILEGES` for future tables; run on a Neon branch first; confirm with `pnpm db:rls`.
 - [ ] 6.2 Phase 1: move the workers' `DATABASE_URL` GitHub secret (consumed by `.github/workflows/deploy.yml`) to the `vyloop_app` credential; keep the owner credential in a separate secret for the `migration-drift` job and the scripts. Record the decision in `docs/09` §4.
 - [ ] 6.3 Phase 2: on a Neon branch of `ep-shiny-paper-aibbf0hk`, apply `enableRls()`, `createRlsPolicies()`, `enableTenantRls()` and `createTenantRlsPolicies()`; point a preview deploy at it; run the smoke flows and the wallet sweep; record the error count from the branch logs.
-- [ ] 6.4 Phase 3: `packages/db/drizzle/<next>_wallet_rls.sql` (next free number) — `ENABLE ROW LEVEL SECURITY` and `CREATE POLICY tenant_isolation` for the three `TENANT_ID_TABLES`; apply by hand; register in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with `rls`/`policy` evidence; `pnpm db:drift` and `pnpm db:rls -- --expect wallet` green.
+- [ ] 6.4 Phase 3: `packages/db/drizzle/<next>_wallet_rls.sql` (next free number, reserved per `docs/18-Trabajo-Pendiente.md`) — `ENABLE ROW LEVEL SECURITY` and `CREATE POLICY tenant_isolation` for the three `TENANT_ID_TABLES`; apply by hand; register in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with `rls`/`policy` evidence; `pnpm db:drift` and `pnpm db:rls -- --expect wallet` green.
 
 ## Unit 7: Phase 4 — business tables and docs
 

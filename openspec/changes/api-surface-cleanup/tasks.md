@@ -28,10 +28,10 @@ Chain strategy: none
 
 ## Unit 1: Automation health probe
 
-- [ ] 1.1 `workers/automation/src/index.ts:23` — add an exact `PUBLIC_PATHS` set (`'/health'`) checked on `new URL(c.req.url).pathname` before `extractAuthHeaders`, the shape of `workers/wallet/src/index.ts:121,130`
-- [ ] 1.2 `workers/automation/src/index.test.ts` (new; the worker has no app-level test today) — `GET /health` with no gateway headers answers 200 `{ status: 'ok', service: 'automation' }`; `GET /health/extra` without headers is still refused
-- [ ] 1.3 `apps/gateway/src/wrangler-route-reachability.contract.test.ts:70-74` — reword the `/v1/automation` note to name the unimplemented Workflow CRUD and the dashboard page that calls it; keep the `ROUTES_OUTSIDE_GATEWAY_NAMESPACE` entry (`:172-185`)
-- [ ] 1.4 Verify whether `workers/automation` is reachable on its `workers.dev` hostname in production; record the answer in `docs/18-Trabajo-Pendiente.md` (~line 911)
+- [x] 1.1 `workers/automation/src/index.ts:23` — add an exact `PUBLIC_PATHS` set (`'/health'`) checked on `new URL(c.req.url).pathname` before `extractAuthHeaders`, the shape of `workers/wallet/src/index.ts:121,130`
+- [x] 1.2 `workers/automation/src/index.test.ts` (new; the worker has no app-level test today) — `GET /health` with no gateway headers answers 200 `{ status: 'ok', service: 'automation' }`; `GET /health/extra` without headers is still refused
+- [x] 1.3 `apps/gateway/src/wrangler-route-reachability.contract.test.ts:70-74` — reword the `/v1/automation` note to name the unimplemented Workflow CRUD and the dashboard page that calls it; keep the `ROUTES_OUTSIDE_GATEWAY_NAMESPACE` entry (`:172-185`)
+- [x] 1.4 Verify whether `workers/automation` is reachable on its `workers.dev` hostname in production; record the answer in `docs/18-Trabajo-Pendiente.md` (~line 911)
 
 ## Unit 2: Retire the event ingestor
 
@@ -56,10 +56,10 @@ Chain strategy: none
 
 ## Unit 4: `pos_terminals` listing index
 
-- [ ] 4.1 `packages/db/src/schema.ts:679-689` — add `index('idx_pos_terminals_business').on(table.businessId, table.createdAt.desc())` to the extra-config callback; rewrite the stale comment at `:651-662` to cite `GET /v1/loyalty/terminals` (`workers/growth/src/routes.ts:2665`)
-- [ ] 4.2 `packages/db/src/indexes.ts` — add `posTerminals` to `INDEXED_TABLES` (`:39-52`), `idxPosTerminalsBusiness: 'idx_pos_terminals_business'` to `INDEX_NAMES` (`:66`), and `export const idxPosTerminalsBusiness = indexByName(INDEX_NAMES.idxPosTerminalsBusiness);`
-- [ ] 4.3 `packages/db/src/index.ts` — re-export `idxPosTerminalsBusiness` in the `from './indexes'` block (`:182`)
-- [ ] 4.4 `packages/db/src/index.test.ts` — add the `idxPosTerminalsBusiness: 'idx_pos_terminals_business'` pair beside the push-subscription ones (`:107-110`)
-- [ ] 4.5 Generate the migration with `pnpm --filter @vyloop/db exec drizzle-kit generate` (next free number in `packages/db/drizzle/`), review it, and confirm `migration-sql.test.ts` passes
-- [ ] 4.6 Apply in production by hand with `CREATE INDEX CONCURRENTLY`, then register the migration in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with `{ "kind": "index", "name": "idx_pos_terminals_business" }` as evidence, so the `migration-drift` deploy gate accepts it
-- [ ] 4.7 Run `pnpm --filter @vyloop/db test` and the full `pnpm -r test`
+- [x] 4.1 `packages/db/src/schema.ts:679-689` — add `index('idx_pos_terminals_business').on(table.businessId, table.createdAt.desc())` to the extra-config callback; rewrite the stale comment at `:651-662` to cite `GET /v1/loyalty/terminals` (`workers/growth/src/routes.ts:2665`)
+- [x] 4.2 `packages/db/src/indexes.ts` — add `posTerminals` to `INDEXED_TABLES` (`:39-52`), `idxPosTerminalsBusiness: 'idx_pos_terminals_business'` to `INDEX_NAMES` (`:66`), and `export const idxPosTerminalsBusiness = indexByName(INDEX_NAMES.idxPosTerminalsBusiness);`
+- [x] 4.3 `packages/db/src/index.ts` — re-export `idxPosTerminalsBusiness` in the `from './indexes'` block (`:182`)
+- [x] 4.4 `packages/db/src/index.test.ts` — add the `idxPosTerminalsBusiness: 'idx_pos_terminals_business'` pair beside the push-subscription ones (`:107-110`)
+- [x] 4.5 Generate the migration with `pnpm --filter @vyloop/db exec drizzle-kit generate` (next free number in `packages/db/drizzle/`, reserved per `docs/18-Trabajo-Pendiente.md`), review it, and confirm `migration-sql.test.ts` passes
+- [ ] 4.6 **(pending — production only)** Apply in production by hand with `CREATE INDEX CONCURRENTLY`, then register the migration in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with `{ "kind": "index", "name": "idx_pos_terminals_business" }` as evidence, so the `migration-drift` deploy gate accepts it
+- [x] 4.7 Run `pnpm --filter @vyloop/db test` and the full `pnpm -r test`

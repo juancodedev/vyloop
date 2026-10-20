@@ -97,7 +97,9 @@ None.
 - `growth-engine`: rewards can be scoped to venues; the auto-grant publishes
   `RewardAvailableAtBranch` for a scoped reward.
 - `push-notifications` (defined by `openspec/changes/push-transport`, not yet
-  archived): the delivery of `RewardAvailableAtBranch`.
+  archived): the delivery of `RewardAvailableAtBranch`. **Blocked by:** this
+  change MUST NOT be archived before `push-transport` is archived or its spec is
+  otherwise accepted.
 - `event-bus`: the `RewardAvailableAtBranch` event type.
 - `schema-registry`: its schema.
 - `database`: the `reward_branches` table.

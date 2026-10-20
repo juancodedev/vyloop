@@ -56,6 +56,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 
+import { assertVerifiedTls } from './lib/database-url.mjs';
+
 const DEV_VARS_CANDIDATES = [
   'workers/growth/.dev.vars',
   'apps/gateway/.dev.vars',
@@ -143,6 +145,11 @@ function resolveUrl() {
 
 export async function observe(url, { connectTimeoutMs = 10_000 } = {}) {
   if (!url) return { reachable: false, error: 'DATABASE_URL is not set' };
+
+  // Throws rather than returning a value on purpose: `main` prints a stack-free
+  // message for this one, because a rejected TLS mode is a configuration bug
+  // that must be fixed, not a fact about the data to report.
+  assertVerifiedTls(url);
 
   const require = createRequire(join(process.cwd(), 'packages/db/package.json'));
   const { Pool } = require('pg');

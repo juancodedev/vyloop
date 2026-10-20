@@ -16,11 +16,30 @@ import router from './routes';
 
 const app = new Hono<{ Bindings: Bindings; Variables: { auth: ReturnType<typeof extractAuthHeaders> } }>();
 
+/**
+ * The set of paths that arrive without a gateway-injected identity.
+ *
+ * One entry, and it is a liveness probe: the worker is queue-driven, so the
+ * probe comes from the platform and cannot carry `X-User-Id`.
+ *
+ * The exemption is an exact path, not a prefix. `/health/anything` stays behind
+ * the middleware, which is the property a later route added under `/health`
+ * would otherwise inherit silently.
+ */
+const PUBLIC_PATHS: ReadonlySet<string> = new Set(['/health']);
+
 // ---------------------------------------------------------------------------
 // Global middleware: auth header extraction
 // ---------------------------------------------------------------------------
 
 app.use('*', async (c, next) => {
+  // Before the extraction, and on the raw path, so the exemption is exactly
+  // the listed route rather than a prefix that could grow.
+  if (PUBLIC_PATHS.has(new URL(c.req.url).pathname)) {
+    await next();
+    return;
+  }
+
   try {
     extractAuthHeaders(c);
     await next();

@@ -316,6 +316,29 @@ project_id: polished-firefly-68401534      # el proyecto: contiene producción Y
 
 Los secrets de GitHub son write-only: para saber a qué base apunta `DATABASE_URL` en producción hay que saberlo de antemano (esta tabla), no leerlo.
 
+### `sslmode=require` no significa lo mismo en cada driver
+
+Comprobado el 2026-10-20 leyendo el código de las dos librerías, no su documentación:
+
+| Driver | `require` / `prefer` / `verify-ca` | `verify-full` | `disable` | `no-verify` |
+|---|---|---|---|---|
+| `pg` vía `pg-connection-string@2.14.1` | **verifica** (alias de `verify-full`, con un warning que avisa que en v3/pg9 pasa a semántica libpq: sin verificar) | verifica | sin TLS | TLS sin verificar |
+| `@neondatabase/serverless@1.2.0` | **verifica** (traduce a `ssl = {}`) | verifica | sin TLS | TLS sin verificar |
+
+La consecuencia práctica: hoy `sslmode=require` es seguro con ambos drivers, y va a dejar de serlo en
+cuanto `pg` cruce a la versión que anuncia el warning. Un `require` escrito hoy es una decisión de
+seguridad que caduca sola, y el síntoma no es un error, es tráfico en claro o sin verificar que nadie
+mira.
+
+Por eso la regla es `verify-full` explícito en el connection string, y `scripts/lib/database-url.mjs`
+lo hace cumplir antes de abrir el pool en los scripts operativos.
+
+**Estado de los connection strings del repo:** los 8 `.dev.vars` (`apps/gateway` y los 7 workers)
+todavía dicen `sslmode=require` y apuntan a producción. Están gitignoreados y **no se editaron**: el
+guard corre en los scripts justamente para que ese `require` falle ahí, delante de quien lo mira, en
+vez de degradarse en silencio dentro de un worker. `packages/db/src/index.ts` (`createDb`) todavía no
+tiene el guard, a propósito: aplicarlo antes de rotar el secret de producción tumba los workers.
+
 ---
 
 ## 5. Migraciones: el ledger no es la verdad

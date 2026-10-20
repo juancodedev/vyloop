@@ -648,19 +648,20 @@ export const checkins = pgTable('checkins', {
  * confusing; a rejected installation is a sale that cannot be reported, and this
  * table exists so a sale always can be.
  *
- * The listing query this table will actually answer one day is "which terminals
- * does this merchant have", and it is served by a full scan of a table with one
- * row per till — no index is declared on purpose, and adding one before its
- * reader exists would be a write cost paid on every terminal installation to
- * speed up a query nobody issues. The only query here is the exchange, which
- * looks a terminal up by primary key.
+ * ## Why the listing index exists now
  *
- * When the listing route lands it will want `idx_pos_terminals_business`, and
- * that change has to touch two files: the index here, **and** `INDEXED_TABLES` in
- * `indexes.ts`. `migration-sql.test.ts` asserts that the set of `CREATE INDEX`
+ * This note used to say the opposite — no index on purpose, because nothing read
+ * the table except the credential exchange, which looks a terminal up by primary
+ * key. That stopped being true when `GET /v1/loyalty/terminals`
+ * (`workers/growth/src/routes.ts`) landed: it filters by `business_id` and orders
+ * by `created_at DESC`, so the index is shaped exactly like the query, one row
+ * per till instead of a scan.
+ *
+ * Declaring it here is only half the change. The other half is `INDEXED_TABLES` in
+ * `indexes.ts`: `migration-sql.test.ts` asserts that the set of `CREATE INDEX`
  * statements across the migration history is exactly what that registry reports,
- * so an index declared here without being registered there fails the build —
- * which is the correct outcome, and is why this note exists.
+ * so an index declared here without being registered there fails the build — the
+ * correct outcome, and the reason this note exists.
  */
 export const posTerminals = pgTable('pos_terminals', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -681,6 +682,8 @@ export const posTerminals = pgTable('pos_terminals', {
   // in this file — see the note at the top of the file for why a module-level
   // `index()` export here is silently dropped by drizzle-kit and never reaches a
   // migration.
+  // Matches `GET /v1/loyalty/terminals`: filter by tenant, newest first.
+  index('idx_pos_terminals_business').on(table.businessId, table.createdAt.desc()),
   foreignKey({
     name: 'pos_terminals_business_id_tenants_id_fk',
     columns: [table.businessId],

@@ -79,10 +79,10 @@ describe('Database schema', () => {
     expect(db.allIndexes).toBeDefined();
     expect(Array.isArray(db.allIndexes)).toBe(true);
     // 12 pre-existing plus the three wallet indexes plus the venue geohash,
-    // the consent uniqueness, the three push subscription indexes, and the two
-    // the proximity work added: the venue interaction index and the
-    // subscription freshness index.
-    expect(db.allIndexes.length).toBe(22);
+    // the consent uniqueness, the three push subscription indexes, the two
+    // the proximity work added (the venue interaction index and the
+    // subscription freshness index), and the pos_terminals listing index.
+    expect(db.allIndexes.length).toBe(23);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -124,6 +124,7 @@ describe('Database schema', () => {
       idxCustomersMemberCode: 'uq_customers_business_member_code',
       idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
       idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
+      idxPosTerminalsBusiness: 'idx_pos_terminals_business',
     };
 
     for (const [binding, sqlName] of Object.entries(expectedNames)) {
@@ -273,25 +274,27 @@ describe('Database schema', () => {
     ]);
   });
 
-  it('should declare no index on pos_terminals, because none of its queries need one', async () => {
+  it('should index pos_terminals exactly like GET /v1/loyalty/terminals reads it', async () => {
     const db = await import('./index');
     const config = getTableConfig(db.posTerminals);
 
-    // Asserted as `[]` so that adding one is a decision somebody makes on purpose
-    // rather than an index that arrives with a column.
-    //
-    // The exchange looks a terminal up by primary key, which the PK already
-    // serves. The one query that would want an index is "which terminals does this
-    // merchant have", and no code runs it: registration and listing are out of
-    // scope, so it has no reader. An index is paid for on every insert to speed
-    // up a query nobody issues.
-    //
-    // When that reader lands, `posTerminals` has to be added to `INDEXED_TABLES`
-    // in `indexes.ts` in the same change — `migration-sql.test.ts` asserts that
-    // the set of `CREATE INDEX` statements in the history is exactly the set that
-    // registry reports, so an index declared here without being registered there
+    // The reader is `GET /v1/loyalty/terminals` in `workers/growth/src/routes.ts`:
+    // `where business_id = ? order by created_at desc`. Asserted on the built
+    // config rather than the Drizzle source, so a change to the column list or the
+    // sort direction fails here instead of silently degrading the tenant scan.
+    expect(config.indexes.map((entry) => entry.config.name)).toEqual(['idx_pos_terminals_business']);
+
+    const index = config.indexes[0]!;
+    expect(index.config.columns.map((column) => (column as { name: string }).name)).toEqual([
+      'business_id',
+      'created_at',
+    ]);
+
+    // `posTerminals` is in `INDEXED_TABLES` in `indexes.ts`; `migration-sql.test.ts`
+    // asserts the set of `CREATE INDEX` statements in the history is exactly the
+    // set that registry reports, so declaring the index without registering it
     // fails the build rather than drifting.
-    expect(config.indexes).toEqual([]);
+    expect(db.allIndexes.map((entry) => entry.config.name)).toContain('idx_pos_terminals_business');
   });
 
   it('should dedupe checkins on (business_id, payment_id)', async () => {

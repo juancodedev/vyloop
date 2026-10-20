@@ -24,14 +24,14 @@ rules:
     - Group by phase, use hierarchical numbering
     - Keep tasks completable in one session
   apply:
-    guidelines:
-      - Follow existing code patterns
-    tdd: false
-    test_command: 'pnpm -r test'
+    - Follow existing code patterns
+    - Run the affected tests before finishing; the full command is pnpm -r test
+    - Strict TDD is off; the testing block below is the source of truth
   verify:
-    test_command: 'pnpm -r test'
-    build_command: 'pnpm -r typecheck'
-    coverage_threshold: 0
+    - 'Test command: pnpm -r test'
+    - 'Typecheck command: pnpm -r typecheck'
+    - 'Lint command: pnpm -r lint'
+    - 'No coverage threshold is enforced'
   archive:
     - Warn before merging destructive deltas
 

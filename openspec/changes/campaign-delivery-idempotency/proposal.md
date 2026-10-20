@@ -103,7 +103,9 @@ None.
 
 - `push-notifications` (defined by `openspec/changes/push-transport`, not yet
   archived into `openspec/specs/`): a delivery is claimed before it is sent; a
-  campaign reference is claimed when it is composed.
+  campaign reference is claimed when it is composed. **Blocked by:** this change
+  MUST NOT be archived before `push-transport` is archived or its spec is
+  otherwise accepted; the delta is written against it.
 - `database`: the `message_log` delivery key and lease, and the
   `push_campaigns` table.
 

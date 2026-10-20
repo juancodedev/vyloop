@@ -44,7 +44,7 @@ the declared default or reads `created_at` from a session in another time zone.
 3. Baseline format: evidence entries carry an expected value for the new kinds;
    `BASELINE_VERSION` (`scripts/check-migration-drift.mjs:170`) moves to 2 and the
    committed baseline is regenerated.
-4. A migration (next free number) aligning the six columns above,
+4. A migration (next free number, reserved per `docs/18-Trabajo-Pendiente.md`) aligning the six columns above,
    with a pre-flight query that proves the data allows it.
 5. A schema-parity check that compares every Drizzle table in `schema.ts` with
    the live catalog column by column, wired into the `migration-drift` job of

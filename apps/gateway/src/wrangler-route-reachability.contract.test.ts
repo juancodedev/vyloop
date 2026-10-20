@@ -67,11 +67,16 @@
  *   the opposite of asserting an empty set as covered: an empty set makes "every
  *   route is reachable" true without looking at anything, and `/v1/compliance` is
  *   live in `ROUTE_MAP` while nothing behind it serves a request yet.
- * - **`/v1/automation` is guarded but currently has no route behind it.** The
- *   worker registers one route, `/health`, and it is outside the namespace (see
- *   below). Worth knowing when debugging: a 404 from `/v1/automation/…` is the
- *   worker's own `app.notFound`, not the gateway's — it *was* routed, and then
- *   not found. Same status code as bug 1, different file to open.
+ * - **`/v1/automation` is guarded but the Workflow CRUD it names is not
+ *   implemented.** The worker registers one route, `/health`, and it is outside
+ *   the namespace (see below). The dashboard's "Flujos" page
+ *   (`apps/dashboard/src/app/dashboard/communication/workflows/page.tsx:79,95,128`)
+ *   calls `GET /v1/automation/workflows`, `POST /v1/automation/workflows` and
+ *   `PUT /v1/automation/workflows/{id}/toggle`; none of them exist yet, and
+ *   `docs/08-API-Design.md:115-118` documents a PATCH and a DELETE that do not
+ *   exist either. Worth knowing when debugging: a 404 from `/v1/automation/…` is
+ *   the worker's own `app.notFound`, not the gateway's — it *was* routed, and
+ *   then not found. Same status code as bug 1, different file to open.
  *
  * ## Why only `/v1/*` is in scope, and what the exclusions are
  *

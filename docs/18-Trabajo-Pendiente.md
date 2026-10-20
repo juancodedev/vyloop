@@ -24,6 +24,32 @@ de lo que hay que implementar.
 | `supply-chain-hardening` | `pnpm audit` en CI, `sslmode` explícito antes de `pg` v9, overrides inertes | Chico | Medio |
 | `api-surface-cleanup` | `/v1/automation` (la página "Flujos" del dashboard llama rutas que no existen), el ingestor de eventos, el webhook de Meta dormido y el índice de `pos_terminals`. **Hallazgo:** `POST /v1/events/:type` se monta antes de la autenticación y publica en la cola de dominio con el `business_id` del body; no fabrica puntos (growth relee el saldo real), pero es una escritura pública | Chico–Mediano | Medio |
 
+### Convenciones para levantar un cambio diferido
+
+Un cambio de esta tabla se levanta de a uno. Antes de escribir código:
+
+1. **Estado.** El `proposal.md`, los deltas y el `tasks.md` de cada cambio llevan
+   `> Status: deferred — post-PMV.` Mientras siga ahí, no está agendado; al
+   arrancar se cambia por la fecha y el dueño.
+2. **Número de migración.** La última migración es `0019`. Los cambios que crean
+   una (`message-log-schema-alignment`, `campaign-delivery-idempotency`,
+   `branch-reward-trigger`, `api-surface-cleanup`, `tenant-isolation-rls`) dicen
+   "next free number": el número se reserva al empezar, se anota en
+   `packages/db/drizzle/meta/_journal.json` y en el plan de ejecución
+   (`odd/tasks/post-pmv-action-plan.md`). Dos cambios no se implementan en
+   paralelo si los dos crean una migración.
+3. **Dependencias entre cambios.** `tenant-isolation-rls` va después de
+   `message-log-schema-alignment` (los dos tocan `check-migration-drift.mjs` y el
+   formato del baseline) y después de `wallet-pass-correctness`,
+   `campaign-delivery-idempotency` y `branch-reward-trigger` (las tablas nuevas
+   tienen que estar en las listas de RLS). `request-tracing` va después de
+   `api-surface-cleanup`. `campaign-delivery-idempotency` y
+   `branch-reward-trigger` no se archivan hasta que `push-transport` esté
+   archivado.
+4. **Puertas de decisión.** No se implementa `api-surface-cleanup` Unidad 2 sin
+   la decisión Opción R/K registrada, ni `branch-reward-trigger` sin responder
+   Q1-Q6.
+
 ### Decisiones de producto abiertas
 
 No hay nada que implementar hasta que alguien decida; cambiar cualquiera de las dos es una línea.
@@ -528,8 +554,8 @@ la fuente de la verdad, y los dos runtimes la leen.
 
 ## Pendiente — `sslmode=require` se va a debilitar en silencio cuando bumpee `pg`
 
-**Estado:** anotado, sin acción. No es urgente: no hay clientes reales y la configuración actual es
-más estricta de lo que su nombre dice.
+**Estado:** cerrado por el guard de `supply-chain-hardening` (Unidad 2). Falta la parte operativa:
+girar el secreto `DATABASE_URL` y actualizar los `.dev.vars` locales.
 
 ### Qué pasa
 
@@ -550,23 +576,35 @@ cifrado, **sin verificar el certificado**.
 O sea: la línea que hoy dice `require` está más segura de lo que se lee. Al bumpear `pg` a v9
 deja de estarlo, y nada en el código va a avisar — el warning es del driver, y sigue apareciendo.
 
-### Por qué no se arregla ahora
+### La decisión tomada
 
-Porque arreglarlo hoy es cambiar la cadena de conexión por algo que ya funciona. Las dos salidas son
-válidas y la decisión se toma junto con el bumpee:
+`sslmode=verify-full`, explícito, y un guard que rechaza cualquier otra cosa. No alcanza con
+arreglar la cadena hoy: el próximo que copie `sslmode=require` de un `.dev.vars` viejo reintroduce
+el problema, y el warning del driver no es un gate.
 
-| | Cuándo |
-|---|---|
-| Poner `sslmode=verify-full` explícito | Ahora, si se quiere que el nombre diga lo que hace |
-| Dejarlo y revisarlo al bumpear `pg` a v9 | Cuando toque; el warning sigue visible hasta entonces |
+`scripts/lib/database-url.mjs` expone `assertVerifiedTls(url)`, que rechaza `require`, `prefer`,
+`verify-ca`, `disable`, `no-verify` y la ausencia de `sslmode`. Lo llaman los tres scripts que
+abren un pool contra la base (`check-migration-drift`, `check-checkin-backlog`,
+`check-payment-reconciliation`). `check-wallet-readiness` mantiene la conexión sin verificar para
+branches de desarrollo, pero la rechaza cuando el host es el endpoint de producción
+(`isProductionHost`).
 
-Ninguna de las dos rompe nada hoy. Lo que **no** hay que hacer es bumpear `pg` a v9 y seguir leyendo
-`require` como si significara lo que significa hoy.
+### Qué se verificó sobre el driver (Unidad 2.1)
+
+`@neondatabase/serverless@1.2.0` — el que usa `createDb` en `packages/db/src/index.ts` — trae su
+propia copia de `pg-connection-string` embebida y **sí lee `sslmode`**. En esa copia la lista
+`prefer | require | verify-ca | verify-full` deja `ssl` en `{}` (verificación normal), y
+`disable` / `no-verify` sí apagan la verificación. O sea: el driver lee el parámetro, pero también
+emite el warning de deprecación.
+
+Por eso el guard **no** se aplicó todavía a `createDb`: todas las cadenas del repo siguen en
+`sslmode=require`, y un guard ahí haría fallar cada worker en producción antes de que el secreto
+esté girado. El orden es: girar el secreto (Unidad 2.5), después agregar el guard a `createDb`.
 
 ### Cómo se detecta
 
-`node scripts/check-migration-drift.mjs` y cualquier worker que imprima el warning. Si desaparece
-el warning sin que haya cambiado la cadena, alguien ya lo migro — volver a revisar acá.
+Los cuatro scripts fallan con un mensaje que nombra el host y no la contraseña. Si alguno vuelve a
+conectar con `sslmode=require`, el guard lo rechaza antes de abrir el pool.
 
 ---
 
@@ -1191,3 +1229,24 @@ El oráculo igual existe: el `.test.mjs` corre `semver.satisfies` y `semver.comp
 los selectores de la tabla real y sobre 169 pares de versiones, y falla si la aritmética escrita
 difiere. Si un semver futuro discrepa, lo que se arregla es la aritmética — que es la dirección que
 mantiene al gate sin dependencia.
+---
+
+## Hecho — la sonda de `automation` es alcanzable, y hoy contesta 403
+
+**Verificado el 2026-10-20** contra producción:
+
+```
+$ curl -s -o /dev/null -w "%{http_code}" https://automation.cl-jmunoz.workers.dev/health
+403
+$ curl -s https://automation.cl-jmunoz.workers.dev/health
+{"error":{"code":"UNAUTHORIZED","message":"Missing authentication headers"}}
+```
+
+El hostname existe y el worker está desplegado: **no es un 404**. Lo que contesta es el middleware de
+autenticación, porque la versión en producción es anterior al `PUBLIC_PATHS` que se agregó en
+`workers/automation/src/index.ts`. Después del próximo deploy, la misma sonda debe devolver
+`200 {"status":"ok","service":"automation"}`.
+
+La distinción importa para el próximo diagnóstico: un 403 acá significa "la ruta existe y está
+detrás del auth"; un 404 significaría que el hostname o el worker no están, que es un problema
+distinto.

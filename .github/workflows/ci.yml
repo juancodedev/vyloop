@@ -41,6 +41,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # A registry outage fails this step on purpose. The alternative is a gate
+      # that passes when it could not look, which is not a gate.
+      - name: Dependency audit
+        run: pnpm deps:audit
+
       - name: Lint
         run: pnpm -r lint
 

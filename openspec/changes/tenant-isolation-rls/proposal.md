@@ -81,6 +81,16 @@ These facts shape the design; each was verified in the code on 2026-10-20.
 7. **There is no RLS verification script.** No `db:verify-rls` (or similar)
    exists in `package.json`; only `db:drift`, `db:drift:baseline`,
    `db:checkin-backlog`, `db:payment-reconciliation` and `deps:overrides`.
+8. **Two runtimes set the variable inline, outside any transaction.** The
+   analytics worker (`workers/analytics/src/index.ts:68,134`) and the gateway's
+   merchant-page lookup (`apps/gateway/src/merchant-store.ts:81`) call
+   `setCurrentBusinessId` directly and then query `customers`,
+   `points_transactions`, `membership_tiers`, `reward_grants` and
+   `loyalty_programs`. They do not use `withRls`, so the phase-0 grep and a
+   call-site test limited to that helper would miss them. The gateway consumes
+   the same `secrets.DATABASE_URL` as the workers
+   (`.github/workflows/deploy.yml:239,244,360-377,471`), so phase 1 moves it to
+   `vyloop_app` too, and phase 4 turns RLS on under these two paths.
 
 ## Scope
 
@@ -89,10 +99,14 @@ These facts shape the design; each was verified in the code on 2026-10-20.
 1. One shared helper in `@vyloop/db`, `withTenantTransaction`, that opens a
    transaction, sets `app.current_business_id` and/or `app.current_tenant_id`
    inside it, and runs the caller's queries on that transaction. The four worker
-   copies of `withRls` and the wallet's `openTenantSession` are replaced by it.
+   copies of `withRls`, the wallet's `openTenantSession`, the analytics worker's
+   two inline setters and the gateway's merchant-page setter are replaced by it.
 2. A non-owner application role (`vyloop_app`) without `BYPASSRLS`, holding only
    DML grants, and the workers' `DATABASE_URL` moved to it. The owner credential
-   stays with migrations and the read-only operational scripts.
+   stays with migrations and the read-only operational scripts. The gateway
+   shares the workers' secret, so it moves in the same phase; the alternative
+   (a separate owner credential for the gateway) MUST be decided and recorded in
+   `docs/09` §4 before phase 1.
 3. Complete table lists: `push_subscriptions` added to `BUSINESS_ID_TABLES`,
    `wallet_callback_deliveries` to `TENANT_ID_TABLES`, and a test that fails when
    a schema table carrying `business_id` or `tenant_id` is in neither list nor in
@@ -127,7 +141,9 @@ These facts shape the design; each was verified in the code on 2026-10-20.
 
 - None. The drift-gate requirements are written against `migration-drift-gate`,
   which the `message-log-schema-alignment` change introduces; whichever of the
-  two changes is archived first creates that spec.
+  two changes is archived first creates that spec. Both edit
+  `scripts/check-migration-drift.mjs` and the baseline format, so implement this
+  change after (or together with) `message-log-schema-alignment`, not in parallel.
 
 ### Modified Capabilities
 
@@ -174,7 +190,7 @@ role is created through the Neon console or API by a runbook in `docs/09`, and
 
 | Phase | What changes | Exit criterion |
 |---|---|---|
-| 0 | Session plumbing, table lists, per-tenant jobs, `pnpm db:rls`, gate kinds. No database change. | All tests green; no `withRls(db` left in `workers/`. |
+| 0 | Session plumbing, table lists, per-tenant jobs, `pnpm db:rls`, gate kinds. No database change. | All tests green; no `withRls(db`, `openTenantSession(`, or raw `setCurrentBusinessId(`/`setCurrentTenantId(` left outside `packages/db/src/rls.ts` in `workers/` or `apps/gateway/src/`. |
 | 1 | `vyloop_app` role created; workers' `DATABASE_URL` secrets moved to it. RLS still off. | `pnpm db:rls` reports the app role as non-owner, no `BYPASSRLS`; smoke tests pass. |
 | 2 | Shadow on a Neon branch: RLS enabled on every listed table of a branch of `ep-shiny-paper-aibbf0hk`, workers' preview deploy pointed at it, full suite and smoke run. | Zero RLS errors in the branch's logs. |
 | 3 | Wallet tables in production: `tenant_wallet_programs`, `customer_wallet_passes`, `wallet_callback_deliveries`. | One week with no RLS errors in worker logs; wallet sweep report counts unchanged. |
@@ -194,8 +210,10 @@ repository, and registered in `_applied-outside-drizzle.json` with `rls` and
 ## Risks
 
 - **A code path not moved to `withTenantTransaction`** fails with an error once
-  its table enforces RLS. Mitigated by phase 0's exit criterion (a grep-backed
-  test that no `withRls(db` call remains) and by the branch shadow in phase 2.
+  its table enforces RLS. Mitigated by phase 0's exit criterion (a call-site test
+  that rejects both helpers and the raw setters outside `rls.ts`) and by the
+  branch shadow in phase 2. The analytics worker and the gateway are the two
+  paths that the original inventory missed; they are now explicit tasks.
 - **A job that loops per tenant runs longer.** Bounded by the existing per-run
   budgets; the sweep reports already count tenants reached and deferred.
 - **Neon role semantics.** Whether a role created by `neondb_owner` can be denied
