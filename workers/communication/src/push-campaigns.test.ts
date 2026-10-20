@@ -171,8 +171,8 @@ describe('resolveCampaignAudience', () => {
     expect(params).toContain('branch-1');
   });
 
-  it('applies a ninety day interaction window', async () => {
-    expect(INTERACTION_WINDOW_DAYS).toBe(90);
+  it('applies a hundred and eighty day interaction window', async () => {
+    expect(INTERACTION_WINDOW_DAYS).toBe(180);
 
     const chain = audienceRows([]);
 
@@ -186,9 +186,9 @@ describe('resolveCampaignAudience', () => {
 
     expect(since).toBeDefined();
     const daysAgo = (Date.now() - new Date(since as string).getTime()) / (24 * 60 * 60 * 1000);
-    // Ninety days, give or take the time the test itself takes to run.
-    expect(daysAgo).toBeGreaterThan(89.9);
-    expect(daysAgo).toBeLessThan(90.1);
+    // A hundred and eighty days, give or take the time the test itself takes to run.
+    expect(daysAgo).toBeGreaterThan(179.9);
+    expect(daysAgo).toBeLessThan(180.1);
   });
 
   it('counts a customer who interacted at two branches of the campaign once', async () => {

@@ -58,12 +58,13 @@ import { deliverPushNotification } from './push-delivery';
 /**
  * How long an interaction keeps a customer in a proximity audience.
  *
- * Ninety days: a quarter. It is long enough that a customer who visits a
- * coffee shop twice a month is still in the audience, and short enough that a
- * customer who stopped coming a year ago is not pushed a "we miss you" at a
- * venue they have not been to since last winter.
+ * A hundred and eighty days: half a year. The spec asks for a "recent
+ * interaction" (`docs/19-Geolocalizacion-Notificaciones.md`) and leaves the
+ * number open; the product chose half a year so that occasional and seasonal
+ * customers stay in the audience, while a customer who stopped coming a year
+ * ago is still not pushed about a venue they have not been to since.
  */
-export const INTERACTION_WINDOW_DAYS = 90;
+export const INTERACTION_WINDOW_DAYS = 180;
 
 /**
  * The consent a push campaign requires.

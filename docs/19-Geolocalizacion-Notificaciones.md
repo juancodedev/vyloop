@@ -307,7 +307,7 @@ Each of these is a domain event on `DOMAIN_EVENTS_QUEUE`, following the existing
 
 New event constants are added to `packages/event-bus/src/index.ts` alongside the existing seven, and the payload carries `business_id` in `header.business_id` exactly as every other event does.
 
-**The `PushCampaignRequested` payload** carries a target: either an explicit `branch_id`, or a `center` + `radius_m`. For a radius target, the worker resolves candidate branches server-side by geohash prefix (precision 6 gives the coarse cell; the exact haversine distance filters within it), then sends to customers who have a consent, a subscription, and a recent interaction with that branch.
+**The `PushCampaignRequested` payload** carries a target: either an explicit `branch_id`, or a `center` + `radius_m`. For a radius target, the worker resolves candidate branches server-side by geohash prefix (precision 6 gives the coarse cell; the exact haversine distance filters within it), then sends to customers who have a consent, a subscription, and a recent interaction with that branch. "Recent" means within the last **180 days** (`INTERACTION_WINDOW_DAYS` in `workers/communication/src/push-campaigns.ts`), a product decision of 2026-10-20.
 
 ---
 
