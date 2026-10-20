@@ -19,6 +19,7 @@ export {
   customers,
   customerEvents,
   consents,
+  pushSubscriptions,
   loyaltyPrograms,
   membershipTiers,
   pointsTransactions,
@@ -103,6 +104,18 @@ export {
 // Re-export slug derivation
 export { slugify } from './slug';
 
+// Re-export push subscription helpers
+export {
+  readPushSubscriptions,
+  upsertPushSubscription,
+  deletePushSubscription,
+  deletePushSubscriptionByEndpoint,
+  readBusinessPushSubscriptions,
+  hashPushEndpoint,
+  type PushSubscriptionRecord,
+  type PushSubscriptionScope,
+} from './push-subscriptions';
+
 // Re-export consent helpers
 export {
   readConsents,
@@ -144,6 +157,9 @@ export {
 export {
   idxBranchesGeohash,
   uqConsentsCustomerType,
+  uqPushSubscriptionsEndpoint,
+  idxPushSubscriptionsBusiness,
+  idxPushSubscriptionsCustomer,
   idxCustomersPhone,
   idxCustomersLastVisit,
   idxPointsBalance,

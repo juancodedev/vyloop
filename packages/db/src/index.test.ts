@@ -76,9 +76,9 @@ describe('Database schema', () => {
     expect(db.idxCustomerEventsType).toBeDefined();
     expect(db.allIndexes).toBeDefined();
     expect(Array.isArray(db.allIndexes)).toBe(true);
-    // 12 pre-existing plus the three wallet indexes plus the venue geohash
-    // plus the consent uniqueness.
-    expect(db.allIndexes.length).toBe(17);
+    // 12 pre-existing plus the three wallet indexes plus the venue geohash,
+    // the consent uniqueness, and the three push subscription indexes.
+    expect(db.allIndexes.length).toBe(20);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -100,6 +100,9 @@ describe('Database schema', () => {
     const expectedNames: Record<string, string> = {
       idxBranchesGeohash: 'idx_branches_geohash',
       uqConsentsCustomerType: 'uq_consents_customer_type',
+      uqPushSubscriptionsEndpoint: 'uq_push_subscriptions_endpoint',
+      idxPushSubscriptionsBusiness: 'idx_push_subscriptions_business',
+      idxPushSubscriptionsCustomer: 'idx_push_subscriptions_customer',
       idxCustomersPhone: 'idx_customers_phone',
       idxCustomersLastVisit: 'idx_customers_last_visit',
       idxPointsBalance: 'idx_points_balance',
@@ -362,6 +365,7 @@ describe('Database schema', () => {
       'messageLog',
       'pointsTransactions',
       'posTerminals',
+      'pushSubscriptions',
       'referrals',
       'rewardGrants',
       'rewards',

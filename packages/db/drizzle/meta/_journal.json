@@ -113,6 +113,13 @@
       "when": 1792465150264,
       "tag": "0015_consent_uniqueness",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792468195984,
+      "tag": "0016_push_subscriptions",
+      "breakpoints": true
     }
   ]
 }

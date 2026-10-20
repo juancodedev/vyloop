@@ -4,6 +4,7 @@ import {
   branches,
   consents,
   customers,
+  pushSubscriptions,
   customerEvents,
   pointsTransactions,
   rewards,
@@ -39,6 +40,7 @@ const INDEXED_TABLES: readonly PgTable[] = [
   branches,
   consents,
   customers,
+  pushSubscriptions,
   pointsTransactions,
   customerEvents,
   rewards,
@@ -64,6 +66,9 @@ export const allIndexes: readonly DrizzleIndex[] = INDEXED_TABLES.flatMap(
 const INDEX_NAMES = {
   idxBranchesGeohash: 'idx_branches_geohash',
   uqConsentsCustomerType: 'uq_consents_customer_type',
+  uqPushSubscriptionsEndpoint: 'uq_push_subscriptions_endpoint',
+  idxPushSubscriptionsBusiness: 'idx_push_subscriptions_business',
+  idxPushSubscriptionsCustomer: 'idx_push_subscriptions_customer',
   idxCustomersPhone: 'idx_customers_phone',
   idxCustomersLastVisit: 'idx_customers_last_visit',
   idxPointsBalance: 'idx_points_balance',
@@ -101,6 +106,9 @@ export function indexByName(name: string): DrizzleIndex {
 
 export const idxBranchesGeohash = indexByName(INDEX_NAMES.idxBranchesGeohash);
 export const uqConsentsCustomerType = indexByName(INDEX_NAMES.uqConsentsCustomerType);
+export const uqPushSubscriptionsEndpoint = indexByName(INDEX_NAMES.uqPushSubscriptionsEndpoint);
+export const idxPushSubscriptionsBusiness = indexByName(INDEX_NAMES.idxPushSubscriptionsBusiness);
+export const idxPushSubscriptionsCustomer = indexByName(INDEX_NAMES.idxPushSubscriptionsCustomer);
 export const idxCustomersPhone = indexByName(INDEX_NAMES.idxCustomersPhone);
 export const idxCustomersLastVisit = indexByName(INDEX_NAMES.idxCustomersLastVisit);
 export const idxPointsBalance = indexByName(INDEX_NAMES.idxPointsBalance);

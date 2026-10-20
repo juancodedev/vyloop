@@ -311,6 +311,52 @@ export const consents = pgTable(
 );
 
 // ============================================================================
+// Push Domain
+// ============================================================================
+
+/**
+ * A browser's subscription to push messages.
+ *
+ * One row per browser registration. The `endpoint` is the push service's URL
+ * for that registration and it embeds a capability token, so it is treated as a
+ * secret everywhere except here, where it has to be stored to be used.
+ *
+ * `business_id` is denormalised alongside `customer_id` so a tenant-scoped
+ * query never needs a join to prove ownership: the RLS predicate filters
+ * directly on it.
+ *
+ * The unique index on `endpoint` is what makes re-registration idempotent. A
+ * browser rotates its `p256dh` and `auth` for the same endpoint, and the
+ * upsert handles that without leaving two rows for one registration.
+ */
+export const pushSubscriptions = pgTable(
+  'push_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull(),
+    // The browser's public key and auth secret. `auth` is per-subscription key
+    // material: it cannot authenticate anything on its own, but it must never
+    // appear in a log or in a `message_log` payload.
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    userAgent: text('user_agent'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+  },
+  (table) => [
+    // A unique **index** and not a unique constraint, because that is how this
+    // repository registers a uniqueness rule: `packages/db/src/indexes.ts`
+    // derives the registry from `getTableConfig(table).indexes`, and a
+    // `unique()` constraint is not in that list.
+    uniqueIndex('uq_push_subscriptions_endpoint').on(table.endpoint),
+    index('idx_push_subscriptions_business').on(table.businessId),
+    index('idx_push_subscriptions_customer').on(table.customerId),
+  ],
+);
+
+// ============================================================================
 // Growth Domain
 // ============================================================================
 
@@ -741,6 +787,11 @@ export const messageLog = pgTable('message_log', {
   channel: text('channel').notNull().default('whatsapp'),
   status: text('status').notNull().default('queued'),
   providerMessageId: text('provider_message_id'),
+  // A push subscription's endpoint embeds a capability token, so it is never
+  // written here. What is written is a digest of it: enough to answer "which
+  // deliveries went to this subscription?" for a support question, and useless
+  // to anyone who reads the row.
+  pushEndpointHash: text('push_endpoint_hash'),
   content: jsonb('content').default({}),
   metadata: jsonb('metadata').default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),

@@ -65,6 +65,41 @@
           "name": "uq_consents_customer_type"
         }
       ]
+    },
+    {
+      "tag": "0016_push_subscriptions",
+      "when": 1792468195984,
+      "hash": "67b8e809075a1764bade08136ffb62b1d607b935578bd6e26de859ec569c4a57",
+      "evidence": [
+        {
+          "kind": "table",
+          "name": "push_subscriptions"
+        },
+        {
+          "kind": "column",
+          "name": "message_log.push_endpoint_hash"
+        },
+        {
+          "kind": "constraint",
+          "name": "push_subscriptions_business_id_tenants_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "push_subscriptions_customer_id_customers_id_fk"
+        },
+        {
+          "kind": "index",
+          "name": "uq_push_subscriptions_endpoint"
+        },
+        {
+          "kind": "index",
+          "name": "idx_push_subscriptions_business"
+        },
+        {
+          "kind": "index",
+          "name": "idx_push_subscriptions_customer"
+        }
+      ]
     }
   ]
 }
