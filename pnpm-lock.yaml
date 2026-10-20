@@ -222,7 +222,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -259,10 +259,10 @@ importers:
         version: 1.2.0
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       pg:
-        specifier: ^8.0.0
-        version: 8.22.0
+        specifier: ^8.23.1
+        version: 8.23.1
     devDependencies:
       drizzle-kit:
         specifier: ^0.31.11
@@ -371,7 +371,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -402,7 +402,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -433,7 +433,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -483,7 +483,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -514,7 +514,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -545,7 +545,7 @@ importers:
         version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -570,7 +570,7 @@ importers:
         version: link:../../packages/db
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9)
+        version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -3070,11 +3070,11 @@ packages:
   pcre-to-regexp@1.1.0:
     resolution: {integrity: sha512-KF9XxmUQJ2DIlMj3TqNqY1AWvyvTuIuq11CuuekxyaYMiFuMKGgQrePYMX5bXKLhLG3sDI4CsGAYHPaT7VV7+g==}
 
-  pg-cloudflare@1.4.0:
-    resolution: {integrity: sha512-Vo7z/6rrQYxpNRylp4Tlob2elzbh+N/MOQbxFVWCxS7oEx6jF53GTJFxK2WWpKuBRkmiin4Mt+xofFDjx09R0A==}
+  pg-cloudflare@1.4.1:
+    resolution: {integrity: sha512-6PQbsFWZcp9EmJEwy5cGQ2La+AMWpP46lgbb8X+U/XsHIUweYDNCpeuKck5RxL2MdVFi7krbbEi5nX4Zh7JhrQ==}
 
-  pg-connection-string@2.14.0:
-    resolution: {integrity: sha512-XwWDGcLRGCXAR8F/AM5bG7Q+A3Wm2s6QeEjlOKZLlH3UYcguiqCWKyWXVag5TLTIjR7oOJUY8kcADaZgWPyLeg==}
+  pg-connection-string@2.14.1:
+    resolution: {integrity: sha512-qR3kGNPBLpCNtz0evbKA0Y/MRFXwSSdT+pTJvYp/bXTcReZbvX1kzF0IyTc1QnxqF7AZbOeBhNL8R5mYQZV/MA==}
 
   pg-int8@1.0.1:
     resolution: {integrity: sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==}
@@ -3088,9 +3088,6 @@ packages:
     resolution: {integrity: sha512-gKtPkFdQPU3DksooVLi9LsjZxrsBUZIpa+7aVx+LV5pNh0KzP4Zleud2po+ConrxbuXGBJ6Hfer6hdgpIBpBaw==}
     peerDependencies:
       pg: '>=8.0'
-
-  pg-protocol@1.15.0:
-    resolution: {integrity: sha512-cq9sECI5s0+uPUXjbz8ioyPJni6RzsRib0US67i5IoTZKw8fNeYlVE7u8F4dG7vEJJtc5wdD1K189lCCUwqWTQ==}
 
   pg-protocol@1.16.1:
     resolution: {integrity: sha512-p9VOFMiHB/ZbJATetbg+99PxssTVSQRnyuPSQ67mN1+1KBOjZaZ83ZQzltnxPhJwSsC3nwVjJ10DVJlerbFzLg==}
@@ -3106,8 +3103,8 @@ packages:
     resolution: {integrity: sha512-o2XFanIMy/3+mThw69O8d4n1E5zsLhdO+OPqswezu7Z5ekP4hYDqlDjlmOpYMbzY2Br0ufCwJLdDIXeNVwcWFg==}
     engines: {node: '>=10'}
 
-  pg@8.22.0:
-    resolution: {integrity: sha512-8wih1vVIBMxoUM2oB4soJsD9tDnDpLv4OXBJ+EJzFsvycD+lfyIreC2gGHq78f8jbLLt+bvlPTFdFZfJkOuzAA==}
+  pg@8.23.1:
+    resolution: {integrity: sha512-aL96AHANtWjPLDOLqnhx+ngp9+UK7ETEU8VJrDCGvsSSi/mGLcWYsS6Herg7lmaBJe4uwrfqsa7gTEFaSizDoQ==}
     engines: {node: '>= 16.0.0'}
     peerDependencies:
       pg-native: '>=3.0.1'
@@ -5102,13 +5099,13 @@ snapshots:
       esbuild: 0.25.12
       tsx: 4.23.15
 
-  drizzle-orm@0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.22.0)(postgres@3.4.9):
+  drizzle-orm@0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9):
     optionalDependencies:
       '@cloudflare/workers-types': 5.20261011.1
       '@neondatabase/serverless': 1.2.0
       '@types/pg': 8.11.6
       gel: 2.2.0
-      pg: 8.22.0
+      pg: 8.23.1
       postgres: 3.4.9
 
   dunder-proto@1.0.1:
@@ -6021,24 +6018,21 @@ snapshots:
 
   pcre-to-regexp@1.1.0: {}
 
-  pg-cloudflare@1.4.0:
+  pg-cloudflare@1.4.1:
     optional: true
 
-  pg-connection-string@2.14.0: {}
+  pg-connection-string@2.14.1: {}
 
   pg-int8@1.0.1: {}
 
   pg-numeric@1.0.2:
     optional: true
 
-  pg-pool@3.14.0(pg@8.22.0):
+  pg-pool@3.14.0(pg@8.23.1):
     dependencies:
-      pg: 8.22.0
+      pg: 8.23.1
 
-  pg-protocol@1.15.0: {}
-
-  pg-protocol@1.16.1:
-    optional: true
+  pg-protocol@1.16.1: {}
 
   pg-query-emscripten@5.1.0: {}
 
@@ -6061,15 +6055,15 @@ snapshots:
       postgres-range: 1.1.4
     optional: true
 
-  pg@8.22.0:
+  pg@8.23.1:
     dependencies:
-      pg-connection-string: 2.14.0
-      pg-pool: 3.14.0(pg@8.22.0)
-      pg-protocol: 1.15.0
+      pg-connection-string: 2.14.1
+      pg-pool: 3.14.0(pg@8.23.1)
+      pg-protocol: 1.16.1
       pg-types: 2.2.0
       pgpass: 1.0.5
     optionalDependencies:
-      pg-cloudflare: 1.4.0
+      pg-cloudflare: 1.4.1
 
   pgpass@1.0.5:
     dependencies:
