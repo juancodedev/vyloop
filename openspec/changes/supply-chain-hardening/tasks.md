@@ -40,7 +40,7 @@ Chain strategy: pending
 - [x] 2.2 `scripts/lib/database-url.mjs` — `assertVerifiedTls(url)` (throws unless `sslmode=verify-full`) and `isProductionHost(url)` (`ep-shiny-paper-aibbf0hk` endpoints); never prints the URL, only the host, per the masking rule in `docs/18-Verificacion-y-Seguridad-Operativa.md`.
 - [x] 2.3 Call `assertVerifiedTls` before opening the pool in `scripts/check-migration-drift.mjs` (`observeDatabase`), `scripts/check-checkin-backlog.mjs`, `scripts/check-payment-reconciliation.mjs`; in `scripts/check-wallet-readiness.mjs` keep `rejectUnauthorized: false` (line 454) for non-production hosts and refuse it for the production host.
 - [x] 2.4 `scripts/lib/database-url.test.mjs` and the existing script tests — `require`, `prefer`, `verify-ca`, missing `sslmode` and `disable` are refused; `verify-full` passes; the error message contains the host and not the password.
-- [ ] 2.5 **(pending — production only)** Rewrite the `DATABASE_URL` GitHub secret with `sslmode=verify-full`; run the `migration-drift` job of `.github/workflows/deploy.yml` to confirm; update each worker's local `.dev.vars` (gitignored, not committed).
+- [ ] 2.5 **(secret done 2026-10-20; `.dev.vars` pending)** Rewrite the `DATABASE_URL` GitHub secret with `sslmode=verify-full`; run the `migration-drift` job of `.github/workflows/deploy.yml` to confirm; update each worker's local `.dev.vars` (gitignored, not committed).
 - [x] 2.6 `docs/18-Trabajo-Pendiente.md` — close the "`sslmode=require` se va a debilitar en silencio" entry, pointing at the guard.
 
 ## Unit 3: Override cleanup
