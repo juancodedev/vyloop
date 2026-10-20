@@ -327,7 +327,7 @@ jobs:
           deploy_worker() {
             local service="$1"
             local dir="$2"
-            local ARGS=""
+            local -a args=()
             # `DATABASE_URL` is a connection string with a password in it, so it
             # arrives as a `--var` from the secret rather than living in a
             # `wrangler.jsonc` that is committed.
@@ -347,24 +347,31 @@ jobs:
             # The list is the `createDb(c.env.DATABASE_URL)` set plus `identity`, and
             # it is asserted by `deploy-bindings.contract.test.ts` so a seventh worker
             # cannot join that group without the deploy being taught about it.
+            # An array, and each element quoted when it is added.
+            #
+            # A secret is an opaque string, and a connection string contains
+            # `&` — which a shell reads as "run the next thing in the
+            # background" unless it is quoted. Building one string and letting
+            # it word-split is how that turns into a deploy that publishes
+            # without its database.
             case "$service" in
               identity)
-                ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
-                ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+                args+=(--var JWT_SECRET:"$JWT_SECRET")
+                args+=(--var DATABASE_URL:"$DATABASE_URL")
                 ;;
               communication)
-                ARGS="$ARGS --var WHATSAPP_PHONE_ID:${{ secrets.WHATSAPP_PHONE_ID }}"
-                ARGS="$ARGS --var WHATSAPP_TOKEN:${{ secrets.WHATSAPP_TOKEN }}"
-                ARGS="$ARGS --var WHATSAPP_VERIFY_TOKEN:${{ secrets.WHATSAPP_VERIFY_TOKEN }}"
-                ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+                args+=(--var WHATSAPP_PHONE_ID:"$WHATSAPP_PHONE_ID")
+                args+=(--var WHATSAPP_TOKEN:"$WHATSAPP_TOKEN")
+                args+=(--var WHATSAPP_VERIFY_TOKEN:"$WHATSAPP_VERIFY_TOKEN")
+                args+=(--var DATABASE_URL:"$DATABASE_URL")
                 ;;
               analytics | automation | customer | growth | wallet)
-                ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+                args+=(--var DATABASE_URL:"$DATABASE_URL")
                 ;;
             esac
 
             echo "::group::Deploy $service"
-            ( cd "$dir" && npx --yes wrangler deploy $ARGS )
+            ( cd "$dir" && npx --yes wrangler deploy "${args[@]}" )
             echo "::endgroup::"
           }
 
@@ -378,6 +385,14 @@ jobs:
           deploy_worker wallet workers/wallet
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The secrets arrive through the environment, not through the shell
+          # parser. A value interpolated into a command line is a value the
+          # shell will interpret.
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WHATSAPP_PHONE_ID: ${{ secrets.WHATSAPP_PHONE_ID }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          WHATSAPP_VERIFY_TOKEN: ${{ secrets.WHATSAPP_VERIFY_TOKEN }}
 
   # The gateway binds to identity, customer, growth, analytics, automation,
   # communication, compliance and wallet as service bindings, and Cloudflare
@@ -441,14 +456,24 @@ jobs:
       - name: Deploy gateway worker
         run: |
           npx --yes wrangler deploy \
-            --var JWT_SECRET:${{ secrets.JWT_SECRET }} \
-            --var DATABASE_URL:${{ secrets.DATABASE_URL }} \
-            --var RESEND_API_KEY:${{ secrets.RESEND_API_KEY }} \
-            --var SUPPORT_EMAIL_FROM:${{ secrets.SUPPORT_EMAIL_FROM }} \
-            --var TURNSTILE_SECRET_KEY:${{ secrets.TURNSTILE_SECRET_KEY }}
+            --var JWT_SECRET:"$JWT_SECRET" \
+            --var DATABASE_URL:"$DATABASE_URL" \
+            --var RESEND_API_KEY:"$RESEND_API_KEY" \
+            --var SUPPORT_EMAIL_FROM:"$SUPPORT_EMAIL_FROM" \
+            --var TURNSTILE_SECRET_KEY:"$TURNSTILE_SECRET_KEY"
         working-directory: apps/gateway
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The secrets arrive through the environment, and the shell expands
+          # them inside quotes. A secret interpolated straight into the command
+          # line is a secret the shell will interpret — and a connection string
+          # contains `&`, which a shell reads as "run the next thing in the
+          # background".
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SUPPORT_EMAIL_FROM: ${{ secrets.SUPPORT_EMAIL_FROM }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
 
   deploy-dashboard:
     needs: [quality, migration-drift]
