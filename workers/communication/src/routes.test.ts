@@ -1,4 +1,6 @@
 import type { Queue, KVNamespace } from '@cloudflare/workers-types';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -8,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 function createQueryChain<T>(resolveValue: T) {
   const chain = {
     from: () => chain,
-    where: () => chain,
+    where: vi.fn(() => chain),
     limit: () => chain,
     orderBy: () => chain,
     offset: () => chain,
@@ -22,6 +24,16 @@ function createQueryChain<T>(resolveValue: T) {
     execute: vi.fn().mockResolvedValue({ rows: [] }),
   };
   return chain;
+}
+
+/** The SQL the history route's predicate renders to, and the values it binds. */
+function renderedHistoryPredicate(): { sql: string; params: unknown[] } {
+  const chain = dbMock.select.mock.results[0]?.value as {
+    where: { mock: { calls: unknown[][] } };
+  };
+  const where = chain.where.mock.calls[0]?.[0];
+  const { sql, params } = new PgDialect().sqlToQuery(where as SQL);
+  return { sql, params };
 }
 
 // ---------------------------------------------------------------------------
@@ -40,16 +52,37 @@ const dbMock: any = {
   execute: vi.fn().mockResolvedValue({ rows: [] }),
 };
 
-vi.mock('@vyloop/db', () => ({
-  createDb: vi.fn(() => dbMock),
-  setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
-  // The authoritative consent store. The route reads the customer's consents
-  // from here, so the mock is what decides whether a message may be sent.
-  readConsentMap: vi.fn(async () => ({ whatsapp: true })),
-  messageLog: 'message_log',
-  whatsappTemplates: 'whatsapp_templates',
-  customers: 'customers',
-}));
+vi.mock('@vyloop/db', async () => {
+  // The message log is a real table here, because the route's filters are
+  // what this file checks: a flat `{}` renders an opaque predicate, so a query
+  // that ignored the channel would look the same as one that honoured it.
+  const { pgTable, uuid, text, timestamp, jsonb } = await import('drizzle-orm/pg-core');
+
+  const messageLogTable = pgTable('message_log', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    direction: text('direction').notNull(),
+    channel: text('channel').notNull(),
+    status: text('status').notNull(),
+    providerMessageId: text('provider_message_id'),
+    pushEndpointHash: text('push_endpoint_hash'),
+    content: jsonb('content'),
+    metadata: jsonb('metadata'),
+    createdAt: timestamp('created_at').notNull(),
+  });
+
+  return {
+    createDb: vi.fn(() => dbMock),
+    setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+    // The authoritative consent store. The route reads the customer's consents
+    // from here, so the mock is what decides whether a message may be sent.
+    readConsentMap: vi.fn(async () => ({ whatsapp: true })),
+    messageLog: messageLogTable,
+    whatsappTemplates: 'whatsapp_templates',
+    customers: 'customers',
+  };
+});
 
 vi.mock('@vyloop/event-bus', () => ({
   publish: vi.fn(),
@@ -273,6 +306,49 @@ describe('GET /v1/communication/history', () => {
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(body.data).toEqual([]);
+  });
+
+  it('returns the deliveries of every channel when no channel is named', async () => {
+    // A push delivery is a delivery. The history used to filter on the
+    // WhatsApp channel in hardcode, which made every push delivery invisible
+    // in it — and a delivery nobody can see is a delivery that did not happen.
+    const res = await mockFetch({
+      path: '/v1/communication/history',
+      headers: authHeaders(),
+    });
+
+    expect(res.status).toBe(200);
+
+    const { sql } = renderedHistoryPredicate();
+    expect(sql).not.toContain('channel');
+  });
+
+  it('filters by channel when one is named', async () => {
+    const res = await mockFetch({
+      path: '/v1/communication/history?channel=push',
+      headers: authHeaders(),
+    });
+
+    expect(res.status).toBe(200);
+
+    const { sql, params } = renderedHistoryPredicate();
+    expect(sql).toContain('channel');
+    expect(params).toContain('push');
+  });
+
+  it('still filters by customer and by status', async () => {
+    // The other filters share the predicate the channel filter now lives in,
+    // so they are pinned here.
+    await mockFetch({
+      path: '/v1/communication/history?customer_id=cust-1&status=sent',
+      headers: authHeaders(),
+    });
+
+    const { sql, params } = renderedHistoryPredicate();
+    expect(sql).toContain('customer_id');
+    expect(sql).toContain('status');
+    expect(params).toContain('cust-1');
+    expect(params).toContain('sent');
   });
 });
 

@@ -26,6 +26,10 @@
       {
         "binding": "WALLET",
         "service": "wallet"
+      },
+      {
+        "binding": "COMMUNICATION",
+        "service": "communication"
       }
     ],
     "triggers": {

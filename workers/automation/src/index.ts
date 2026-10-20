@@ -109,6 +109,24 @@ async function scheduled(_controller: unknown, env: Bindings): Promise<void> {
   await handleInactivityCron(env);
   await dispatchWalletSweep(env);
   await dispatchPassInactivity(env);
+  await dispatchSubscriptionMaintenance(env);
+}
+
+/**
+ * Calls the communication worker's `scheduled` export over the service
+ * binding: the push subscription sweep, which has no cron trigger of its own.
+ *
+ * Never throws, for the reason `dispatchWalletSweep` does not.
+ */
+async function dispatchSubscriptionMaintenance(env: Bindings): Promise<void> {
+  try {
+    await env.COMMUNICATION.scheduled(undefined);
+  } catch (error) {
+    console.error(
+      '[automation] Push subscription maintenance did not run:',
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 /**

@@ -266,7 +266,9 @@ router.post('/v1/communication/push/campaigns', async (c) => {
     .where(
       and(
         eq(messageLog.businessId, businessId),
-        sql`${messageLog.content}->>'reference_id' LIKE ${`${referenceId}:%`}`,
+        // A literal prefix comparison, not `LIKE`: an operator's reference may
+        // hold `_` or `%`, and as a pattern `promo_1` would match `promo-1`.
+        sql`left(${messageLog.content}->>'reference_id', ${referenceId.length + 1}) = ${`${referenceId}:`}`,
       ),
     )
     .limit(1);

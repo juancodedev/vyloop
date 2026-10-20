@@ -253,13 +253,6 @@ export async function handlePushCampaignRequested(
       continue;
     }
 
-    // The delivery writes one row per browser the customer registered, all of
-    // them carrying the reference it was handed, so the reference names one
-    // subscription of this customer. The first one by id, so the choice is
-    // stable rather than dependent on the order the rows came back in.
-    const subscriptionId = [...subscriptions]
-      .sort((a, b) => a.id.localeCompare(b.id))[0]!.id;
-
     const outcome = await deliverPushNotification(
       {
         customer_id: member.globalId,
@@ -267,7 +260,9 @@ export async function handlePushCampaignRequested(
         title: payload.title,
         body: payload.body,
         ...(payload.url !== undefined ? { url: payload.url } : {}),
-        reference_id: `${campaignReferenceId}:${subscriptionId}`,
+        // The campaign's own reference. The delivery appends each browser's
+        // subscription id, which makes `<campaign>:<subscription>`.
+        reference_id: campaignReferenceId,
       },
       businessId,
       env,
