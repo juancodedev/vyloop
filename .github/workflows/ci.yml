@@ -1,8 +1,21 @@
 name: CI
 
+# Only on pull requests.
+#
+# This workflow used to run on `push` to `main` as well, which meant the same
+# code was validated twice for every merge: once by the `pull_request` event,
+# which runs against the merge result, and again by the `push` event.
+#
+# The `push` run was the third validation of the same commit, not the first —
+# `deploy.yml` has its own `quality` job that runs before anything is
+# published, and that one is the gate that protects production. Dropping this
+# trigger leaves two validations where there were three, and the one that
+# guards a release is the one that stays.
+#
+# A repository on the free plan with a private repository is billed per runner
+# minute, and the quota is finite. Runner minutes are spent on work that has
+# to happen, not on the same work happening again.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 

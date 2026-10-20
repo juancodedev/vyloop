@@ -285,28 +285,9 @@ jobs:
   deploy-workers:
     needs: [quality, register-schemas, migration-drift]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: identity
-            dir: workers/identity
-          - service: customer
-            dir: workers/customer
-          - service: growth
-            dir: workers/growth
-          - service: analytics
-            dir: workers/analytics
-          - service: automation
-            dir: workers/automation
-          - service: communication
-            dir: workers/communication
-          - service: compliance
-            dir: workers/compliance
-          - service: wallet
-            dir: workers/wallet
+    # Nine publishes in sequence, where the matrix ran them in parallel and
+    # finished inside the same fifteen minutes.
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -321,45 +302,80 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Deploy ${{ matrix.service }} worker
+      # One runner for all nine workers, not nine runners for one worker each.
+      #
+      # The matrix was nine boots of a runner, nine checkouts and nine
+      # `pnpm install --frozen-lockfile` of the same monorepo, to run nine
+      # `wrangler deploy` calls that each take seconds. Runner minutes are
+      # billed per runner, so the parallel matrix cost nine times the
+      # sequential job for the same result.
+      #
+      # It also ran with `fail-fast: false`, which meant a worker that failed
+      # to publish did not stop the others: the platform could end up with a
+      # new `growth` and an old `identity`. Deploying in order stops at the
+      # first failure, which is a consistent state rather than a mixed one.
+      #
+      # The gateway is still published last, and for the same reason as
+      # before: it binds to every worker here, and Cloudflare refuses to
+      # publish a Worker whose binding names a Worker that does not exist yet.
+      # That ordering lives in this file's `needs`, not in the matrix, so
+      # removing the matrix does not touch it.
+      - name: Deploy the workers
         run: |
-          ARGS=""
-          # `DATABASE_URL` is a connection string with a password in it, so it
-          # arrives as a `--var` from the secret rather than living in a
-          # `wrangler.jsonc` that is committed.
-          #
-          # **Six** workers read it, not two. Four of them call
-          # `createDb(c.env.DATABASE_URL)` — `analytics`, `automation`,
-          # `communication` and `growth` — and `customer` takes it the same way.
-          # Listing only `identity` and `wallet` left the other four depending on a
-          # binding that this job never sets, which is not something any local run
-          # can show: the deploy is the only place the omission exists.
-          #
-          # `wrangler deploy` keeps bindings a previous deploy set, so a worker that
-          # had the var once keeps working while a worker that never did returns
-          # `500` from `set_config` on the first query. That is what
-          # `/v1/communication/templates` was doing.
-          #
-          # The list is the `createDb(c.env.DATABASE_URL)` set plus `identity`, and
-          # it is asserted by `deploy-bindings.contract.test.ts` so a seventh worker
-          # cannot join that group without the deploy being taught about it.
-          case "${{ matrix.service }}" in
-            identity)
-              ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
-              ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
-              ;;
-            communication)
-              ARGS="$ARGS --var WHATSAPP_PHONE_ID:${{ secrets.WHATSAPP_PHONE_ID }}"
-              ARGS="$ARGS --var WHATSAPP_TOKEN:${{ secrets.WHATSAPP_TOKEN }}"
-              ARGS="$ARGS --var WHATSAPP_VERIFY_TOKEN:${{ secrets.WHATSAPP_VERIFY_TOKEN }}"
-              ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
-              ;;
-            analytics | automation | customer | growth | wallet)
-              ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
-              ;;
-          esac
-          npx --yes wrangler deploy $ARGS
-        working-directory: ${{ matrix.dir }}
+          set -euo pipefail
+
+          deploy_worker() {
+            local service="$1"
+            local dir="$2"
+            local ARGS=""
+            # `DATABASE_URL` is a connection string with a password in it, so it
+            # arrives as a `--var` from the secret rather than living in a
+            # `wrangler.jsonc` that is committed.
+            #
+            # **Six** workers read it, not two. Four of them call
+            # `createDb(c.env.DATABASE_URL)` — `analytics`, `automation`,
+            # `communication` and `growth` — and `customer` takes it the same way.
+            # Listing only `identity` and `wallet` left the other four depending on a
+            # binding that this job never sets, which is not something any local run
+            # can show: the deploy is the only place the omission exists.
+            #
+            # `wrangler deploy` keeps bindings a previous deploy set, so a worker that
+            # had the var once keeps working while a worker that never did returns
+            # `500` from `set_config` on the first query. That is what
+            # `/v1/communication/templates` was doing.
+            #
+            # The list is the `createDb(c.env.DATABASE_URL)` set plus `identity`, and
+            # it is asserted by `deploy-bindings.contract.test.ts` so a seventh worker
+            # cannot join that group without the deploy being taught about it.
+            case "$service" in
+              identity)
+                ARGS="$ARGS --var JWT_SECRET:${{ secrets.JWT_SECRET }}"
+                ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+                ;;
+              communication)
+                ARGS="$ARGS --var WHATSAPP_PHONE_ID:${{ secrets.WHATSAPP_PHONE_ID }}"
+                ARGS="$ARGS --var WHATSAPP_TOKEN:${{ secrets.WHATSAPP_TOKEN }}"
+                ARGS="$ARGS --var WHATSAPP_VERIFY_TOKEN:${{ secrets.WHATSAPP_VERIFY_TOKEN }}"
+                ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+                ;;
+              analytics | automation | customer | growth | wallet)
+                ARGS="$ARGS --var DATABASE_URL:${{ secrets.DATABASE_URL }}"
+                ;;
+            esac
+
+            echo "::group::Deploy $service"
+            ( cd "$dir" && npx --yes wrangler deploy $ARGS )
+            echo "::endgroup::"
+          }
+
+          deploy_worker identity workers/identity
+          deploy_worker customer workers/customer
+          deploy_worker growth workers/growth
+          deploy_worker analytics workers/analytics
+          deploy_worker automation workers/automation
+          deploy_worker communication workers/communication
+          deploy_worker compliance workers/compliance
+          deploy_worker wallet workers/wallet
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
