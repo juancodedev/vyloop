@@ -7,11 +7,13 @@ import {
   jsonb,
   numeric,
   integer,
+  smallint,
   boolean,
   date,
   unique,
   index,
   uniqueIndex,
+  check,
   foreignKey,
   bigserial,
 } from 'drizzle-orm/pg-core';
@@ -78,17 +80,76 @@ export const tenants = pgTable('tenants', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const branches = pgTable('branches', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  name: text('name').notNull(),
-  address: text('address'),
-  city: text('city'),
-  country: text('country').notNull(),
-  timezone: text('timezone'),
-  isActive: boolean('is_active').notNull().default(true),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
-});
+export const branches = pgTable(
+  'branches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    address: text('address'),
+    city: text('city'),
+    country: text('country').notNull(),
+    timezone: text('timezone'),
+    isActive: boolean('is_active').notNull().default(true),
+    // ---------------------------------------------------------------------
+    // The venue's position.
+    //
+    // Nullable, and `NULL` means "this venue has not registered a position" —
+    // a state that is distinct from "the position is 0,0" and that the query
+    // for nearby venues has to be able to exclude. It is why the columns are
+    // nullable rather than defaulted to something.
+    //
+    // `numeric(9,6)` rather than `double precision`: three integer digits and
+    // six decimals cover ±180° with roughly 11 cm of resolution, and a fixed
+    // decimal has no binary rounding noise in a value a person reads off a
+    // map. `float8` would carry rounding error in a column whose whole purpose
+    // is to be compared for equality.
+    latitude: numeric('latitude', { precision: 9, scale: 6 }),
+    longitude: numeric('longitude', { precision: 9, scale: 6 }),
+    // The geohash is a server-computed cache of the pair above, so the query
+    // for venues inside a cell is a prefix match on a string instead of a
+    // scan with a distance function. It is derived, never authoritative: the
+    // decimal degrees are, and the server recomputes the geohash from them on
+    // every write, so a stale cache cannot outlive the change that caused it.
+    geohash: text('geohash'),
+    // Which precision produced the geohash. Stored because the cell a geohash
+    // denotes depends on how many characters it has, and the string alone does
+    // not say how wide its cell is.
+    geohashPrecision: smallint('geohash_precision'),
+    // When the venue asserted this position. `branches` has no `updated_at`
+    // column and this table is not a row that is edited over time, so a
+    // general update timestamp would describe a lifecycle the table does not
+    // have. This one says exactly what it means: the position was set at this
+    // moment.
+    locatedAt: timestamp('located_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (table) => [
+    // The nearby-venues lookup is a prefix match on the geohash, which is a
+    // range scan over the index — so it is the index that makes "venues around
+    // this point" a bounded read instead of a scan of every branch in the
+    // system.
+    index('idx_branches_geohash').on(table.geohash),
+
+    // A half-written position is not a position. Either both coordinates are
+    // present or neither is, and the database is where that is enforced: a
+    // check constraint is the only thing that survives a second writer, a
+    // script, and a future endpoint that forgets to validate its input.
+    check(
+      'branches_coordinates_pair_chk',
+      sql`(${table.latitude} is null) = (${table.longitude} is null)`,
+    ),
+
+    // And a position is a position on the globe. The constraint is written so
+    // that a row with no coordinates passes it — `CHECK` is satisfied unless it
+    // evaluates to false, and `NULL BETWEEN ...` is unknown — which leaves the
+    // pair constraint above to own the "both or neither" question.
+    check(
+      'branches_coordinates_range_chk',
+      sql`${table.latitude} between -90 and 90 and ${table.longitude} between -180 and 180`,
+    ),
+  ],
+);
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
