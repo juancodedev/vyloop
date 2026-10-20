@@ -1,5 +1,6 @@
 import { createDb, customers, pushSubscriptions } from '@vyloop/db';
-import { and, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import { and, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
 
@@ -55,6 +56,17 @@ import type { Bindings } from './helpers';
  */
 export const STALE_SUBSCRIPTION_DAYS = 180;
 
+/**
+ * The most rows one step of one run deletes.
+ *
+ * A sweep that deletes everything due in one statement holds its locks for as
+ * long as that takes, and the first run after a backlog — or after a bug that
+ * stopped `last_seen_at` from moving — would be the longest. A run that stops
+ * at a batch leaves the rest for the next day, and the daily cron drains any
+ * backlog a thousand rows at a time.
+ */
+export const SWEEP_BATCH_SIZE = 1000;
+
 /** The milliseconds in a day, so the window is written in days and computed once. */
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -79,19 +91,19 @@ export async function handleSubscriptionMaintenance(env: Bindings): Promise<void
     // The stale subscriptions
     // -----------------------------------------------------------------------
     try {
+      const stale = or(
+        // Seen, but not for a long time.
+        lt(pushSubscriptions.lastSeenAt, cutoff),
+        // Never seen, and old enough that it never will be.
+        and(
+          isNull(pushSubscriptions.lastSeenAt),
+          lt(pushSubscriptions.createdAt, cutoff),
+        ),
+      );
+
       const removed = await db
         .delete(pushSubscriptions)
-        .where(
-          or(
-            // Seen, but not for a long time.
-            lt(pushSubscriptions.lastSeenAt, cutoff),
-            // Never seen, and old enough that it never will be.
-            and(
-              isNull(pushSubscriptions.lastSeenAt),
-              lt(pushSubscriptions.createdAt, cutoff),
-            ),
-          ),
-        )
+        .where(oneBatchOf(stale))
         .returning({ id: pushSubscriptions.id });
 
       prunedStale = removed.length;
@@ -110,6 +122,12 @@ export async function handleSubscriptionMaintenance(env: Bindings): Promise<void
       // The soft-deleted customers, as a subquery, so the delete is one
       // statement and cannot race with a customer deleted between the read
       // and the write.
+      //
+      // This reads `customers` with no tenant set: the sweep is table-wide.
+      // That works because row-level security is not enforced on `customers`
+      // today. Once it is, this subquery would see no rows and the step would
+      // delete nothing without an error — so the RLS rollout has to give the
+      // sweep a role that bypasses it, or a tenant-by-tenant loop.
       const deletedCustomers = db
         .select({ id: customers.id })
         .from(customers)
@@ -117,7 +135,7 @@ export async function handleSubscriptionMaintenance(env: Bindings): Promise<void
 
       const removed = await db
         .delete(pushSubscriptions)
-        .where(inArray(pushSubscriptions.customerId, deletedCustomers))
+        .where(oneBatchOf(inArray(pushSubscriptions.customerId, deletedCustomers)))
         .returning({ id: pushSubscriptions.id });
 
       prunedDeletedCustomer = removed.length;
@@ -143,4 +161,12 @@ export async function handleSubscriptionMaintenance(env: Bindings): Promise<void
     `[communication] Subscription maintenance: pruned_stale=${prunedStale} ` +
       `pruned_deleted_customer=${prunedDeletedCustomer} errors=${errors}`,
   );
+}
+
+/**
+ * The rows matching `predicate`, at most one batch of them, as a predicate on
+ * the subscription id: Postgres has no `DELETE … LIMIT`.
+ */
+function oneBatchOf(predicate: SQL | undefined): SQL {
+  return sql`${pushSubscriptions.id} in (select ${pushSubscriptions.id} from ${pushSubscriptions} where ${predicate} limit ${SWEEP_BATCH_SIZE})`;
 }

@@ -31,6 +31,7 @@ const dbMock: any = {
   update: vi.fn(() => createQueryChain([])),
   delete: vi.fn(() => createQueryChain([])),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
+  transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbMock)),
 };
 
 vi.mock('@vyloop/db', () => ({
@@ -123,6 +124,7 @@ const VALID_SUBSCRIPTION = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  dbMock.execute.mockResolvedValue({ rows: [] });
   // The customer the token names.
   dbMock.select.mockReturnValue(createQueryChain([{ id: 'cust-1' }]));
   readConsentMap.mockResolvedValue({ nearby_notifications: true });
@@ -301,6 +303,21 @@ describe('POST /v1/communication/push/subscribe', () => {
     }
   });
 
+/** `count` subscriptions of `cust-1`, each on its own endpoint. */
+function heldSubscriptions(count: number, endpoints?: string[]) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `sub-${index}`,
+    businessId: 'biz-1',
+    customerId: 'cust-1',
+    endpoint: endpoints?.[index] ?? `https://fcm.googleapis.com/fcm/send/held-${index}`,
+    p256dh: 'public-key',
+    auth: 'auth-secret',
+    userAgent: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    lastSeenAt: new Date('2026-01-01T00:00:00.000Z'),
+  }));
+}
+
   it('refuses a customer who already holds more subscriptions than the cap', async () => {
     // Unbounded registration is a storage-abuse vector: the endpoint is
     // attacker-controlled input.
@@ -331,6 +348,81 @@ describe('POST /v1/communication/push/subscribe', () => {
     expect(body.error.code).toBe('TOO_MANY_SUBSCRIPTIONS');
     // And nothing was written.
     expect(upsertPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('refuses the eleventh browser: the cap is ten in all', async () => {
+    readPushSubscriptions.mockResolvedValue(heldSubscriptions(10));
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/subscribe',
+      method: 'POST',
+      headers: customerHeaders(),
+      body: VALID_SUBSCRIPTION,
+    });
+
+    expect(res.status).toBe(429);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('TOO_MANY_SUBSCRIPTIONS');
+    expect(upsertPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('accepts the tenth browser', async () => {
+    readPushSubscriptions.mockResolvedValue(heldSubscriptions(9));
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/subscribe',
+      method: 'POST',
+      headers: customerHeaders(),
+      body: VALID_SUBSCRIPTION,
+    });
+
+    expect(res.status).toBe(201);
+    expect(upsertPushSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes a browser the customer already holds, even at the cap', async () => {
+    // A browser re-subscribing (rotated keys, a reinstalled service worker) is
+    // the same subscription, not an eleventh one.
+    readPushSubscriptions.mockResolvedValue(
+      heldSubscriptions(10, [VALID_SUBSCRIPTION.subscription.endpoint]),
+    );
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/subscribe',
+      method: 'POST',
+      headers: customerHeaders(),
+      body: VALID_SUBSCRIPTION,
+    });
+
+    expect(res.status).toBe(201);
+    expect(upsertPushSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts and writes under one lock per customer, so two requests cannot both pass the cap', async () => {
+    const order: string[] = [];
+    dbMock.execute.mockImplementation(async (query: unknown) => {
+      const rendered = JSON.stringify(query);
+      if (rendered.includes('pg_advisory_xact_lock')) order.push('lock');
+      return { rows: [] };
+    });
+    readPushSubscriptions.mockImplementation(async () => {
+      order.push('count');
+      return [];
+    });
+    upsertPushSubscription.mockImplementation(async (_db: unknown, input: Record<string, unknown>) => {
+      order.push('write');
+      return { id: 'sub-new', endpoint: input.endpoint, createdAt: new Date('2026-01-01T00:00:00.000Z') };
+    });
+
+    await mockFetch({
+      path: '/v1/communication/push/subscribe',
+      method: 'POST',
+      headers: customerHeaders(),
+      body: VALID_SUBSCRIPTION,
+    });
+
+    expect(dbMock.transaction).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['lock', 'count', 'write']);
   });
 });
 

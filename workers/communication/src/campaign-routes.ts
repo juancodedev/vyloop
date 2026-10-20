@@ -268,7 +268,10 @@ router.post('/v1/communication/push/campaigns', async (c) => {
         eq(messageLog.businessId, businessId),
         // A literal prefix comparison, not `LIKE`: an operator's reference may
         // hold `_` or `%`, and as a pattern `promo_1` would match `promo-1`.
-        sql`left(${messageLog.content}->>'reference_id', ${referenceId.length + 1}) = ${`${referenceId}:`}`,
+        // `starts_with` and not `left(…, n)`: a length measured in JavaScript
+        // counts UTF-16 units and Postgres counts characters, so an emoji in
+        // the reference would make the two disagree.
+        sql`starts_with(${messageLog.content}->>'reference_id', ${`${referenceId}:`})`,
       ),
     )
     .limit(1);

@@ -40,11 +40,12 @@ vi.mock('@vyloop/db', async () => {
   };
 });
 
-const { handleSubscriptionMaintenance, STALE_SUBSCRIPTION_DAYS } = (await import(
+const { handleSubscriptionMaintenance, STALE_SUBSCRIPTION_DAYS, SWEEP_BATCH_SIZE } = (await import(
   './subscription-maintenance'
 )) as unknown as {
   handleSubscriptionMaintenance: (env: unknown) => Promise<void>;
   STALE_SUBSCRIPTION_DAYS: number;
+  SWEEP_BATCH_SIZE: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -136,6 +137,17 @@ describe('handleSubscriptionMaintenance', () => {
     expect(ageInDays).toBeLessThan(180.1);
   });
 
+  it('deletes at most one batch per step, so one run cannot hold a lock on the whole table', async () => {
+    await handleSubscriptionMaintenance(mockEnv);
+
+    expect(SWEEP_BATCH_SIZE).toBe(1000);
+    for (const index of [0, 1]) {
+      const { sql, params } = renderedPredicate(deleteChain(index));
+      expect(sql).toMatch(/limit \$\d+/i);
+      expect(params).toContain(SWEEP_BATCH_SIZE);
+    }
+  });
+
   it('prunes a subscription that was never seen but was created long ago', async () => {
     // A registration nobody has ever been delivered to is stale once it is
     // old enough, and only then: a recent subscription with no `last_seen_at`
@@ -161,11 +173,15 @@ describe('handleSubscriptionMaintenance', () => {
     // And the delete removes the subscriptions of exactly those customers: the
     // predicate embeds the query that finds the soft-deleted.
     const chain = deleteChain(1);
-    const where = chain.where.mock.calls[0]?.[0] as { queryChunks?: unknown[] };
-    const embedsSelect = (where.queryChunks ?? []).some(
-      (chunk: any) => chunk === selectChain || chunk?.value === selectChain,
-    );
-    expect(embedsSelect).toBe(true);
+    // The batch bound wraps the predicate, so the query is nested a level or
+    // two down: look for it at any depth.
+    const embeds = (node: any, seen = new Set<unknown>()): boolean => {
+      if (node === selectChain || node?.value === selectChain) return true;
+      if (!node || typeof node !== 'object' || seen.has(node)) return false;
+      seen.add(node);
+      return (node.queryChunks ?? []).some((chunk: unknown) => embeds(chunk, seen));
+    };
+    expect(embeds(chain.where.mock.calls[0]?.[0])).toBe(true);
   });
 
   it('never throws, and carries on after a failed sub-task', async () => {
