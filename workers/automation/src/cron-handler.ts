@@ -1,4 +1,4 @@
-import { createDb, customers, workflows } from '@vyloop/db';
+import { createDb, customers, workflows, readConsentMap } from '@vyloop/db';
 import { WHATSAPP_OUTBOUND_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { eq, and, sql } from 'drizzle-orm';
 
@@ -71,10 +71,19 @@ export async function handleBirthdayCron(env: Bindings): Promise<void> {
 
     // Process each workflow for each matching customer
     for (const workflow of activeWorkflows) {
-      const actions = (workflow.actions ?? []) as Array<{ type: string; config?: Record<string, unknown> }>;
+      const actions = (workflow.actions ?? []) as Array<{
+        type: string;
+        config?: Record<string, unknown>;
+      }>;
 
       for (const customer of birthdayCustomers) {
-        const customerData = buildCustomerData(customer);
+        // The customer's consents, from the authoritative store. The gate and
+        // the context are built from the same read, so they cannot disagree.
+        const consents = await readConsentMap(db, {
+          businessId,
+          customerId: customer.id as string,
+        });
+        const customerData = buildCustomerData(customer, consents);
         const conditions = (workflow.conditions ?? []) as Condition[];
 
         // Evaluate workflow conditions
@@ -86,7 +95,7 @@ export async function handleBirthdayCron(env: Bindings): Promise<void> {
         }
 
         // Consent check
-        if (!hasWhatsAppConsent(customerData)) {
+        if (!hasWhatsAppConsent(consents)) {
           console.log(
             `[automation] Customer ${customer.id} has no WhatsApp consent — skipping birthday workflow ${workflow.id}`,
           );
@@ -187,7 +196,10 @@ export async function handleInactivityCron(env: Bindings): Promise<void> {
     if (activeWorkflows.length === 0) continue;
 
     for (const workflow of activeWorkflows) {
-      const actions = (workflow.actions ?? []) as Array<{ type: string; config?: Record<string, unknown> }>;
+      const actions = (workflow.actions ?? []) as Array<{
+        type: string;
+        config?: Record<string, unknown>;
+      }>;
 
       // Read inactivity threshold from workflow config (default 30 days)
       const workflowConfig = (actions[0]?.config ?? {}) as Record<string, unknown>;
@@ -207,7 +219,13 @@ export async function handleInactivityCron(env: Bindings): Promise<void> {
       if (inactiveCustomers.length === 0) continue;
 
       for (const customer of inactiveCustomers) {
-        const customerData = buildCustomerData(customer);
+        // The customer's consents, from the authoritative store. The gate and
+        // the context are built from the same read, so they cannot disagree.
+        const consents = await readConsentMap(db, {
+          businessId,
+          customerId: customer.id as string,
+        });
+        const customerData = buildCustomerData(customer, consents);
         const conditions = (workflow.conditions ?? []) as Condition[];
 
         // Evaluate workflow conditions
@@ -216,7 +234,7 @@ export async function handleInactivityCron(env: Bindings): Promise<void> {
         }
 
         // Consent check
-        if (!hasWhatsAppConsent(customerData)) {
+        if (!hasWhatsAppConsent(consents)) {
           continue;
         }
 
@@ -273,7 +291,18 @@ export async function handleInactivityCron(env: Bindings): Promise<void> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildCustomerData(customer: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Build customer data map for condition evaluation.
+ *
+ * The `consent` entry is assembled from the authoritative store — the
+ * `consents` table — and not from a flag in the customer's metadata, which had
+ * no writer and could say neither when the agreement began nor when it was
+ * withdrawn.
+ */
+function buildCustomerData(
+  customer: Record<string, unknown>,
+  consents: Record<string, boolean> = {},
+): Record<string, unknown> {
   return {
     id: customer.id,
     global_id: customer.globalId,
@@ -283,11 +312,15 @@ function buildCustomerData(customer: Record<string, unknown>): Record<string, un
     birth_date: customer.birthDate,
     last_visit_at: customer.lastVisitAt,
     metadata: customer.metadata ?? {},
+    consent: consents,
   };
 }
 
-function hasWhatsAppConsent(customerData: Record<string, unknown>): boolean {
-  const metadata = (customerData.metadata ?? {}) as Record<string, unknown>;
-  const consent = (metadata.consent ?? {}) as Record<string, unknown>;
-  return consent.whatsapp === true;
+/**
+ * Takes the consent map, which is also what the evaluation context is built
+ * from — so the implicit filter and a workflow's own `consent.whatsapp`
+ * condition cannot answer from two different places.
+ */
+function hasWhatsAppConsent(consents: Record<string, boolean>): boolean {
+  return consents.whatsapp === true;
 }

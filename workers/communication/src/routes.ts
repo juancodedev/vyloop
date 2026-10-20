@@ -1,4 +1,4 @@
-import { createDb, messageLog, whatsappTemplates, customers } from '@vyloop/db';
+import { createDb, messageLog, whatsappTemplates, customers, readConsentMap } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import { eq, and, desc, count, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -37,7 +37,9 @@ router.post('/v1/communication/send', async (c) => {
 
   if (!body.customer_id || !body.template_name) {
     return c.json(
-      { error: { code: 'VALIDATION_ERROR', message: 'customer_id and template_name are required' } },
+      {
+        error: { code: 'VALIDATION_ERROR', message: 'customer_id and template_name are required' },
+      },
       400,
     );
   }
@@ -49,25 +51,36 @@ router.post('/v1/communication/send', async (c) => {
   // Validate customer exists and check consent
   // -----------------------------------------------------------------------
   const [customer] = await db
-    .select({ id: customers.id, phone: customers.phone, metadata: customers.metadata })
+    .select({ id: customers.id, phone: customers.phone })
     .from(customers)
     .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
     .limit(1);
 
   if (!customer) {
-    return c.json(
-      { error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } },
-      404,
-    );
+    return c.json({ error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } }, 404);
   }
 
-  // Check WhatsApp consent via customer metadata
-  const metadata = (customer.metadata ?? {}) as Record<string, unknown>;
-  const consent = (metadata.consent ?? {}) as Record<string, unknown>;
-  if (consent.whatsapp !== true) {
+  // The consent is read from the authoritative store.
+  //
+  // It used to be a flag in the customer's jsonb metadata, and that flag had no
+  // writer: the table that was supposed to record a consent was read by two
+  // surfaces and written by none. A flag cannot say when the agreement began or
+  // when it was withdrawn, and a consent that cannot be withdrawn is not a
+  // consent.
+  const consents = await readConsentMap(db, {
+    businessId,
+    customerId: body.customer_id,
+  });
+
+  if (consents.whatsapp !== true) {
     return c.json(
-      { error: { code: 'CONSENT_REQUIRED', message: 'Customer has not consented to WhatsApp messaging' } },
-      409,
+      {
+        error: {
+          code: 'CONSENT_REQUIRED',
+          message: 'Customer has not consented to WhatsApp messaging',
+        },
+      },
+      403,
     );
   }
 
@@ -86,7 +99,8 @@ router.post('/v1/communication/send', async (c) => {
   // -----------------------------------------------------------------------
   // Idempotency check
   // -----------------------------------------------------------------------
-  const referenceId = body.reference_id ?? `${body.customer_id}-${body.template_name}-${Date.now()}`;
+  const referenceId =
+    body.reference_id ?? `${body.customer_id}-${body.template_name}-${Date.now()}`;
 
   const [existing] = await db
     .select({ id: messageLog.id })
@@ -103,7 +117,12 @@ router.post('/v1/communication/send', async (c) => {
 
   if (existing) {
     return c.json(
-      { error: { code: 'DUPLICATE_MESSAGE', message: 'A message with this reference already exists' } },
+      {
+        error: {
+          code: 'DUPLICATE_MESSAGE',
+          message: 'A message with this reference already exists',
+        },
+      },
       409,
     );
   }
@@ -163,9 +182,7 @@ router.get('/v1/communication/templates', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
 
-  const conditions: ReturnType<typeof and>[] = [
-    eq(whatsappTemplates.businessId, businessId),
-  ];
+  const conditions: ReturnType<typeof and>[] = [eq(whatsappTemplates.businessId, businessId)];
 
   if (category) {
     conditions.push(eq(whatsappTemplates.category, category));
@@ -173,10 +190,7 @@ router.get('/v1/communication/templates', async (c) => {
 
   const where = and(...conditions);
 
-  const [totalResult] = await db
-    .select({ total: count() })
-    .from(whatsappTemplates)
-    .where(where);
+  const [totalResult] = await db.select({ total: count() }).from(whatsappTemplates).where(where);
 
   const total = Number(totalResult?.total ?? 0);
 
@@ -214,7 +228,12 @@ router.post('/v1/communication/templates', async (c) => {
 
   if (!body.name || !body.language || !body.category || !body.body) {
     return c.json(
-      { error: { code: 'VALIDATION_ERROR', message: 'name, language, category, and body are required' } },
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'name, language, category, and body are required',
+        },
+      },
       400,
     );
   }
@@ -271,10 +290,7 @@ router.get('/v1/communication/history', async (c) => {
 
   const where = and(...conditions);
 
-  const [totalResult] = await db
-    .select({ total: count() })
-    .from(messageLog)
-    .where(where);
+  const [totalResult] = await db.select({ total: count() }).from(messageLog).where(where);
 
   const total = Number(totalResult?.total ?? 0);
 
@@ -316,7 +332,12 @@ router.get('/webhook', async (c) => {
   }
 
   return c.json(
-    { error: { code: 'VERIFICATION_FAILED', message: 'Verification token mismatch or invalid mode' } },
+    {
+      error: {
+        code: 'VERIFICATION_FAILED',
+        message: 'Verification token mismatch or invalid mode',
+      },
+    },
     403,
   );
 });
@@ -387,7 +408,9 @@ router.post('/webhook', async (c) => {
         .limit(1);
 
       if (!customer) {
-        console.warn(`[communication] Inbound message from unknown phone ${customerPhone} — skipping`);
+        console.warn(
+          `[communication] Inbound message from unknown phone ${customerPhone} — skipping`,
+        );
         continue;
       }
 
@@ -415,7 +438,10 @@ router.post('/webhook', async (c) => {
     for (const status of value.statuses) {
       await db
         .update(messageLog)
-        .set({ status: mapMetaStatus(status.status), metadata: { status_timestamp: status.timestamp } })
+        .set({
+          status: mapMetaStatus(status.status),
+          metadata: { status_timestamp: status.timestamp },
+        })
         .where(eq(messageLog.providerMessageId, status.id));
     }
   }

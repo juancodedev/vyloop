@@ -45,8 +45,31 @@ const mockCreateEnvelope = vi.fn((type, header, payload) => ({
 vi.mock('@vyloop/db', () => ({
   createDb: vi.fn(() => dbMock),
   setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
-  customers: { id: 'customers', businessId: 'business_id', globalId: 'global_id', fullName: 'full_name', phone: 'phone', email: 'email', birthDate: 'birth_date', lastVisitAt: 'last_visit_at', metadata: 'metadata', createdAt: 'created_at' },
-  workflows: { id: 'workflows', businessId: 'business_id', name: 'name', triggerEvent: 'trigger_event', conditions: 'conditions', actions: 'actions', isActive: 'is_active', config: 'config' },
+  // The authoritative consent store. The gate reads the customer's consents from
+  // here, so the mock is what decides whether a workflow may dispatch.
+  readConsentMap: vi.fn(async () => ({ whatsapp: true })),
+  customers: {
+    id: 'customers',
+    businessId: 'business_id',
+    globalId: 'global_id',
+    fullName: 'full_name',
+    phone: 'phone',
+    email: 'email',
+    birthDate: 'birth_date',
+    lastVisitAt: 'last_visit_at',
+    metadata: 'metadata',
+    createdAt: 'created_at',
+  },
+  workflows: {
+    id: 'workflows',
+    businessId: 'business_id',
+    name: 'name',
+    triggerEvent: 'trigger_event',
+    conditions: 'conditions',
+    actions: 'actions',
+    isActive: 'is_active',
+    config: 'config',
+  },
 }));
 
 vi.mock('@vyloop/event-bus', () => ({
@@ -93,7 +116,8 @@ describe('Birthday cron handler', () => {
     // Second call: db.select().from(workflows) returns active birthday workflows
     dbMock.select
       .mockReturnValueOnce(
-        chain([{
+        chain([
+          {
           id: 'wf-1',
           businessId: 'biz-1',
           name: 'Birthday wishes',
@@ -102,20 +126,23 @@ describe('Birthday cron handler', () => {
           actions: [{ type: 'send_whatsapp', config: { template_name: 'birthday_greeting' } }],
           isActive: true,
           config: { timezone: 'America/Santiago' },
-        }]),
+          },
+        ]),
       )
       // Third call: db.select().from(customers) returns customer with birthday today
       .mockReturnValueOnce(
-        chain([{
+        chain([
+          {
           id: 'cust-1',
           globalId: 'global-1',
           fullName: 'Test User',
           phone: '56912345678',
           email: 'test@test.com',
           birthDate: `${todayMonth}-${todayDay}`,
-          metadata: { consent: { whatsapp: true } },
+
           createdAt: '2024-01-01',
-        }]),
+          },
+        ]),
       );
 
     const { handleBirthdayCron } = await import('./cron-handler');
@@ -154,28 +181,37 @@ describe('Inactivity cron handler', () => {
     // Second call: db.select().from(workflows) returns active inactivity workflows
     dbMock.select
       .mockReturnValueOnce(
-        chain([{
+        chain([
+          {
           id: 'wf-2',
           businessId: 'biz-1',
           name: 'Re-engagement',
           triggerEvent: 'inactivity',
           conditions: [],
-          actions: [{ type: 'send_whatsapp', config: { template_name: 'come_back', inactivity_days: 30 } }],
+            actions: [
+              {
+                type: 'send_whatsapp',
+                config: { template_name: 'come_back', inactivity_days: 30 },
+              },
+            ],
           isActive: true,
-        }]),
+          },
+        ]),
       )
       // Third call: db.select().from(customers) returns inactive customer
       .mockReturnValueOnce(
-        chain([{
+        chain([
+          {
           id: 'cust-1',
           globalId: 'global-1',
           fullName: 'Inactive User',
           phone: '56912345678',
           email: 'inactive@test.com',
           lastVisitAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString(),
-          metadata: { consent: { whatsapp: true } },
+
           createdAt: '2024-01-01',
-        }]),
+          },
+        ]),
       );
 
     const { handleInactivityCron } = await import('./cron-handler');

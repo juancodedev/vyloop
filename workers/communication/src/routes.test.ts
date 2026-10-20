@@ -15,11 +15,10 @@ function createQueryChain<T>(resolveValue: T) {
     select: () => chain,
     values: () => chain,
     set: () => chain,
-    returning: vi.fn().mockResolvedValue(
-      Array.isArray(resolveValue) ? resolveValue : [resolveValue],
-    ),
-    then: (onfulfilled: (v: any) => unknown) =>
-      Promise.resolve(resolveValue).then(onfulfilled),
+    returning: vi
+      .fn()
+      .mockResolvedValue(Array.isArray(resolveValue) ? resolveValue : [resolveValue]),
+    then: (onfulfilled: (v: any) => unknown) => Promise.resolve(resolveValue).then(onfulfilled),
     execute: vi.fn().mockResolvedValue({ rows: [] }),
   };
   return chain;
@@ -28,6 +27,11 @@ function createQueryChain<T>(resolveValue: T) {
 // ---------------------------------------------------------------------------
 // DB Mock — include setCurrentBusinessId used by withRls
 // ---------------------------------------------------------------------------
+
+/** The mocked consent store, so a test can decide what the customer agreed to. */
+const { readConsentMap } = (await import('@vyloop/db')) as unknown as {
+  readConsentMap: ReturnType<typeof vi.fn>;
+};
 
 const dbMock: any = {
   insert: vi.fn(() => createQueryChain({ id: 'mock-id' })),
@@ -39,6 +43,9 @@ const dbMock: any = {
 vi.mock('@vyloop/db', () => ({
   createDb: vi.fn(() => dbMock),
   setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+  // The authoritative consent store. The route reads the customer's consents
+  // from here, so the mock is what decides whether a message may be sent.
+  readConsentMap: vi.fn(async () => ({ whatsapp: true })),
   messageLog: 'message_log',
   whatsappTemplates: 'whatsapp_templates',
   customers: 'customers',
@@ -129,10 +136,9 @@ describe('POST /v1/communication/send', () => {
     expect(body.error.message).toContain('required');
   });
 
-  it('rejects 409 if customer has no WhatsApp consent', async () => {
-    dbMock.select.mockReturnValue(
-      createQueryChain([{ id: 'cust-1', phone: '56912345678', metadata: {} }]),
-    );
+  it('rejects 403 if customer has no WhatsApp consent', async () => {
+    dbMock.select.mockReturnValue(createQueryChain([{ id: 'cust-1', phone: '56912345678' }]));
+    readConsentMap.mockResolvedValueOnce({});
 
     const res = await mockFetch({
       path: '/v1/communication/send',
@@ -141,21 +147,38 @@ describe('POST /v1/communication/send', () => {
       body: { customer_id: 'cust-1', template_name: 'welcome' },
     });
 
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(403);
     const body: any = await res.json();
     expect(body.error.message).toContain('consent');
   });
 
+  it('rejects 403 if the WhatsApp consent was withdrawn', async () => {
+    // A withdrawn consent is not a granted one. The store says so with
+    // `granted = false`, and the gate has to honour that rather than treating
+    // "a row exists" as consent.
+    dbMock.select.mockReturnValue(createQueryChain([{ id: 'cust-1', phone: '56912345678' }]));
+    readConsentMap.mockResolvedValueOnce({ whatsapp: false });
+
+    const res = await mockFetch({
+      path: '/v1/communication/send',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: { customer_id: 'cust-1', template_name: 'welcome' },
+    });
+
+    expect(res.status).toBe(403);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('CONSENT_REQUIRED');
+  });
+
   it('returns 202 on valid send request', async () => {
     dbMock.select
-      .mockReturnValueOnce(
-        createQueryChain([
-          { id: 'cust-1', phone: '56912345678', metadata: { consent: { whatsapp: true } } },
-        ]),
-      )
+      .mockReturnValueOnce(createQueryChain([{ id: 'cust-1', phone: '56912345678' }]))
       .mockReturnValueOnce(createQueryChain([]));
     dbMock.insert.mockReturnValue(
-      createQueryChain([{ id: 'msg-1', status: 'queued', businessId: 'biz-1', customerId: 'cust-1' }]),
+      createQueryChain([
+        { id: 'msg-1', status: 'queued', businessId: 'biz-1', customerId: 'cust-1' },
+      ]),
     );
 
     const res = await mockFetch({
@@ -198,7 +221,16 @@ describe('GET /v1/communication/templates', () => {
 describe('POST /v1/communication/templates', () => {
   it('creates template with valid input', async () => {
     dbMock.insert.mockReturnValue(
-      createQueryChain([{ id: 'tpl-1', name: 'test', language: 'es', category: 'utility', body: 'test body', status: 'pending' }]),
+      createQueryChain([
+        {
+          id: 'tpl-1',
+          name: 'test',
+          language: 'es',
+          category: 'utility',
+          body: 'test body',
+          status: 'pending',
+        },
+      ]),
     );
 
     const res = await mockFetch({
@@ -294,18 +326,24 @@ describe('POST /webhook — Meta callbacks', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: {
-        entry: [{
-          changes: [{
+        entry: [
+          {
+            changes: [
+              {
             value: {
               metadata: { phone_number_id: '123' },
-              statuses: [{
+                  statuses: [
+                    {
                 id: 'wamid-abc123',
                 status: 'delivered',
                 timestamp: String(Math.floor(Date.now() / 1000)),
-              }],
             },
-          }],
-        }],
+                  ],
+                },
+              },
+            ],
+          },
+        ],
       },
     });
 
@@ -323,20 +361,26 @@ describe('POST /webhook — Meta callbacks', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: {
-        entry: [{
-          changes: [{
+        entry: [
+          {
+            changes: [
+              {
             value: {
               metadata: { phone_number_id: '123' },
-              messages: [{
+                  messages: [
+                    {
                 from: '56912345678',
                 id: 'wamid-incoming',
                 text: { body: 'Hello!' },
                 type: 'text',
                 timestamp: String(Math.floor(Date.now() / 1000)),
-              }],
             },
-          }],
-        }],
+                  ],
+                },
+              },
+            ],
+          },
+        ],
       },
     });
 
@@ -353,20 +397,26 @@ describe('POST /webhook — Meta callbacks', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: {
-        entry: [{
-          changes: [{
+        entry: [
+          {
+            changes: [
+              {
             value: {
               metadata: { phone_number_id: '123' },
-              messages: [{
+                  messages: [
+                    {
                 from: '56999999999',
                 id: 'wamid-unknown',
                 text: { body: 'Who dis?' },
                 type: 'text',
                 timestamp: String(Math.floor(Date.now() / 1000)),
-              }],
             },
-          }],
-        }],
+                  ],
+                },
+              },
+            ],
+          },
+        ],
       },
     });
 

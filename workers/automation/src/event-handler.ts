@@ -1,5 +1,5 @@
 import type { Message } from '@cloudflare/workers-types';
-import { createDb, customers, workflows } from '@vyloop/db';
+import { createDb, customers, workflows, readConsentMap } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { WHATSAPP_OUTBOUND_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { eq, and } from 'drizzle-orm';
@@ -40,8 +40,17 @@ export async function handleEvent(
 
 /**
  * Build customer data map for condition evaluation.
+ *
+ * The `consent` entry is assembled from the authoritative store — the
+ * `consents` table — and not from a flag in the customer's metadata, which had
+ * no writer and could say neither when the agreement began nor when it was
+ * withdrawn. It is what makes `consent.whatsapp` the field path a workflow
+ * author writes.
  */
-function buildCustomerData(customer: Record<string, unknown>): Record<string, unknown> {
+function buildCustomerData(
+  customer: Record<string, unknown>,
+  consents: Record<string, boolean> = {},
+): Record<string, unknown> {
   return {
     id: customer.id,
     global_id: customer.globalId,
@@ -51,16 +60,19 @@ function buildCustomerData(customer: Record<string, unknown>): Record<string, un
     birth_date: customer.birthDate,
     last_visit_at: customer.lastVisitAt,
     metadata: customer.metadata ?? {},
+    consent: consents,
   };
 }
 
 /**
  * Check if a customer has consented to WhatsApp messaging.
+ *
+ * Takes the consent map, which is also what the evaluation context is built
+ * from — so the implicit filter and a workflow's own `consent.whatsapp`
+ * condition cannot answer from two different places.
  */
-function hasWhatsAppConsent(customer: Record<string, unknown>): boolean {
-  const metadata = (customer.metadata ?? {}) as Record<string, unknown>;
-  const consent = (metadata.consent ?? {}) as Record<string, unknown>;
-  return consent.whatsapp === true;
+function hasWhatsAppConsent(consents: Record<string, boolean>): boolean {
+  return consents.whatsapp === true;
 }
 
 /**
@@ -129,9 +141,7 @@ async function handleCustomerRegistered(
   const [customer] = await db
     .select()
     .from(customers)
-    .where(
-      and(eq(customers.businessId, businessId), eq(customers.globalId, customerGlobalId)),
-    )
+    .where(and(eq(customers.businessId, businessId), eq(customers.globalId, customerGlobalId)))
     .limit(1);
 
   if (!customer) {
@@ -158,21 +168,49 @@ async function handleCustomerRegistered(
     return;
   }
 
-  const customerData = buildCustomerData(customer as unknown as Record<string, unknown>);
+  // The customer's consents, from the authoritative store. The gate and the
+  // context are built from the same read, so they cannot disagree.
+  const consents = await readConsentMap(db, {
+    businessId,
+    customerId: customer.id as string,
+  });
+
+  // Consent check.
+  //
+  // This path had no gate, and it is the one that needed it most: the
+  // registration flow is where a customer says whether they agree to be
+  // contacted, and the workflow it usually triggers is the welcome message. A
+  // welcome sent to someone who declined is the failure the consent is
+  // supposed to prevent.
+  if (!hasWhatsAppConsent(consents)) {
+    console.log(
+      `[automation] Customer ${customerGlobalId} has no WhatsApp consent — skipping CustomerRegistered`,
+    );
+    return;
+  }
+
+  const customerData = buildCustomerData(customer as unknown as Record<string, unknown>, consents);
   const customerInternalId = customer.id;
 
   // Process each matched workflow
   for (const workflow of activeWorkflows) {
     if (!workflowConditionsPass(workflow as unknown as Record<string, unknown>, customerData)) {
-      console.log(`[automation] Workflow ${workflow.id} conditions not met for customer ${customerInternalId}`);
+      console.log(
+        `[automation] Workflow ${workflow.id} conditions not met for customer ${customerInternalId}`,
+      );
       continue;
     }
 
-    const actions = (workflow.actions ?? []) as Array<{ type: string; config?: Record<string, unknown> }>;
+    const actions = (workflow.actions ?? []) as Array<{
+      type: string;
+      config?: Record<string, unknown>;
+    }>;
 
     for (const action of actions) {
       if (action.type !== 'send_whatsapp') {
-        console.log(`[automation] Unknown action type ${action.type} in workflow ${workflow.id} — skipping`);
+        console.log(
+          `[automation] Unknown action type ${action.type} in workflow ${workflow.id} — skipping`,
+        );
         continue;
       }
 
@@ -253,9 +291,7 @@ async function handlePointsAssigned(
   const [customer] = await db
     .select()
     .from(customers)
-    .where(
-      and(eq(customers.businessId, businessId), eq(customers.id, customerId)),
-    )
+    .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
     .limit(1);
 
   if (!customer) {
@@ -263,9 +299,14 @@ async function handlePointsAssigned(
     return;
   }
 
+  // The customer's consents, from the authoritative store.
+  const consents = await readConsentMap(db, { businessId, customerId: customer.id as string });
+
   // Consent check
-  if (!hasWhatsAppConsent(customer as unknown as Record<string, unknown>)) {
-    console.log(`[automation] Customer ${customerId} has no WhatsApp consent — skipping PointsAssigned`);
+  if (!hasWhatsAppConsent(consents)) {
+    console.log(
+      `[automation] Customer ${customerId} has no WhatsApp consent — skipping PointsAssigned`,
+    );
     return;
   }
 
@@ -285,7 +326,7 @@ async function handlePointsAssigned(
     return;
   }
 
-  const customerData = buildCustomerData(customer as unknown as Record<string, unknown>);
+  const customerData = buildCustomerData(customer as unknown as Record<string, unknown>, consents);
   // Add points data for condition evaluation
   customerData.total_points = payload.total_points;
 
@@ -294,7 +335,10 @@ async function handlePointsAssigned(
       continue;
     }
 
-    const actions = (workflow.actions ?? []) as Array<{ type: string; config?: Record<string, unknown> }>;
+    const actions = (workflow.actions ?? []) as Array<{
+      type: string;
+      config?: Record<string, unknown>;
+    }>;
 
     for (const action of actions) {
       if (action.type !== 'send_whatsapp') continue;
@@ -383,9 +427,7 @@ async function handleRewardRedeemed(
   const [customer] = await db
     .select()
     .from(customers)
-    .where(
-      and(eq(customers.businessId, businessId), eq(customers.id, customerId)),
-    )
+    .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
     .limit(1);
 
   if (!customer) {
@@ -393,9 +435,14 @@ async function handleRewardRedeemed(
     return;
   }
 
+  // The customer's consents, from the authoritative store.
+  const consents = await readConsentMap(db, { businessId, customerId: customer.id as string });
+
   // Consent check
-  if (!hasWhatsAppConsent(customer as unknown as Record<string, unknown>)) {
-    console.log(`[automation] Customer ${customerId} has no WhatsApp consent — skipping RewardRedeemed`);
+  if (!hasWhatsAppConsent(consents)) {
+    console.log(
+      `[automation] Customer ${customerId} has no WhatsApp consent — skipping RewardRedeemed`,
+    );
     return;
   }
 
@@ -415,7 +462,7 @@ async function handleRewardRedeemed(
     return;
   }
 
-  const customerData = buildCustomerData(customer as unknown as Record<string, unknown>);
+  const customerData = buildCustomerData(customer as unknown as Record<string, unknown>, consents);
   customerData.reward_name = payload.reward_name;
 
   for (const workflow of activeWorkflows) {
@@ -423,7 +470,10 @@ async function handleRewardRedeemed(
       continue;
     }
 
-    const actions = (workflow.actions ?? []) as Array<{ type: string; config?: Record<string, unknown> }>;
+    const actions = (workflow.actions ?? []) as Array<{
+      type: string;
+      config?: Record<string, unknown>;
+    }>;
 
     for (const action of actions) {
       if (action.type !== 'send_whatsapp') continue;
@@ -434,7 +484,9 @@ async function handleRewardRedeemed(
       if (firstRedeemOnly) {
         // We could check redemption history here
         // For now, we always pass through and let the condition handle filtering
-        console.log(`[automation] RewardRedeemed: first_redeem filter configured for workflow ${workflow.id}`);
+        console.log(
+          `[automation] RewardRedeemed: first_redeem filter configured for workflow ${workflow.id}`,
+        );
       }
 
       const outbound = buildOutboundPayload(
