@@ -58,3 +58,9 @@ next-env.d.ts
 /*-*.json
 /*service*account*.json
 *service*account*.json
+
+# The Engram memory export is a migration artifact, not source. It carries
+# credentials from the machine that produced it, and it is regenerated on
+# demand with `engram export`.
+engram-vyloop-export.json
+*-export.json
