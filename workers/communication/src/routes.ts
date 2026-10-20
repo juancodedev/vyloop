@@ -263,22 +263,34 @@ router.post('/v1/communication/templates', async (c) => {
  * GET /v1/communication/history
  *
  * Paginated message log for the current business.
- * Supports ?customer_id=, ?status= filters.
+ * Supports ?customer_id=, ?status=, ?channel= filters.
+ *
+ * ## The channel filter
+ *
+ * The channel is optional, and when it is absent every channel is returned.
+ *
+ * It used to be `channel = 'whatsapp'` in hardcode, which made a push delivery
+ * invisible in the history of the very business it was delivered for. A
+ * delivery nobody can see is a delivery that did not happen, so the filter is
+ * a filter now: name a channel and only that one comes back, name none and
+ * they all do.
  */
 router.get('/v1/communication/history', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const customerId = c.req.query('customer_id');
   const statusFilter = c.req.query('status');
+  const channelFilter = c.req.query('channel');
   const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10) || 1);
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
 
-  const conditions: ReturnType<typeof and>[] = [
-    eq(messageLog.businessId, businessId),
-    eq(messageLog.channel, 'whatsapp'),
-  ];
+  const conditions: ReturnType<typeof and>[] = [eq(messageLog.businessId, businessId)];
+
+  if (channelFilter) {
+    conditions.push(eq(messageLog.channel, channelFilter));
+  }
 
   if (customerId) {
     conditions.push(eq(messageLog.customerId, customerId));

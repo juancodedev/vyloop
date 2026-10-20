@@ -256,6 +256,82 @@ describe('POST /v1/communication/push/subscribe', () => {
     expect(res.status).toBe(400);
     expect(upsertPushSubscription).not.toHaveBeenCalled();
   });
+
+  it('refuses an endpoint longer than the cap', async () => {
+    // The endpoint is a `text` column, and `text` is unbounded. A ten
+    // megabyte endpoint is a storage-abuse vector, not a browser.
+    const endpoint = `https://fcm.googleapis.com/fcm/send/${'a'.repeat(3000)}`;
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/subscribe',
+      method: 'POST',
+      headers: customerHeaders(),
+      body: { subscription: { endpoint, keys: { p256dh: 'public-key', auth: 'auth-secret' } } },
+    });
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    // And nothing was written.
+    expect(upsertPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('refuses an endpoint that is not an https URL', async () => {
+    for (const endpoint of [
+      'http://fcm.googleapis.com/fcm/send/abc123',
+      'ftp://example.test/send/abc123',
+      'not a url at all',
+    ]) {
+      upsertPushSubscription.mockClear();
+
+      const res = await mockFetch({
+        path: '/v1/communication/push/subscribe',
+        method: 'POST',
+        headers: customerHeaders(),
+        body: { subscription: { endpoint, keys: { p256dh: 'public-key', auth: 'auth-secret' } } },
+      });
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      // And nothing was written.
+      expect(upsertPushSubscription).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses a customer who already holds more subscriptions than the cap', async () => {
+    // Unbounded registration is a storage-abuse vector: the endpoint is
+    // attacker-controlled input.
+    readPushSubscriptions.mockResolvedValue(
+      Array.from({ length: 11 }, (_, index) => ({
+        id: `sub-${index}`,
+        businessId: 'biz-1',
+        customerId: 'cust-1',
+        endpoint: `https://fcm.googleapis.com/fcm/send/${index}`,
+        p256dh: 'public-key',
+        auth: 'auth-secret',
+        userAgent: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        lastSeenAt: new Date('2026-01-01T00:00:00.000Z'),
+      })),
+    );
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/subscribe',
+      method: 'POST',
+      headers: customerHeaders(),
+      body: VALID_SUBSCRIPTION,
+    });
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('TOO_MANY_SUBSCRIPTIONS');
+    // And nothing was written.
+    expect(upsertPushSubscription).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /v1/communication/push/unsubscribe', () => {

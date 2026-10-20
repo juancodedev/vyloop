@@ -4,10 +4,11 @@ import {
   deletePushSubscriptionByEndpoint,
   hashPushEndpoint,
   messageLog,
+  pushSubscriptions,
   readConsentMap,
   readPushSubscriptions,
 } from '@vyloop/db';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
 import { withRls } from './helpers';
@@ -136,10 +137,23 @@ export async function deliverPushNotification(
   await withRls(db, businessId);
 
   // The customer, by the global id the event carries.
+  //
+  // The soft-deleted are excluded here. Deleting a customer in this platform
+  // is an `UPDATE` of `deleted_at` and not a `DELETE`, so the row is still
+  // there to be found — and the `ON DELETE CASCADE` on
+  // `push_subscriptions.customer_id` never fires. A customer who asked to be
+  // forgotten must not be pushed at, and the row that says they were forgotten
+  // is the only thing that knows.
   const [customer] = await db
     .select({ id: customers.id })
     .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.globalId, payload.customer_id)))
+    .where(
+      and(
+        eq(customers.businessId, businessId),
+        eq(customers.globalId, payload.customer_id),
+        isNull(customers.deletedAt),
+      ),
+    )
     .limit(1);
 
   if (!customer) {
@@ -178,6 +192,41 @@ export async function deliverPushNotification(
   for (const subscription of subscriptions) {
     const endpointHash = await hashPushEndpoint(subscription.endpoint);
 
+    // The reference names one delivery, not one message.
+    //
+    // The producer's reference says *what* was sent — a campaign, a promotion —
+    // and the same string is handed to every browser a customer registered. On
+    // its own it cannot tell two deliveries apart. The subscription's id is the
+    // other half, and the two together are what identifies the delivery: a
+    // campaign's rows all begin with the campaign's reference, and a campaign
+    // that names one subscriber does not block the others.
+    const referenceId = payload.reference_id
+      ? `${payload.reference_id}:${subscription.id}`
+      : subscription.id;
+
+    // A delivery already decided is not made again. A queue retry redelivers
+    // the whole event — a campaign whose tenth subscriber answered `429` comes
+    // back for all ten — and an operator can compose the same campaign twice
+    // before the first one's rows exist. Either way, a browser that already
+    // received this reference, or refused it for good, is skipped. A row still
+    // `queued` is an attempt that never finished, and is attempted again.
+    if (payload.reference_id) {
+      const [decided] = await db
+        .select({ id: messageLog.id })
+        .from(messageLog)
+        .where(
+          and(
+            eq(messageLog.businessId, businessId),
+            eq(messageLog.channel, 'push'),
+            sql`${messageLog.content}->>'reference_id' = ${referenceId}`,
+            inArray(messageLog.status, ['sent', 'failed']),
+          ),
+        )
+        .limit(1);
+
+      if (decided) continue;
+    }
+
     // One row per delivery. The message is delivered once per browser, and
     // each of those has its own outcome, so each of those is its own row.
     const [logEntry] = await db
@@ -193,7 +242,7 @@ export async function deliverPushNotification(
           title: payload.title,
           body: payload.body,
           url: payload.url ?? '/',
-          reference_id: payload.reference_id ?? null,
+          reference_id: referenceId,
         },
       })
       .returning();
@@ -237,6 +286,20 @@ export async function deliverPushNotification(
       );
       throw err;
     }
+
+    // The registration was answered, so it is alive.
+    //
+    // The freshness of a subscription is what keeps it: a registration nobody
+    // has heard from for months is a browser that was uninstalled, or a site
+    // whose data was cleared, and the sweep prunes it. A delivery attempt is
+    // the proof that it is still there — and it is proof even when the delivery
+    // failed, because a push service that answers "no" has still reached the
+    // browser. So the moment the outcome is decided is the moment the
+    // registration is refreshed.
+    await db
+      .update(pushSubscriptions)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(pushSubscriptions.id, subscription.id));
 
     if (attempt.kind === 'delivered') {
       delivered += 1;

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import type { WalletWorker } from './helpers';
+import type { CommunicationWorker, WalletWorker } from './helpers';
 
 import { scheduled } from './index';
 
@@ -22,9 +22,16 @@ vi.mock('./cron-handler', () => ({
   handleInactivityCron,
 }));
 
-function makeEnv(wallet: Partial<WalletWorker> = {}): { WALLET: WalletWorker; DATABASE_URL: string } {
+function makeEnv(
+  wallet: Partial<WalletWorker> = {},
+  communication: Partial<CommunicationWorker> = {},
+): { WALLET: WalletWorker; COMMUNICATION: CommunicationWorker; DATABASE_URL: string } {
   return {
     DATABASE_URL: 'postgres://test',
+    COMMUNICATION: {
+      scheduled: vi.fn(async () => undefined),
+      ...communication,
+    } as CommunicationWorker,
     WALLET: {
       scheduled: vi.fn(async () => undefined),
       deactivateInactivePasses: vi.fn(async () => undefined),
@@ -173,5 +180,51 @@ describe('scheduled', () => {
     await expect(scheduled(undefined, env)).resolves.toBeUndefined();
     expect(handleBirthdayCron).toHaveBeenCalled();
     expect(handleInactivityCron).toHaveBeenCalled();
+  });
+
+  it('runs the push subscription sweep over the communication binding, last', async () => {
+    // The sweep has no cron trigger of its own: the account's five are taken.
+    const order: string[] = [];
+    handleBirthdayCron.mockImplementation(async () => {
+      order.push('birthday');
+    });
+    handleInactivityCron.mockImplementation(async () => {
+      order.push('inactivity-cron');
+    });
+    const env = makeEnv(
+      {
+        scheduled: vi.fn(async () => {
+          order.push('sweep');
+        }),
+        deactivateInactivePasses: vi.fn(async () => {
+          order.push('inactivity');
+        }),
+      } as Partial<WalletWorker>,
+      {
+        scheduled: vi.fn(async () => {
+          order.push('subscriptions');
+        }),
+      },
+    );
+
+    await scheduled(undefined, env as never);
+
+    expect(env.COMMUNICATION.scheduled).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['birthday', 'inactivity-cron', 'sweep', 'inactivity', 'subscriptions']);
+  });
+
+  it('does not throw when the subscription sweep fails', async () => {
+    const env = makeEnv(
+      {},
+      {
+        scheduled: vi.fn(async () => {
+          throw new Error('communication is down');
+        }),
+      },
+    );
+
+    await expect(scheduled(undefined, env as never)).resolves.toBeUndefined();
+    expect(handleBirthdayCron).toHaveBeenCalledTimes(1);
+    expect(env.WALLET.scheduled).toHaveBeenCalledTimes(1);
   });
 });
