@@ -193,11 +193,20 @@ describe('observe', () => {
     });
   });
 
+  it('refuses a connection string whose TLS meaning is scheduled to weaken', async () => {
+    // `require` still verifies the certificate today, but pg-connection-string
+    // documents that v3 will treat it as libpq's weaker mode. Refusing now keeps
+    // the gate honest across that bump.
+    await expect(
+      observe('postgres://user:pass@127.0.0.1:1/nope?sslmode=require'),
+    ).rejects.toThrow(/sslmode must be verify-full/);
+  });
+
   it('fails closed on an unreachable database instead of returning a clean report', async () => {
     // Port 1 is reserved and nothing listens on it, so the connection genuinely
     // fails rather than reaching a real database. Without a timeout this would hang
     // rather than fail, which is why one is passed.
-    const result = await observe('postgres://user:pass@127.0.0.1:1/nope', {
+    const result = await observe('postgres://user:pass@127.0.0.1:1/nope?sslmode=verify-full', {
       connectTimeoutMs: 2_000,
     });
 

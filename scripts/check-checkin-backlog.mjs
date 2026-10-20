@@ -59,6 +59,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 
+import { assertVerifiedTls } from './lib/database-url.mjs';
+
 const DEV_VARS_CANDIDATES = [
   'workers/growth/.dev.vars',
   'apps/gateway/.dev.vars',
@@ -117,6 +119,10 @@ function resolveUrl() {
 
 export async function observe(url, { connectTimeoutMs = 10_000 } = {}) {
   if (!url) return { reachable: false, error: 'DATABASE_URL is not set' };
+
+  // Before the pool, not after: a URL whose TLS meaning changes with a
+  // dependency bump is the thing this gate exists to notice.
+  assertVerifiedTls(url);
 
   const require = createRequire(join(process.cwd(), 'packages/db/package.json'));
   const { Pool } = require('pg');

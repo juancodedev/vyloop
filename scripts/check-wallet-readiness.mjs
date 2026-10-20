@@ -16,6 +16,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
+import { assertVerifiedTls, isProductionHost } from './lib/database-url.mjs';
+
 // ---------------------------------------------------------------------------
 // The gates
 // ---------------------------------------------------------------------------
@@ -438,7 +440,33 @@ export function readDevVarsDatabaseUrl(devVarsPath) {
 async function databaseFacts() {
   const url =
     process.env.DATABASE_URL ?? readDevVarsDatabaseUrl('apps/gateway/.dev.vars');
-  if (!url) return { known: false, migrationApplied: false, reviewStatus: null, slug: null };
+  if (!url) {
+    return {
+      known: false,
+      migrationApplied: false,
+      reviewStatus: null,
+      slug: null,
+      reason: 'no DATABASE_URL in this shell',
+    };
+  }
+
+  // A local Neon branch does not get a CA setup here, so the report keeps the
+  // unverified pool below. The production host is the exception: it holds real
+  // passes, and "it connected" must not mean "it connected to whatever answered".
+  const production = isProductionHost(url);
+  if (production) {
+    try {
+      assertVerifiedTls(url);
+    } catch (error) {
+      return {
+        known: false,
+        migrationApplied: false,
+        reviewStatus: null,
+        slug: null,
+        reason: error.message,
+      };
+    }
+  }
 
   try {
     // `pg` is a dependency of packages/db, not of the repository root, so a
@@ -451,7 +479,7 @@ async function databaseFacts() {
     const pool = new Pool({
       connectionString: url,
       max: 1,
-      ssl: { rejectUnauthorized: false },
+      ...(production ? {} : { ssl: { rejectUnauthorized: false } }),
       connectionTimeoutMillis: 10_000,
     });
 
@@ -573,7 +601,7 @@ async function main() {
   }
   if (!database.known) {
     process.stdout.write(
-      '  note: no DATABASE_URL in this shell, so the class and table checks could not run.\n',
+      `  note: ${database.reason ?? 'no DATABASE_URL in this shell'}, so the class and table checks could not run.\n`,
     );
   }
   if (!programPage.known) {

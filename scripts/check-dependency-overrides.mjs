@@ -729,6 +729,17 @@ export function readOverrides(packageJsonText) {
   return parsed?.pnpm?.overrides;
 }
 
+/**
+ * The `--list-inert` output: one entry per line, `overrideKey` and, when it has
+ * one, the selector. The exit code is the gate's, so a caller can list the
+ * candidates and still fail the build for the real violations.
+ */
+export function formatInertList(inert) {
+  return inert
+    .map(({ overrideKey, selector }) => (selector ? `${overrideKey}\t${selector}` : overrideKey))
+    .join('\n');
+}
+
 /** A flag's value, or the default. Enough for the two paths this gate needs. */
 function flagValue(argv, flag, fallback) {
   const at = argv.indexOf(flag);
@@ -774,6 +785,15 @@ export async function main(argv = []) {
   }
 
   const gate = checkOverrides({ overrides, lockfileText });
+
+  // `--list-inert` is a report, not a second mode: the exit code stays the
+  // gate's. It exists so the one-off cleanup can name its candidates without
+  // parsing the human report.
+  if (argv.includes('--list-inert')) {
+    process.stdout.write(`${formatInertList(gate.inert)}\n`);
+    return gate.exitCode;
+  }
+
   process.stdout.write(formatReport(gate));
   process.stdout.write(`  read overrides from ${packageJsonPath}\n`);
   process.stdout.write(`  read resolutions from ${lockfilePath}\n\n`);
