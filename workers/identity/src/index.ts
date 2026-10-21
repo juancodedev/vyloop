@@ -1,7 +1,7 @@
 import type { MessageBatch } from '@cloudflare/workers-types';
 import { checkPasswordPolicy, createDb, hashPassword, schema, verifyPassword } from '@vyloop/db';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
-import { getRequestId, logPrefix, requestIdMiddleware } from '@vyloop/request-context';
+import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
 import { and, eq } from 'drizzle-orm';
 import type { Context } from 'hono';
@@ -1279,14 +1279,7 @@ app.notFound((c) => {
 // Error handler
 // ---------------------------------------------------------------------------
 
-app.onError((err, c) => {
-  const requestId = getRequestId(c);
-  console.error(`${logPrefix('identity', requestId)} ${c.req.method} ${new URL(c.req.url).pathname}:`, err);
-  return c.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error', request_id: requestId } },
-    500,
-  );
-});
+app.onError(createErrorHandler('identity'));
 
 // ---------------------------------------------------------------------------
 // Queue consumer — TestEvent handler
