@@ -65,8 +65,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       lucide-react:
-        specifier: ^1.58.0
-        version: 1.58.0(@types/react@19.2.17)(react@19.3.0)
+        specifier: ^1.59.0
+        version: 1.59.0(@types/react@19.2.17)(react@19.3.0)
       next:
         specifier: ^16.3.8
         version: 16.3.8(@types/node@26.6.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -129,8 +129,8 @@ importers:
         specifier: ^2.3.8
         version: 2.3.8
       lucide-react:
-        specifier: ^1.58.0
-        version: 1.58.0(@types/react@19.2.17)(react@19.3.0)
+        specifier: ^1.59.0
+        version: 1.59.0(@types/react@19.2.17)(react@19.3.0)
       next:
         specifier: ^16.3.8
         version: 16.3.8(@types/node@26.6.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -2857,8 +2857,8 @@ packages:
     peerDependencies:
       react: 19.3.0
 
-  lucide-react@1.58.0:
-    resolution: {integrity: sha512-hXaFNm6mk6QVtBnDGBn1YAs8j2tGUk0A4s/CpclIcczfxeXiW1rdOLVo6zCsoIih9XXsGvDODQerl749a2n7bA==}
+  lucide-react@1.59.0:
+    resolution: {integrity: sha512-5qgMyyCPU6OvnKpLS2t693+ZtiqA8oaSweWoUows0BLFKFf6V75m4+CptpmohZHpD5IuOVIBXHBBiv2vpLJmtw==}
     peerDependencies:
       '@types/react': '*'
       react: 19.3.0
@@ -5787,7 +5787,7 @@ snapshots:
     dependencies:
       react: 19.3.0
 
-  lucide-react@1.58.0(@types/react@19.2.17)(react@19.3.0):
+  lucide-react@1.59.0(@types/react@19.2.17)(react@19.3.0):
     dependencies:
       react: 19.3.0
     optionalDependencies:
