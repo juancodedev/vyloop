@@ -33,7 +33,7 @@ When the auto-grant in `handlePointsAssigned` grants a reward that has at least 
 
 A grant of a reward with no venue scope MUST NOT publish `RewardAvailableAtBranch`. A grant skipped because the customer already holds the reward MUST NOT publish it.
 
-Assumption (open question Q1): only the customer the reward was granted to is notified.
+Only the customer the reward was granted to is notified (Q1, answered 2026-10-20). A broadcast to a venue's audience is a campaign and MUST NOT be produced here.
 
 #### Scenario: A scoped reward is granted
 

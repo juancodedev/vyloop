@@ -1,6 +1,6 @@
 # Tasks: Branch Reward Trigger
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: in progress. Decisions answered 2026-10-20 (Unit 0).
 
 ## Review Workload Forecast
 
@@ -12,7 +12,7 @@
 | Suggested split         | Unit 0 (decisions) → Unit 1 (storage) → Unit 2 (reward API + UI) → Unit 3 (event) → Unit 4 (producer + delivery) |
 | Delivery strategy       | ask-on-risk                                                                        |
 
-Decision needed before apply: Yes (open questions Q1-Q6 in `proposal.md`)
+Decision needed before apply: No (Q1-Q6 answered 2026-10-20)
 Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
@@ -29,7 +29,7 @@ Chain strategy: stacked-to-main
 
 ## Unit 0: Decisions
 
-- [ ] 0.1 Answer Q1-Q6 in `proposal.md`; update the assumptions marked in `specs/growth-engine/spec.md` and `specs/push-notifications/spec.md` to the answers
+- [x] 0.1 Answer Q1-Q6 in `proposal.md`; update the assumptions marked in `specs/growth-engine/spec.md` and `specs/push-notifications/spec.md` to the answers
 
 ## Unit 1: Storage
 
@@ -58,7 +58,7 @@ Chain strategy: stacked-to-main
 - [ ] 4.1 `workers/growth/src/event-handler.ts` — select `globalId` with the customer (line ~230); after the `reward_grants` insert (line ~330), read the reward's `reward_branches`; when non-empty, publish `RewardAvailableAtBranch` to `env.DELIVERY_QUEUE` (log and skip, as the check-in route does, when the binding is absent)
 - [ ] 4.2 `workers/growth/src/helpers.ts` — `buildRewardAvailableAtBranchEvent` next to `buildRewardAutoGrantedEvent`
 - [ ] 4.3 `workers/growth/src/event-handler.test.ts` (new; the worker has no handler test today) — scoped grant publishes once to the delivery queue; unscoped grant does not; an existing grant does not; `RewardAutoGranted` is still published
-- [ ] 4.4 `workers/communication/src/reward-notifications.ts` — `handleRewardAvailableAtBranch`: frequency cap read on `message_log`, venue selection (most recent interaction within `INTERACTION_WINDOW_DAYS`, else first by name), Spanish title/body, then `deliverPushNotification` with `reference_id` `reward-grant:<grant_id>`
+- [ ] 4.4 `workers/communication/src/reward-notifications.ts` — `handleRewardAvailableAtBranch`: frequency cap read on `message_log`, Spanish title/body naming the reward and the venue name when scoped to exactly one venue or the venue count otherwise (Q5), then `deliverPushNotification` with `reference_id` `reward-grant:<grant_id>`
 - [ ] 4.5 `workers/communication/src/event-handler.ts` — dispatch `REWARD_AVAILABLE_AT_BRANCH`
 - [ ] 4.6 `workers/communication/src/reward-notifications.test.ts` and `event-handler.test.ts` — delivered with consent; not delivered without; redelivery sends once; frequency cap acks without sending; the body carries no balance
 - [ ] 4.7 `docs/19-Geolocalizacion-Notificaciones.md` — §7.4 marks `RewardAvailableAtBranch` as implemented, with the decisions from Unit 0
