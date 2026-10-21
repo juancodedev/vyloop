@@ -1,6 +1,7 @@
 # Proposal: API Surface Cleanup
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: Units 1, 2 and 4 done (2026-10-20). Unit 3 deferred: the Meta webhook
+> stays dormant until the product decision of 2026-10-08 is reversed.
 
 ## Intent
 
@@ -25,8 +26,8 @@ code or the docs and believes them:
 
 1. **`/v1/automation`**: keep the gateway prefix; make the automation worker's
    `/health` reachable without gateway headers.
-2. **Event ingestor**: an explicit decision between *retire* (recommended) and
-   *keep and fix*, and the work for the recommended option.
+2. **Event ingestor**: the decision between *retire* and *keep and fix*, and the
+   work for it. Decided 2026-10-20: **keep and fix**.
 3. **Meta webhook**: the specification of what enabling it requires, so the
    dormant state is a documented contract rather than a hidden 403.
 4. **`pos_terminals`**: the index `idx_pos_terminals_business` and the
@@ -55,8 +56,10 @@ None.
 ### Modified Capabilities
 
 - `api-gateway`: the `/v1/automation` namespace and the automation worker's
-  health probe; the removal of `/v1/events` from the route map.
-- `event-ingestor`: retired (recommended option).
+  health probe; the ingestor's move below the auth chain, with its route-map entry
+  unchanged.
+- `event-ingestor`: kept, and moved behind the gateway's auth with its tenant
+  taken from the token.
 - `communication-whatsapp`: the Meta webhook's real path, its public-path
   exemption, its verify token and its signature check.
 - `database`: the `pos_terminals` listing index.
@@ -95,13 +98,13 @@ reachable through tests and the exemption is still correct but unused.
 ### 2. Event ingestor: decision point, recommendation *retire*
 
 Evidence:
-- `apps/gateway/src/ingestor.ts:58` mounts `POST /v1/events/:type`, and
-  `apps/gateway/src/index.ts:51` mounts the ingestor **before** the `/v1/*`
-  auth middleware (`index.ts:289-381`). `apps/gateway/src/index.test.ts:578-600`
-  gets 202 with no `Authorization` header. (`apps/gateway/src/error-log.test.ts:339`
-  states the opposite in a comment; the executable test is the evidence.)
-- The envelope's `business_id` is taken from the request body
-  (`ingestor.ts:126`), defaulting to `'unknown'`.
+- `apps/gateway/src/ingestor.ts` mounts `POST /v1/events/:type`, and until
+  2026-10-20 `apps/gateway/src/index.ts` mounted the ingestor **before** the
+  `/v1/*` auth middleware, so `index.test.ts` got 202 with no `Authorization`
+  header. (`error-log.test.ts` stated the opposite in a comment; the executable
+  test was the evidence.)
+- The envelope's `business_id` was taken from the request body, defaulting to
+  `'unknown'`.
 - Accepted events go to `DOMAIN_EVENTS_QUEUE` (`ingestor.ts:140`), whose consumer
   is the growth worker.
 - The registry keys are PascalCase (`CustomerRegistered`, `PointsAssigned`,
@@ -111,31 +114,55 @@ Evidence:
   (`docs/14-Backlog.md:41-44`).
 - Nothing in `apps/` or `workers/` calls `/v1/events`.
 
-**Option R — retire (recommended).** Remove the route, its mount, the
-`/v1/events` entry from `ROUTE_MAP`, the gateway's queue producer bindings that
-exist only for it (`EVENT_QUEUE`, `DOMAIN_EVENTS_QUEUE` in
-`apps/gateway/wrangler.jsonc` and `GatewayEnv`, `router.ts:172-174`), and the
-docs. Rationale: no caller; a public endpoint that lets an unauthenticated caller
-put a schema-valid domain event for any `business_id` onto the queue the growth
-worker consumes is a liability with no product behind it. The `SCHEMA_REGISTRY`
-binding stays on the gateway config, because the `register-schemas` deploy job
-addresses the namespace through `--config apps/gateway/wrangler.jsonc`
-(`.github/workflows/deploy.yml:271-273`); `wrangler-config.contract.test.ts`
-pins it.
+**Option R — retire.** Remove the route, its mount, the `/v1/events` entry from
+`ROUTE_MAP`, the gateway's queue producer bindings that exist only for it
+(`EVENT_QUEUE`, `DOMAIN_EVENTS_QUEUE`), and the docs. The `SCHEMA_REGISTRY`
+binding would have stayed on the gateway config, because the `register-schemas`
+deploy job addresses the namespace through
+`--config apps/gateway/wrangler.jsonc`.
 
-**Option K — keep and fix.** Only if a concrete integration (a POS or an external
-system posting purchases) is scheduled. It would require: the route behind the
-`/v1/*` auth with `business_id` taken from the verified token, never from the
-body; a defined list of externally ingestible event types (a purchase event such
-as the existing `purchase_completed.json` schema in
-`packages/schema-registry/src/schemas/`, registered under the name the URL uses);
-validation of the payload rather than the whole body (`ingestor.ts:96` passes
-`body`); rate limiting; and an idempotency key. That is a feature, not a cleanup.
+**Option K — keep and fix. Chosen 2026-10-20.** The route is a documented part of
+the public API (`docs/08-API-Design.md`, `openspec/specs/event-ingestor`), the
+registry already carries the tenant-scoped domain events an integration would post
+(`CustomerRegistered`, `PointsAssigned`, `RewardRedeemed`, `CustomerCheckedIn`),
+and the reasons it did not work were defects rather than product: it was mounted
+above the auth chain, it took its tenant from the body, and its documented event
+names were not the registry's. Removing the endpoint would have deleted a
+capability in order to delete three bugs.
 
-The decision MUST be recorded before implementation. The deltas in this change
-specify Option R as a draft; they are not approved scope, and this change MUST
-NOT be archived until the decision and the 30-day log check are recorded in
-`tasks.md` (task 2.1).
+There is no purchase schema in the registry, and this change does not add one:
+`PurchaseCompleted` is a product decision about the POS integration, not a name
+the ingestor was missing.
+
+What shipped:
+
+- **Auth by position.** The ingestor is now registered at `/v1/events` *below* the
+  five `/v1/*` middlewares, next to `POST /v1/support`. Hono runs handlers in
+  registration order, so "registered below the chain" is the authentication, and
+  `index.test.ts` holds it from outside by asserting a tokenless POST answers 401.
+- **Tenant from the token.** The envelope's `business_id` is the verified claim.
+  A body whose `header.business_id` names a different business answers 403
+  `EVENT_BUSINESS_MISMATCH` instead of being silently rewritten.
+- **Names that exist, spelled the way the registry spells them.** `docs/07`,
+  `docs/08` and the `event-ingestor` spec now name the eight keys
+  `register-schemas.ts` publishes — `CustomerCheckedIn`, `CustomerRegistered`,
+  `PointsAssigned`, `PushCampaignRequested`, `PushNotificationRequested`,
+  `RewardRedeemed`, `WhatsAppOutboundRequested`, `WorkflowTriggered` — not
+  `purchase` and `custom`, which were never registered, and not their lowercase
+  spelling, which resolves to a different KV key and also 404s.
+  `event-ingestor.registry.contract.test.ts` reads that array and the docs table
+  and fails when the two disagree; the mocked registry in `index.test.ts` cannot,
+  because a namespace that answers every key cannot report a missing one.
+- **Both registered body shapes.** Most types validate `{ header, payload }`;
+  `CustomerRegistered` validates the payload alone. The bare-payload shape used to
+  publish `payload: undefined`.
+- **Rate limiting**, inherited from the `/v1/*` chain the route now sits under.
+
+Not done, and deliberately not part of the fix: an idempotency key. The schema's
+`reference_id` is the caller's idempotency token and the consumer owns dedupe; a
+second mechanism here would be a second answer to the same question. The 30-day
+log check is moot — it was the gate for *retiring* the route, and no path-level
+request logs exist to run it on (no `observability`, no Logpush).
 
 ### 3. Meta webhook: what enabling it requires
 
@@ -188,9 +215,12 @@ commit:
 
 ## Risks
 
-- **Retiring a route someone uses.** Nothing in the repository calls it; a
-  production request log for `/v1/events/*` over 30 days MUST be checked before
-  removal. Any hit means Option K, or a deprecation period.
+- **Keeping a route someone uses.** Nothing in the repository calls it, so the
+  fix has to be safe for a caller that exists outside it: the tenant now comes from
+  the token, so an external caller posting for a business it has no credential for
+  gets 403 rather than a queue message. A caller that already posts the right
+  `business_id` sees no change beyond needing a token — which it could not have
+  been sending before, since the route ignored it.
 - **A public `/health` on the automation worker.** It returns a constant and reads
   nothing, so exposure is nil; the exemption is exact, never a prefix.
 - **The index on a live table.** One row per till; the build is instant. Use

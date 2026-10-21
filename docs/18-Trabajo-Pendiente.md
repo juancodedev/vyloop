@@ -22,7 +22,7 @@ de lo que hay que implementar.
 | `wallet-pass-correctness` | Saldo entero hacia Google, `member_code` al registrarse, y el comercio gestiona los pases | Mediano–Grande | Medio |
 | `request-tracing` | El `request_id` viaja del gateway a los workers y a los eventos de la cola | Mediano | Medio |
 | `supply-chain-hardening` | `pnpm audit` en CI, `sslmode` explícito antes de `pg` v9, overrides inertes | Chico | Medio |
-| `api-surface-cleanup` | `/v1/automation` (la página "Flujos" del dashboard llama rutas que no existen), el ingestor de eventos, el webhook de Meta dormido y el índice de `pos_terminals`. **Hallazgo:** `POST /v1/events/:type` se monta antes de la autenticación y publica en la cola de dominio con el `business_id` del body; no fabrica puntos (growth relee el saldo real), pero es una escritura pública | Chico–Mediano | Medio |
+| `api-surface-cleanup` | `/v1/automation` (la página "Flujos" del dashboard llama rutas que no existen), el ingestor de eventos, el webhook de Meta dormido y el índice de `pos_terminals`. **Hallazgo (resuelto el 2026-10-20):** `POST /v1/events/:type` estaba montado antes de la autenticación y publicaba con el `business_id` del body; ahora vive debajo de la cadena de auth, el tenant sale del token y un body que nombra otro comercio responde 403. Queda la Unidad 3, el webhook de Meta, dormido por decisión de producto | Chico–Mediano | Medio |
 
 ### Convenciones para levantar un cambio diferido
 

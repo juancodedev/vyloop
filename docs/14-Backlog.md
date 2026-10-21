@@ -42,6 +42,16 @@ Objetivo: infraestructura base corriendo en producción. Sin esta fase, nada má
         > `PointsAssigned`, …, y `docs/07`, `docs/08` y `openspec/specs/event-ingestor` describen
         > `POST /v1/events/purchase` y `/v1/events/custom`. Después de este fix la ruta responde
         > **404** y no 500 — sigue rota, pero por otra razón. Y nada en el producto la consume.
+        >
+        > **Resuelto el 2026-10-20 (Opción K).** La ruta quedó debajo de la cadena de auth del
+        > gateway (antes estaba montada arriba de todo, así que era una escritura pública), el
+        > `business_id` sale del token y no del body, y la documentación nombra los ocho tipos que
+        > el registry sí tiene, en PascalCase: `CustomerCheckedIn`, `CustomerRegistered`,
+        > `PointsAssigned`, `PushCampaignRequested`, `PushNotificationRequested`,
+        > `RewardRedeemed`, `WhatsAppOutboundRequested` y `WorkflowTriggered`. Ojo: la primera
+        > corrección los pasó a minúscula y seguía dando 404, porque la clave de KV es
+        > `PointsAssigned:latest`. No hay esquema de compra; agregar `PurchaseCompleted` sería una
+        > decisión de producto aparte. Ver `openspec/changes/api-surface-cleanup/`.
 
 ### Identity y autenticación
 - [ ] Implementar IAM (Identity & Access Management) multi-tenant
@@ -54,8 +64,9 @@ Objetivo: infraestructura base corriendo en producción. Sin esta fase, nada má
 - [ ] Configurar Cloudflare Queues como bus de eventos base
 - [x] Implementar Event Ingestor con validación de Schema Registry
         — *La validación funciona; el binding faltaba y el registry estaba vacío.* Ambos
-        resueltos, ver arriba. Pendiente el desajuste de nombres de evento y decidir si esta ruta
-        entra en producción o se retira: hoy **nada en el producto la llama**.
+        resueltos, ver arriba. La ruta se mantiene y ya está autenticada: el 2026-10-20 se eligió
+        la Opción K (mantener y arreglar) sobre retirarla, y los nombres documentados ahora son
+        los del registry.
 - [ ] Worker de prueba: publicar `TestEvent` y consumirlo desde un Worker suscriptor
 
 ---

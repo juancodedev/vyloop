@@ -83,10 +83,10 @@ Cada dominio es un Cloudflare Worker aislado. No comparte memoria con otros Work
 
 ```
 1. INGESTA
-   POS / App / Web → POST /v1/events/purchase
+   POS / App / Web → POST /v1/events/{tipo}  (autenticado; {tipo} es una clave del registry)
    
 2. VALIDACIÓN
-   Event Ingestor → Schema Registry → ¿esquema PurchaseCompleted válido? → sí
+   Event Ingestor → Schema Registry → ¿el body valida contra el esquema de {tipo}? → sí
    
 3. PUBLICACIÓN AL BUS
    Cloudflare Queues recibe el evento con garantía at-least-once

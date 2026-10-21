@@ -250,7 +250,11 @@ describe('the error log leaks nothing from the request', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${AUTH_TOKEN_VALUE}`,
+          // A real token: `/v1/events/*` is behind the auth chain now, so the
+          // fake bearer below would be refused with 401 before the KV throw this
+          // test needs. The token-leak assertion lives in `triggerReal500`, which
+          // carries `AUTH_TOKEN_VALUE` on a route that needs no credential.
+          Authorization: `Bearer ${await validToken()}`,
           Cookie: `session=${COOKIE_VALUE}`,
           'X-Business-ID': 'biz_test_001',
         },
