@@ -6,7 +6,7 @@
 
 The dashboard MUST offer a "Venues" section under Settings where an operator lists, registers, edits and deactivates the business's venues through the existing identity routes: `GET` and `POST /v1/businesses/:id/branches`, `PATCH` and `DELETE /v1/businesses/:id/branches/:branchId`.
 
-The venue form MUST carry `name`, `address`, `city`, `country`, `timezone` and a position. The operator MUST be able to set the position by placing a pin on a map, and MAY set it by searching an address. _(Assumption, Q6: address search needs a geocoding provider, which is not chosen yet; the pin works without one.)_
+The venue form MUST carry `name`, `address`, `city`, `country`, `timezone` and a position. The operator MUST be able to set the position by placing a pin on a map, and MAY set it by searching an address. _(Q6 open. Recommendation: drop the map in v1 — two numeric fields plus a "use my location" button, since the operator stands at the venue — and add Leaflet with a configurable tile URL only if a map is wanted. Address search needs a geocoding provider and stays deferred either way.)_
 
 The form MUST send `latitude` and `longitude` together, or neither to clear the position. It MUST show the identity worker's refusal codes (`BRANCH_LOCATION_INCOMPLETE`, `BRANCH_LOCATION_INVALID`, `BRANCH_LOCATION_OUT_OF_RANGE`) as readable messages.
 
