@@ -161,7 +161,7 @@ Tres caminos:
 
 El change de F1 que nunca existió: proposal + delta de `database` (columnas, índice, constraints) + delta de `api-gateway` (las 4 rutas y su contrato de error) + delta de `multi-tenant-iam` (el tenant sale del token, y un path que nombra otro business responde 404).
 
-**Resuelto por `openspec/changes/venue-geolocation/`**: describe el contrato que el código ya implementa, sin cambiar comportamiento.
+**Resuelto y archivado como `openspec/changes/archive/2026-10-20-venue-geolocation/`**: el contrato que el código ya implementa quedó fusionado en los specs de `database`, `api-gateway` y `multi-tenant-iam`, sin cambiar comportamiento.
 
 ---
 
