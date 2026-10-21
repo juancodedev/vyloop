@@ -21,7 +21,7 @@ Chained PRs recommended: Yes
 | Unit | Goal                                                  | Likely PR | Lines | Notes                                       |
 | ---- | ----------------------------------------------------- | --------- | ----- | ------------------------------------------- |
 | 0    | Product decisions recorded                            | —         | ~20   | Blocks everything else.                     |
-| 1    | Dashboard Venues section with map pin                 | PR #1     | ~300  | Step 1. Existing routes; no backend change. |
+| 1    | Dashboard Venues section (coordinates, no map)        | PR #1     | ~180  | Step 1. Existing routes; no backend change. |
 | 2    | `merchantLocations` on consenting objects + sync      | PR #2     | ~300  | Needs located venues (Unit 1).              |
 | 3    | Message storage, budget ledger, consent type          | PR #3     | ~250  | Migration applied before Unit 4.            |
 | 4    | `POST/GET /v1/wallet/messages` + queue delivery       | PR #4     | ~300  | Needs Unit 3.                               |
