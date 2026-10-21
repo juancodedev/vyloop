@@ -15,6 +15,7 @@ import {
   uniqueIndex,
   check,
   foreignKey,
+  primaryKey,
   bigserial,
 } from 'drizzle-orm/pg-core';
 
@@ -915,6 +916,43 @@ export const rewardGrants = pgTable('reward_grants', {
   index('idx_reward_grants_customer').on(sql`${table.customerId}`, sql`${table.rewardId}`),
 ]);
 
+// A reward scoped to venues. **No rows means "available at every venue"**, which
+// is what every reward meant before this table existed, so the migration that
+// created it inserted nothing and no reward changed meaning.
+//
+// `business_id` is carried even though it is reachable through `reward_id`.
+// The RLS policy is `business_id = <setting>`, and a policy that joins to
+// `rewards` to find the tenant is both slower and a second place to get tenancy
+// wrong. The two foreign keys that matter for that column are enforced by the
+// composite primary key plus the RLS policy; a mismatched `business_id` here
+// would be caught by the policy before it could be read.
+export const rewardBranches = pgTable('reward_branches', {
+  rewardId: uuid('reward_id')
+    .notNull()
+    .references(() => rewards.id, { onDelete: 'cascade' }),
+  branchId: uuid('branch_id')
+    .notNull()
+    .references(() => branches.id, { onDelete: 'cascade' }),
+  businessId: uuid('business_id')
+    .notNull()
+    .references(() => tenants.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  // One row per (reward, venue). The pair is the identity: a reward is either
+  // scoped to a venue or it is not, and a duplicate carries no information.
+  primaryKey({
+    name: 'reward_branches_pkey',
+    columns: [table.rewardId, table.branchId],
+  }),
+
+  // The primary key already answers "which venues is this reward scoped to?",
+  // which is the only read the auto-grant performs. This one answers the other
+  // direction — a venue deletion cascades, and without it Postgres would scan
+  // the table once per deleted branch — and it is also the shape the RLS policy
+  // filters on.
+  index('idx_reward_branches_branch').on(sql`${table.businessId}`, sql`${table.branchId}`),
+]);
+
 // ============================================================================
 // Wallet Domain
 //
@@ -1235,6 +1273,8 @@ export type NewReward = typeof rewards.$inferInsert;
 
 export type RewardGrant = typeof rewardGrants.$inferSelect;
 export type NewRewardGrant = typeof rewardGrants.$inferInsert;
+export type RewardBranch = typeof rewardBranches.$inferSelect;
+export type NewRewardBranch = typeof rewardBranches.$inferInsert;
 
 export type TenantWalletProgram = typeof tenantWalletPrograms.$inferSelect;
 export type NewTenantWalletProgram = typeof tenantWalletPrograms.$inferInsert;

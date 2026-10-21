@@ -38,6 +38,9 @@ export const BUSINESS_ID_TABLES = [
   'localization_configs',
   'rewards',
   'reward_grants',
+  // The venue scope of a reward. Its `business_id` is denormalised on purpose:
+  // the policy reads this column and never joins to `rewards`.
+  'reward_branches',
   'message_log',
   'whatsapp_templates',
   'checkins',

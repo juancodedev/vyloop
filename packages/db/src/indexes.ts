@@ -9,6 +9,7 @@ import {
   pointsTransactions,
   rewards,
   rewardGrants,
+  rewardBranches,
   messageLog,
   whatsappTemplates,
   customerWalletPasses,
@@ -46,6 +47,7 @@ const INDEXED_TABLES: readonly PgTable[] = [
   customerEvents,
   rewards,
   rewardGrants,
+  rewardBranches,
   messageLog,
   whatsappTemplates,
   customerWalletPasses,
@@ -82,6 +84,7 @@ const INDEX_NAMES = {
   idxRewardsCategory: 'idx_rewards_category',
   idxRewardsAutoGrant: 'idx_rewards_auto_grant',
   idxRewardGrantsCustomer: 'idx_reward_grants_customer',
+  idxRewardBranchesBranch: 'idx_reward_branches_branch',
   idxMessageLogCustomer: 'idx_message_log_customer',
   idxMessageLogStatus: 'idx_message_log_status',
   idxWhatsappTemplatesName: 'idx_whatsapp_templates_name',
@@ -125,6 +128,7 @@ export const idxCustomerEventsBranch = indexByName(INDEX_NAMES.idxCustomerEvents
 export const idxRewardsCategory = indexByName(INDEX_NAMES.idxRewardsCategory);
 export const idxRewardsAutoGrant = indexByName(INDEX_NAMES.idxRewardsAutoGrant);
 export const idxRewardGrantsCustomer = indexByName(INDEX_NAMES.idxRewardGrantsCustomer);
+export const idxRewardBranchesBranch = indexByName(INDEX_NAMES.idxRewardBranchesBranch);
 export const idxMessageLogCustomer = indexByName(INDEX_NAMES.idxMessageLogCustomer);
 export const idxMessageLogStatus = indexByName(INDEX_NAMES.idxMessageLogStatus);
 export const idxWhatsappTemplatesName = indexByName(INDEX_NAMES.idxWhatsappTemplatesName);

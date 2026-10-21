@@ -164,6 +164,37 @@
           "name": "idx_pos_terminals_business"
         }
       ]
+    },
+    {
+      "tag": "0021_reward_branches",
+      "when": 1792551322510,
+      "hash": "c13e787d08683cc76929672049f4ac85fd0574d0492620de300d84984487ee75",
+      "evidence": [
+        {
+          "kind": "table",
+          "name": "reward_branches"
+        },
+        {
+          "kind": "constraint",
+          "name": "reward_branches_pkey"
+        },
+        {
+          "kind": "constraint",
+          "name": "reward_branches_reward_id_rewards_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "reward_branches_branch_id_branches_id_fk"
+        },
+        {
+          "kind": "constraint",
+          "name": "reward_branches_business_id_tenants_id_fk"
+        },
+        {
+          "kind": "index",
+          "name": "idx_reward_branches_branch"
+        }
+      ]
     }
   ]
 }

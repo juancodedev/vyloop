@@ -1,6 +1,6 @@
 # Tasks: Branch Reward Trigger
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: in progress. Decisions answered 2026-10-20 (Unit 0).
 
 ## Review Workload Forecast
 
@@ -12,7 +12,7 @@
 | Suggested split         | Unit 0 (decisions) → Unit 1 (storage) → Unit 2 (reward API + UI) → Unit 3 (event) → Unit 4 (producer + delivery) |
 | Delivery strategy       | ask-on-risk                                                                        |
 
-Decision needed before apply: Yes (open questions Q1-Q6 in `proposal.md`)
+Decision needed before apply: No (Q1-Q6 answered 2026-10-20)
 Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
@@ -29,15 +29,15 @@ Chain strategy: stacked-to-main
 
 ## Unit 0: Decisions
 
-- [ ] 0.1 Answer Q1-Q6 in `proposal.md`; update the assumptions marked in `specs/growth-engine/spec.md` and `specs/push-notifications/spec.md` to the answers
+- [x] 0.1 Answer Q1-Q6 in `proposal.md`; update the assumptions marked in `specs/growth-engine/spec.md` and `specs/push-notifications/spec.md` to the answers
 
 ## Unit 1: Storage
 
-- [ ] 1.1 `packages/db/src/schema.ts` — `rewardBranches` table (`reward_id`, `branch_id`, `business_id`, `created_at`), primary key `(reward_id, branch_id)`, index `idx_reward_branches_branch` on `(business_id, branch_id)`, all FKs `ON DELETE CASCADE`; export from `packages/db/src/index.ts`
-- [ ] 1.2 `packages/db/src/indexes.ts` — register the index
-- [ ] 1.3 `packages/db/src/rls.ts` — add `reward_branches` to `BUSINESS_ID_TABLES`; extend `packages/db/src/rls.test.ts`
-- [ ] 1.4 `packages/db/drizzle/00NN_reward_branches.sql` (next free number, reserved per `docs/18-Trabajo-Pendiente.md`) — generated and reviewed; header says it is applied by hand and inserts no rows
-- [ ] 1.5 `packages/db/drizzle/meta/_applied-outside-drizzle.json` — entry with evidence `table reward_branches`, `index idx_reward_branches_branch` and the two FK constraint names; `node scripts/check-migration-drift.mjs` passes
+- [x] 1.1 `packages/db/src/schema.ts` — `rewardBranches` table (`reward_id`, `branch_id`, `business_id`, `created_at`), primary key `(reward_id, branch_id)`, index `idx_reward_branches_branch` on `(business_id, branch_id)`, all FKs `ON DELETE CASCADE`; export from `packages/db/src/index.ts`
+- [x] 1.2 `packages/db/src/indexes.ts` — register the index
+- [x] 1.3 `packages/db/src/rls.ts` — add `reward_branches` to `BUSINESS_ID_TABLES`; extend `packages/db/src/rls.test.ts`
+- [x] 1.4 `packages/db/drizzle/00NN_reward_branches.sql` (next free number, reserved per `docs/18-Trabajo-Pendiente.md`) — generated and reviewed; header says it is applied by hand and inserts no rows
+- [x] 1.5 `packages/db/drizzle/meta/_applied-outside-drizzle.json` — entry with evidence `table reward_branches`, `index idx_reward_branches_branch` and the two FK constraint names; `node scripts/check-migration-drift.mjs` passes
 
 ## Unit 2: Reward API and dashboard
 
@@ -58,7 +58,7 @@ Chain strategy: stacked-to-main
 - [ ] 4.1 `workers/growth/src/event-handler.ts` — select `globalId` with the customer (line ~230); after the `reward_grants` insert (line ~330), read the reward's `reward_branches`; when non-empty, publish `RewardAvailableAtBranch` to `env.DELIVERY_QUEUE` (log and skip, as the check-in route does, when the binding is absent)
 - [ ] 4.2 `workers/growth/src/helpers.ts` — `buildRewardAvailableAtBranchEvent` next to `buildRewardAutoGrantedEvent`
 - [ ] 4.3 `workers/growth/src/event-handler.test.ts` (new; the worker has no handler test today) — scoped grant publishes once to the delivery queue; unscoped grant does not; an existing grant does not; `RewardAutoGranted` is still published
-- [ ] 4.4 `workers/communication/src/reward-notifications.ts` — `handleRewardAvailableAtBranch`: frequency cap read on `message_log`, venue selection (most recent interaction within `INTERACTION_WINDOW_DAYS`, else first by name), Spanish title/body, then `deliverPushNotification` with `reference_id` `reward-grant:<grant_id>`
+- [ ] 4.4 `workers/communication/src/reward-notifications.ts` — `handleRewardAvailableAtBranch`: frequency cap read on `message_log`, Spanish title/body naming the reward and the venue name when scoped to exactly one venue or the venue count otherwise (Q5), then `deliverPushNotification` with `reference_id` `reward-grant:<grant_id>`
 - [ ] 4.5 `workers/communication/src/event-handler.ts` — dispatch `REWARD_AVAILABLE_AT_BRANCH`
 - [ ] 4.6 `workers/communication/src/reward-notifications.test.ts` and `event-handler.test.ts` — delivered with consent; not delivered without; redelivery sends once; frequency cap acks without sending; the body carries no balance
 - [ ] 4.7 `docs/19-Geolocalizacion-Notificaciones.md` — §7.4 marks `RewardAvailableAtBranch` as implemented, with the decisions from Unit 0

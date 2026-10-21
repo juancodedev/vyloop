@@ -1,6 +1,7 @@
 # Proposal: Branch Reward Trigger
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: scheduled — decisions answered 2026-10-20 (Unit 0 of `tasks.md`).
+> Delivery: chained PRs, stacked-to-main.
 
 ## Intent
 
@@ -13,7 +14,7 @@ This is the `RewardAvailableAtBranch` trigger listed in
 (`odd/tasks/proximidad-y-hardening.md`, Log L1, "Desviaciones", item 1) because
 it needs a vertical the proximity gate does not cover: rewards have no venue.
 
-## Why it is deferred
+## Why it was deferred
 
 The PMV already tells a business's customers about a venue through campaigns
 (`PushCampaignRequested`), and a customer already sees their rewards in the
@@ -72,19 +73,16 @@ it raises product questions (below) that are not needed to demonstrate the PMV.
   `event-handler.ts:311-335`). Noted; the delivery reference prevents a double
   push even if the grant race produced two grants of the same reward.
 
-## Open Product Questions
+## Product Decisions (answered 2026-10-20)
 
-These MUST be answered before the change is scheduled. The specs below encode
-the recommended answer and mark it as an assumption.
-
-| #  | Question                                                                                               | Recommendation (assumption)                                                                                   |
-| -- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Q1 | Who receives it: only the customer the reward was granted to, or every customer of the venue's audience? | Only the granted customer. A broadcast is a campaign.                                                         |
-| Q2 | Is the `nearby_notifications` consent the right one, or does this need its own consent type?           | Reuse `nearby_notifications`: the message is about a venue. Revisit if legal review says otherwise.           |
-| Q3 | Frequency cap: how many reward notifications per customer per day?                                     | At most one per customer per 24 h per business; further grants in the window are not notified.               |
-| Q4 | Must redemption be refused at a venue the reward is not scoped to?                                      | Not in this change.                                                                                           |
-| Q5 | With several venues, which one does the message name?                                                   | The venue the customer interacted with most recently within `INTERACTION_WINDOW_DAYS` (180); otherwise the first by name; the message links to the reward, not to one venue. |
-| Q6 | Quiet hours (no pushes at night in the business's timezone)?                                            | Not in this change; applies to every push and belongs to the transport.                                       |
+| #  | Decision |
+| -- | -------- |
+| Q1 | Only the customer the reward was granted to is notified. A broadcast to a venue's audience is a campaign. |
+| Q2 | Reuse `nearby_notifications`. The consent copy shown in the customer web MUST mention rewards, not only proximity, or the permission is used for something it did not describe. |
+| Q3 | At most one reward notification per customer per business per 24 h; further grants inside the window are acked without a delivery. |
+| Q4 | Redemption is not restricted to the reward's venues in this change. |
+| Q5 | The message MUST NOT name a single venue. It names the venue when the reward is scoped to exactly one, and otherwise states how many venues it is available at. Naming one venue while Q4 leaves redemption unrestricted would send the customer to a place where the reward may not be honoured. |
+| Q6 | Quiet hours are not part of this change; they belong to the transport and apply to every push. |
 
 ## Capabilities
 
@@ -153,14 +151,18 @@ sequenceDiagram
     end
 ```
 
-**The message text** is built in the communication worker from the payload
-(reward name and venue name), in Spanish, with a URL to the customer web's
-rewards view. No points balance and no customer data travel in the push body.
+**The message text** is built in the communication worker from the payload:
+the reward name plus the venue name when the reward is scoped to exactly one
+venue, and otherwise the number of venues. Spanish, with a URL to the customer
+web's rewards view. No points balance and no customer data travel in the push
+body. This follows Q5: with redemption unrestricted, a message naming one of
+three venues is a wrong address.
 
 ## Risks
 
 - **Product risk is the main risk.** An automatic message a customer did not
-  expect is the fastest way to lose a push permission. Q1-Q3 exist for that.
+  expect is the fastest way to lose a push permission. Q1-Q3, and the consent
+  copy Q2 requires, exist for that.
 - **A new table read in a hot path.** `handlePointsAssigned` runs on every
   points assignment; the extra read happens only after a grant, which is rare.
 - **Schema registration drift.** A new schema must be added to
