@@ -157,6 +157,9 @@ describe('a 500 logs the request_id it returned', () => {
     const requestId = body.error.request_id;
 
     expect(requestId).toBeTruthy();
+    // Three places, one value: the response header, the response body and the
+    // log line.
+    expect(res.headers.get('X-Request-Id')).toBe(requestId);
     // The whole point. A different id in the response than in the log is the
     // original bug wearing a different hat.
     expect(errorText()).toContain(requestId);

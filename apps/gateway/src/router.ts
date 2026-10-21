@@ -1,4 +1,5 @@
 import type { KVNamespace } from '@cloudflare/workers-types';
+import { getRequestId, logPrefix } from '@vyloop/request-context';
 import type { Context, Next } from 'hono';
 
 // ---------------------------------------------------------------------------
@@ -198,7 +199,7 @@ export async function routerMiddleware(c: Context, next: Next) {
         error: {
           code: 'NOT_FOUND',
           message: `No route found for path: ${path}`,
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       404,
@@ -222,7 +223,7 @@ export async function routerMiddleware(c: Context, next: Next) {
         error: {
           code: 'SERVICE_UNAVAILABLE',
           message: `Service binding "${route.binding}" not configured`,
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       503,
@@ -235,13 +236,13 @@ export async function routerMiddleware(c: Context, next: Next) {
     const response = await binding.fetch(request);
     return response;
   } catch (err) {
-    console.error(`Routing error to ${route.binding}:`, err);
+    console.error(`${logPrefix('gateway', getRequestId(c))} routing error to ${route.binding}:`, err);
     return c.json(
       {
         error: {
           code: 'SERVICE_ERROR',
           message: `Error forwarding to ${route.binding}`,
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       502,

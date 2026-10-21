@@ -1,4 +1,5 @@
 import type { KVNamespace } from '@cloudflare/workers-types';
+import { getRequestId } from '@vyloop/request-context';
 import { COUNTER_SUBJECT_PREFIX, isCounterSubject } from '@vyloop/types';
 import type { Context, Next } from 'hono';
 
@@ -298,7 +299,7 @@ async function throttle(
             error: {
               code: 'RATE_LIMIT_EXCEEDED',
               message: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
-              request_id: crypto.randomUUID(),
+              request_id: getRequestId(c),
             },
           },
           429,

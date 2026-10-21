@@ -91,6 +91,16 @@ describe('EventBus', () => {
 
       expect(e1.id).not.toBe(e2.id);
     });
+
+    it('should carry an optional request_id', () => {
+      const envelope = createEnvelope(
+        'test_event',
+        { business_id: 'biz_1', timestamp: new Date().toISOString(), request_id: 'req-12345678' },
+        {},
+      );
+
+      expect(envelope.header.request_id).toBe('req-12345678');
+    });
   });
 
   describe('publish', () => {
@@ -142,6 +152,23 @@ describe('EventBus', () => {
       expect(handler).toHaveBeenCalledOnce();
       expect(batch.messages[0].retry).toHaveBeenCalledOnce();
       expect(batch.messages[0].ack).not.toHaveBeenCalled();
+    });
+
+    it('should log the request id when a message fails', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const handler = vi.fn().mockRejectedValue(new Error('boom'));
+      const env = createEnvelope(
+        'test_event',
+        { business_id: 'biz_1', timestamp: new Date().toISOString(), request_id: 'req-12345678' },
+        {},
+      );
+
+      await consume(mockBatch([{ body: env }]), handler);
+
+      const line = String(spy.mock.calls[0]?.[0]);
+      expect(line).toContain('request_id=req-12345678');
+      expect(line).toContain(`event=${env.id}`);
+      spy.mockRestore();
     });
 
     it('should handle multiple messages independently', async () => {

@@ -1,6 +1,6 @@
 # Tasks: Request Tracing
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: scheduled — started 2026-10-21. Units 1-2 done; Units 3-4 pending.
 
 ## Review Workload Forecast
 
@@ -31,18 +31,18 @@ schema and the worker error body. Unit 4's schema change gets its own commit.
 
 ## Unit 1: Shared package
 
-- [ ] 1.1 `packages/request-context/package.json`, `tsconfig.json`, `vitest.config.ts` — following `packages/types`; `hono` as a peer dependency
-- [ ] 1.2 `packages/request-context/src/index.ts` — `REQUEST_ID_HEADER = 'X-Request-Id'`, `REQUEST_ID_PATTERN`, `isValidRequestId`, `resolveRequestId(value)`, `requestIdMiddleware()` (sets `c.set('requestId')`, rewrites the forwarded request header, sets the response header after `next()`), `logPrefix(service, requestId)`
-- [ ] 1.3 `packages/request-context/src/index.test.ts` — valid ids kept; empty, too long, space, newline and `=` refused; generated id is a UUID; response header set on success and after a thrown error; prefix format
+- [x] 1.1 `packages/request-context/package.json`, `tsconfig.json`, `vitest.config.ts` — following `packages/types`; `hono` as a peer dependency
+- [x] 1.2 `packages/request-context/src/index.ts` — `REQUEST_ID_HEADER = 'X-Request-Id'`, `REQUEST_ID_PATTERN`, `isValidRequestId`, `resolveRequestId(value)`, `requestIdMiddleware()` (sets `c.set('requestId')`, rewrites the forwarded request header, sets the response header after `next()`), `logPrefix(service, requestId)`
+- [x] 1.3 `packages/request-context/src/index.test.ts` — valid ids kept; empty, too long, space, newline and `=` refused; generated id is a UUID; response header set on success and after a thrown error; prefix format
 
 ## Unit 2: Gateway
 
-- [ ] 2.1 `apps/gateway/package.json` — depend on `@vyloop/request-context`
-- [ ] 2.2 `apps/gateway/src/index.ts` — register `requestIdMiddleware()` as the first `app.use('*', …)` (before `cors()` at line 31); `onError` (line 482) and `notFound` (line 428) read `c.get('requestId')` instead of `crypto.randomUUID()`
-- [ ] 2.3 `apps/gateway/src/router.ts` — the three error bodies (lines 201, 225, 244) use the context id; the `console.error` at line 238 gains the prefix
-- [ ] 2.4 `apps/gateway/src/ingestor.ts` — error bodies (lines 70, 86, 105, 118) use the context id; the published envelope's `header.request_id` is overwritten with it. Skip if `api-surface-cleanup` already retired the ingestor
-- [ ] 2.5 `apps/gateway/src/support.ts` — the request id at line 475 is read from the context (keep `deps.newId` only as the fallback the tests inject), so the support log and the body agree with the response header
-- [ ] 2.6 `apps/gateway/src/index.test.ts`, `router.test.ts`, `error-log.test.ts` — generated id forwarded and echoed; well-formed client id kept; malformed replaced; `404`, `502` and `500` bodies equal the response header; the error log contains the same id
+- [x] 2.1 `apps/gateway/package.json` — depend on `@vyloop/request-context`
+- [x] 2.2 `apps/gateway/src/index.ts` — register `requestIdMiddleware()` as the first `app.use('*', …)` (before `cors()` at line 31); `onError` (line 482) and `notFound` (line 428) read `c.get('requestId')` instead of `crypto.randomUUID()`
+- [x] 2.3 `apps/gateway/src/router.ts` — the three error bodies (lines 201, 225, 244) use the context id; the `console.error` at line 238 gains the prefix
+- [x] 2.4 `apps/gateway/src/ingestor.ts` — error bodies (lines 70, 86, 105, 118) use the context id; the published envelope's `header.request_id` is overwritten with it. Skip if `api-surface-cleanup` already retired the ingestor
+- [x] 2.5 `apps/gateway/src/support.ts` — the request id at line 475 is read from the context (keep `deps.newId` only as the fallback the tests inject), so the support log and the body agree with the response header
+- [x] 2.6 `apps/gateway/src/index.test.ts`, `router.test.ts`, `error-log.test.ts` — generated id forwarded and echoed; well-formed client id kept; malformed replaced; `404`, `502` and `500` bodies equal the response header; the error log contains the same id
 
 ## Unit 3: Workers
 

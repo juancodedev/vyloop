@@ -40,6 +40,7 @@ export interface EventEnvelope {
   header: {
     business_id: string;
     timestamp: string;
+    request_id?: string;
     localization?: {
       country?: string;
       currency?: string;
@@ -115,10 +116,10 @@ export async function consume(
       await handler(msg.body, msg);
       msg.ack();
     } catch (err) {
-      console.error(
-        `[event-bus] Error processing event ${msg.body?.id ?? 'unknown'}:`,
-        err,
-      );
+      const eventId = msg.body?.id ?? 'unknown';
+      const requestId = msg.body?.header?.request_id;
+      const context = requestId ? `request_id=${requestId} event=${eventId}` : `event=${eventId}`;
+      console.error(`[event-bus] Error processing ${context}:`, err);
       msg.retry();
     }
   });

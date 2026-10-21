@@ -183,6 +183,9 @@ importers:
       '@vyloop/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/schema-registry':
         specifier: workspace:*
         version: link:../../packages/schema-registry
@@ -295,6 +298,21 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20261011.1
         version: 5.20261011.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@types/node@26.6.5)(jsdom@30.1.2)(vite@7.3.7(@types/node@26.6.5)(jiti@2.7.0)(tsx@4.23.15))
+
+  packages/request-context:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^5.20261011.1
+        version: 5.20261011.1
+      hono:
+        specifier: ^4.13.13
+        version: 4.13.13
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

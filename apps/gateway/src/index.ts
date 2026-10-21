@@ -1,3 +1,4 @@
+import { getRequestId, requestIdMiddleware } from '@vyloop/request-context';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { cors } from 'hono/cors';
@@ -28,6 +29,7 @@ const app = new Hono<{ Bindings: GatewayEnv }>();
 // Global middleware
 // ---------------------------------------------------------------------------
 
+app.use('*', requestIdMiddleware());
 app.use('*', cors());
 
 // ---------------------------------------------------------------------------
@@ -447,7 +449,7 @@ app.notFound((c) => {
       error: {
         code: 'NOT_FOUND',
         message: 'Route not found',
-        request_id: crypto.randomUUID(),
+        request_id: getRequestId(c),
       },
     },
     404,
@@ -501,7 +503,7 @@ app.onError((err, c) => {
   // existed nowhere but the response body, so `wrangler tail --search <id>` came
   // back empty and the id could not be tied to anything. A `request_id` nobody
   // can find is worse than none, because the user is told to report it.
-  const requestId = crypto.randomUUID();
+  const requestId = getRequestId(c);
 
   // Built before logging so the status in the log is read off the response that
   // is actually going out. Logging a literal 500 here would be true today and
