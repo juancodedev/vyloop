@@ -12,7 +12,6 @@ describe('every worker establishes and reports a request id', () => {
     const source = readFileSync(join(ROOT, 'workers', worker, 'src', 'index.ts'), 'utf8');
 
     expect(source).toContain("app.use('*', requestIdMiddleware());");
-    expect(source).toContain('app.onError(');
-    expect(source).toContain('request_id: requestId');
+    expect(source).toContain('app.onError(createErrorHandler(');
   });
 });

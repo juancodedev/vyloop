@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
-import { describe, it, expect } from 'vitest';
+import { HTTPException } from 'hono/http-exception';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   REQUEST_ID_HEADER,
+  createErrorHandler,
   getRequestId,
   isValidRequestId,
   logPrefix,
@@ -118,5 +120,54 @@ describe('requestIdMiddleware', () => {
     expect(res.status).toBe(500);
     expect(res.headers.get(REQUEST_ID_HEADER)).toBe('client-id-1234');
     expect(await res.json()).toEqual({ error: 'boom', request_id: 'client-id-1234' });
+  });
+
+  it('answers 500 with the request id and logs the id, never the Authorization header', async () => {
+    const app = new Hono();
+    app.use('*', requestIdMiddleware());
+    app.get('/boom', () => {
+      throw new Error('boom');
+    });
+    app.onError(createErrorHandler('growth'));
+
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    });
+
+    const res = await app.request('/boom', {
+      headers: {
+        [REQUEST_ID_HEADER]: 'client-id-1234',
+        Authorization: 'Bearer super-secret-token',
+      },
+    });
+
+    spy.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(res.headers.get(REQUEST_ID_HEADER)).toBe('client-id-1234');
+    expect(await res.json()).toEqual({
+      error: { code: 'INTERNAL_ERROR', message: 'Internal server error', request_id: 'client-id-1234' },
+    });
+    expect(logged.join('\n')).toContain('[growth] request_id=client-id-1234 GET /boom:');
+    expect(logged.join('\n')).not.toContain('super-secret-token');
+  });
+
+  it('keeps the status and the message of an HTTPException', async () => {
+    const app = new Hono();
+    app.use('*', requestIdMiddleware());
+    app.get('/nope', () => {
+      throw new HTTPException(403, { message: 'forbidden' });
+    });
+    app.onError(createErrorHandler('growth'));
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await app.request('/nope', { headers: { [REQUEST_ID_HEADER]: 'client-id-1234' } });
+    spy.mockRestore();
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: { code: 'ERROR', message: 'forbidden', request_id: 'client-id-1234' },
+    });
   });
 });
