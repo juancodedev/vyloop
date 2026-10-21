@@ -43,8 +43,8 @@
 
 ### Wave 1 — next
 
-3. **`request-tracing`** (Lane B). The ingestor still exists (Option K), so
-   apply task 2.4. Its dependency (`api-surface-cleanup`) is archived.
+3. **`request-tracing`** (Lane B). DONE — PRs #261/#263, archived as
+   `2026-10-21-request-tracing`.
 4. **`pages-opennext-migration`** (Lane E). Independent; can run beside 3.
 
 ### Wave 2 — schema queue, serial
@@ -102,6 +102,11 @@ migration is applied and registered.
 | `api-surface-cleanup` | 2 (ingestor, Opción K) | hecho — auth por posición, tenant del token |
 | `api-surface-cleanup` | 4 (`pos_terminals` index) | hecho — `0020` aplicada y registrada (#236) |
 | `branch-reward-trigger` | todas | hecho — archivado `2026-10-21-branch-reward-trigger`, mergeado #248/#249 |
+
+**Wave 1 — `request-tracing` archivado** (`2026-10-21-request-tracing`, PRs #261/#263).
+El id viaja del gateway a los ocho workers y, por el header del envelope, a los
+consumidores de la cola; `docs/18-Verificacion-y-Seguridad-Operativa.md` §8 tiene la
+receta de rastreo. De la Wave 1 queda `pages-opennext-migration`.
 
 **Pendiente de decisión, no de trabajo:** la Unidad 3 de `api-surface-cleanup`
 (webhook de Meta) espera la decisión de producto del 2026-10-08; su requerimiento
