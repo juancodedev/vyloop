@@ -11,6 +11,7 @@ import {
   upsertConsent,
 } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
+import { getRequestId } from '@vyloop/request-context';
 import { validate } from '@vyloop/schema-registry';
 import {
   CUSTOMER_PATCH_ERROR,
@@ -260,7 +261,7 @@ router.put('/v1/customers', async (c) => {
   // reconciliation problem, not a customer who failed to register, and collapsing
   // the two is what made the original failure invisible.
   // ---------------------------------------------------------------------------
-  const event = buildCustomerRegisteredEvent(inserted, businessId);
+  const event = buildCustomerRegisteredEvent(inserted, businessId, getRequestId(c));
 
   // Two distinct questions, deliberately kept apart.
   //
@@ -630,6 +631,7 @@ router.get('/v1/customers/me', async (c) => {
             {
             business_id: businessId,
             timestamp: new Date().toISOString(),
+            request_id: getRequestId(c),
             },
             {
             customer_id: customer.globalId,
