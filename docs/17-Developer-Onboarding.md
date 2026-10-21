@@ -163,6 +163,40 @@ vyloop-core/
 
 ---
 
+### PRs apilados: cuando la base mergea, el PR de arriba se re-apunta
+
+Un PR apilado tiene como base otra rama, no `main`. Cuando esa base mergea, **el PR de arriba no
+hereda el merge**: si lo mergeás sobre la rama vieja, el trabajo aterriza en una rama que ya nadie
+va a mergear. Pasó tres veces en este repositorio (#116, #225, #262).
+
+La regla, sin excepciones:
+
+1. **Antes de mergear un PR, mirá su base.** Si dice cualquier cosa distinta de `main`, no lo
+   mergees todavía: primero aterriza la base.
+2. **Cuando la base mergea, re-apuntá el PR de arriba a `main`** con `gh pr edit <n> --base main`.
+   Si el diff queda limpio, se mergea normal.
+3. **Si la base ya mergeó con squash, no re-apuntes: reconstruí.** El squash reescribe los SHA, así
+   que la rama vieja conserva commits cuyo contenido `main` ya tiene, y el merge intenta aplicar
+   cada hunk otra vez contra una historia que se movió.
+
+La reconstrucción, cuando toca:
+
+```bash
+git log --oneline origin/main..origin/<rama>   # qué commits quedaron huérfanos
+git checkout -b fix/<algo> origin/main
+git cherry-pick <sha> <sha> ...                # en orden
+git diff --stat fix/<algo> origin/<rama>       # sólo deberían diferir cambios ajenos
+```
+
+Ese `git diff` es la verificación, no un extra: si aparecen diferencias de código, la reconstrucción
+no es fiel y no se pushea.
+
+Y el aviso que delata la trampa: después de un squash merge, `git log origin/main..origin/<rama>`
+**sigue mostrando** los commits pre-squash. Esa lista es la señal de que hay que comparar contenido,
+no la prueba de que falta trabajo.
+
+---
+
 ## Convenciones de código
 
 | Convención | Detalle |
