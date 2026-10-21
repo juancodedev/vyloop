@@ -1,8 +1,8 @@
 import type { Queue } from '@cloudflare/workers-types';
-import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword, branches, customerEvents } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, rewardBranches, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword, branches, customerEvents } from '@vyloop/db';
 import { publish, createEnvelope, CUSTOMER_CHECKED_IN } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
-import { eq, and, count, sql, or, isNull, lte, gte, gt, desc } from 'drizzle-orm';
+import { eq, and, count, sql, or, isNull, lte, gte, gt, desc, inArray, notInArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 import type { Context } from 'hono';
@@ -1143,6 +1143,95 @@ router.get('/v1/loyalty/points/transactions', async (c) => {
 // ============================================================================
 
 /**
+ * Validate a `branch_ids` body field against the caller's own venues.
+ *
+ * Returns the de-duplicated ids, or a message for the 422. Every id must name a
+ * branch of *this* business: a reward scoped to another tenant's venue would
+ * either be invisible to that tenant or, worse, readable through a join. The
+ * check runs before any write so a rejected request leaves nothing behind.
+ *
+ * An empty array is valid and means "no venue scope", which is the same thing
+ * as omitting the field: the reward is available everywhere.
+ */
+async function resolveBranchScope(
+  db: ReturnType<typeof createDb>,
+  businessId: string,
+  branchIds: unknown,
+): Promise<{ ok: true; ids: string[] } | { ok: false; message: string }> {
+  if (!Array.isArray(branchIds)) {
+    return { ok: false, message: 'branch_ids must be an array of branch ids' };
+  }
+  if (branchIds.some((id) => typeof id !== 'string' || id.length === 0)) {
+    return { ok: false, message: 'branch_ids must contain non-empty branch ids' };
+  }
+  const ids = [...new Set(branchIds as string[])];
+  if (ids.length === 0) return { ok: true, ids };
+
+  const owned = await db
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(eq(branches.businessId, businessId), inArray(branches.id, ids)));
+
+  if (owned.length !== ids.length) {
+    return { ok: false, message: 'branch_ids must name venues of this business' };
+  }
+  return { ok: true, ids };
+}
+
+/**
+ * Replace a reward's venue scope with exactly `ids`.
+ *
+ * Insert first, delete second. The other order has a window where the reward
+ * has no rows, and "no rows" means "available at every venue" — a failure
+ * between the two statements would silently widen a scoped reward to the whole
+ * business. This order can only ever leave a superset, which is still scoped.
+ */
+async function replaceBranchScope(
+  db: ReturnType<typeof createDb>,
+  businessId: string,
+  rewardId: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length > 0) {
+    await db
+      .insert(rewardBranches)
+      .values(ids.map((branchId) => ({ rewardId, branchId, businessId })))
+      .onConflictDoNothing();
+    await db
+      .delete(rewardBranches)
+      .where(
+        and(
+          eq(rewardBranches.rewardId, rewardId),
+          notInArray(rewardBranches.branchId, ids),
+        ),
+      );
+    return;
+  }
+  await db.delete(rewardBranches).where(eq(rewardBranches.rewardId, rewardId));
+}
+
+/** The venue scope of many rewards, in one read rather than one per reward. */
+async function branchScopeByReward(
+  db: ReturnType<typeof createDb>,
+  rewardIds: string[],
+): Promise<Map<string, string[]>> {
+  const scopes = new Map<string, string[]>();
+  if (rewardIds.length === 0) return scopes;
+
+  const rows = await db
+    .select({ rewardId: rewardBranches.rewardId, branchId: rewardBranches.branchId })
+    .from(rewardBranches)
+    .where(inArray(rewardBranches.rewardId, rewardIds));
+
+  for (const row of rows) {
+    const list = scopes.get(row.rewardId) ?? [];
+    list.push(row.branchId);
+    scopes.set(row.rewardId, list);
+  }
+  return scopes;
+}
+
+/**
  * POST /v1/loyalty/rewards
  *
  * Create a new reward in the catalog.
@@ -1167,6 +1256,7 @@ router.post('/v1/loyalty/rewards', async (c) => {
     valid_from?: string;
     valid_until?: string;
     image_url?: string;
+    branch_ids?: string[];
   }>();
 
   if (!body.name || body.points_cost === undefined) {
@@ -1186,6 +1276,17 @@ router.post('/v1/loyalty/rewards', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
 
+  // Before the duplicate-name read: a request with a foreign venue is refused
+  // without telling the caller which names are taken.
+  let scope: string[] = [];
+  if (body.branch_ids !== undefined) {
+    const resolved = await resolveBranchScope(db, businessId, body.branch_ids);
+    if (!resolved.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: resolved.message } }, 422);
+    }
+    scope = resolved.ids;
+  }
+
   // Check duplicate name
   const [existing] = await db
     .select({ id: rewards.id })
@@ -1200,9 +1301,15 @@ router.post('/v1/loyalty/rewards', async (c) => {
     );
   }
 
+  // The id is generated here rather than by the column default so the scope
+  // rows can be written in the same request without a second round trip to read
+  // the generated id back.
+  const rewardId = crypto.randomUUID();
+
   const [inserted] = await db
     .insert(rewards)
     .values({
+      id: rewardId,
       businessId,
       name: body.name,
       description: body.description ?? null,
@@ -1216,7 +1323,21 @@ router.post('/v1/loyalty/rewards', async (c) => {
     })
     .returning();
 
-  return c.json({ data: inserted }, 201);
+  if (scope.length > 0) {
+    try {
+      await db
+        .insert(rewardBranches)
+        .values(scope.map((branchId) => ({ rewardId, branchId, businessId })));
+    } catch (error) {
+      // Without the scope the reward would read as "available everywhere",
+      // which is a different promise to the one the caller asked for. Removing
+      // the row is the only way back to "nothing was created".
+      await db.delete(rewards).where(eq(rewards.id, rewardId));
+      throw error;
+    }
+  }
+
+  return c.json({ data: { ...inserted, branch_ids: scope } }, 201);
 });
 
 /**
@@ -1279,8 +1400,15 @@ router.get('/v1/loyalty/rewards', async (c) => {
     .limit(perPage)
     .offset((page - 1) * perPage);
 
+  // One read for the whole page. A query per reward would turn a 20-item page
+  // into 21 round trips, which on a Worker is 21 chances to be slow.
+  const scopes = await branchScopeByReward(
+    db,
+    items.map((item) => item.id),
+  );
+
   return c.json({
-    data: items,
+    data: items.map((item) => ({ ...item, branch_ids: scopes.get(item.id) ?? [] })),
     meta: { total, page, per_page: perPage },
   });
 });
@@ -1310,7 +1438,9 @@ router.get('/v1/loyalty/rewards/:id', async (c) => {
     );
   }
 
-  return c.json({ data: reward });
+  const scopes = await branchScopeByReward(db, [reward.id]);
+
+  return c.json({ data: { ...reward, branch_ids: scopes.get(reward.id) ?? [] } });
 });
 
 /**
@@ -1339,10 +1469,23 @@ router.put('/v1/loyalty/rewards/:id', async (c) => {
     valid_from?: string | null;
     valid_until?: string | null;
     image_url?: string | null;
+    branch_ids?: string[];
   }>();
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
+
+  // Validate before the reward is even looked up, so an unknown reward and a
+  // foreign venue both come back as the same 422/404 pair the caller expects
+  // and no write can happen after a rejected scope.
+  let scope: string[] | undefined;
+  if (body.branch_ids !== undefined) {
+    const resolved = await resolveBranchScope(db, businessId, body.branch_ids);
+    if (!resolved.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: resolved.message } }, 422);
+    }
+    scope = resolved.ids;
+  }
 
   // Verify reward exists and belongs to this business
   const [existing] = await db
@@ -1385,8 +1528,22 @@ router.put('/v1/loyalty/rewards/:id', async (c) => {
   if (body.valid_until !== undefined) updateData.validUntil = body.valid_until ? new Date(body.valid_until) : null;
   if (body.image_url !== undefined) updateData.imageUrl = body.image_url;
 
+  // A request that only changes the venue scope is a valid update: it must not
+  // be swallowed by the "nothing to update" shortcut.
+  if (Object.keys(updateData).length === 0 && scope === undefined) {
+    // Same shape as every other branch: the caller reads `branch_ids` off this
+    // response, and a no-op must not be the one reply that lacks it.
+    const scopes = await branchScopeByReward(db, [id]);
+    return c.json({ data: { ...existing, branch_ids: scopes.get(id) ?? [] } });
+  }
+
+  if (scope !== undefined) {
+    await replaceBranchScope(db, businessId, id, scope);
+  }
+
   if (Object.keys(updateData).length === 0) {
-    return c.json({ data: existing });
+    const scopes = await branchScopeByReward(db, [id]);
+    return c.json({ data: { ...existing, branch_ids: scopes.get(id) ?? [] } });
   }
 
   updateData.updatedAt = new Date();
@@ -1397,7 +1554,9 @@ router.put('/v1/loyalty/rewards/:id', async (c) => {
     .where(eq(rewards.id, id))
     .returning();
 
-  return c.json({ data: updated });
+  const scopes = await branchScopeByReward(db, [id]);
+
+  return c.json({ data: { ...updated, branch_ids: scopes.get(id) ?? [] } });
 });
 
 /**

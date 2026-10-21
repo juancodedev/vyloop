@@ -388,6 +388,12 @@ export interface Reward {
   validFrom?: string;
   validUntil?: string;
   imageUrl?: string;
+  /**
+   * Venues where the reward can be redeemed. Empty means every venue of the
+   * business, which is what every reward meant before venue scoping existed —
+   * so an empty array is the default, not a missing value.
+   */
+  branchIds?: string[];
 }
 
 interface ApiRewardRecord {
@@ -401,6 +407,7 @@ interface ApiRewardRecord {
   validFrom?: string | null;
   validUntil?: string | null;
   imageUrl?: string | null;
+  branch_ids?: string[];
 }
 
 /**
@@ -658,6 +665,28 @@ export const api = {
   },
 
   /**
+   * The business's venues, for choosing where a reward can be redeemed.
+   *
+   * The venue route is tenant-scoped by path, and the dashboard does not carry
+   * the business id in its own state: it reads it from the token via `/v1/me`
+   * once per page load. Sending the id from local storage would make the UI a
+   * second source of truth for the tenant, which is exactly what the signed
+   * token exists to avoid.
+   */
+  async getVenues(): Promise<Venue[]> {
+    const businessId = await currentBusinessId();
+    const result = await apiFetch(`/v1/businesses/${businessId}/branches`) as {
+      branches?: ApiVenueRecord[];
+    };
+    return (result.branches || []).map((b) => ({
+      id: b.id,
+      name: b.name,
+      ...(b.city != null && { city: b.city }),
+      isActive: b.is_active,
+    }));
+  },
+
+  /**
    * Accumulate under a **visit** program: `points` is the qualifying count.
    *
    * `POST /v1/loyalty/points/assign` reads the tenant's `earn_by` and consumes a
@@ -810,6 +839,43 @@ export const api = {
   },
 };
 
+/**
+ * A venue of the business, as the dashboard needs it: an id to send back and a
+ * name to show. `isActive` is carried so a closed venue can be labelled rather
+ * than silently offered.
+ */
+export interface Venue {
+  id: string;
+  name: string;
+  city?: string;
+  isActive: boolean;
+}
+
+interface ApiVenueRecord {
+  id: string;
+  name: string;
+  city?: string | null;
+  is_active: boolean;
+}
+
+/**
+ * The tenant, read once from the signed token.
+ *
+ * Cached for the page load only: a reload re-reads it, so a token swap cannot
+ * leave the dashboard pointed at the previous business.
+ */
+let cachedBusinessId: string | null = null;
+
+async function currentBusinessId(): Promise<string> {
+  if (cachedBusinessId) return cachedBusinessId;
+  const me = await apiFetch('/v1/me') as { business_id?: string };
+  if (!me.business_id) {
+    throw new Error('El token no identifica un negocio');
+  }
+  cachedBusinessId = me.business_id;
+  return cachedBusinessId;
+}
+
 function mapReward(r: ApiRewardRecord): Reward {
   return {
     id: r.id,
@@ -822,6 +888,7 @@ function mapReward(r: ApiRewardRecord): Reward {
     ...(r.validFrom != null && { validFrom: r.validFrom }),
     ...(r.validUntil != null && { validUntil: r.validUntil }),
     ...(r.imageUrl != null && { imageUrl: r.imageUrl }),
+    ...(r.branch_ids != null && { branchIds: r.branch_ids }),
   };
 }
 
@@ -853,5 +920,6 @@ function toRewardPayload(data: Partial<Reward>): Record<string, unknown> {
   if (data.validFrom !== undefined) body.valid_from = data.validFrom;
   if (data.validUntil !== undefined) body.valid_until = data.validUntil;
   if (data.imageUrl !== undefined) body.image_url = data.imageUrl;
+  if (data.branchIds !== undefined) body.branch_ids = data.branchIds;
   return body;
 }

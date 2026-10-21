@@ -76,6 +76,19 @@ vi.mock('@vyloop/db', async () => {
     amountCents: integer('amount_cents').notNull(),
     receivedAt: timestamp('received_at').notNull(),
   });
+  // Real columns: the reward scope validates every venue id against this
+  // tenant's rows before writing, so the predicate has to be renderable.
+  const branchTable = pgTable('branches', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    name: text('name').notNull(),
+  });
+  const rewardBranchTable = pgTable('reward_branches', {
+    rewardId: uuid('reward_id').notNull(),
+    branchId: uuid('branch_id').notNull(),
+    businessId: uuid('business_id').notNull(),
+    createdAt: timestamp('created_at'),
+  });
   const table = {};
   // `pos_terminals` is real. Its tenant predicate is the cross-business assertion
   // below: the create route writes `business_id` from the credential's scope and
@@ -109,6 +122,12 @@ vi.mock('@vyloop/db', async () => {
     tenants: tenantTable,
     rewards: table,
     rewardGrants: table,
+    // Real columns, not `table`: the reward routes filter this one by
+    // `reward_id` with `inArray`/`notInArray`, which an opaque `{}` cannot
+    // render. A predicate that silently ignored the reward would make the
+    // "scope replaced" tests pass for the wrong reason.
+    branches: branchTable,
+    rewardBranches: rewardBranchTable,
     // Real, for the reason the other tables are real: every predicate these
     // routes build on it is tenant-scoped on `business_id`, and a flat `{}` would
     // render an opaque chunk — so a revoke that ignored `businessId` would pass
@@ -1807,6 +1826,180 @@ describe('Growth Worker', () => {
       expect(res.status).toBe(200);
       const json = await res.json() as Record<string, Record<string, unknown>>;
       expect(json.data.name).toBe('Same Name');
+    });
+  });
+
+  // ==========================================================================
+  // Reward venue scope
+  // ==========================================================================
+
+  describe('Reward venue scope', () => {
+    const VENUE_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const VENUE_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const FOREIGN_VENUE = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+    /** The values the route passed to the Nth `insert`, and the table it hit. */
+    function insertCall(n: number): { table: unknown; values: unknown } {
+      const result = mockDb.insert.mock.results[n];
+      const builder = result?.value as { values: { mock: { calls: unknown[][] } } };
+      return {
+        table: mockDb.insert.mock.calls[n]?.[0],
+        values: builder?.values.mock.calls[0]?.[0],
+      };
+    }
+
+    it('creates a reward scoped to the venues it was given', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: VENUE_A }, { id: VENUE_B }]));
+      mockDb.select.mockReturnValueOnce(createBuilder([])); // no duplicate name
+      mockDb.insert.mockReturnValueOnce(createBuilder([{ id: 'rw-1', name: 'Gift Card' }]));
+      mockDb.insert.mockReturnValueOnce(createBuilder([])); // scope rows
+
+      const res = await POST('/v1/loyalty/rewards', {
+        name: 'Gift Card',
+        points_cost: 500,
+        branch_ids: [VENUE_A, VENUE_B],
+      });
+
+      expect(res.status).toBe(201);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.branch_ids).toEqual([VENUE_A, VENUE_B]);
+      // The scope rows carry the tenant, not just the reward: the policy reads
+      // `business_id` and never joins to `rewards`.
+      // The scope rows point at the id the reward was inserted with. The route
+      // generates it before the insert so both statements can be built without
+      // reading the id back.
+      const rewardId = (insertCall(0).values as Record<string, unknown>).id;
+      expect(rewardId).toEqual(expect.any(String));
+      expect(insertCall(1).values).toEqual([
+        { rewardId, branchId: VENUE_A, businessId: 'biz-1' },
+        { rewardId, branchId: VENUE_B, businessId: 'biz-1' },
+      ]);
+    });
+
+    it('refuses a venue of another business before writing anything', async () => {
+      // Only one of the two ids belongs to this tenant.
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: VENUE_A }]));
+
+      const res = await POST('/v1/loyalty/rewards', {
+        name: 'Gift Card',
+        points_cost: 500,
+        branch_ids: [VENUE_A, FOREIGN_VENUE],
+      });
+
+      expect(res.status).toBe(422);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('VALIDATION_ERROR');
+      // Nothing was inserted, and the duplicate-name read never ran: the
+      // catalog cannot be used to learn which names are taken.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(mockDb.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects branch_ids that are not an array', async () => {
+      const res = await POST('/v1/loyalty/rewards', {
+        name: 'Gift Card',
+        points_cost: 500,
+        branch_ids: VENUE_A,
+      });
+
+      expect(res.status).toBe(422);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('replaces the scope on update, inserting before deleting', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ id: VENUE_B }])); // ownership
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card', pointsCost: 500 }]),
+      );
+      mockDb.insert.mockReturnValueOnce(createBuilder([])); // scope rows
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card', pointsCost: 500 }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ rewardId: 'rw-1', branchId: VENUE_B }]));
+
+      const res = await PUT('/v1/loyalty/rewards/rw-1', { branch_ids: [VENUE_B] });
+
+      expect(res.status).toBe(200);
+      expect(insertCall(0).values).toEqual([
+        { rewardId: 'rw-1', branchId: VENUE_B, businessId: 'biz-1' },
+      ]);
+      // The delete only runs after the insert, so a failure between the two
+      // leaves a superset rather than the empty set that means "every venue".
+      expect(mockDb.delete).toHaveBeenCalledOnce();
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.branch_ids).toEqual([VENUE_B]);
+    });
+
+    it('leaves the scope untouched when branch_ids is omitted', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Old Name', pointsCost: 500 }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([])); // no name collision
+      mockDb.update.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'New Name', pointsCost: 500 }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ rewardId: 'rw-1', branchId: VENUE_A }]));
+
+      const res = await PUT('/v1/loyalty/rewards/rw-1', { name: 'New Name' });
+
+      expect(res.status).toBe(200);
+      expect(mockDb.delete).not.toHaveBeenCalled();
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.branch_ids).toEqual([VENUE_A]);
+    });
+
+    it('clears the scope with an empty array', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card', pointsCost: 500 }]),
+      );
+      mockDb.delete.mockReturnValueOnce(createBuilder([]));
+      mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+      const res = await PUT('/v1/loyalty/rewards/rw-1', { branch_ids: [] });
+
+      expect(res.status).toBe(200);
+      expect(mockDb.delete).toHaveBeenCalledOnce();
+      // An empty array is the "every venue" answer, so no scope row is written.
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.branch_ids).toEqual([]);
+    });
+
+    it('returns the scope in the list, in one read for the page', async () => {
+      mockDb.select.mockReturnValueOnce(createBuilder([{ total: 2 }]));
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([
+          { id: 'rw-1', name: 'Scoped', pointsCost: 500 },
+          { id: 'rw-2', name: 'Everywhere', pointsCost: 200 },
+        ]),
+      );
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ rewardId: 'rw-1', branchId: VENUE_A }]),
+      );
+
+      const res = await GET('/v1/loyalty/rewards');
+
+      expect(res.status).toBe(200);
+      const json = await res.json() as { data: Record<string, unknown>[] };
+      expect(json.data[0].branch_ids).toEqual([VENUE_A]);
+      // No rows means every venue, and that has to read as `[]`, not as missing.
+      expect(json.data[1].branch_ids).toEqual([]);
+      // count + page + one grouped scope read, never one per reward.
+      expect(mockDb.select).toHaveBeenCalledTimes(3);
+    });
+
+    it('returns the scope for a single reward', async () => {
+      mockDb.select.mockReturnValueOnce(
+        createBuilder([{ id: 'rw-1', name: 'Gift Card', pointsCost: 500 }]),
+      );
+      mockDb.select.mockReturnValueOnce(createBuilder([{ rewardId: 'rw-1', branchId: VENUE_B }]));
+
+      const res = await GET('/v1/loyalty/rewards/rw-1');
+
+      expect(res.status).toBe(200);
+      const json = await res.json() as Record<string, Record<string, unknown>>;
+      expect(json.data.branch_ids).toEqual([VENUE_B]);
     });
   });
 

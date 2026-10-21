@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 
 import { api } from '@/lib/api';
-import type { Reward } from '@/lib/api';
+import type { Reward, Venue } from '@/lib/api';
 
 interface RewardForm {
   name: string;
@@ -14,6 +14,8 @@ interface RewardForm {
   autoGrantThreshold: string;
   validFrom: string;
   validUntil: string;
+  /** Empty means every venue of the business. */
+  branchIds: string[];
 }
 
 const emptyForm: RewardForm = {
@@ -25,6 +27,7 @@ const emptyForm: RewardForm = {
   autoGrantThreshold: '',
   validFrom: '',
   validUntil: '',
+  branchIds: [],
 };
 
 function formatDate(iso?: string): string {
@@ -39,9 +42,13 @@ export default function LoyaltyRewardsPage() {
   const [form, setForm] = useState<RewardForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ type: string; message: string } | null>(null);
+  const [venues, setVenues] = useState<Venue[]>([]);
 
   useEffect(() => {
     loadRewards();
+    // Venues are only needed inside the modal, so a failure here must not stop
+    // the catalog from rendering: the form then offers "all venues" alone.
+    api.getVenues().then(setVenues).catch(() => setVenues([]));
   }, []);
 
   async function loadRewards() {
@@ -71,6 +78,7 @@ export default function LoyaltyRewardsPage() {
       autoGrantThreshold: reward.autoGrantThreshold !== undefined ? String(reward.autoGrantThreshold) : '',
       validFrom: reward.validFrom ? reward.validFrom.slice(0, 10) : '',
       validUntil: reward.validUntil ? reward.validUntil.slice(0, 10) : '',
+      branchIds: reward.branchIds ?? [],
     });
     setModal({ mode: 'edit', reward });
   }
@@ -92,6 +100,9 @@ export default function LoyaltyRewardsPage() {
         ...(form.autoGrantThreshold && { autoGrantThreshold: Number(form.autoGrantThreshold) }),
         ...(form.validFrom && { validFrom: new Date(form.validFrom).toISOString() }),
         ...(form.validUntil && { validUntil: new Date(form.validUntil).toISOString() }),
+        // Always sent: the checkbox group is the authority on this field, and
+        // an empty array is the explicit "every venue" answer.
+        branchIds: form.branchIds,
       };
 
       if (modal?.mode === 'create') {
@@ -159,6 +170,7 @@ export default function LoyaltyRewardsPage() {
                   <th>Nombre</th>
                   <th>Puntos</th>
                   <th>Categoría</th>
+                  <th>Locales</th>
                   <th>Stock</th>
                   <th>Auto-grant</th>
                   <th>Vigencia</th>
@@ -171,6 +183,11 @@ export default function LoyaltyRewardsPage() {
                     <td style={{ fontWeight: 500 }}>{reward.name}</td>
                     <td>{reward.pointsCost.toLocaleString()}</td>
                     <td>{reward.category || '—'}</td>
+                    <td>
+                      {reward.branchIds && reward.branchIds.length > 0
+                        ? `${reward.branchIds.length} local${reward.branchIds.length !== 1 ? 'es' : ''}`
+                        : 'Todos'}
+                    </td>
                     <td>{reward.stock !== undefined ? reward.stock.toLocaleString() : '∞'}</td>
                     <td>{reward.autoGrantThreshold ? `${reward.autoGrantThreshold.toLocaleString()} pts` : '—'}</td>
                     <td>
@@ -305,6 +322,41 @@ export default function LoyaltyRewardsPage() {
                     onChange={(e) => setForm({ ...form, validUntil: e.target.value })}
                   />
                 </div>
+              </div>
+
+              <div className="form-group">
+                <label>Locales donde se puede canjear</label>
+                <p className="text-sm text-muted" style={{ marginTop: 0 }}>
+                  Sin ninguno marcado, la recompensa se canjea en todos los locales del negocio.
+                </p>
+                {venues.length === 0 ? (
+                  <p className="text-sm text-muted">No hay locales configurados.</p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {venues.map((venue) => (
+                      <label key={venue.id} className="flex items-center gap-1" htmlFor={`reward-venue-${venue.id}`}>
+                        <input
+                          id={`reward-venue-${venue.id}`}
+                          type="checkbox"
+                          checked={form.branchIds.includes(venue.id)}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              branchIds: e.target.checked
+                                ? [...form.branchIds, venue.id]
+                                : form.branchIds.filter((id) => id !== venue.id),
+                            })
+                          }
+                        />
+                        <span>
+                          {venue.name}
+                          {venue.city ? ` — ${venue.city}` : ''}
+                          {!venue.isActive ? ' (cerrado)' : ''}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
