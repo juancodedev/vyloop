@@ -8,12 +8,6 @@ export const CUSTOMER_REGISTERED = 'CustomerRegistered';
 export const POINTS_ASSIGNED = 'PointsAssigned';
 export const REWARD_REDEEMED = 'RewardRedeemed';
 export const REWARD_AUTO_GRANTED = 'RewardAutoGranted';
-// A customer was granted a reward that is redeemable at a named set of venues.
-// Published by the growth worker after the grant row exists, consumed by the
-// communication worker, which decides whether to push. It is a separate event
-// from `RewardAutoGranted` because most grants are not venue-scoped: this one
-// only exists when there is something to say about where the reward is good.
-export const REWARD_AVAILABLE_AT_BRANCH = 'RewardAvailableAtBranch';
 export const PROFILE_VIEWED = 'ProfileViewed';
 export const QR_DISPLAYED = 'QRDisplayed';
 export const WHATSAPP_OUTBOUND_REQUESTED = 'WhatsAppOutboundRequested';
