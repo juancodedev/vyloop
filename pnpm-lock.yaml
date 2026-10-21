@@ -356,6 +356,9 @@ importers:
       '@vyloop/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -384,6 +387,9 @@ importers:
       '@vyloop/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/schema-registry':
         specifier: workspace:*
         version: link:../../packages/schema-registry
@@ -415,6 +421,9 @@ importers:
       '@vyloop/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/schema-registry':
         specifier: workspace:*
         version: link:../../packages/schema-registry
@@ -440,9 +449,15 @@ importers:
 
   workers/compliance:
     dependencies:
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
+      hono:
+        specifier: ^4.13.13
+        version: 4.13.13
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261011.1
@@ -465,6 +480,9 @@ importers:
       '@vyloop/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/schema-registry':
         specifier: workspace:*
         version: link:../../packages/schema-registry
@@ -496,6 +514,9 @@ importers:
       '@vyloop/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/schema-registry':
         specifier: workspace:*
         version: link:../../packages/schema-registry
@@ -530,6 +551,9 @@ importers:
       '@vyloop/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -558,6 +582,9 @@ importers:
       '@vyloop/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261011.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)

@@ -1,4 +1,5 @@
 import { createDb } from '@vyloop/db';
+import { getRequestId, logPrefix, requestIdMiddleware } from '@vyloop/request-context';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
@@ -88,6 +89,8 @@ export type { AuthHeaders, WalletBindings } from './helpers';
 
 const app = new Hono<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders } }>();
 
+app.use('*', requestIdMiddleware());
+
 /**
  * The one path that arrives without a gateway-injected identity.
  *
@@ -170,17 +173,18 @@ app.notFound((c) => {
 // ---------------------------------------------------------------------------
 
 app.onError((err, c) => {
-  console.error('[wallet] Unhandled error:', err);
+  const requestId = getRequestId(c);
+  console.error(`${logPrefix('wallet', requestId)} ${c.req.method} ${new URL(c.req.url).pathname}:`, err);
 
   if (err instanceof HTTPException) {
     return c.json(
-      { error: { code: 'ERROR', message: err.message } },
+      { error: { code: 'ERROR', message: err.message, request_id: requestId } },
       err.status,
     );
   }
 
   return c.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error', request_id: requestId } },
     500,
   );
 });

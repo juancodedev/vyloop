@@ -1,4 +1,5 @@
 import { createDb, setCurrentBusinessId } from '@vyloop/db';
+import { getRequestId, logPrefix, requestIdMiddleware } from '@vyloop/request-context';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -57,6 +58,8 @@ function extractAuthHeaders(c: {
 // ---------------------------------------------------------------------------
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+app.use('*', requestIdMiddleware());
 
 // ---------------------------------------------------------------------------
 // GET /v1/analytics/kpis
@@ -214,17 +217,18 @@ app.notFound((c) => {
 // ---------------------------------------------------------------------------
 
 app.onError((err, c) => {
-  console.error('[analytics] Unhandled error:', err);
+  const requestId = getRequestId(c);
+  console.error(`${logPrefix('analytics', requestId)} ${c.req.method} ${new URL(c.req.url).pathname}:`, err);
 
   if (err instanceof HTTPException) {
     return c.json(
-      { error: { code: 'ERROR', message: err.message } },
+      { error: { code: 'ERROR', message: err.message, request_id: requestId } },
       err.status,
     );
   }
 
   return c.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error', request_id: requestId } },
     500,
   );
 });

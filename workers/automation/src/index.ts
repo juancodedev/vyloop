@@ -1,6 +1,7 @@
 import type { MessageBatch } from '@cloudflare/workers-types';
 import { consume } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
+import { getRequestId, logPrefix, requestIdMiddleware } from '@vyloop/request-context';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
@@ -15,6 +16,8 @@ import router from './routes';
 // ---------------------------------------------------------------------------
 
 const app = new Hono<{ Bindings: Bindings; Variables: { auth: ReturnType<typeof extractAuthHeaders> } }>();
+
+app.use('*', requestIdMiddleware());
 
 /**
  * The set of paths that arrive without a gateway-injected identity.
@@ -76,17 +79,18 @@ app.notFound((c) => {
 // ---------------------------------------------------------------------------
 
 app.onError((err, c) => {
-  console.error('[automation] Unhandled error:', err);
+  const requestId = getRequestId(c);
+  console.error(`${logPrefix('automation', requestId)} ${c.req.method} ${new URL(c.req.url).pathname}:`, err);
 
   if (err instanceof HTTPException) {
     return c.json(
-      { error: { code: 'ERROR', message: err.message } },
+      { error: { code: 'ERROR', message: err.message, request_id: requestId } },
       err.status,
     );
   }
 
   return c.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error', request_id: requestId } },
     500,
   );
 });
