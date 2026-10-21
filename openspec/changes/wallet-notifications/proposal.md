@@ -21,7 +21,11 @@ and the wallet worker deliberately sends no notification: `reconcile.ts:43` and
 The venue positions already exist (`2026-10-20-venue-geolocation`): `branches`
 carries `latitude`/`longitude`, and the identity worker exposes the venue
 routes. Google made nearby notifications available for every regular pass type
-on 2025-10-14. The data is there; nothing hands it to Google.
+on 2025-10-14. The storage and the routes are there, but no operator can fill them: the
+dashboard only lists venues to scope rewards (`apps/dashboard/src/lib/api.ts:668`)
+and has no form to register a venue or its position (`docs/19` F4, never
+started). Without that form no venue has coordinates, and every pass would carry
+empty `merchantLocations`. So the venue form is the first step of this change.
 
 The manual message is the feature the competition sells as "push to the
 wallet" (see `docs/analisis.md`). Sending it without the rules below would put
@@ -47,15 +51,18 @@ Verified against the Google Wallet loyalty-card documentation on 2026-10-21.
 
 ### In Scope
 
-1. `google-wallet`: the pass object of a consenting customer carries up to 10
+1. `growth-dashboard`: a "Venues" section under Settings to register, edit and
+   deactivate venues and set each one's position with a map pin, on the
+   existing identity routes. No backend change.
+2. `google-wallet`: the pass object of a consenting customer carries up to 10
    `merchantLocations` from the business's active, located venues, kept in step
    when venues or consent change.
-2. `google-wallet`: an operator route that sends one message to the eligible
+3. `google-wallet`: an operator route that sends one message to the eligible
    pass holders of the business, per object, with a notification budget the
    worker tracks itself.
-3. `growth-dashboard`: a "Wallet" section under Communication to write, preview
+4. `growth-dashboard`: a "Wallet" section under Communication to write, preview
    and send a message, and to see its delivery counts.
-4. `docs/08` gains the new route; `docs/19` records the Google channel.
+5. `docs/08` gains the new route; `docs/19` records the Google channel.
 
 ### Out of Scope
 
