@@ -47,9 +47,6 @@ app.get('/health', (c) => {
 // guaranteed and the contract is testable through `app.fetch` — see `robots.ts`.
 app.get(ROBOTS_PATH, robotsRoute());
 
-// Mount the event ingestor — public endpoint for external event sources
-app.route('/', ingestor);
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -379,6 +376,25 @@ app.use('/v1/*', async (c, next) => {
 
 // Middleware 5: Route dispatch to service bindings
 app.use('/v1/*', routerMiddleware);
+
+// ---------------------------------------------------------------------------
+// Event ingestor — authenticated
+// ---------------------------------------------------------------------------
+//
+// Registered **below** the five middlewares above, and that position is the
+// authentication.
+//
+// This used to be mounted at `/` before any of them, carrying its own full
+// `/v1/events/:type` path. Hono runs handlers in registration order, so the
+// route answered before auth, auth-inject, business-id and rate-limit ever ran:
+// an unauthenticated public write, with the tenant taken from the request body.
+// Its tests passed because they called it without a token — they were asserting
+// the hole.
+//
+// `/v1/events` stays in `ROUTE_MAP` as a `gateway` binding; `routerMiddleware`
+// calls `next()` for that binding rather than 404-ing, which is how a route this
+// worker answers itself is reachable at all.
+app.route('/v1/events', ingestor);
 
 // ---------------------------------------------------------------------------
 // Brand assets

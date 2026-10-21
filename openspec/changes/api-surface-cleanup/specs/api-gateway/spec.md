@@ -6,7 +6,7 @@
 
 Route by segment, longest prefix first: `/v1/auth`, `/v1/me`, `/v1/businesses`, `/v1/customers`, `/v1/loyalty`, `/v1/growth`, `/v1/analytics`, `/v1/support`, `/v1/automation`, `/v1/communication`, `/v1/compliance`, `/v1/wallet`.
 
-`/v1/events` MUST NOT be in the route map: the event ingestor is retired, and a request under it MUST receive the gateway's 404 for an unrouted `/v1/*` path.
+`/v1/events` MUST stay in the route map with the `gateway` binding: `routerMiddleware` calls `next()` for a gateway-owned prefix, so that entry is what makes a route the gateway answers itself reachable at all. The ingestor MUST be registered below the gateway's auth chain.
 
 The identity worker's routes live under `/v1/auth` and `/v1/me`, not under `/v1/identity`.
 
@@ -25,12 +25,12 @@ A prefix matches on a segment boundary: `/v1/loyalty-admin` is not `/v1/loyalty`
 - THEN no prefix matches
 - AND the gateway answers 404 rather than forwarding to the Growth Worker
 
-#### Scenario: The retired ingestor path
+#### Scenario: The ingestor path is routed and authenticated
 
-- GIVEN any caller, with or without a token
+- GIVEN any caller
 - WHEN it sends `POST /v1/events/PointsAssigned`
-- THEN the gateway answers 404
-- AND nothing is published to any queue
+- THEN the gateway routes it to its own ingestor rather than answering 404
+- AND without a valid token the answer is 401, and nothing is published to any queue
 
 ## ADDED Requirements
 

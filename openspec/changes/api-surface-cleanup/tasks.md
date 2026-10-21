@@ -1,6 +1,7 @@
 # Tasks: API Surface Cleanup
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: Units 1, 2 and 4 done (2026-10-20). Unit 3 deferred: the Meta webhook
+> stays dormant until the product decision of 2026-10-08 is reversed.
 
 ## Review Workload Forecast
 
@@ -12,7 +13,7 @@
 | Suggested split         | Unit 1, Unit 2, Unit 4 independent; Unit 3 waits for the product decision |
 | Delivery strategy       | ask-on-risk                                                               |
 
-Decision needed before apply: Yes — Option R (retire) or Option K (keep and fix) for the event ingestor; a 30-day production log check for `/v1/events/*` precedes it.
+Decision needed before apply: No — Unit 2 decided **Option K (keep and fix)** on 2026-10-20. Unit 3 still waits on the product decision.
 Chained PRs recommended: No
 Chain strategy: none
 400-line budget risk: Low
@@ -22,7 +23,7 @@ Chain strategy: none
 | Unit | Goal                                         | Likely PR | Lines | Notes                                          |
 | ---- | -------------------------------------------- | --------- | ----- | ---------------------------------------------- |
 | 1    | Automation `/health` reachable               | PR #1     | ~60   | Independent.                                   |
-| 2    | Retire the event ingestor (Option R)         | PR #2     | ~200  | Needs the decision and the log check.          |
+| 2    | Keep and fix the event ingestor (Option K)   | PR #2     | ~200  | Done. Auth by position, tenant from token.     |
 | 3    | Meta webhook enablement                      | PR #3     | ~150  | Only when the 2026-10-08 decision is reversed. |
 | 4    | `pos_terminals` listing index                | PR #4     | ~60   | Independent. Touches a persisted schema.       |
 
@@ -33,17 +34,17 @@ Chain strategy: none
 - [x] 1.3 `apps/gateway/src/wrangler-route-reachability.contract.test.ts:70-74` — reword the `/v1/automation` note to name the unimplemented Workflow CRUD and the dashboard page that calls it; keep the `ROUTES_OUTSIDE_GATEWAY_NAMESPACE` entry (`:172-185`)
 - [x] 1.4 Verify whether `workers/automation` is reachable on its `workers.dev` hostname in production; record the answer in `docs/18-Trabajo-Pendiente.md` (~line 911)
 
-## Unit 2: Retire the event ingestor
+## Unit 2: Keep and fix the event ingestor (Option K)
 
-- [ ] 2.1 Decision gate: check 30 days of production gateway logs for `/v1/events/*`; record Option R or K in this file and in `docs/14-Backlog.md:41-58`
-- [ ] 2.2 `apps/gateway/src/ingestor.ts` — delete; `apps/gateway/src/index.ts:6,50-51` — remove the import and the mount
-- [ ] 2.3 `apps/gateway/src/router.ts:24,172-174` — remove the `/v1/events` entry and `EVENT_QUEUE` / `DOMAIN_EVENTS_QUEUE` from `GatewayEnv`; keep `SCHEMA_REGISTRY`
-- [ ] 2.4 `apps/gateway/wrangler.jsonc:156-170` — remove the two queue producer bindings; keep the `SCHEMA_REGISTRY` KV binding, which `deploy.yml:271-273` uses to address the namespace
-- [ ] 2.5 `apps/gateway/src/index.test.ts:578-660` — replace the "Event Ingestor" block with: `POST /v1/events/PointsAssigned` answers 404 with and without a token, and publishes nothing
-- [ ] 2.6 `apps/gateway/src/error-log.test.ts:249,342` — move the two cases that use `/v1/events/customer.created` to another routed path that produces the same status
-- [ ] 2.7 `apps/gateway/src/wrangler-config.contract.test.ts` — keep the `SCHEMA_REGISTRY` pin; it holds no queue assertions today, so add one that the gateway declares no queue producers
-- [ ] 2.8 `docs/08-API-Design.md:131-136` (Events section), `docs/07-Architecture.md:86`, and `openspec/specs/api-gateway/spec.md` via archive of this change
-- [ ] 2.9 Run `pnpm --filter @vyloop/gateway test` and `typecheck`
+- [x] 2.1 Decision gate. **Option K (keep and fix)**, recorded 2026-10-20 here and in `docs/14-Backlog.md:41-58`. The 30-day log check was the gate for *retiring* the route and cannot be run either way: no `wrangler.jsonc` in the repository sets `observability`, there is no Logpush job, and Workers Logs would not have retained 30 days. The evidence used instead is behavioural and stronger for this decision: nothing under `apps/` or `workers/` calls the route; the documented names 404 in production (`POST /v1/events/purchase` → 404 on 2026-10-20); `GET /v1/events/health` answered 200 from a public hostname; and the route was mounted above the auth chain.
+- [x] 2.2 `apps/gateway/src/index.ts` — remove the pre-middleware `app.route('/', ingestor)` mount and mount `app.route('/v1/events', ingestor)` **below** the five `/v1/*` middlewares, next to `POST /v1/support`. Registration order is the authentication; the comment says so.
+- [x] 2.3 `apps/gateway/src/ingestor.ts` — routes become `/:type` and `/health`; a `jwt.business_id` check answers 401 `AUTH_TOKEN_INVALID` when no claim is on the context; the envelope's `business_id` is the token's; a body whose `header.business_id` names another business answers 403 `EVENT_BUSINESS_MISMATCH`; a body with no `payload` key is treated as the payload (the `CustomerRegistered` schema shape) instead of publishing `undefined`.
+- [x] 2.4 `apps/gateway/src/router.ts` — keep the `/v1/events` `gateway` entry and both queue bindings: `routerMiddleware` calls `next()` for a gateway-owned prefix, so the entry is what makes the route reachable, and the ingestor still produces.
+- [x] 2.5 `apps/gateway/src/index.test.ts` — the "Event Ingestor" block now drives the real chain: 202 with a token; 401 without one; 403 when the body names another business; a client-supplied `X-Business-ID` is replaced by the claim; the published envelope carries the token's `business_id`; the bare-payload shape reaches the queue with its body as `payload`; 400/404 unchanged.
+- [x] 2.6 `apps/gateway/src/error-log.test.ts` — the real-500 case now sends a valid token, because the fake bearer it used to send is refused with 401 before the KV throw it needs; the token-leak assertion stays on `triggerReal500`, which carries `AUTH_TOKEN_VALUE` on `/brand/*`.
+- [x] 2.7 `docs/08-API-Design.md` (Events section), `docs/07-Architecture.md:86`, `docs/14-Backlog.md`, `openspec/specs/event-ingestor/spec.md` — the registry keys, the auth requirement, and the two error codes.
+- [x] 2.8 Run `pnpm --filter @vyloop/gateway test`, `typecheck`, `lint` and `openspec validate` — all green on 2026-10-20.
+- [x] 2.9 The independent verifier caught what the mocked registry could not: `register-schemas.ts` publishes eight **PascalCase** keys, and the first correction had renamed the docs to `points_assigned` / `purchase_completed`, which are different KV keys and 404 just like `purchase` did. `test_event` is not registered at all, so the dev-queue branch is dormant. Fixed in `docs/07`, `docs/08`, `docs/14`, `proposal.md`, the spec and both deltas; `apps/gateway/src/event-ingestor.registry.contract.test.ts` now reads the `eventType:` array and the `docs/08` table and fails when they disagree.
 
 ## Unit 3: Meta webhook enablement (only when the product decision changes)
 
@@ -61,5 +62,5 @@ Chain strategy: none
 - [x] 4.3 `packages/db/src/index.ts` — re-export `idxPosTerminalsBusiness` in the `from './indexes'` block (`:182`)
 - [x] 4.4 `packages/db/src/index.test.ts` — add the `idxPosTerminalsBusiness: 'idx_pos_terminals_business'` pair beside the push-subscription ones (`:107-110`)
 - [x] 4.5 Generate the migration with `pnpm --filter @vyloop/db exec drizzle-kit generate` (next free number in `packages/db/drizzle/`, reserved per `docs/18-Trabajo-Pendiente.md`), review it, and confirm `migration-sql.test.ts` passes
-- [ ] 4.6 **(pending — production only)** Apply in production by hand with `CREATE INDEX CONCURRENTLY`, then register the migration in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with `{ "kind": "index", "name": "idx_pos_terminals_business" }` as evidence, so the `migration-drift` deploy gate accepts it
+- [x] 4.6 Apply in production by hand with `CREATE INDEX CONCURRENTLY`, then register the migration in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with `{ "kind": "index", "name": "idx_pos_terminals_business" }` as evidence, so the `migration-drift` deploy gate accepts it. Done 2026-10-20: index created on `br-delicate-paper-aitqyq9y` (`indisvalid = true`), ledger entry merged in #236, `migration-drift` green on the deploy.
 - [x] 4.7 Run `pnpm --filter @vyloop/db test` and the full `pnpm -r test`

@@ -130,10 +130,23 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 
 ### Events (ingesta directa al bus)
 
+Requiere JWT y `X-Business-ID`, como el resto de `/v1/*`. El `business_id` del sobre sale del token; si el body declara otro comercio, la respuesta es 403 `EVENT_BUSINESS_MISMATCH`. El `{tipo}` de la ruta se resuelve contra el Schema Registry, que el job `register-schemas` rellena en cada deploy: KV guarda `{tipo}:latest` y `{tipo}:1.0.0`, y las claves son PascalCase. Cualquier nombre que no esté registrado responde 404 `EVENT_TYPE_UNKNOWN`.
+
 | Método | Endpoint | Descripción |
 |---|---|---|
-| POST | `/v1/events/purchase` | Compra completada desde POS o sistema externo |
-| POST | `/v1/events/custom` | Evento personalizado definido por el negocio |
+| POST | `/v1/events/CustomerRegistered` | Alta de cliente |
+| POST | `/v1/events/CustomerCheckedIn` | Check-in en local |
+| POST | `/v1/events/PointsAssigned` | Puntos asignados, con el saldo resultante |
+| POST | `/v1/events/RewardRedeemed` | Canje de una recompensa |
+| POST | `/v1/events/PushNotificationRequested` | Push puntual |
+| POST | `/v1/events/PushCampaignRequested` | Campaña push segmentada |
+| POST | `/v1/events/WhatsAppOutboundRequested` | Mensaje saliente de WhatsApp |
+| POST | `/v1/events/WorkflowTriggered` | Disparo de un workflow de automatización |
+| GET | `/v1/events/health` | Sonda autenticada del ingestor |
+
+Varios de esos tipos los produce la propia plataforma: `Growth` publica `PointsAssigned` y `RewardRedeemed` directo a la cola, sin pasar por HTTP.
+
+No hay esquema de compra. Esta tabla documentó durante meses `/v1/events/purchase` y `/v1/events/custom`, que nunca estuvieron registrados y siempre respondieron 404; un `PurchaseCompleted` sería una decisión de producto aparte, no un nombre que falte.
 
 ### Wallet (Google Wallet)
 

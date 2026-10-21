@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { clearCache } from '@vyloop/schema-registry';
 import { SignJWT } from 'jose';
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
@@ -20,10 +21,10 @@ const TEST_SCOPES = ['read:customers', 'write:customers'];
 // Helper: issue a JWT for testing (self-contained, no external imports)
 // ---------------------------------------------------------------------------
 
-async function getValidToken(): Promise<string> {
+async function getValidToken(businessId: string = TEST_BUSINESS_ID): Promise<string> {
   const jwt = await new SignJWT({
     sub: TEST_SUB,
-    business_id: TEST_BUSINESS_ID,
+    business_id: businessId,
     role: TEST_ROLE,
     scopes: TEST_SCOPES,
   })
@@ -88,7 +89,7 @@ function mockEnv(overrides: Record<string, unknown> = {}) {
               required: ['event_id', 'event_type', 'business_id', 'timestamp'],
               properties: {
                 event_id: { type: 'string', format: 'uuid' },
-                event_type: { type: 'string', const: 'test_event' },
+                event_type: { type: 'string' },
                 event_version: { type: 'string' },
                 business_id: { type: 'string', format: 'uuid' },
                 timestamp: { type: 'string', format: 'date-time' },
@@ -576,23 +577,64 @@ describe('API Gateway', () => {
   });
 
   describe('Event Ingestor', () => {
+    // A uuid, because the registered schemas type `header.business_id` as one.
+    // ## What this block mocks, and what it does not
+    //
+    // The registry below answers every key with one schema, which is what makes
+    // the ingestor's *logic* — auth by position, tenant from the claim, both
+    // body shapes, error codes — testable without the schema package. It is also
+    // why this block cannot speak about which keys exist: a namespace that
+    // answers everything cannot report a missing one. All the paths here are
+    // therefore `test_event`, a type no deploy registers, so no real name is
+    // paired with a body its real schema would reject.
+    //
+    // The compiled-validator cache is module state keyed by event type, not by
+    // schema content, so a test that swaps the registry for one type only takes
+    // effect if the previous compilation is dropped first.
+    //
+    // The shipped names, and the bodies their real schemas accept, live in
+    // `event-ingestor.real-registry.test.ts`; the names vs. the deploy payload
+    // live in `event-ingestor.registry.contract.test.ts`.
+    const EVENT_BUSINESS_ID = '12345678-1234-1234-1234-123456789abc';
+    const OTHER_BUSINESS_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    let token: string;
+
+    beforeAll(async () => {
+      token = await getValidToken(EVENT_BUSINESS_ID);
+    });
+
+    beforeEach(() => {
+      clearCache();
+    });
+
+    /** The headers a real caller sends. The gateway injects none of them. */
+    function authedHeaders(contentType = 'application/json') {
+      return {
+        'Content-Type': contentType,
+        Authorization: `Bearer ${token}`,
+        'X-Business-ID': EVENT_BUSINESS_ID,
+      };
+    }
+
+    function envelopeBody(businessId: string = EVENT_BUSINESS_ID, type = 'test_event') {
+      return JSON.stringify({
+        header: {
+          event_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          event_type: type,
+          event_version: '1.0.0',
+          business_id: businessId,
+          timestamp: '2026-07-02T12:00:00Z',
+        },
+        payload: { message: 'Hello from test!' },
+      });
+    }
+
     it('returns 202 for a valid event with registered schema', async () => {
       const res = await app.fetch(
         new Request('http://localhost/v1/events/test_event', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            header: {
-              event_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-              event_type: 'test_event',
-              event_version: '1.0.0',
-              business_id: '12345678-1234-1234-1234-123456789abc',
-              timestamp: '2026-07-02T12:00:00Z',
-            },
-            payload: {
-              message: 'Hello from test!',
-            },
-          }),
+          headers: authedHeaders(),
+          body: envelopeBody(),
         }),
         mockEnv(),
       );
@@ -604,11 +646,150 @@ describe('API Gateway', () => {
       expect(body).toHaveProperty('event_type', 'test_event');
     });
 
-    it('returns 400 for an invalid event payload', async () => {
+    it('refuses an unauthenticated POST, which is what this route used to accept', async () => {
+      // The route was mounted above the whole middleware chain, so this exact
+      // request answered 202 and published. Public-write regression guard: no
+      // token, a body that would otherwise validate, and the answer is 401.
       const res = await app.fetch(
         new Request('http://localhost/v1/events/test_event', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          body: envelopeBody(),
+        }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('AUTH_TOKEN_INVALID');
+    });
+
+    it('replaces a client-supplied X-Business-ID with the token\'s', async () => {
+      // `authInjectMiddleware` strips incoming `X-*` headers and re-injects them
+      // from the claim, so a caller cannot choose its tenant by header any more
+      // than it can by body. Without that, the business-id check below would be
+      // comparing two values the caller controls.
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: { ...authedHeaders(), 'X-Business-ID': OTHER_BUSINESS_ID },
+          body: envelopeBody(),
+        }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(202);
+    });
+
+    it('refuses a body that names another business', async () => {
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: authedHeaders(),
+          body: envelopeBody(OTHER_BUSINESS_ID),
+        }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('EVENT_BUSINESS_MISMATCH');
+    });
+
+    it('publishes an envelope whose business_id is the token\'s', async () => {
+      const sent: Array<{ header: { business_id: string }; payload: unknown }> = [];
+
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: authedHeaders(),
+          body: envelopeBody(),
+        }),
+        mockEnv({
+          EVENT_QUEUE: {
+            send: async (event: { header: { business_id: string }; payload: unknown }) => {
+              sent.push(event);
+            },
+            sendBatch: async () => {},
+          },
+        }),
+      );
+
+      expect(res.status).toBe(202);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.header.business_id).toBe(EVENT_BUSINESS_ID);
+      expect(sent[0]?.payload).toEqual({ message: 'Hello from test!' });
+    });
+
+    it('publishes test_event to the dev queue, a branch no registered key reaches today', async () => {
+      // The dev/domain split is real code and `register-schemas.ts` publishes no
+      // `test_event` key, so this is the only place the branch can be exercised.
+      // The registry contract test asserts the absence; this asserts the branch.
+      const sent: Array<{ type: string }> = [];
+
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: authedHeaders(),
+          body: envelopeBody(EVENT_BUSINESS_ID, 'test_event'),
+        }),
+        mockEnv({
+          EVENT_QUEUE: {
+            send: async (event: { type: string }) => {
+              sent.push(event);
+            },
+            sendBatch: async () => {},
+          },
+        }),
+      );
+
+      expect(res.status).toBe(202);
+      expect(sent).toHaveLength(1);
+    });
+
+    it('accepts a bare-payload schema and wraps the body as the payload', async () => {
+      // `CustomerRegistered` validates the payload alone. The envelope branch
+      // used to publish `payload: undefined` for a body like this one; both
+      // shapes have to reach the queue with something in them.
+      const barePayloadRegistry = {
+        get: async () =>
+          JSON.stringify({
+            $schema: 'http://json-schema.org/draft-07/schema#',
+            type: 'object',
+            required: ['customer_id'],
+            properties: { customer_id: { type: 'string' } },
+          }),
+        put: async () => {},
+        delete: async () => {},
+      };
+      const sent: Array<{ payload: unknown }> = [];
+
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: authedHeaders(),
+          body: JSON.stringify({ customer_id: 'cust_1' }),
+        }),
+        mockEnv({
+          SCHEMA_REGISTRY: barePayloadRegistry,
+          EVENT_QUEUE: {
+            send: async (event: { payload: unknown }) => {
+              sent.push(event);
+            },
+            sendBatch: async () => {},
+          },
+        }),
+      );
+
+      expect(res.status).toBe(202);
+      expect(sent[0]?.payload).toEqual({ customer_id: 'cust_1' });
+    });
+
+    it('returns 400 for an invalid event payload', async () => {
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: authedHeaders(),
           body: JSON.stringify({
             // Missing required 'header' field
             payload: { message: 'test' },
@@ -620,11 +801,28 @@ describe('API Gateway', () => {
       expect(res.status).toBe(400);
     });
 
+    it('returns 400 for a JSON body that is not an object', async () => {
+      // `c.req.json()` parses `null` and `"text"` happily. Before the guard this
+      // reached `body.header` and threw, so a malformed request answered 500.
+      const res = await app.fetch(
+        new Request('http://localhost/v1/events/test_event', {
+          method: 'POST',
+          headers: authedHeaders(),
+          body: 'null',
+        }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('SCHEMA_INVALID');
+    });
+
     it('returns 400 for non-JSON content type', async () => {
       const res = await app.fetch(
         new Request('http://localhost/v1/events/test_event', {
           method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: authedHeaders('text/plain'),
           body: 'not json',
         }),
         mockEnv(),
@@ -644,13 +842,13 @@ describe('API Gateway', () => {
       const res = await app.fetch(
         new Request('http://localhost/v1/events/unknown_type', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authedHeaders(),
           body: JSON.stringify({
             header: {
               event_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
               event_type: 'unknown_type',
               event_version: '1.0.0',
-              business_id: '12345678-1234-1234-1234-123456789abc',
+              business_id: EVENT_BUSINESS_ID,
               timestamp: '2026-07-02T12:00:00Z',
             },
             payload: {},
@@ -700,13 +898,13 @@ describe('API Gateway', () => {
       const res = await app.fetch(
         new Request('http://localhost/v1/events/test_event', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authedHeaders(),
           body: JSON.stringify({
             header: {
               event_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
               event_type: 'test_event',
               event_version: '1.0.0',
-              business_id: '12345678-1234-1234-1234-123456789abc',
+              business_id: EVENT_BUSINESS_ID,
               timestamp: '2026-07-02T12:00:00Z',
             },
             payload: { message: 'Hello from test!' },
