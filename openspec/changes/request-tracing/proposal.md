@@ -1,6 +1,6 @@
 # Proposal: Request Tracing
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: scheduled — started 2026-10-21. Unit 1 done; Units 2-4 pending.
 
 ## Intent
 

@@ -4,6 +4,7 @@
     "baseUrl": ".",
     "paths": {
       "@vyloop/types": ["packages/types/src"],
+      "@vyloop/request-context": ["packages/request-context/src"],
       "@vyloop/schema-registry": ["packages/schema-registry/src"],
       "@vyloop/db": ["packages/db/src"],
       "@vyloop/config": ["packages/config/src"]

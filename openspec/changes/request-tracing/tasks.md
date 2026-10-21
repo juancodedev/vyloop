@@ -1,6 +1,6 @@
 # Tasks: Request Tracing
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: scheduled — started 2026-10-21. Unit 1 done; Units 2-4 pending.
 
 ## Review Workload Forecast
 
@@ -31,9 +31,9 @@ schema and the worker error body. Unit 4's schema change gets its own commit.
 
 ## Unit 1: Shared package
 
-- [ ] 1.1 `packages/request-context/package.json`, `tsconfig.json`, `vitest.config.ts` — following `packages/types`; `hono` as a peer dependency
-- [ ] 1.2 `packages/request-context/src/index.ts` — `REQUEST_ID_HEADER = 'X-Request-Id'`, `REQUEST_ID_PATTERN`, `isValidRequestId`, `resolveRequestId(value)`, `requestIdMiddleware()` (sets `c.set('requestId')`, rewrites the forwarded request header, sets the response header after `next()`), `logPrefix(service, requestId)`
-- [ ] 1.3 `packages/request-context/src/index.test.ts` — valid ids kept; empty, too long, space, newline and `=` refused; generated id is a UUID; response header set on success and after a thrown error; prefix format
+- [x] 1.1 `packages/request-context/package.json`, `tsconfig.json`, `vitest.config.ts` — following `packages/types`; `hono` as a peer dependency
+- [x] 1.2 `packages/request-context/src/index.ts` — `REQUEST_ID_HEADER = 'X-Request-Id'`, `REQUEST_ID_PATTERN`, `isValidRequestId`, `resolveRequestId(value)`, `requestIdMiddleware()` (sets `c.set('requestId')`, rewrites the forwarded request header, sets the response header after `next()`), `logPrefix(service, requestId)`
+- [x] 1.3 `packages/request-context/src/index.test.ts` — valid ids kept; empty, too long, space, newline and `=` refused; generated id is a UUID; response header set on success and after a thrown error; prefix format
 
 ## Unit 2: Gateway
 
