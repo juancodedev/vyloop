@@ -20,4 +20,4 @@ already shipped by `0014_branch_geolocation` and the identity worker.
 - [x] 3.1 `openspec validate venue-geolocation --strict` passes.
 - [x] 3.2 `openspec validate database --type spec`, `openspec validate api-gateway --type spec` and `openspec validate multi-tenant-iam --type spec` still pass (they do not see the delta until it is archived).
 - [x] 3.3 Re-read the deltas against the route handlers once more; a scenario that describes what the code does not do is worse than no scenario.
-- [ ] 3.4 Archive with `openspec archive venue-geolocation -y` after review, then `openspec validate <capability> --type spec` for the three merged specs.
+- [x] 3.4 Archive with `openspec archive venue-geolocation -y` after review, then `openspec validate <capability> --type spec` for the three merged specs.
