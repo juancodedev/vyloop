@@ -1,11 +1,11 @@
 import type { Message } from '@cloudflare/workers-types';
-import { createDb, customers, membershipTiers, loyaltyPrograms, rewards, rewardGrants } from '@vyloop/db';
+import { createDb, customers, membershipTiers, loyaltyPrograms, rewards, rewardBranches, rewardGrants } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { publish } from '@vyloop/event-bus';
 import { eq, and, lte, desc, sql, isNotNull } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
-import { withRls, buildRewardAutoGrantedEvent } from './helpers';
+import { withRls, buildRewardAutoGrantedEvent, buildRewardAvailableAtBranchEvent } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Queue consumer dispatcher
@@ -228,7 +228,11 @@ async function handlePointsAssigned(
   // Get the customer record to find current tier
   // -----------------------------------------------------------------------
   const [customer] = await db
-    .select({ id: customers.id, currentTierId: customers.currentTierId })
+    .select({
+      id: customers.id,
+      globalId: customers.globalId,
+      currentTierId: customers.currentTierId,
+    })
     .from(customers)
     .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
     .limit(1);
@@ -329,7 +333,7 @@ async function handlePointsAssigned(
       }
 
       // Insert grant record
-      await db
+      const [grant] = await db
         .insert(rewardGrants)
         .values({
           businessId,
@@ -337,7 +341,7 @@ async function handlePointsAssigned(
           rewardId: reward.id,
           balanceAfter: currentBalance,
         })
-        .returning();
+        .returning({ id: rewardGrants.id });
 
       console.log(
         `[growth] Auto-reward "${reward.name}" granted to customer ${customer.id} (threshold: ${reward.autoGrantThreshold}, balance: ${currentBalance})`,
@@ -353,6 +357,45 @@ async function handlePointsAssigned(
       );
 
       await publish(env.DOMAIN_EVENTS_QUEUE, event);
+
+      // -----------------------------------------------------------------
+      // A reward that is only good at some venues is worth telling the
+      // customer about, and a reward that is good everywhere is not: that is
+      // the difference between "you have a prize" and "your prize is here".
+      //
+      // The scope is read after the grant exists, so a failure between the
+      // two publishes loses the announcement and never the grant. The
+      // consumer's own cap and the grant's idempotency make a redelivery safe.
+      // -----------------------------------------------------------------
+      const scope = await db
+        .select({ branchId: rewardBranches.branchId })
+        .from(rewardBranches)
+        .where(eq(rewardBranches.rewardId, reward.id));
+
+      if (scope.length === 0) continue;
+
+      const queue = env.DELIVERY_QUEUE;
+      if (!queue) {
+        // Same call the check-in route makes: the grant is the record, and a
+        // missing binding must not fail the points that produced it.
+        console.error(
+          `[growth] No DELIVERY_QUEUE binding, so the grant of "${reward.name}" to customer ` +
+            `${customer.id} in tenant ${businessId} was not announced. The reward_grants row is the record.`,
+        );
+        continue;
+      }
+
+      await publish(
+        queue,
+        buildRewardAvailableAtBranchEvent(
+          customer.globalId,
+          businessId,
+          reward.id,
+          reward.name,
+          grant.id,
+          scope.map((row) => row.branchId),
+        ),
+      );
     }
   }
 }

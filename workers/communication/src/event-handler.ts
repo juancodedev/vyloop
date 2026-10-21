@@ -1,6 +1,6 @@
 import type { Message } from '@cloudflare/workers-types';
 import { createDb, messageLog, customers } from '@vyloop/db';
-import { CUSTOMER_CHECKED_IN, PUSH_CAMPAIGN_REQUESTED } from '@vyloop/event-bus';
+import { CUSTOMER_CHECKED_IN, PUSH_CAMPAIGN_REQUESTED, REWARD_AVAILABLE_AT_BRANCH } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { eq, and } from 'drizzle-orm';
 
@@ -8,6 +8,10 @@ import type { Bindings } from './helpers';
 import { withRls, callMetaApi, isRetryableError } from './helpers';
 import { handlePushCampaignRequested, type PushCampaignPayload } from './push-campaigns';
 import { deliverPushNotification, type PushNotificationPayload } from './push-delivery';
+import {
+  handleRewardAvailableAtBranch,
+  type RewardAvailableAtBranchPayload,
+} from './reward-notifications';
 
 // ---------------------------------------------------------------------------
 // Queue consumer dispatcher
@@ -34,10 +38,32 @@ export async function handleEvent(
     case CUSTOMER_CHECKED_IN:
       // Recorded for the venue association; no message is owed for a check-in.
       return;
+    case REWARD_AVAILABLE_AT_BRANCH:
+      return handleRewardAvailableAtBranchEvent(event, env);
     default:
       console.warn(`[communication] Unknown event type: ${event.type} — acking and skipping`);
       return;
   }
+}
+
+// ---------------------------------------------------------------------------
+// RewardAvailableAtBranch handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Announce a reward that is only redeemable at some venues.
+ *
+ * The cap and the consent live in `reward-notifications`; this wrapper only
+ * takes the tenant from the envelope, which is what makes the handler's own
+ * reads tenant-scoped.
+ */
+async function handleRewardAvailableAtBranchEvent(
+  event: EventEnvelope,
+  env: Bindings,
+): Promise<void> {
+  const payload = event.payload as RewardAvailableAtBranchPayload;
+
+  await handleRewardAvailableAtBranch(payload, event.header.business_id, env);
 }
 
 // ---------------------------------------------------------------------------
