@@ -57,7 +57,8 @@ const CHANGE_SPECS_DIR = join(
   REPO_ROOT,
   'openspec',
   'changes',
-  'api-surface-cleanup',
+  'archive',
+  '2026-10-21-api-surface-cleanup',
   'specs',
 );
 

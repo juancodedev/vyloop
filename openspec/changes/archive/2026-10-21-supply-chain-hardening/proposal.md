@@ -1,6 +1,7 @@
 # Proposal: Supply-Chain Hardening
 
-> Status: deferred — post-PMV. Documented 2026-10-20; not scheduled.
+> Status: archived — done in PR #235 (merged 2026-10-20), the Wave 0 security work.
+> Archived 2026-10-21.
 
 ## Intent
 

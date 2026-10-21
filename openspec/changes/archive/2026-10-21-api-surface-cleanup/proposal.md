@@ -1,7 +1,9 @@
 # Proposal: API Surface Cleanup
 
-> Status: Units 1, 2 and 4 done (2026-10-20). Unit 3 deferred: the Meta webhook
-> stays dormant until the product decision of 2026-10-08 is reversed.
+> Status: archived — Units 1, 2 and 4 landed in the canonical specs on 2026-10-21
+> (merged in PRs #236/#237, 2026-10-20). Unit 3 (Meta webhook enablement) is
+> deferred by the product decision of 2026-10-08: its requirement landed as a
+> dormant contract, and its implementation tasks stay open in this archive.
 
 ## Intent
 

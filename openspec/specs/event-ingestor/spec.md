@@ -33,53 +33,12 @@ handler — is what authenticates it.
 - **AND** the envelope is published under the token's business, never under
   `business_id: "unknown"`
 
-### Requirement: Authentication and tenancy
-
-The ingestor SHALL take the event's `business_id` from the verified JWT claim,
-never from the request body. A request without a valid identity SHALL answer 401,
-and a body whose `header.business_id` names a different business SHALL answer 403.
-
-#### Scenario: Anonymous write
-
-- **GIVEN** a schema-valid event body and no `Authorization` header
-- **WHEN** `POST /v1/events/PointsAssigned`
-- **THEN** 401 `AUTH_TOKEN_INVALID`
-- **AND** nothing is published
-
-#### Scenario: Foreign tenant
-
-- **GIVEN** a token for business A and a body whose `header.business_id` is B
-- **WHEN** `POST /v1/events/PointsAssigned`
-- **THEN** 403 `EVENT_BUSINESS_MISMATCH`
-- **AND** nothing is published
-
-### Requirement: Registered types only
-
-The event type SHALL be a key of the Schema Registry, which the `register-schemas`
-deploy job populates before the gateway is published. KV keys are the event type in
-PascalCase with a version suffix; the deploy publishes `CustomerCheckedIn`,
-`CustomerRegistered`, `PointsAssigned`, `PushCampaignRequested`,
-`PushNotificationRequested`, `RewardAvailableAtBranch`, `RewardRedeemed`,
-`WhatsAppOutboundRequested` and `WorkflowTriggered`.
-
-#### Scenario: Unknown type
-
-- **GIVEN** `POST /v1/events/purchase`
-- **WHEN** no schema is registered under `purchase`
-- **THEN** 404 `EVENT_TYPE_UNKNOWN`
-- **AND** nothing is published
-
-#### Scenario: Unregistered test type
-
-- **GIVEN** the deploy registers no `test_event` key
-- **WHEN** `POST /v1/events/test_event`
-- **THEN** 404 `EVENT_TYPE_UNKNOWN`
-
 ### Requirement: Queue selection
 
-An event named `test_event` SHALL publish to the dev-only queue; every other type
-SHALL publish to the domain queue. No `test_event` key is registered today, so that
-branch is dormant until one is.
+An event named `test_event` SHALL publish to the dev-only queue and SHALL require
+the same authentication as every other event type; every other type SHALL publish to
+the domain queue. No `test_event` key is registered today, so that branch is dormant
+until one is.
 
 #### Scenario: Domain queue
 
@@ -107,3 +66,45 @@ Content-Type, a JSON body that is not an object, or a schema mismatch, and
 - **WHEN** `POST /v1/events/PointsAssigned`
 - **THEN** 400 `SCHEMA_INVALID`, never 500
 - **AND** nothing is published
+
+### Requirement: Authentication and tenancy
+
+The ingestor SHALL take the event's `business_id` from the verified JWT claim,
+never from the request body. A request without a valid identity SHALL answer 401,
+and a body whose `header.business_id` names a different business SHALL answer 403.
+
+#### Scenario: Anonymous write
+
+- **GIVEN** a schema-valid event body and no `Authorization` header
+- **WHEN** `POST /v1/events/PointsAssigned`
+- **THEN** 401 `AUTH_TOKEN_INVALID`
+- **AND** nothing is published
+
+#### Scenario: Foreign tenant
+
+- **GIVEN** a token for business A and a body whose `header.business_id` is B
+- **WHEN** `POST /v1/events/PointsAssigned`
+- **THEN** 403 `EVENT_BUSINESS_MISMATCH`
+- **AND** nothing is published
+
+### Requirement: Registered types only
+
+The event type SHALL be a key of the Schema Registry, which the `register-schemas`
+deploy job populates before the gateway is published. KV keys are the event type in
+PascalCase with a version suffix; the deploy publishes `CustomerCheckedIn`,
+`CustomerRegistered`, `PointsAssigned`, `PushCampaignRequested`,
+`PushNotificationRequested`, `RewardAvailableAtBranch`, `RewardRedeemed`, `WhatsAppOutboundRequested` and
+`WorkflowTriggered`.
+
+#### Scenario: Unknown type
+
+- **GIVEN** `POST /v1/events/purchase`
+- **WHEN** no schema is registered under `purchase`
+- **THEN** 404 `EVENT_TYPE_UNKNOWN`
+- **AND** nothing is published
+
+#### Scenario: Unregistered test type
+
+- **GIVEN** the deploy registers no `test_event` key
+- **WHEN** `POST /v1/events/test_event`
+- **THEN** 404 `EVENT_TYPE_UNKNOWN`
