@@ -18,11 +18,16 @@ de lo que hay que implementar.
 | `campaign-delivery-idempotency` | Un push de campaña llega una sola vez aunque dos consumidores o dos POST compitan | Grande | Alto |
 | `message-log-schema-alignment` | `message_log` de producción igual al schema, y el gate de drift aprende a verificar `ALTER COLUMN` y `DROP` | Mediano | Bajo |
 | `pages-opennext-migration` | `customer-web` y `dashboard` dejan `@cloudflare/next-on-pages` (en desuso) por OpenNext | Grande | Medio |
-| `branch-reward-trigger` | El trigger `RewardAvailableAtBranch`, con la dimensión de local en `rewards` | Mediano | Bajo |
 | `wallet-pass-correctness` | Saldo entero hacia Google, `member_code` al registrarse, y el comercio gestiona los pases | Mediano–Grande | Medio |
 | `request-tracing` | El `request_id` viaja del gateway a los workers y a los eventos de la cola | Mediano | Medio |
-| `supply-chain-hardening` | `pnpm audit` en CI, `sslmode` explícito antes de `pg` v9, overrides inertes | Chico | Medio |
-| `api-surface-cleanup` | `/v1/automation` (la página "Flujos" del dashboard llama rutas que no existen), el ingestor de eventos, el webhook de Meta dormido y el índice de `pos_terminals`. **Hallazgo (resuelto el 2026-10-20):** `POST /v1/events/:type` estaba montado antes de la autenticación y publicaba con el `business_id` del body; ahora vive debajo de la cadena de auth, el tenant sale del token y un body que nombra otro comercio responde 403. Queda la Unidad 3, el webhook de Meta, dormido por decisión de producto | Chico–Mediano | Medio |
+
+### Hecho — archivado en OpenSpec
+
+Tres cambios de la tabla ya están implementados y sus deltas viven en las specs canónicas:
+
+- **`branch-reward-trigger`** — implementado y archivado (`2026-10-21-branch-reward-trigger`), mergeado en #248/#249. Añadió `reward_branches` (migración `0021`) y el evento `RewardAvailableAtBranch`.
+- **`supply-chain-hardening`** — implementado en PR #235 (mergeado el 2026-10-20) y archivado (`2026-10-21-supply-chain-hardening`). `pnpm audit` en CI, `sslmode=verify-full` y overrides inertes.
+- **`api-surface-cleanup`** — Unidades 1, 2 y 4 implementadas (PRs #236/#237) y archivadas (`2026-10-21-api-surface-cleanup`): `/health` de automation alcanzable, ingestor de eventos autenticado y con tenant del token, e índice `idx_pos_terminals_business` (`0020`). **Queda la Unidad 3** (habilitar el webhook de Meta), diferida por la decisión de producto del 2026-10-08; su requerimiento quedó como contrato dormido en `openspec/specs/communication-whatsapp/spec.md` y sus tareas de implementación siguen abiertas en el archivo.
 
 ### Convenciones para levantar un cambio diferido
 
@@ -31,25 +36,27 @@ Un cambio de esta tabla se levanta de a uno. Antes de escribir código:
 1. **Estado.** El `proposal.md`, los deltas y el `tasks.md` de cada cambio llevan
    `> Status: deferred — post-PMV.` Mientras siga ahí, no está agendado; al
    arrancar se cambia por la fecha y el dueño.
-2. **Número de migración.** La última migración es `0019`. Los cambios que crean
-   una (`message-log-schema-alignment`, `campaign-delivery-idempotency`,
-   `branch-reward-trigger`, `api-surface-cleanup`, `tenant-isolation-rls`) dicen
+2. **Número de migración.** La última migración es `0021` (aplicadas `0019`, `0020`
+   y `0021`). Los cambios que crean una (`message-log-schema-alignment`,
+   `campaign-delivery-idempotency`, `tenant-isolation-rls`) dicen
    "next free number": el número se reserva al empezar, se anota en
    `packages/db/drizzle/meta/_journal.json` y en el plan de ejecución
    (`odd/tasks/post-pmv-action-plan.md`). Dos cambios no se implementan en
    paralelo si los dos crean una migración.
 3. **Dependencias entre cambios.** `tenant-isolation-rls` va después de
    `message-log-schema-alignment` (los dos tocan `check-migration-drift.mjs` y el
-   formato del baseline) y después de `wallet-pass-correctness`,
-   `campaign-delivery-idempotency` y `branch-reward-trigger` (las tablas nuevas
-   tienen que estar en las listas de RLS). `request-tracing` va después de
-   `api-surface-cleanup`. `campaign-delivery-idempotency` y
-   `branch-reward-trigger` ya no dependen de `push-transport`: está archivado
-   (`2026-10-20-push-transport`) y su spec vive en
-   `openspec/specs/push-notifications/spec.md`.
-4. **Puertas de decisión.** No se implementa `api-surface-cleanup` Unidad 2 sin
-   la decisión Opción R/K registrada, ni `branch-reward-trigger` sin responder
-   Q1-Q6.
+   formato del baseline) y después de `wallet-pass-correctness` y
+   `campaign-delivery-idempotency` (las tablas nuevas tienen que estar en las
+   listas de RLS). `request-tracing` ya no depende de `api-surface-cleanup`: está
+   archivado (`2026-10-21-api-surface-cleanup`) y su superficie quedó estable.
+   `campaign-delivery-idempotency` ya no depende de `push-transport` ni de
+   `branch-reward-trigger`: ambos están archivados (`2026-10-20-push-transport`,
+   `2026-10-21-branch-reward-trigger`).
+4. **Puertas de decisión.** Cerradas: `api-surface-cleanup` Unidad 2 se decidió
+   **Opción K (keep and fix)** el 2026-10-20, y `branch-reward-trigger` respondió
+   Q1-Q6. Quedan abiertas: la Unidad 3 de `api-surface-cleanup` (webhook de Meta),
+   la revocación de Google de `wallet-pass-correctness` y la credencial del
+   gateway de `tenant-isolation-rls`.
 
 ### Decisiones de producto abiertas
 
@@ -553,13 +560,12 @@ la fuente de la verdad, y los dos runtimes la leen.
 
 ---
 
-## Pendiente — `sslmode=require` se va a debilitar en silencio cuando bumpee `pg`
+## Resuelto — `sslmode=require` se iba a debilitar en silencio cuando bumpee `pg`
 
-**Estado:** el secreto `DATABASE_URL` de GitHub se giró a `sslmode=verify-full` el 2026-10-20
-19:34 UTC, y `deploy.yml` lo publica a los workers con `--var` en cada deploy, así que producción
-queda con la cadena verificada. El guard de `supply-chain-hardening` (Unidad 2) está en los scripts.
-Falta solo actualizar los 8 `.dev.vars` locales, que siguen en `require`; no son producción y no se
-tocaron.
+**Estado:** resuelto el 2026-10-20. El secreto `DATABASE_URL` de GitHub se giró a `sslmode=verify-full`
+y `deploy.yml` lo publica a los workers con `--var` en cada deploy, así que producción queda con la
+cadena verificada. Los 8 `.dev.vars` (apps/gateway y los siete workers) también están en
+`verify-full`, y el guard de `supply-chain-hardening` (Unidad 2) está en los scripts.
 
 ### Qué pasa
 
