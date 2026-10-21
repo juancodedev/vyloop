@@ -1,6 +1,6 @@
 # Tasks: Wallet Notifications
 
-> Status: proposed. Q1-Q5 decided 2026-10-21; Q6 open.
+> Status: proposed. Q1-Q6 decided 2026-10-21.
 
 ## Review Workload Forecast
 
@@ -34,13 +34,13 @@ Chained PRs recommended: Yes
 - [x] 0.3 Q3 — Daily limit per business. **Decided: 1 per business per day, as a constant in code, not a column.** A constant is reviewable in a PR; a column is a setting that changes without one.
 - [x] 0.4 Q4 — `header`/`body` lengths. **Decided: 40 / 300 as product limits**, declared once in `WALLET_MESSAGE_LIMITS` in `@vyloop/types` so the form and the route cannot disagree. `POST` refuses with `WALLET_MESSAGE_TOO_LONG` before anything is queued. Google documents no message-length cap, so a provider 400 for length is recorded `rejected` per object, never retried, and the fan-out continues. Unit 3 measures the real behaviour with one over-long message to a test issuer.
 - [x] 0.5 Q5 — Which hosts may `link` point to? **Decided: only the origin of `WALLET_CUSTOMER_WEB_BASE_URL`.** An operator-typed host is the exact vector Google's Acceptable Use Policy forbids, and a typo is indistinguishable from abuse. A business domain is added later with ownership verification.
-- [ ] 0.6 Q6 — Map for the venue form. **Open.** Recommendation: no map in v1 — two numeric fields plus a "use my location" button, because the operator stands at the venue and the browser's position is better data than a dragged pin. That also removes the tile-provider decision. If a map is wanted: Leaflet with a configurable tile URL.
+- [x] 0.6 Q6 — Map for the venue form. **Decided: no map in v1.** Two numeric fields plus a "use my location" button. The operator registers a venue while standing in it, so the browser's position is better data than a dragged pin, and a map would force a tile-provider decision for one pair of numbers. Address search stays deferred. If a map is ever wanted, Leaflet with a configurable tile URL.
 
 ## Unit 1: Venues Section (step 1)
 
 - [ ] 1.1 API client in `apps/dashboard/src/lib/api.ts`: create, update and deactivate venues; extend the venue record with `latitude`, `longitude` and `isActive`.
 - [ ] 1.2 `dashboard/settings/venues` page: list with located / not located and active / inactive.
-- [ ] 1.3 Venue form with map pin (Q6); sends both coordinates or neither.
+- [ ] 1.3 Venue form with two coordinate fields and a "use my location" button (Q6 = no map); sends both coordinates or neither.
 - [ ] 1.4 Readable messages for `BRANCH_LOCATION_INCOMPLETE`, `BRANCH_LOCATION_INVALID`, `BRANCH_LOCATION_OUT_OF_RANGE`.
 - [ ] 1.5 Tests per scenario in `specs/growth-dashboard` "Venue Management".
 
