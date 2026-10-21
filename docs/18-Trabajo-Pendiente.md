@@ -44,8 +44,9 @@ Un cambio de esta tabla se levanta de a uno. Antes de escribir código:
    `campaign-delivery-idempotency` y `branch-reward-trigger` (las tablas nuevas
    tienen que estar en las listas de RLS). `request-tracing` va después de
    `api-surface-cleanup`. `campaign-delivery-idempotency` y
-   `branch-reward-trigger` no se archivan hasta que `push-transport` esté
-   archivado.
+   `branch-reward-trigger` ya no dependen de `push-transport`: está archivado
+   (`2026-10-20-push-transport`) y su spec vive en
+   `openspec/specs/push-notifications/spec.md`.
 4. **Puertas de decisión.** No se implementa `api-surface-cleanup` Unidad 2 sin
    la decisión Opción R/K registrada, ni `branch-reward-trigger` sin responder
    Q1-Q6.

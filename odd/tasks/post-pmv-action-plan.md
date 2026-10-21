@@ -87,7 +87,7 @@ migration is applied and registered.
 | Meta webhook decision of 2026-10-08 | `api-surface-cleanup` | Unit 3 only | pending |
 | Q1-Q6 in `proposal.md` | `branch-reward-trigger` | Unit 0 and everything after | pending |
 | Google revocation state (`INACTIVE` or `EXPIRED`) and the backfill invocation | `wallet-pass-correctness` | Unit 2.9 and Unit 3 | pending |
-| `push-transport` archived | `campaign-delivery-idempotency`, `branch-reward-trigger` | archive | pending |
+| `push-transport` archived | `campaign-delivery-idempotency`, `branch-reward-trigger` | archive | done 2026-10-20 (`openspec/specs/push-notifications/`) |
 | Gateway credential for phase 1 (`vyloop_app` with the workers, or separate) | `tenant-isolation-rls` | phase 1 | pending |
 
 ## Estado al 2026-10-20

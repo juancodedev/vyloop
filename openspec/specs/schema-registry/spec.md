@@ -24,9 +24,37 @@ Ingestor MUST validate payloads. Invalid → 400 `SCHEMA_INVALID`.
 - WHEN Ingestor validates
 - THEN 400 `SCHEMA_INVALID`
 
-### Requirement: CRUD
+### Requirement: Registration and Lookup
 
-Endpoints to register, read, list, deprecate. Admin-only modify.
+`registerSchema` MUST store the schema under both `{eventType}:{version}` and `{eventType}:latest`, and `getSchema` MUST read the exact key when a version is given and the `latest` key when it is not.
+
+The version MUST be the explicit argument when present, otherwise the semver tail of the schema's `$id`, otherwise `1.0.0`. Registration MUST invalidate the compiled validator for that event type.
+
+The package exposes no list, deprecate or delete operation, and no HTTP surface: registration happens through `packages/schema-registry/scripts/register-schemas.ts`, which runs as a deployment step.
+
+#### Scenario: Registration writes both keys
+
+- GIVEN a schema registered at `1.0.0`
+- WHEN the store is read
+- THEN both `{eventType}:1.0.0` and `{eventType}:latest` hold it
+
+#### Scenario: Lookup without a version
+
+- GIVEN a registered schema
+- WHEN it is read without a version
+- THEN the `latest` value is returned
+
+#### Scenario: The version comes from `$id`
+
+- GIVEN a schema whose `$id` ends in `v2.1.0` and no explicit version
+- WHEN it is registered
+- THEN it is stored at `2.1.0` and at `latest`
+
+#### Scenario: An absent schema
+
+- GIVEN no schema registered for an event type
+- WHEN it is read
+- THEN `null` is returned
 
 ### Requirement: CustomerRegistered Schema
 
@@ -56,3 +84,21 @@ All three fields MUST be required.
 - GIVEN `full_name` is an empty string
 - WHEN validated
 - THEN validation fails (minLength 1)
+
+### Requirement: PushNotificationRequested Schema
+
+The schema registry MUST register a `PushNotificationRequested` JSON Schema at version `v1.0.0`, and MUST publish it under both `{eventType}:{version}` and `{eventType}:latest`.
+
+The schema MUST validate an envelope with `header` and `payload` as sibling properties. The `payload` MUST validate `customer_id` (string, uuid), `business_id` (string, uuid), `title` (string, minLength 1) and `body` (string) as required, and MAY validate `url` (string) and `reference_id` (string).
+
+#### Scenario: A valid payload passes
+
+- GIVEN an envelope with a valid header and payload
+- WHEN validated against the schema
+- THEN validation passes
+
+#### Scenario: A payload without a title is rejected
+
+- GIVEN a payload with no `title`
+- WHEN validated
+- THEN validation fails with `SCHEMA_INVALID`
