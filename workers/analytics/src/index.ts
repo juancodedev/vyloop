@@ -1,5 +1,5 @@
 import { createDb, setCurrentBusinessId } from '@vyloop/db';
-import { getRequestId, logPrefix, requestIdMiddleware } from '@vyloop/request-context';
+import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -216,22 +216,7 @@ app.notFound((c) => {
 // Global error handler
 // ---------------------------------------------------------------------------
 
-app.onError((err, c) => {
-  const requestId = getRequestId(c);
-  console.error(`${logPrefix('analytics', requestId)} ${c.req.method} ${new URL(c.req.url).pathname}:`, err);
-
-  if (err instanceof HTTPException) {
-    return c.json(
-      { error: { code: 'ERROR', message: err.message, request_id: requestId } },
-      err.status,
-    );
-  }
-
-  return c.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error', request_id: requestId } },
-    500,
-  );
-});
+app.onError(createErrorHandler('analytics'));
 
 // ---------------------------------------------------------------------------
 // Export

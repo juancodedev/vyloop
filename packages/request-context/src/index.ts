@@ -1,4 +1,5 @@
-import type { Context, Next } from 'hono';
+import type { Context, ErrorHandler, Next } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 
 /**
  * The header that carries the correlation id from the gateway to the workers,
@@ -91,5 +92,38 @@ export function requestIdMiddleware() {
     } finally {
       c.header(REQUEST_ID_HEADER, requestId);
     }
+  };
+}
+
+/**
+ * The `onError` every worker registers.
+ *
+ * It lives here rather than in each worker because the shape of the answer is
+ * the contract: `request_id` is what makes a 500 traceable, and a worker that
+ * forgets it produces the same untraceable error the whole change exists to
+ * remove. One function, tested once, registered eight times.
+ *
+ * An `HTTPException` keeps the status and message its thrower chose; anything
+ * else becomes a 500 whose message says nothing about the internals.
+ */
+export function createErrorHandler(service: string): ErrorHandler {
+  return (err, c) => {
+    const requestId = getRequestId(c);
+    console.error(
+      `${logPrefix(service, requestId)} ${c.req.method} ${new URL(c.req.url).pathname}:`,
+      err,
+    );
+
+    if (err instanceof HTTPException) {
+      return c.json(
+        { error: { code: 'ERROR', message: err.message, request_id: requestId } },
+        err.status,
+      );
+    }
+
+    return c.json(
+      { error: { code: 'INTERNAL_ERROR', message: 'Internal server error', request_id: requestId } },
+      500,
+    );
   };
 }
