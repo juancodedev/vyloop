@@ -301,11 +301,26 @@ Each of these is a domain event on `DOMAIN_EVENTS_QUEUE`, following the existing
 | ------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------- |
 | `PushCampaignRequested`   | A business targets a branch or a radius around it.                                  | Server-side only                    |
 | `CustomerCheckedIn`       | A customer checked in at a branch (`customer_events.branch_id` already carries it). | No — the venue comes from the event |
-| `RewardAvailableAtBranch` | A reward is redeemable at a specific venue.                                         | No                                  |
+| `RewardAvailableAtBranch` | A reward is redeemable at a specific venue. **Implemented** — see §7.4.1.           | No                                  |
 | `PointsExpiringSoon`      | Balance decays at a date.                                                           | No                                  |
 | `BranchLocationChanged`   | A venue moved or opened.                                                            | Coordinates used server-side        |
 
 New event constants are added to `packages/event-bus/src/index.ts` alongside the existing seven, and the payload carries `business_id` in `header.business_id` exactly as every other event does.
+
+#### 7.4.1 `RewardAvailableAtBranch`, as implemented
+
+Published by the growth worker when an auto-granted reward is scoped to venues (`reward_branches`), consumed by the communication worker, which pushes to the customer who received it. The decisions from 2026-10-20, in the order they constrain the code:
+
+| # | Decision | Where it lives |
+| - | -------- | -------------- |
+| Q1 | Only the customer who was granted the reward is told. A broadcast is a campaign, and campaigns are `PushCampaignRequested`. | `workers/growth/src/event-handler.ts` publishes with one `customer_id`; nothing fans out. |
+| Q2 | The push uses the existing `nearby_notifications` consent. The customer-facing consent copy must say **rewards**, not only proximity. | `workers/communication/src/push-delivery.ts` re-checks the consent at delivery. |
+| Q3 | At most one reward push per customer per business per 24 h. Further grants are acked without a delivery. | `REWARD_PUSH_WINDOW_MS` and `wasRewardAnnouncedToday` in `workers/communication/src/reward-notifications.ts`, read on `message_log`. |
+| Q4 | Redemption is **not** restricted to the reward's venues. The scope says where it is offered, not where it may be used. | No check on the redeem path; the event is informational. |
+| Q5 | The body names the venue only when the reward is scoped to exactly one; otherwise it states the count. | `describeRewardVenues` in the same module. |
+| Q6 | Quiet hours are out of scope here; they belong to the transport. | — |
+
+The event is published to `DELIVERY_QUEUE`, not `DOMAIN_EVENTS_QUEUE`: it is a message to deliver, not a fact other workers project. A missing `DELIVERY_QUEUE` binding logs and skips, as the check-in route does — the `reward_grants` row is the record.
 
 **The `PushCampaignRequested` payload** carries a target: either an explicit `branch_id`, or a `center` + `radius_m`. For a radius target, the worker resolves candidate branches server-side by geohash prefix (precision 6 gives the coarse cell; the exact haversine distance filters within it), then sends to customers who have a consent, a subscription, and a recent interaction with that branch. "Recent" means within the last **180 days** (`INTERACTION_WINDOW_DAYS` in `workers/communication/src/push-campaigns.ts`), a product decision of 2026-10-20.
 

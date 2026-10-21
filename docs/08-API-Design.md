@@ -143,6 +143,7 @@ Requiere JWT y `X-Business-ID`, como el resto de `/v1/*`. El `business_id` del s
 | POST | `/v1/events/RewardRedeemed` | Canje de una recompensa |
 | POST | `/v1/events/PushNotificationRequested` | Push puntual |
 | POST | `/v1/events/PushCampaignRequested` | Campaña push segmentada |
+| POST | `/v1/events/RewardAvailableAtBranch` | Recompensa canjeable en locales concretos |
 | POST | `/v1/events/WhatsAppOutboundRequested` | Mensaje saliente de WhatsApp |
 | POST | `/v1/events/WorkflowTriggered` | Disparo de un workflow de automatización |
 | GET | `/v1/events/health` | Sonda autenticada del ingestor |

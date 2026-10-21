@@ -46,6 +46,12 @@ const handlePushCampaignRequested = vi.hoisted(() =>
 
 vi.mock('./push-campaigns', () => ({ handlePushCampaignRequested }));
 
+const handleRewardAvailableAtBranch = vi.hoisted(() =>
+  vi.fn(async () => ({ result: 'sent', delivered: 1 })),
+);
+
+vi.mock('./reward-notifications', () => ({ handleRewardAvailableAtBranch }));
+
 // ---------------------------------------------------------------------------
 // Mock queue message
 // ---------------------------------------------------------------------------
@@ -219,5 +225,35 @@ describe('CustomerCheckedIn', () => {
 
     expect(handlePushCampaignRequested).not.toHaveBeenCalled();
     expect(dbMock.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('RewardAvailableAtBranch', () => {
+  it('is dispatched with the tenant from the envelope', async () => {
+    const { handleEvent } = await import('./event-handler');
+    const payload = {
+      customer_id: 'cust-1',
+      reward_id: 'reward-1',
+      reward_name: 'Café gratis',
+      grant_id: 'grant-1',
+      branch_ids: ['branch-1'],
+      granted_at: '2026-10-21T12:00:00Z',
+    };
+    const event = makeEvent({ type: 'RewardAvailableAtBranch', payload });
+
+    await handleEvent(event, mockMsg() as never, mockEnv as never);
+
+    expect(handleRewardAvailableAtBranch).toHaveBeenCalledWith(payload, 'biz-1', mockEnv);
+  });
+
+  it('lets a delivery failure reach the queue, so the batch retries it', async () => {
+    const { handleEvent } = await import('./event-handler');
+    handleRewardAvailableAtBranch.mockRejectedValueOnce(new Error('429'));
+    const event = makeEvent({
+      type: 'RewardAvailableAtBranch',
+      payload: { customer_id: 'c', reward_id: 'r', reward_name: 'n', grant_id: 'g', branch_ids: ['b'], granted_at: 't' },
+    });
+
+    await expect(handleEvent(event, mockMsg() as never, mockEnv as never)).rejects.toThrow('429');
   });
 });

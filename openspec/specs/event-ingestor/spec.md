@@ -59,8 +59,8 @@ The event type SHALL be a key of the Schema Registry, which the `register-schema
 deploy job populates before the gateway is published. KV keys are the event type in
 PascalCase with a version suffix; the deploy publishes `CustomerCheckedIn`,
 `CustomerRegistered`, `PointsAssigned`, `PushCampaignRequested`,
-`PushNotificationRequested`, `RewardRedeemed`, `WhatsAppOutboundRequested` and
-`WorkflowTriggered`.
+`PushNotificationRequested`, `RewardAvailableAtBranch`, `RewardRedeemed`,
+`WhatsAppOutboundRequested` and `WorkflowTriggered`.
 
 #### Scenario: Unknown type
 
