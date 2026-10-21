@@ -41,10 +41,10 @@ Chain strategy: stacked-to-main
 
 ## Unit 2: Reward API and dashboard
 
-- [ ] 2.1 `workers/growth/src/routes.ts` — `POST /v1/loyalty/rewards` (line 1151) and `PUT /v1/loyalty/rewards/:id` (line 1322) accept `branch_ids`; validate every id against `branches` of the business; replace the set on update; `422 VALIDATION_ERROR` before any write
-- [ ] 2.2 `workers/growth/src/routes.ts` — `GET /v1/loyalty/rewards` (line 1229) and `GET /v1/loyalty/rewards/:id` (line 1293) return `branch_ids` (one grouped read, not one query per reward)
-- [ ] 2.3 `workers/growth/src/routes.test.ts` — scoped create, foreign venue refused, update without the field keeps the scope, list returns `[]` for unscoped rewards
-- [ ] 2.4 `apps/dashboard/src/lib/api.ts` and `apps/dashboard/src/app/dashboard/loyalty/rewards/page.tsx` — the `branch_ids` field and a venue multi-select ("Todos los locales" when empty)
+- [x] 2.1 `workers/growth/src/routes.ts` — `POST /v1/loyalty/rewards` (line 1151) and `PUT /v1/loyalty/rewards/:id` (line 1322) accept `branch_ids`; validate every id against `branches` of the business; replace the set on update; `422 VALIDATION_ERROR` before any write
+- [x] 2.2 `workers/growth/src/routes.ts` — `GET /v1/loyalty/rewards` (line 1229) and `GET /v1/loyalty/rewards/:id` (line 1293) return `branch_ids` (one grouped read, not one query per reward)
+- [x] 2.3 `workers/growth/src/index.test.ts` — scoped create, foreign venue refused, update without the field keeps the scope, list returns `[]` for unscoped rewards
+- [x] 2.4 `apps/dashboard/src/lib/api.ts` and `apps/dashboard/src/app/dashboard/loyalty/rewards/page.tsx` — the `branch_ids` field and a venue multi-select ("Todos los locales" when empty)
 
 ## Unit 3: Event and schema
 
