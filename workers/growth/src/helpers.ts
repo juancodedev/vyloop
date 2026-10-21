@@ -4,6 +4,7 @@ import {
   POINTS_ASSIGNED,
   REWARD_REDEEMED,
   REWARD_AUTO_GRANTED,
+  REWARD_AVAILABLE_AT_BRANCH,
   createEnvelope,
 } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
@@ -496,6 +497,39 @@ export function buildRewardAutoGrantedEvent(
     REWARD_AUTO_GRANTED,
     { business_id: businessId, timestamp: new Date().toISOString() },
     payload,
+  );
+}
+
+/**
+ * Build a RewardAvailableAtBranch event envelope for the delivery queue.
+ *
+ * `customerId` is the **global** id, not `customers.id`: the delivery side
+ * resolves the customer by `global_id`, which is the identifier the customer
+ * app knows. The grant's internal ids stay on this side of the queue.
+ *
+ * `branchIds` is never empty. The producer only publishes this event for a
+ * scoped reward, and the schema refuses an empty list: an unscoped grant is
+ * what `RewardAutoGranted` already says.
+ */
+export function buildRewardAvailableAtBranchEvent(
+  customerGlobalId: string,
+  businessId: string,
+  rewardId: string,
+  rewardName: string,
+  grantId: string,
+  branchIds: string[],
+): EventEnvelope {
+  return createEnvelope(
+    REWARD_AVAILABLE_AT_BRANCH,
+    { business_id: businessId, timestamp: new Date().toISOString() },
+    {
+      customer_id: customerGlobalId,
+      reward_id: rewardId,
+      reward_name: rewardName,
+      grant_id: grantId,
+      branch_ids: branchIds,
+      granted_at: new Date().toISOString(),
+    },
   );
 }
 
