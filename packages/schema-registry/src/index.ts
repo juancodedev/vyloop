@@ -300,48 +300,6 @@ export const rewardAutoGrantedSchema = {
   additionalProperties: false,
 };
 
-/**
- * JSON Schema v1.0.0 for RewardAvailableAtBranch events (envelope format).
- *
- * Validates the full envelope with header + payload.
- * Payload: customer_id, reward_id, reward_name, grant_id, branch_ids, granted_at.
- *
- * `branch_ids` has `minItems: 1` on purpose: the event exists to say where a
- * reward can be redeemed, and a grant with no venues is not this event — it is
- * `RewardAutoGranted`. An empty array here would let a producer publish an
- * event whose only content is missing, and the consumer would have to guess
- * whether it meant "every venue" or "no data".
- */
-export const rewardAvailableAtBranchSchema = {
-  $id: 'https://schema.vyloop.app/events/RewardAvailableAtBranch/v1.0.0',
-  type: 'object',
-  title: 'RewardAvailableAtBranch',
-  description: 'Envelope schema for RewardAvailableAtBranch events',
-  required: ['header', 'payload'],
-  properties: {
-    header: envelopeHeaderSchema,
-    payload: {
-      type: 'object',
-      required: ['customer_id', 'reward_id', 'reward_name', 'grant_id', 'branch_ids', 'granted_at'],
-      properties: {
-        customer_id: { type: 'string', format: 'uuid', description: 'Customer identifier' },
-        reward_id: { type: 'string', format: 'uuid', description: 'Catalog reward identifier' },
-        reward_name: { type: 'string', minLength: 1, description: 'Name of the granted reward' },
-        grant_id: { type: 'string', format: 'uuid', description: 'The reward_grants row this announcement is about' },
-        branch_ids: {
-          type: 'array',
-          minItems: 1,
-          items: { type: 'string', format: 'uuid' },
-          description: 'Venues where the reward can be redeemed',
-        },
-        granted_at: { type: 'string', format: 'date-time', description: 'ISO 8601 timestamp of the grant' },
-      },
-      additionalProperties: false,
-    },
-  },
-  additionalProperties: false,
-};
-
 // ---------------------------------------------------------------------------
 // WhatsApp & Automation event schemas
 // ---------------------------------------------------------------------------

@@ -33,7 +33,6 @@ const EVENT_TYPES = [
   'PushNotificationRequested',
   'PushCampaignRequested',
   'CustomerCheckedIn',
-  'RewardAvailableAtBranch',
 ];
 
 /**
@@ -157,21 +156,6 @@ const REPRESENTATIVE_PAYLOADS: Record<string, unknown> = {
       business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
       branch_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
       checkin_id: 'c4d5e6f7-8a9b-0c1d-2e3f-456789abcdef',
-    },
-  },
-  RewardAvailableAtBranch: {
-    header: {
-      business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
-      timestamp: '2026-07-02T12:00:00Z',
-      localization: { language: 'es-CL', timezone: 'America/Santiago' },
-    },
-    payload: {
-      customer_id: '123e4567-e89b-12d3-a456-426614174000',
-      reward_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-      reward_name: 'Café gratis',
-      grant_id: 'c4d5e6f7-8a9b-0c1d-2e3f-456789abcdef',
-      branch_ids: ['a1b2c3d4-e5f6-7890-abcd-ef1234567890'],
-      granted_at: '2026-07-02T12:00:00Z',
     },
   },
   WhatsAppOutboundRequested: {

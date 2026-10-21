@@ -48,10 +48,10 @@ Chain strategy: stacked-to-main
 
 ## Unit 3: Event and schema
 
-- [x] 3.1 `packages/event-bus/src/index.ts` — `REWARD_AVAILABLE_AT_BRANCH = 'RewardAvailableAtBranch'` with a comment naming its queue and consumer
-- [x] 3.2 `packages/schema-registry/src/index.ts` — `rewardAvailableAtBranchSchema` v1.0.0 using `envelopeHeaderSchema`
-- [x] 3.3 `packages/schema-registry/scripts/register-schemas.ts` — register it; `packages/schema-registry/scripts/register-schemas.test.ts` and `build-registry-payload.test.ts` — add it to the expected set and to the mocks
-- [x] 3.4 Schema tests — valid payload passes; empty `branch_ids` fails; extra property fails
+- [ ] 3.1 `packages/event-bus/src/index.ts` — `REWARD_AVAILABLE_AT_BRANCH = 'RewardAvailableAtBranch'` with a comment naming its queue and consumer
+- [ ] 3.2 `packages/schema-registry/src/index.ts` — `rewardAvailableAtBranchSchema` v1.0.0 using `envelopeHeaderSchema`
+- [ ] 3.3 `packages/schema-registry/scripts/register-schemas.ts` — register it; `packages/schema-registry/scripts/register-schemas.test.ts` and `build-registry-payload.test.ts` — add it to the expected set and to the mocks
+- [ ] 3.4 Schema tests — valid payload passes; empty `branch_ids` fails; extra property fails
 
 ## Unit 4: Producer and delivery
 

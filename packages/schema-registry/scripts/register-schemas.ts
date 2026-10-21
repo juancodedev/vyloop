@@ -18,7 +18,6 @@ import {
   pointsAssignedSchema,
   pushCampaignRequestedSchema,
   pushNotificationRequestedSchema,
-  rewardAvailableAtBranchSchema,
   rewardRedeemedSchema,
   whatsappOutboundRequestedSchema,
   workflowTriggeredSchema,
@@ -67,11 +66,6 @@ const SCHEMAS_TO_REGISTER: Array<{
   {
     eventType: 'CustomerCheckedIn',
     schema: customerCheckedInSchema as Record<string, unknown>,
-    version: '1.0.0',
-  },
-  {
-    eventType: 'RewardAvailableAtBranch',
-    schema: rewardAvailableAtBranchSchema as Record<string, unknown>,
     version: '1.0.0',
   },
 ];

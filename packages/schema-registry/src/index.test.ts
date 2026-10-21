@@ -9,7 +9,6 @@ import {
   customerRegisteredSchema,
   pointsAssignedSchema,
   rewardRedeemedSchema,
-  rewardAvailableAtBranchSchema,
 } from './index';
 
 // ---------------------------------------------------------------------------
@@ -349,63 +348,6 @@ describe('SchemaRegistry', () => {
           reference_id: 'ref-004',
           redemption_id: 'e6f7a8b9-0c1d-2e3f-4a5b-6789abcdef01',
         },
-      });
-
-      expect(result.valid).toBe(false);
-    });
-  });
-
-  describe('rewardAvailableAtBranchSchema', () => {
-    const validEnvelope = {
-      header: {
-        business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
-        timestamp: '2026-07-02T12:00:00Z',
-        localization: { language: 'es-CL', timezone: 'America/Santiago' },
-      },
-      payload: {
-        customer_id: '123e4567-e89b-12d3-a456-426614174000',
-        reward_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-        reward_name: 'Café gratis',
-        grant_id: 'c4d5e6f7-8a9b-0c1d-2e3f-456789abcdef',
-        branch_ids: ['a1b2c3d4-e5f6-7890-abcd-ef1234567890'],
-        granted_at: '2026-07-02T12:00:00Z',
-      },
-    };
-
-    it('should be exported with envelope structure and $id v1.0.0', () => {
-      expect(rewardAvailableAtBranchSchema.$id).toContain('v1.0.0');
-      expect(rewardAvailableAtBranchSchema.title).toBe('RewardAvailableAtBranch');
-      expect(rewardAvailableAtBranchSchema.required).toEqual(['header', 'payload']);
-    });
-
-    it('should pass validation for a valid scoped-grant envelope', async () => {
-      await registerSchema(kv, 'RewardAvailableAtBranch', rewardAvailableAtBranchSchema, '1.0.0');
-
-      const result = await validate(kv, 'RewardAvailableAtBranch', validEnvelope);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toBeUndefined();
-    });
-
-    it('should reject an empty branch_ids array', async () => {
-      await registerSchema(kv, 'RewardAvailableAtBranch', rewardAvailableAtBranchSchema, '1.0.0');
-
-      const result = await validate(kv, 'RewardAvailableAtBranch', {
-        ...validEnvelope,
-        payload: { ...validEnvelope.payload, branch_ids: [] },
-      });
-
-      // An unscoped grant is `RewardAutoGranted`; this event always names venues.
-      expect(result.valid).toBe(false);
-      expect(result.errors!.some((e) => e.includes('branch_ids'))).toBe(true);
-    });
-
-    it('should reject an extra payload property', async () => {
-      await registerSchema(kv, 'RewardAvailableAtBranch', rewardAvailableAtBranchSchema, '1.0.0');
-
-      const result = await validate(kv, 'RewardAvailableAtBranch', {
-        ...validEnvelope,
-        payload: { ...validEnvelope.payload, balance_after: 500 },
       });
 
       expect(result.valid).toBe(false);
