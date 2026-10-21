@@ -33,11 +33,11 @@ Chain strategy: stacked-to-main
 
 ## Unit 1: Storage
 
-- [ ] 1.1 `packages/db/src/schema.ts` — `rewardBranches` table (`reward_id`, `branch_id`, `business_id`, `created_at`), primary key `(reward_id, branch_id)`, index `idx_reward_branches_branch` on `(business_id, branch_id)`, all FKs `ON DELETE CASCADE`; export from `packages/db/src/index.ts`
-- [ ] 1.2 `packages/db/src/indexes.ts` — register the index
-- [ ] 1.3 `packages/db/src/rls.ts` — add `reward_branches` to `BUSINESS_ID_TABLES`; extend `packages/db/src/rls.test.ts`
-- [ ] 1.4 `packages/db/drizzle/00NN_reward_branches.sql` (next free number, reserved per `docs/18-Trabajo-Pendiente.md`) — generated and reviewed; header says it is applied by hand and inserts no rows
-- [ ] 1.5 `packages/db/drizzle/meta/_applied-outside-drizzle.json` — entry with evidence `table reward_branches`, `index idx_reward_branches_branch` and the two FK constraint names; `node scripts/check-migration-drift.mjs` passes
+- [x] 1.1 `packages/db/src/schema.ts` — `rewardBranches` table (`reward_id`, `branch_id`, `business_id`, `created_at`), primary key `(reward_id, branch_id)`, index `idx_reward_branches_branch` on `(business_id, branch_id)`, all FKs `ON DELETE CASCADE`; export from `packages/db/src/index.ts`
+- [x] 1.2 `packages/db/src/indexes.ts` — register the index
+- [x] 1.3 `packages/db/src/rls.ts` — add `reward_branches` to `BUSINESS_ID_TABLES`; extend `packages/db/src/rls.test.ts`
+- [x] 1.4 `packages/db/drizzle/00NN_reward_branches.sql` (next free number, reserved per `docs/18-Trabajo-Pendiente.md`) — generated and reviewed; header says it is applied by hand and inserts no rows
+- [x] 1.5 `packages/db/drizzle/meta/_applied-outside-drizzle.json` — entry with evidence `table reward_branches`, `index idx_reward_branches_branch` and the two FK constraint names; `node scripts/check-migration-drift.mjs` passes
 
 ## Unit 2: Reward API and dashboard
 

@@ -73,8 +73,9 @@
 | Order | Change | Number | Status |
 |---|---|---|---|
 | — | last applied | `0019` | applied |
-| 1 | `api-surface-cleanup` Unit 4 | `0020_pos_terminals_business` | generated; applied by hand with `CONCURRENTLY` (**pending**) |
-| next | — | `0021` | unassigned |
+| 1 | `api-surface-cleanup` Unit 4 | `0020_pos_terminals_business` | applied by hand with `CONCURRENTLY`; registered (#236) |
+| 2 | `branch-reward-trigger` Unit 1 | `0021_reward_branches` | applied by hand and registered |
+| next | — | `0022` | unassigned |
 
 Add a row when a change starts. The active change owns exactly one row until its
 migration is applied and registered.

@@ -81,8 +81,9 @@ describe('Database schema', () => {
     // 12 pre-existing plus the three wallet indexes plus the venue geohash,
     // the consent uniqueness, the three push subscription indexes, the two
     // the proximity work added (the venue interaction index and the
-    // subscription freshness index), and the pos_terminals listing index.
-    expect(db.allIndexes.length).toBe(23);
+    // subscription freshness index), the pos_terminals listing index, and the
+    // reward_branches venue index.
+    expect(db.allIndexes.length).toBe(24);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -118,6 +119,7 @@ describe('Database schema', () => {
       idxRewardsCategory: 'idx_rewards_category',
       idxRewardsAutoGrant: 'idx_rewards_auto_grant',
       idxRewardGrantsCustomer: 'idx_reward_grants_customer',
+      idxRewardBranchesBranch: 'idx_reward_branches_branch',
       idxMessageLogCustomer: 'idx_message_log_customer',
       idxMessageLogStatus: 'idx_message_log_status',
       idxWhatsappTemplatesName: 'idx_whatsapp_templates_name',
@@ -376,6 +378,7 @@ describe('Database schema', () => {
       'posTerminals',
       'pushSubscriptions',
       'referrals',
+      'rewardBranches',
       'rewardGrants',
       'rewards',
       'settledPayments',
