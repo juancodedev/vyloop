@@ -55,10 +55,10 @@ Chain strategy: stacked-to-main
 
 ## Unit 4: Producer and delivery
 
-- [ ] 4.1 `workers/growth/src/event-handler.ts` — select `globalId` with the customer (line ~230); after the `reward_grants` insert (line ~330), read the reward's `reward_branches`; when non-empty, publish `RewardAvailableAtBranch` to `env.DELIVERY_QUEUE` (log and skip, as the check-in route does, when the binding is absent)
-- [ ] 4.2 `workers/growth/src/helpers.ts` — `buildRewardAvailableAtBranchEvent` next to `buildRewardAutoGrantedEvent`
-- [ ] 4.3 `workers/growth/src/event-handler.test.ts` (new; the worker has no handler test today) — scoped grant publishes once to the delivery queue; unscoped grant does not; an existing grant does not; `RewardAutoGranted` is still published
-- [ ] 4.4 `workers/communication/src/reward-notifications.ts` — `handleRewardAvailableAtBranch`: frequency cap read on `message_log`, Spanish title/body naming the reward and the venue name when scoped to exactly one venue or the venue count otherwise (Q5), then `deliverPushNotification` with `reference_id` `reward-grant:<grant_id>`
-- [ ] 4.5 `workers/communication/src/event-handler.ts` — dispatch `REWARD_AVAILABLE_AT_BRANCH`
-- [ ] 4.6 `workers/communication/src/reward-notifications.test.ts` and `event-handler.test.ts` — delivered with consent; not delivered without; redelivery sends once; frequency cap acks without sending; the body carries no balance
-- [ ] 4.7 `docs/19-Geolocalizacion-Notificaciones.md` — §7.4 marks `RewardAvailableAtBranch` as implemented, with the decisions from Unit 0
+- [x] 4.1 `workers/growth/src/event-handler.ts` — select `globalId` with the customer (line ~230); after the `reward_grants` insert (line ~330), read the reward's `reward_branches`; when non-empty, publish `RewardAvailableAtBranch` to `env.DELIVERY_QUEUE` (log and skip, as the check-in route does, when the binding is absent)
+- [x] 4.2 `workers/growth/src/helpers.ts` — `buildRewardAvailableAtBranchEvent` next to `buildRewardAutoGrantedEvent`
+- [x] 4.3 `workers/growth/src/event-handler.test.ts` (new; the worker has no handler test today) — scoped grant publishes once to the delivery queue; unscoped grant does not; an existing grant does not; `RewardAutoGranted` is still published
+- [x] 4.4 `workers/communication/src/reward-notifications.ts` — `handleRewardAvailableAtBranch`: frequency cap read on `message_log`, Spanish title/body naming the reward and the venue name when scoped to exactly one venue or the venue count otherwise (Q5), then `deliverPushNotification` with `reference_id` `reward-grant:<grant_id>`
+- [x] 4.5 `workers/communication/src/event-handler.ts` — dispatch `REWARD_AVAILABLE_AT_BRANCH`
+- [x] 4.6 `workers/communication/src/reward-notifications.test.ts` and `event-handler.test.ts` — delivered with consent; not delivered without; redelivery sends once; frequency cap acks without sending; the body carries no balance
+- [x] 4.7 `docs/19-Geolocalizacion-Notificaciones.md` — §7.4 marks `RewardAvailableAtBranch` as implemented, with the decisions from Unit 0

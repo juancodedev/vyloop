@@ -12,7 +12,11 @@ const consentOptions = [
   {
     name: 'nearbyNotifications',
     label: 'Avisos cercanos',
-    description: 'Información sobre lugares y momentos cercanos.',
+    // Q2 of `branch-reward-trigger`: this consent also carries the push that
+    // says a reward can be redeemed somewhere, so the copy has to say so. A
+    // consent that only mentions proximity does not cover the reward message.
+    description:
+      'Información sobre lugares y momentos cercanos, y avisos cuando tenés una recompensa para canjear.',
   },
 ] as const;
 
