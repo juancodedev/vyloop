@@ -234,6 +234,38 @@ describe('SchemaRegistry', () => {
       expect(result.errors).toBeUndefined();
     });
 
+    it('accepts an optional request_id in the header', async () => {
+      await registerSchema(kv, 'PointsAssigned', pointsAssignedSchema, '1.0.0');
+
+      const result = await validate(kv, 'PointsAssigned', {
+        header: {
+          business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+          timestamp: '2026-07-02T12:00:00Z',
+          localization: { language: 'es-CL', timezone: 'America/Santiago' },
+          request_id: 'client-id-1234',
+        },
+        payload: pointsPayload(),
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it('refuses a malformed request_id', async () => {
+      await registerSchema(kv, 'PointsAssigned', pointsAssignedSchema, '1.0.0');
+
+      const result = await validate(kv, 'PointsAssigned', {
+        header: {
+          business_id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456789',
+          timestamp: '2026-07-02T12:00:00Z',
+          localization: { language: 'es-CL', timezone: 'America/Santiago' },
+          request_id: 'bad id!',
+        },
+        payload: pointsPayload(),
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
     it('should fail validation when header is missing', async () => {
       await registerSchema(kv, 'PointsAssigned', pointsAssignedSchema, '1.0.0');
 
@@ -452,3 +484,14 @@ describe('SchemaRegistry', () => {
     });
   });
 });
+
+function pointsPayload() {
+  return {
+    customer_id: '123e4567-e89b-12d3-a456-426614174000',
+    points_assigned: 100,
+    points_multiplier: 1.0,
+    total_points: 500,
+    reference_id: 'ref-001',
+    assignment_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+  };
+}

@@ -195,6 +195,11 @@ const envelopeHeaderSchema = {
       format: 'date-time',
       description: 'ISO 8601 timestamp of event creation',
     },
+    request_id: {
+      type: 'string',
+      pattern: '^[A-Za-z0-9._-]{8,128}$',
+      description: 'Correlation id of the request that produced the event',
+    },
     localization: {
       type: 'object',
       required: ['language', 'timezone'],
