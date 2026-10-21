@@ -83,7 +83,10 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 | POST | `/v1/auth/refresh` | Renovación de token sin re-autenticación |
 | GET | `/v1/me` | Información del usuario autenticado y sus permisos |
 | GET | `/v1/businesses/{id}` | Información del negocio (tenant) autenticado |
-| GET | `/v1/businesses/{id}/branches` | Lista de sucursales del negocio |
+| GET | `/v1/businesses/{id}/branches` | Lista de sucursales del negocio, con su posición geográfica cuando la registró (`latitude`, `longitude`, `geohash`, `geohash_precision`, `located_at`) |
+| POST | `/v1/businesses/{id}/branches` | Crea una sucursal; la posición es opcional y se envía como `latitude` + `longitude` o `geohash` |
+| PATCH | `/v1/businesses/{id}/branches/{branchId}` | Actualiza una sucursal y, si vienen, sus coordenadas |
+| DELETE | `/v1/businesses/{id}/branches/{branchId}` | Desactiva la sucursal (`is_active: false`); no borra la fila |
 
 ### Customer Platform
 
