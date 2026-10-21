@@ -1,6 +1,6 @@
 # Tasks: Request Tracing
 
-> Status: scheduled — started 2026-10-21. Units 1-2 done; Units 3-4 pending.
+> Status: scheduled — started 2026-10-21. Units 1-4 done; all tasks complete.
 
 ## Review Workload Forecast
 
@@ -46,17 +46,17 @@ schema and the worker error body. Unit 4's schema change gets its own commit.
 
 ## Unit 3: Workers
 
-- [ ] 3.1 `workers/{analytics,automation,communication,compliance,customer,growth,identity,wallet}/package.json` — depend on `@vyloop/request-context`
-- [ ] 3.2 Each `workers/*/src/index.ts` — register `requestIdMiddleware()` first; `onError` logs `logPrefix(service, id)` with method, path and the error object, and answers `{ error: { code, message, request_id } }` (analytics :216, automation :59, communication :67, customer :66, growth :109, identity :1279, wallet :172)
-- [ ] 3.3 `workers/compliance/src/index.ts` — add the missing `onError`
-- [ ] 3.4 Each worker's `index.test.ts` (or a new one where missing) — a throwing route answers with the incoming id, logs it, and logs no `Authorization` value
-- [ ] 3.5 A contract test in `packages/request-context` that reads each `workers/*/src/index.ts` and fails if one does not register the middleware or has no `onError`
+- [x] 3.1 `workers/{analytics,automation,communication,compliance,customer,growth,identity,wallet}/package.json` — depend on `@vyloop/request-context`
+- [x] 3.2 Each `workers/*/src/index.ts` — register `requestIdMiddleware()` first; `onError` logs `logPrefix(service, id)` with method, path and the error object, and answers `{ error: { code, message, request_id } }` (analytics :216, automation :59, communication :67, customer :66, growth :109, identity :1279, wallet :172)
+- [x] 3.3 `workers/compliance/src/index.ts` — add the missing `onError`
+- [x] 3.4 A throwing route answers with the incoming id, logs it, and logs no `Authorization` value — covered once in `packages/request-context/src/index.test.ts` against `createErrorHandler(service)`, the single `onError` every worker now registers; 3.5 fails a worker that stops registering it
+- [x] 3.5 A contract test in `packages/request-context` that reads each `workers/*/src/index.ts` and fails if one does not register the middleware or has no `onError`
 
 ## Unit 4: Events and documentation
 
-- [ ] 4.1 `packages/event-bus/src/index.ts` — `request_id?: string` in `EventEnvelope['header']`; `createEnvelope` copies it; `consume` logs `request_id=<id> event=<id>` on failure; tests in `packages/event-bus`
-- [ ] 4.2 `packages/schema-registry/src/index.ts` — `request_id` in `envelopeHeaderSchema` (line 184) with the pattern; tests: with, without, malformed
-- [ ] 4.3 Producers that run inside a request pass `request_id: c.get('requestId')` in the header: `workers/growth/src/routes.ts`, `workers/customer/src/routes.ts`, `workers/communication/src/campaign-routes.ts`, and the request-path builders in `workers/*/src/helpers.ts`; cron producers (`workers/automation/src/cron-handler.ts`) are left without one
-- [ ] 4.4 Queue handlers in `workers/{growth,communication,automation}/src/event-handler.ts` — error and warning lines use the prefix when `event.header.request_id` is present
-- [ ] 4.5 `docs/18-Verificacion-y-Seguridad-Operativa.md` — how to trace a request: `wrangler tail <worker> --search <request id>` across the gateway and the worker; what is never logged
-- [ ] 4.6 `docs/14-Backlog.md` — mark "El hueco de `request_id` en todos los workers" resolved
+- [x] 4.1 `packages/event-bus/src/index.ts` — `request_id?: string` in `EventEnvelope['header']`; `createEnvelope` copies it; `consume` logs `request_id=<id> event=<id>` on failure; tests in `packages/event-bus`
+- [x] 4.2 `packages/schema-registry/src/index.ts` — `request_id` in `envelopeHeaderSchema` (line 184) with the pattern; tests: with, without, malformed
+- [x] 4.3 Producers that run inside a request pass `request_id: c.get('requestId')` in the header: `workers/growth/src/routes.ts`, `workers/customer/src/routes.ts`, `workers/communication/src/campaign-routes.ts`, and the request-path builders in `workers/*/src/helpers.ts`; cron producers (`workers/automation/src/cron-handler.ts`) are left without one
+- [x] 4.4 Queue handlers in `workers/{growth,communication,automation}/src/event-handler.ts` — error and warning lines use the prefix when `event.header.request_id` is present
+- [x] 4.5 `docs/18-Verificacion-y-Seguridad-Operativa.md` — how to trace a request: `wrangler tail <worker> --search <request id>` across the gateway and the worker; what is never logged
+- [x] 4.6 `docs/14-Backlog.md` — mark "El hueco de `request_id` en todos los workers" resolved
