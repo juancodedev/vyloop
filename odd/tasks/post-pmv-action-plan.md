@@ -10,7 +10,7 @@
 - One change at a time per lane. Two changes that add a migration never run in
   parallel.
 - Reserve the migration number at the start of a change, here and in
-  `packages/db/drizzle/meta/_journal.json`. `0019` is the last applied. A number
+  `packages/db/drizzle/meta/_journal.json`. `0021` is the last applied. A number
   is never reused, even if the change is abandoned.
 - A change does not start until its decision gates are closed (table below).
 - A change whose modified capability is itself unarchived does not archive first.
@@ -23,9 +23,9 @@
 
 | Lane | Changes | Why this lane |
 |---|---|---|
-| A. Security and CI | `supply-chain-hardening`, `api-surface-cleanup` | Removes a public unauthenticated write and closes the supply-chain gaps; shares no code with the data work. |
+| A. Security and CI | `supply-chain-hardening`, `api-surface-cleanup` | Removes a public unauthenticated write and closes the supply-chain gaps; shares no code with the data work. Both archived 2026-10-21 (Unit 3 of the latter deferred). |
 | B. Observability | `request-tracing` | Touches every worker and the gateway; runs after the gateway surface is settled. |
-| C. Data and schema (serial) | `message-log-schema-alignment` → `branch-reward-trigger` → `campaign-delivery-idempotency` → `wallet-pass-correctness` | They share schema, the drift gate and the RLS table lists. |
+| C. Data and schema (serial) | `message-log-schema-alignment` → ~~`branch-reward-trigger`~~ → `campaign-delivery-idempotency` → `wallet-pass-correctness` | They share schema, the drift gate and the RLS table lists. `branch-reward-trigger` is archived. |
 | D. Isolation | `tenant-isolation-rls` | Last: it enforces what every earlier change had to classify. |
 | E. Frontend infrastructure | `pages-opennext-migration` | Independent of the data work; keep it away from the dashboard files `wallet-pass-correctness` touches. |
 
@@ -130,8 +130,8 @@ siguen como *asumidas*. Se decide aparte.
   contract test rejects the raw setters, not only the two helpers.
 - The `wallet-pass-correctness` / `tenant-isolation-rls` ordering is written in
   both changes.
-- The five migration producers point to one numbering rule.
+- The migration producers point to one numbering rule (`0019`–`0021` applied).
 - The `push-notifications` dependency is explicit in both consumers.
-- `request-tracing` is conditional on the ingestor decision.
-- `api-surface-cleanup` states that its Option R deltas are a draft.
+- `request-tracing` is conditional on the ingestor decision — the ingestor was kept (Option K).
+- `api-surface-cleanup` states that its Option R deltas are a draft — the choice was Option K.
 - `openspec/config.yaml` declares `apply` and `verify` rules as arrays.
