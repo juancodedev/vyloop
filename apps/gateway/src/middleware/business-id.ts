@@ -1,3 +1,4 @@
+import { getRequestId } from '@vyloop/request-context';
 import type { Context, Next } from 'hono';
 
 import type { JwtClaims } from './auth';
@@ -21,7 +22,7 @@ export async function businessIdMiddleware(c: Context, next: Next) {
         error: {
           code: 'AUTH_TOKEN_INVALID',
           message: 'JWT claims not found — ensure auth middleware runs first',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       401,
@@ -34,7 +35,7 @@ export async function businessIdMiddleware(c: Context, next: Next) {
         error: {
           code: 'AUTH_BUSINESS_MISMATCH',
           message: 'Missing X-Business-ID header',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       403,
@@ -47,7 +48,7 @@ export async function businessIdMiddleware(c: Context, next: Next) {
         error: {
           code: 'AUTH_BUSINESS_MISMATCH',
           message: 'X-Business-ID does not match token business_id',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       403,

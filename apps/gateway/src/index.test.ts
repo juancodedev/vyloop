@@ -1130,4 +1130,42 @@ describe('API Gateway', () => {
       }
     });
   });
+
+  describe('request id', () => {
+    const ID = 'X-Request-Id';
+
+    it('generates one and echoes it', async () => {
+      const res = await app.fetch(new Request('http://localhost/health'), mockEnv());
+      expect(res.headers.get(ID)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    });
+
+    it('keeps a well-formed client id', async () => {
+      const res = await app.fetch(
+        new Request('http://localhost/health', { headers: { [ID]: 'client-id-1234' } }),
+        mockEnv(),
+      );
+      expect(res.headers.get(ID)).toBe('client-id-1234');
+    });
+
+    it('replaces a malformed client id', async () => {
+      const res = await app.fetch(
+        new Request('http://localhost/health', { headers: { [ID]: 'bad id!' } }),
+        mockEnv(),
+      );
+      expect(res.headers.get(ID)).not.toBe('bad id!');
+    });
+
+    it('answers a 404 with the id it echoes', async () => {
+      const res = await app.fetch(new Request('http://localhost/nope'), mockEnv());
+      const body = (await res.json()) as { error: { request_id: string } };
+      expect(body.error.request_id).toBe(res.headers.get(ID));
+    });
+
+    it('answers a 401 with the id it echoes', async () => {
+      const res = await app.fetch(new Request('http://localhost/v1/customers'), mockEnv());
+      const body = (await res.json()) as { error: { request_id: string } };
+      expect(body.error.request_id).toBe(res.headers.get(ID));
+    });
+  });
 });
+

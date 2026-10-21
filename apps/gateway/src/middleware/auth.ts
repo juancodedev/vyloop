@@ -1,3 +1,4 @@
+import { getRequestId } from '@vyloop/request-context';
 import type { Context, Next } from 'hono';
 import { jwtVerify } from 'jose';
 import type { JWTPayload } from 'jose';
@@ -77,7 +78,7 @@ export function authMiddleware(secret: string) {
           error: {
             code: 'AUTH_TOKEN_INVALID',
             message: 'Missing or invalid Authorization header',
-            request_id: crypto.randomUUID(),
+            request_id: getRequestId(c),
           },
         },
         401,
@@ -105,7 +106,7 @@ export function authMiddleware(secret: string) {
             error: {
               code: 'AUTH_TOKEN_INVALID',
               message: 'Token missing required claims',
-              request_id: crypto.randomUUID(),
+              request_id: getRequestId(c),
             },
           },
           401,
@@ -120,7 +121,7 @@ export function authMiddleware(secret: string) {
           error: {
             code: 'AUTH_TOKEN_INVALID',
             message: err instanceof Error ? err.message : 'Token invalid or expired',
-            request_id: crypto.randomUUID(),
+            request_id: getRequestId(c),
           },
         },
         401,
