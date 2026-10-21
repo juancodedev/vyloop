@@ -319,7 +319,10 @@ Estos ítems están en la visión del producto pero **no entran al PMV**. Se pri
             aplicado el journal cubrió todo y el baseline quedó vacío.
 
             Detalle: [`18-Verificacion-y-Seguridad-Operativa.md`](18-Verificacion-y-Seguridad-Operativa.md) §5.
-      - [ ] **El hueco de `request_id` en todos los workers.**
+      - [x] ~~**El hueco de `request_id` en todos los workers.**~~ **Resuelto (2026-10-21):** el gateway
+            establece un `X-Request-Id` por request, lo forwardea a cada worker y lo ecohea en la respuesta;
+            cada worker responde `{ error: { code, message, request_id } }` y loguea con el prefijo
+            `[<worker>] request_id=<id>`. Texto original del hueco:
             `workers/*/src/index.ts` tienen un `console.error` pelado en el catch final
             (`'[customer] Unhandled error:'`, `'[growth] Unhandled error:'`, y uno por worker).
             El gateway ya loguea el `request_id` de un 500 para que el error sea rastreable

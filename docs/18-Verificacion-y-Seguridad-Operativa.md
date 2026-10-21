@@ -560,6 +560,36 @@ cubren las rutas.
 
 ---
 
+## 8. Un error sin `request_id` no se puede rastrear
+
+### El incidente
+
+Un 500 que nace dentro de un worker llegaba al cliente sin nada que lo atara al log del worker.
+El gateway ya tenía su `request_id`; el worker no. Cuando alguien reportaba "me falló el canje",
+había que adivinar por timestamp en seis `wrangler tail` distintos.
+
+### La regla
+
+El gateway genera un `X-Request-Id` por request (o respeta el que llegue, si es válido), lo
+propaga a cada worker y lo ecohea en la respuesta. Cada worker establece el mismo id en su
+contexto, lo devuelve en el cuerpo de error y lo escribe en todas sus líneas de log:
+
+```json
+{ "error": { "code": "INTERNAL_ERROR", "message": "Internal server error", "request_id": "..." } }
+```
+
+Para rastrear una queja:
+
+1. Solicitar el `request_id` del cuerpo de error, o el `X-Request-Id` del header de respuesta.
+2. `wrangler tail <worker> --search <id>` en el worker correspondiente.
+3. Si el evento siguió por la cola, el mismo id viaja en `header.request_id` y aparece en el
+   `consume` del event bus y en el handler de destino.
+
+Sin ese id no hay rastreo: hay búsqueda por hora. Es la diferencia entre un incidente de diez
+minutos y uno de dos horas.
+
+---
+
 ## Documentos relacionados
 
 | Documento | Qué cubre |
