@@ -2,6 +2,7 @@ import type { Message } from '@cloudflare/workers-types';
 import { createDb, messageLog, customers } from '@vyloop/db';
 import { CUSTOMER_CHECKED_IN, PUSH_CAMPAIGN_REQUESTED, REWARD_AVAILABLE_AT_BRANCH } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
+import { logPrefix } from '@vyloop/request-context';
 import { eq, and } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
@@ -23,6 +24,16 @@ import {
  * For now, only WhatsAppOutboundRequested is handled. Events not matching
  * a known type are logged and acked to avoid blocking the queue.
  */
+/**
+ * Log prefix for a queued event. The id travels in the envelope, so a failure
+ * here is traceable back to the request that produced the event.
+ */
+function tag(event: EventEnvelope): string {
+  const requestId = event.header.request_id;
+  return requestId ? logPrefix('communication', requestId) : '[communication]';
+}
+
+
 export async function handleEvent(
   event: EventEnvelope,
   message: Message<EventEnvelope>,
@@ -41,7 +52,7 @@ export async function handleEvent(
     case REWARD_AVAILABLE_AT_BRANCH:
       return handleRewardAvailableAtBranchEvent(event, env);
     default:
-      console.warn(`[communication] Unknown event type: ${event.type} — acking and skipping`);
+      console.warn(`${tag(event)} Unknown event type: ${event.type} — acking and skipping`);
       return;
   }
 }
@@ -116,7 +127,7 @@ async function handleWhatsAppOutboundRequested(
 
   if (!logEntry) {
     console.warn(
-      `[communication] message_log entry ${payload.idempotency_key} not found — acking`,
+      `${tag(event)} message_log entry ${payload.idempotency_key} not found — acking`,
     );
     return;
   }
@@ -124,7 +135,7 @@ async function handleWhatsAppOutboundRequested(
   // Idempotency: skip if already sent or failed permanently
   if (logEntry.status !== 'queued') {
     console.log(
-      `[communication] message_log ${payload.idempotency_key} already ${logEntry.status} — skipping`,
+      `${tag(event)} message_log ${payload.idempotency_key} already ${logEntry.status} — skipping`,
     );
     return;
   }
@@ -148,7 +159,7 @@ async function handleWhatsAppOutboundRequested(
 
   if (!phone) {
     console.warn(
-      `[communication] No phone for customer ${payload.customer_id} — marking failed`,
+      `${tag(event)} No phone for customer ${payload.customer_id} — marking failed`,
     );
     await db
       .update(messageLog)
@@ -183,7 +194,7 @@ async function handleWhatsAppOutboundRequested(
         .where(eq(messageLog.id, logEntry.id));
 
       console.log(
-        `[communication] Message ${logEntry.id} sent via Meta — provider ID: ${providerMessageId}`,
+        `${tag(event)} Message ${logEntry.id} sent via Meta — provider ID: ${providerMessageId}`,
       );
     } else {
       // Determine error handling based on status
@@ -193,7 +204,7 @@ async function handleWhatsAppOutboundRequested(
       if (isRetryableError({ status: response.status, code: errorCode })) {
         // Leave as 'queued' — queue will retry
         console.warn(
-          `[communication] Meta API retryable error (${response.status}) for ${logEntry.id} — leaving queued`,
+          `${tag(event)} Meta API retryable error (${response.status}) for ${logEntry.id} — leaving queued`,
         );
         // Throw to trigger queue retry
         throw new Error(`Meta API retryable error: ${response.status}`);
@@ -213,13 +224,13 @@ async function handleWhatsAppOutboundRequested(
         .where(eq(messageLog.id, logEntry.id));
 
       console.error(
-        `[communication] Message ${logEntry.id} failed permanently — Meta error: ${responseBody.error?.message ?? response.status}`,
+        `${tag(event)} Message ${logEntry.id} failed permanently — Meta error: ${responseBody.error?.message ?? response.status}`,
       );
     }
   } catch (err) {
     // Network or unexpected error — retry
     console.error(
-      `[communication] Unexpected error sending message ${logEntry.id}:`,
+      `${tag(event)} Unexpected error sending message ${logEntry.id}:`,
       err,
     );
     throw err; // Triggers queue retry
@@ -249,7 +260,7 @@ async function handlePushNotificationRequested(
   const outcome = await deliverPushNotification(payload, businessId, env);
 
   console.log(
-    `[communication] Push to ${payload.customer_id}: ${outcome.delivered} delivered, ` +
+    `${tag(event)} Push to ${payload.customer_id}: ${outcome.delivered} delivered, ` +
       `${outcome.failed} failed, ${outcome.removed} dead subscriptions removed ` +
       `of ${outcome.subscriptions}`,
   );
@@ -269,7 +280,7 @@ async function handlePushCampaignRequestedEvent(
   const outcome = await handlePushCampaignRequested(payload, businessId, env);
 
   console.log(
-    `[communication] Push campaign ${payload.reference_id ?? '(no reference)'}: ` +
+    `${tag(event)} Push campaign ${payload.reference_id ?? '(no reference)'}: ` +
       `${outcome.delivered} delivered, ${outcome.failed} failed, ${outcome.skipped} skipped`,
   );
 }

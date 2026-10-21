@@ -18,6 +18,7 @@ export async function handleTestEvent(
     type: event.type,
     business_id: event.header.business_id,
     timestamp: event.header.timestamp,
+    request_id: event.header.request_id,
     message: payload?.message,
     data: payload?.data,
   });

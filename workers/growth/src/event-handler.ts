@@ -2,10 +2,20 @@ import type { Message } from '@cloudflare/workers-types';
 import { createDb, customers, membershipTiers, loyaltyPrograms, rewards, rewardBranches, rewardGrants } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { publish } from '@vyloop/event-bus';
+import { logPrefix } from '@vyloop/request-context';
 import { eq, and, lte, desc, sql, isNotNull } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
 import { withRls, buildRewardAutoGrantedEvent, buildRewardAvailableAtBranchEvent } from './helpers';
+
+/**
+ * Log prefix for a queued event. The id travels in the envelope, so a failure
+ * here is traceable back to the request that produced the event.
+ */
+function tag(event: EventEnvelope): string {
+  const requestId = event.header.request_id;
+  return requestId ? logPrefix('growth', requestId) : '[growth]';
+}
 
 // ---------------------------------------------------------------------------
 // Queue consumer dispatcher
@@ -29,7 +39,7 @@ export async function handleEvent(
     case 'PointsAssigned':
       return handlePointsAssigned(event, message, env);
     default:
-      console.warn(`[growth] Unknown event type: ${event.type} — acking and skipping`);
+      console.warn(`${tag(event)} Unknown event type: ${event.type} — acking and skipping`);
       return;
   }
 }
@@ -81,7 +91,7 @@ async function handleCustomerRegistered(
 
   if (!customer) {
     console.warn(
-      `[growth] Customer with global_id ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
+      `${tag(event)} Customer with global_id ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
     );
     return;
   }
@@ -112,7 +122,7 @@ async function handleCustomerRegistered(
 
     if (!program) {
       console.warn(
-        `[growth] No loyalty program found for business ${businessId} — cannot create tier for CustomerRegistered`,
+        `${tag(event)} No loyalty program found for business ${businessId} — cannot create tier for CustomerRegistered`,
       );
       return;
     }
@@ -131,7 +141,7 @@ async function handleCustomerRegistered(
       .returning();
 
     tierId = createdTier.id;
-    console.log(`[growth] Created Bronze tier for business ${businessId}`);
+    console.log(`${tag(event)} Created Bronze tier for business ${businessId}`);
   } else {
     tierId = lowestTier.id;
   }
@@ -154,12 +164,12 @@ async function handleCustomerRegistered(
       RETURNING id
     `);
 
-    console.log(`[growth] Wallet initialized for customer ${customer.id}`);
+    console.log(`${tag(event)} Wallet initialized for customer ${customer.id}`);
   } catch (err: unknown) {
     const error = err as { message?: string; code?: string };
     // Idempotency: duplicate (customer_id, reference_id) → second event is a no-op
     if (error.message?.includes('uq_points_tx_reference') || error.code === '23505') {
-      console.log(`[growth] Customer ${customer.id} already has wallet — continuing`);
+      console.log(`${tag(event)} Customer ${customer.id} already has wallet — continuing`);
     } else {
       throw err;
     }
@@ -173,7 +183,7 @@ async function handleCustomerRegistered(
     .set({ currentTierId: tierId })
     .where(eq(customers.id, customer.id));
 
-  console.log(`[growth] Customer ${customer.id} assigned to tier ${tierId}`);
+  console.log(`${tag(event)} Customer ${customer.id} assigned to tier ${tierId}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +249,7 @@ async function handlePointsAssigned(
 
   if (!customer) {
     console.warn(
-      `[growth] Customer ${customerId} not found in business ${businessId} — skipping PointsAssigned`,
+      `${tag(event)} Customer ${customerId} not found in business ${businessId} — skipping PointsAssigned`,
     );
     return;
   }
@@ -276,7 +286,7 @@ async function handlePointsAssigned(
       if (currentTier && highestTier.minPoints <= currentTier.minPoints) {
         isUpgrade = false;
         console.log(
-          `[growth] Customer ${customerId} tier unchanged — ${highestTier.name} is not an upgrade from current tier`,
+          `${tag(event)} Customer ${customerId} tier unchanged — ${highestTier.name} is not an upgrade from current tier`,
         );
       }
     }
@@ -288,12 +298,12 @@ async function handlePointsAssigned(
         .where(eq(customers.id, customer.id));
 
       console.log(
-        `[growth] Customer ${customerId} upgraded to tier ${highestTier.name} (minPoints: ${highestTier.minPoints}, balance: ${currentBalance})`,
+        `${tag(event)} Customer ${customerId} upgraded to tier ${highestTier.name} (minPoints: ${highestTier.minPoints}, balance: ${currentBalance})`,
       );
     }
   } else if (!highestTier) {
     console.log(
-      `[growth] Customer ${customerId} — no eligible tier found (balance: ${currentBalance})`,
+      `${tag(event)} Customer ${customerId} — no eligible tier found (balance: ${currentBalance})`,
     );
   }
 
@@ -327,7 +337,7 @@ async function handlePointsAssigned(
 
       if (existingGrant) {
         console.log(
-          `[growth] Auto-reward ${reward.name} already granted to customer ${customer.id} — skipping`,
+          `${tag(event)} Auto-reward ${reward.name} already granted to customer ${customer.id} — skipping`,
         );
         continue;
       }
@@ -344,19 +354,20 @@ async function handlePointsAssigned(
         .returning({ id: rewardGrants.id });
 
       console.log(
-        `[growth] Auto-reward "${reward.name}" granted to customer ${customer.id} (threshold: ${reward.autoGrantThreshold}, balance: ${currentBalance})`,
+        `${tag(event)} Auto-reward "${reward.name}" granted to customer ${customer.id} (threshold: ${reward.autoGrantThreshold}, balance: ${currentBalance})`,
       );
 
       // Publish RewardAutoGranted event
-      const event = buildRewardAutoGrantedEvent(
+      const autoGrantedEvent = buildRewardAutoGrantedEvent(
         customer.id,
         businessId,
         reward.id,
         reward.name,
         currentBalance,
+        event.header.request_id,
       );
 
-      await publish(env.DOMAIN_EVENTS_QUEUE, event);
+      await publish(env.DOMAIN_EVENTS_QUEUE, autoGrantedEvent);
 
       // -----------------------------------------------------------------
       // A reward that is only good at some venues is worth telling the
@@ -379,7 +390,7 @@ async function handlePointsAssigned(
         // Same call the check-in route makes: the grant is the record, and a
         // missing binding must not fail the points that produced it.
         console.error(
-          `[growth] No DELIVERY_QUEUE binding, so the grant of "${reward.name}" to customer ` +
+          `${tag(event)} No DELIVERY_QUEUE binding, so the grant of "${reward.name}" to customer ` +
             `${customer.id} in tenant ${businessId} was not announced. The reward_grants row is the record.`,
         );
         continue;
@@ -394,6 +405,7 @@ async function handlePointsAssigned(
           reward.name,
           grant.id,
           scope.map((row) => row.branchId),
+          event.header.request_id,
         ),
       );
     }

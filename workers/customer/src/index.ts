@@ -1,3 +1,4 @@
+import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
@@ -10,6 +11,8 @@ import router from './routes';
 // ---------------------------------------------------------------------------
 
 const app = new Hono<{ Bindings: Bindings; Variables: { auth: ReturnType<typeof extractAuthHeaders> } }>();
+
+app.use('*', requestIdMiddleware());
 
 // ---------------------------------------------------------------------------
 // Global middleware: auth header extraction + defense-in-depth stripping
@@ -63,21 +66,7 @@ app.notFound((c) => {
 // Global error handler
 // ---------------------------------------------------------------------------
 
-app.onError((err, c) => {
-  console.error('[customer] Unhandled error:', err);
-
-  if (err instanceof HTTPException) {
-    return c.json(
-      { error: { code: 'ERROR', message: err.message } },
-      err.status,
-    );
-  }
-
-  return c.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
-    500,
-  );
-});
+app.onError(createErrorHandler('customer'));
 
 // ---------------------------------------------------------------------------
 // Export

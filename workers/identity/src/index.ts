@@ -1,6 +1,7 @@
 import type { MessageBatch } from '@cloudflare/workers-types';
 import { checkPasswordPolicy, createDb, hashPassword, schema, verifyPassword } from '@vyloop/db';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
+import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
 import { and, eq } from 'drizzle-orm';
 import type { Context } from 'hono';
@@ -71,6 +72,8 @@ type Variables = {
 type AppEnv = { Bindings: Env; Variables: Variables };
 
 const app = new Hono<AppEnv>();
+
+app.use('*', requestIdMiddleware());
 
 // ---------------------------------------------------------------------------
 // POST /v1/auth/token
@@ -1276,10 +1279,7 @@ app.notFound((c) => {
 // Error handler
 // ---------------------------------------------------------------------------
 
-app.onError((err, c) => {
-  console.error('Identity service error:', err);
-  return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500);
-});
+app.onError(createErrorHandler('identity'));
 
 // ---------------------------------------------------------------------------
 // Queue consumer — TestEvent handler

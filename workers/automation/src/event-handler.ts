@@ -2,10 +2,21 @@ import type { Message } from '@cloudflare/workers-types';
 import { createDb, customers, workflows, readConsentMap } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { WHATSAPP_OUTBOUND_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
+import { logPrefix } from '@vyloop/request-context';
 import { eq, and } from 'drizzle-orm';
 
 import type { Bindings, Condition } from './helpers';
 import { withRls, evaluateConditions, buildWorkflowTriggeredEvent } from './helpers';
+
+/**
+ * Log prefix for a queued event. The id travels in the envelope, so a failure
+ * here is traceable back to the request that produced the event.
+ */
+function tag(event: EventEnvelope): string {
+  const requestId = event.header.request_id;
+  return requestId ? logPrefix('automation', requestId) : '[automation]';
+}
+
 
 // ---------------------------------------------------------------------------
 // Queue consumer dispatcher
@@ -29,7 +40,7 @@ export async function handleEvent(
     case 'RewardRedeemed':
       return handleRewardRedeemed(event, message, env);
     default:
-      console.warn(`[automation] Unknown event type: ${event.type} — acking and skipping`);
+      console.warn(`${tag(event)} Unknown event type: ${event.type} — acking and skipping`);
       return;
   }
 }
@@ -146,7 +157,7 @@ async function handleCustomerRegistered(
 
   if (!customer) {
     console.warn(
-      `[automation] Customer ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
+      `${tag(event)} Customer ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
     );
     return;
   }
@@ -164,7 +175,7 @@ async function handleCustomerRegistered(
     );
 
   if (activeWorkflows.length === 0) {
-    console.log(`[automation] No active customer_registered workflows for business ${businessId}`);
+    console.log(`${tag(event)} No active customer_registered workflows for business ${businessId}`);
     return;
   }
 
@@ -184,7 +195,7 @@ async function handleCustomerRegistered(
   // supposed to prevent.
   if (!hasWhatsAppConsent(consents)) {
     console.log(
-      `[automation] Customer ${customerGlobalId} has no WhatsApp consent — skipping CustomerRegistered`,
+      `${tag(event)} Customer ${customerGlobalId} has no WhatsApp consent — skipping CustomerRegistered`,
     );
     return;
   }
@@ -196,7 +207,7 @@ async function handleCustomerRegistered(
   for (const workflow of activeWorkflows) {
     if (!workflowConditionsPass(workflow as unknown as Record<string, unknown>, customerData)) {
       console.log(
-        `[automation] Workflow ${workflow.id} conditions not met for customer ${customerInternalId}`,
+        `${tag(event)} Workflow ${workflow.id} conditions not met for customer ${customerInternalId}`,
       );
       continue;
     }
@@ -209,7 +220,7 @@ async function handleCustomerRegistered(
     for (const action of actions) {
       if (action.type !== 'send_whatsapp') {
         console.log(
-          `[automation] Unknown action type ${action.type} in workflow ${workflow.id} — skipping`,
+          `${tag(event)} Unknown action type ${action.type} in workflow ${workflow.id} — skipping`,
         );
         continue;
       }
@@ -222,7 +233,7 @@ async function handleCustomerRegistered(
       );
 
       if (!outbound) {
-        console.warn(`[automation] Workflow ${workflow.id} has no template_name in action config`);
+        console.warn(`${tag(event)} Workflow ${workflow.id} has no template_name in action config`);
         continue;
       }
 
@@ -248,12 +259,16 @@ async function handleCustomerRegistered(
         businessId,
         'send_whatsapp',
         outbound.template_name,
+        // skipped / skipReason stay unset; the id is the last parameter.
+        undefined,
+        undefined,
+        event.header.request_id,
       );
 
       await publish(env.DOMAIN_EVENTS_QUEUE, triggeredEvent);
 
       console.log(
-        `[automation] CustomerRegistered triggered workflow ${workflow.id} for customer ${customerInternalId}`,
+        `${tag(event)} CustomerRegistered triggered workflow ${workflow.id} for customer ${customerInternalId}`,
       );
     }
   }
@@ -295,7 +310,7 @@ async function handlePointsAssigned(
     .limit(1);
 
   if (!customer) {
-    console.warn(`[automation] Customer ${customerId} not found — skipping PointsAssigned`);
+    console.warn(`${tag(event)} Customer ${customerId} not found — skipping PointsAssigned`);
     return;
   }
 
@@ -305,7 +320,7 @@ async function handlePointsAssigned(
   // Consent check
   if (!hasWhatsAppConsent(consents)) {
     console.log(
-      `[automation] Customer ${customerId} has no WhatsApp consent — skipping PointsAssigned`,
+      `${tag(event)} Customer ${customerId} has no WhatsApp consent — skipping PointsAssigned`,
     );
     return;
   }
@@ -348,7 +363,7 @@ async function handlePointsAssigned(
       const threshold = (workflowRecord.threshold ?? 0) as number;
       if (threshold > 0 && payload.total_points < threshold) {
         console.log(
-          `[automation] PointsAssigned: customer ${customerId} total ${payload.total_points} < threshold ${threshold} — skipping`,
+          `${tag(event)} PointsAssigned: customer ${customerId} total ${payload.total_points} < threshold ${threshold} — skipping`,
         );
         continue;
       }
@@ -382,12 +397,16 @@ async function handlePointsAssigned(
         businessId,
         'send_whatsapp',
         outbound.template_name,
+        // skipped / skipReason stay unset; the id is the last parameter.
+        undefined,
+        undefined,
+        event.header.request_id,
       );
 
       await publish(env.DOMAIN_EVENTS_QUEUE, triggeredEvent);
 
       console.log(
-        `[automation] PointsAssigned triggered workflow ${workflow.id} for customer ${customerId}`,
+        `${tag(event)} PointsAssigned triggered workflow ${workflow.id} for customer ${customerId}`,
       );
     }
   }
@@ -431,7 +450,7 @@ async function handleRewardRedeemed(
     .limit(1);
 
   if (!customer) {
-    console.warn(`[automation] Customer ${customerId} not found — skipping RewardRedeemed`);
+    console.warn(`${tag(event)} Customer ${customerId} not found — skipping RewardRedeemed`);
     return;
   }
 
@@ -441,7 +460,7 @@ async function handleRewardRedeemed(
   // Consent check
   if (!hasWhatsAppConsent(consents)) {
     console.log(
-      `[automation] Customer ${customerId} has no WhatsApp consent — skipping RewardRedeemed`,
+      `${tag(event)} Customer ${customerId} has no WhatsApp consent — skipping RewardRedeemed`,
     );
     return;
   }
@@ -485,7 +504,7 @@ async function handleRewardRedeemed(
         // We could check redemption history here
         // For now, we always pass through and let the condition handle filtering
         console.log(
-          `[automation] RewardRedeemed: first_redeem filter configured for workflow ${workflow.id}`,
+          `${tag(event)} RewardRedeemed: first_redeem filter configured for workflow ${workflow.id}`,
         );
       }
 
@@ -518,12 +537,16 @@ async function handleRewardRedeemed(
         businessId,
         'send_whatsapp',
         outbound.template_name,
+        // skipped / skipReason stay unset; the id is the last parameter.
+        undefined,
+        undefined,
+        event.header.request_id,
       );
 
       await publish(env.DOMAIN_EVENTS_QUEUE, triggeredEvent);
 
       console.log(
-        `[automation] RewardRedeemed triggered workflow ${workflow.id} for customer ${customerId}`,
+        `${tag(event)} RewardRedeemed triggered workflow ${workflow.id} for customer ${customerId}`,
       );
     }
   }

@@ -1,4 +1,5 @@
 import { createDb, setCurrentBusinessId } from '@vyloop/db';
+import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -57,6 +58,8 @@ function extractAuthHeaders(c: {
 // ---------------------------------------------------------------------------
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+app.use('*', requestIdMiddleware());
 
 // ---------------------------------------------------------------------------
 // GET /v1/analytics/kpis
@@ -213,21 +216,7 @@ app.notFound((c) => {
 // Global error handler
 // ---------------------------------------------------------------------------
 
-app.onError((err, c) => {
-  console.error('[analytics] Unhandled error:', err);
-
-  if (err instanceof HTTPException) {
-    return c.json(
-      { error: { code: 'ERROR', message: err.message } },
-      err.status,
-    );
-  }
-
-  return c.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
-    500,
-  );
-});
+app.onError(createErrorHandler('analytics'));
 
 // ---------------------------------------------------------------------------
 // Export
