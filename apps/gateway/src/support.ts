@@ -472,7 +472,7 @@ async function verifyTurnstile(
  */
 export function supportRoute(deps: SupportDeps) {
   return async (c: Context): Promise<Response> => {
-    const requestId = deps.newId();
+    const requestId = (c.get('requestId') as string | undefined) ?? deps.newId();
     const env = c.env as SupportEnv;
 
     let body: unknown;

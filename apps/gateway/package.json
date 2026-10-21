@@ -12,6 +12,7 @@
   "dependencies": {
     "@vyloop/db": "workspace:*",
     "@vyloop/event-bus": "workspace:*",
+    "@vyloop/request-context": "workspace:*",
     "@vyloop/schema-registry": "workspace:*",
     "@vyloop/types": "workspace:*",
     "drizzle-orm": "^0.45.4",

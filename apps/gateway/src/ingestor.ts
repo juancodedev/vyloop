@@ -1,5 +1,6 @@
 import type { KVNamespace } from '@cloudflare/workers-types';
 import { publish, createEnvelope } from '@vyloop/event-bus';
+import { getRequestId } from '@vyloop/request-context';
 import { validate } from '@vyloop/schema-registry';
 import { Hono } from 'hono';
 
@@ -148,7 +149,7 @@ ingestor.post('/:type', async (c) => {
         error: {
           code: 'AUTH_TOKEN_INVALID',
           message: 'JWT claims not found — this route requires authentication',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       401,
@@ -163,7 +164,7 @@ ingestor.post('/:type', async (c) => {
         error: {
           code: 'SCHEMA_INVALID',
           message: 'Content-Type must be application/json',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       400,
@@ -179,7 +180,7 @@ ingestor.post('/:type', async (c) => {
         error: {
           code: 'SCHEMA_INVALID',
           message: 'Invalid JSON body',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       400,
@@ -196,7 +197,7 @@ ingestor.post('/:type', async (c) => {
         error: {
           code: 'SCHEMA_INVALID',
           message: 'Event body must be a JSON object',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       400,
@@ -215,7 +216,7 @@ ingestor.post('/:type', async (c) => {
           error: {
             code: 'EVENT_TYPE_UNKNOWN',
             message: `No schema registered for event type: "${eventType}"`,
-            request_id: crypto.randomUUID(),
+            request_id: getRequestId(c),
           },
         },
         404,
@@ -228,7 +229,7 @@ ingestor.post('/:type', async (c) => {
           code: 'SCHEMA_INVALID',
           message: 'Event payload does not match schema',
           details: result.errors,
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       400,
@@ -242,7 +243,7 @@ ingestor.post('/:type', async (c) => {
         error: {
           code: 'EVENT_BUSINESS_MISMATCH',
           message: 'header.business_id does not match the authenticated business',
-          request_id: crypto.randomUUID(),
+          request_id: getRequestId(c),
         },
       },
       403,
@@ -253,10 +254,12 @@ ingestor.post('/:type', async (c) => {
   const header: {
     business_id: string;
     timestamp: string;
+    request_id?: string;
     localization?: Localization;
   } = {
     business_id: jwt.business_id,
     timestamp: body.header?.timestamp ?? new Date().toISOString(),
+    request_id: getRequestId(c),
   };
   if (body.header?.localization) {
     header.localization = body.header.localization;

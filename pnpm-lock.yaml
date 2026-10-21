@@ -183,6 +183,9 @@ importers:
       '@vyloop/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@vyloop/request-context':
+        specifier: workspace:*
+        version: link:../../packages/request-context
       '@vyloop/schema-registry':
         specifier: workspace:*
         version: link:../../packages/schema-registry
