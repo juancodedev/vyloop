@@ -59,6 +59,12 @@ vi.mock('../src/index.ts', () => ({
     type: 'object',
     properties: {},
   },
+  rewardAvailableAtBranchSchema: {
+    $id: 'https://schema.vyloop.app/events/RewardAvailableAtBranch/v1.0.0',
+    title: 'RewardAvailableAtBranch',
+    type: 'object',
+    properties: {},
+  },
 }));
 
 const { registerAllSchemas } = await import('./register-schemas');
@@ -140,9 +146,20 @@ describe('registerAllSchemas', () => {
     );
   });
 
-  it('should register all eight schemas', async () => {
+  it('should register RewardAvailableAtBranch schema', async () => {
     await registerAllSchemas(kv);
 
-    expect(registerSchemaMock).toHaveBeenCalledTimes(8);
+    expect(registerSchemaMock).toHaveBeenCalledWith(
+      kv,
+      'RewardAvailableAtBranch',
+      expect.objectContaining({ title: 'RewardAvailableAtBranch' }),
+      '1.0.0',
+    );
+  });
+
+  it('should register all nine schemas', async () => {
+    await registerAllSchemas(kv);
+
+    expect(registerSchemaMock).toHaveBeenCalledTimes(9);
   });
 });
