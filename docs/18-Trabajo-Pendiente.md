@@ -19,14 +19,14 @@ de lo que hay que implementar.
 | `message-log-schema-alignment` | `message_log` de producción igual al schema, y el gate de drift aprende a verificar `ALTER COLUMN` y `DROP` | Mediano | Bajo |
 | `pages-opennext-migration` | `customer-web` y `dashboard` dejan `@cloudflare/next-on-pages` (en desuso) por OpenNext | Grande | Medio |
 | `wallet-pass-correctness` | Saldo entero hacia Google, `member_code` al registrarse, y el comercio gestiona los pases | Mediano–Grande | Medio |
-| `request-tracing` | El `request_id` viaja del gateway a los workers y a los eventos de la cola | Mediano | Medio |
 
 ### Hecho — archivado en OpenSpec
 
-Tres cambios de la tabla ya están implementados y sus deltas viven en las specs canónicas:
+Cuatro cambios de la tabla ya están implementados y sus deltas viven en las specs canónicas:
 
 - **`branch-reward-trigger`** — implementado y archivado (`2026-10-21-branch-reward-trigger`), mergeado en #248/#249. Añadió `reward_branches` (migración `0021`) y el evento `RewardAvailableAtBranch`.
 - **`supply-chain-hardening`** — implementado en PR #235 (mergeado el 2026-10-20) y archivado (`2026-10-21-supply-chain-hardening`). `pnpm audit` en CI, `sslmode=verify-full` y overrides inertes.
+- **`request-tracing`** — implementado (PRs #261/#263) y archivado (`2026-10-21-request-tracing`). Un `X-Request-Id` por request en el gateway, en los ocho workers y en el header de los eventos de la cola; `docs/18-Verificacion-y-Seguridad-Operativa.md` §8 explica cómo rastrear una queja con él.
 - **`api-surface-cleanup`** — Unidades 1, 2 y 4 implementadas (PRs #236/#237) y archivadas (`2026-10-21-api-surface-cleanup`): `/health` de automation alcanzable, ingestor de eventos autenticado y con tenant del token, e índice `idx_pos_terminals_business` (`0020`). **Queda la Unidad 3** (habilitar el webhook de Meta), diferida por la decisión de producto del 2026-10-08; su requerimiento quedó como contrato dormido en `openspec/specs/communication-whatsapp/spec.md` y sus tareas de implementación siguen abiertas en el archivo.
 
 ### Convenciones para levantar un cambio diferido
