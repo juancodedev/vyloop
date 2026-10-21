@@ -52,7 +52,7 @@ Verified against the Google Wallet loyalty-card documentation on 2026-10-21.
 ### In Scope
 
 1. `growth-dashboard`: a "Venues" section under Settings to register, edit and
-   deactivate venues and set each one's position with a map pin, on the
+   deactivate venues and set each one's position with coordinates, on the
    existing identity routes. No backend change.
 2. `google-wallet`: the pass object of a consenting customer carries up to 10
    `merchantLocations` from the business's active, located venues, kept in step

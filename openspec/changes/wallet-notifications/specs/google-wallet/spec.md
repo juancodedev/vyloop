@@ -6,7 +6,7 @@
 
 The loyalty object of a customer with a granted `nearby_notifications` consent MUST carry, in `merchantLocations`, the positions of the business's venues that are active and have both `latitude` and `longitude`. It MUST carry at most 10 of them, the limit Google accepts per object.
 
-When the business has more than 10 such venues, the object MUST carry the 10 the customer visited most recently, completed by the most recently located venues. _(Assumption, Q1.)_
+When the business has more than 10 such venues, the object MUST carry the 10 whose coordinates were updated most recently. _(Decided, Q1: no per-customer visit order. Google evaluates proximity on the device, so past visits say nothing about where the holder is now, and the order would cost a join per customer on every object build.)_
 
 The loyalty object of a customer without that consent, or with it withdrawn, MUST carry no `merchantLocations`. The loyalty class MUST carry no `merchantLocations`, because a class reaches every holder regardless of consent.
 
@@ -70,9 +70,9 @@ A withdrawn consent MUST be reflected on the pass without waiting for a periodic
 
 `POST /v1/wallet/messages` MUST accept `{ header, body, link? }` from an operator of the business and MUST send the message to every eligible pass of that business through the loyalty object `addMessage` method.
 
-A pass is eligible when its object is active and its customer has a granted consent for wallet messages. _(Assumption, Q2: the consent is a new type, `wallet_messages`.)_
+A pass is eligible when its object is active and its customer has granted the `promotions` consent. _(Decided, Q2: `promotions` is the purpose `docs/10` §15 names for offers, off by default. The push campaign gate still reads `nearby_notifications`, which contradicts §15; that is a separate change.)_
 
-`header` MUST be 1–40 characters and `body` 1–300 characters. _(Assumption, Q4.)_ `link`, when present, MUST point to a URL related to the pass: the business's program page or a host the business has registered. Any other link MUST be refused, because Google's Acceptable Use Policy forbids links unrelated to the pass.
+`header` MUST be 1–40 characters and `body` 1–300 characters, declared once in `WALLET_MESSAGE_LIMITS` in `@vyloop/types` so the form and the route cannot disagree. _(Decided, Q4: product limits. Google documents no message-length cap, so a provider rejection for length is recorded per object and never retried.)_ `link`, when present, MUST point to the origin of `WALLET_CUSTOMER_WEB_BASE_URL`. Any other origin MUST be refused, because Google's Acceptable Use Policy forbids links unrelated to the pass, and an operator-typed host is that vector with a typo.
 
 The route MUST answer `202` with the message id and the number of eligible passes, and MUST deliver asynchronously, one job per object, idempotent on `(message_id, object_id)`.
 

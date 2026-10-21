@@ -6,23 +6,30 @@
 
 The dashboard MUST offer a "Venues" section under Settings where an operator lists, registers, edits and deactivates the business's venues through the existing identity routes: `GET` and `POST /v1/businesses/:id/branches`, `PATCH` and `DELETE /v1/businesses/:id/branches/:branchId`.
 
-The venue form MUST carry `name`, `address`, `city`, `country`, `timezone` and a position. The operator MUST be able to set the position by placing a pin on a map, and MAY set it by searching an address. _(Assumption, Q6: address search needs a geocoding provider, which is not chosen yet; the pin works without one.)_
+The venue form MUST carry `name`, `address`, `city`, `country`, `timezone` and a position. The operator MUST be able to set the position by typing `latitude` and `longitude`, and MUST be able to fill both from the browser's current position in one action. _(Decided, Q6: no map and no address search in v1. The operator registers a venue while standing in it, so the device's position is better data than a dragged pin, and a map would force a tile-provider decision for one pair of numbers.)_
 
 The form MUST send `latitude` and `longitude` together, or neither to clear the position. It MUST show the identity worker's refusal codes (`BRANCH_LOCATION_INCOMPLETE`, `BRANCH_LOCATION_INVALID`, `BRANCH_LOCATION_OUT_OF_RANGE`) as readable messages.
 
 The list MUST show, per venue, whether it has a position.
 
-#### Scenario: An operator registers a venue with a pin
+#### Scenario: An operator registers a venue with a position
 
 - GIVEN an operator on the Venues section
-- WHEN they fill the form, place the pin and save
+- WHEN they fill the form, enter the position or use their current location, and save
 - THEN the venue is created with that `latitude` and `longitude`
 - AND the list shows it as located
+
+#### Scenario: The browser refuses the current position
+
+- GIVEN an operator on the Venues section
+- WHEN they ask for their current location and the browser denies the permission
+- THEN the form says the position could not be read
+- AND the operator can still type the coordinates
 
 #### Scenario: An operator clears a position
 
 - GIVEN a located venue
-- WHEN the operator removes the pin and saves
+- WHEN the operator clears both coordinates and saves
 - THEN the venue is updated with neither coordinate
 - AND the list shows it as not located
 

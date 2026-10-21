@@ -1,6 +1,6 @@
 # Tasks: Wallet Notifications
 
-> Status: proposed. Decisions pending (Unit 0).
+> Status: proposed. Q1-Q6 decided 2026-10-21.
 
 ## Review Workload Forecast
 
@@ -21,7 +21,7 @@ Chained PRs recommended: Yes
 | Unit | Goal                                                  | Likely PR | Lines | Notes                                       |
 | ---- | ----------------------------------------------------- | --------- | ----- | ------------------------------------------- |
 | 0    | Product decisions recorded                            | —         | ~20   | Blocks everything else.                     |
-| 1    | Dashboard Venues section with map pin                 | PR #1     | ~300  | Step 1. Existing routes; no backend change. |
+| 1    | Dashboard Venues section (coordinates, no map)        | PR #1     | ~180  | Step 1. Existing routes; no backend change. |
 | 2    | `merchantLocations` on consenting objects + sync      | PR #2     | ~300  | Needs located venues (Unit 1).              |
 | 3    | Message storage, budget ledger, consent type          | PR #3     | ~250  | Migration applied before Unit 4.            |
 | 4    | `POST/GET /v1/wallet/messages` + queue delivery       | PR #4     | ~300  | Needs Unit 3.                               |
@@ -29,18 +29,18 @@ Chained PRs recommended: Yes
 
 ## Unit 0: Decisions
 
-- [ ] 0.1 Q1 — With more than 10 located venues, which 10 go on a pass? Assumed: the customer's most recently visited, completed by the most recently located.
-- [ ] 0.2 Q2 — Which consent allows manual wallet messages? Assumed: a new `wallet_messages` type in `CONSENT_TYPES`, off by default (`docs/10` §11). Alternative: reuse `nearby_notifications`.
-- [ ] 0.3 Q3 — Daily limit per business. Assumed: 1 message per business per day.
-- [ ] 0.4 Q4 — `header`/`body` lengths. Assumed: 40 / 300 characters.
-- [ ] 0.5 Q5 — Which hosts may `link` point to? Assumed: the program page plus hosts the business registers in settings.
-- [ ] 0.6 Q6 — Map and geocoding provider for the venue form. Assumed: an open map tile source for the pin, address search deferred until a geocoding provider is chosen.
+- [x] 0.1 Q1 — Which 10 of more than 10 located venues go on a pass? **Decided: the 10 active venues with coordinates, most recently updated.** No per-customer order: Google evaluates proximity on the device, so past visits say nothing about where the holder is, and the order would cost a join per customer on every object build.
+- [x] 0.2 Q2 — Which consent allows manual wallet messages? **Decided: a new `promotions` type in `CONSENT_TYPES`, off by default.** `promotions` is the purpose `docs/10` §15 already names for offers, and it forbids grouping promotions with nearby notifications. Not `wallet_messages`: the purpose is the promotion, the channel is not part of it. Separately: `push-campaigns.ts` requires `nearby_notifications` for marketing campaigns, which contradicts §15; out of scope here.
+- [x] 0.3 Q3 — Daily limit per business. **Decided: 1 per business per day, as a constant in code, not a column.** A constant is reviewable in a PR; a column is a setting that changes without one.
+- [x] 0.4 Q4 — `header`/`body` lengths. **Decided: 40 / 300 as product limits**, declared once in `WALLET_MESSAGE_LIMITS` in `@vyloop/types` so the form and the route cannot disagree. `POST` refuses with `WALLET_MESSAGE_TOO_LONG` before anything is queued. Google documents no message-length cap, so a provider 400 for length is recorded `rejected` per object, never retried, and the fan-out continues. Unit 3 measures the real behaviour with one over-long message to a test issuer.
+- [x] 0.5 Q5 — Which hosts may `link` point to? **Decided: only the origin of `WALLET_CUSTOMER_WEB_BASE_URL`.** An operator-typed host is the exact vector Google's Acceptable Use Policy forbids, and a typo is indistinguishable from abuse. A business domain is added later with ownership verification.
+- [x] 0.6 Q6 — Map for the venue form. **Decided: no map in v1.** Two numeric fields plus a "use my location" button. The operator registers a venue while standing in it, so the browser's position is better data than a dragged pin, and a map would force a tile-provider decision for one pair of numbers. Address search stays deferred. If a map is ever wanted, Leaflet with a configurable tile URL.
 
 ## Unit 1: Venues Section (step 1)
 
 - [ ] 1.1 API client in `apps/dashboard/src/lib/api.ts`: create, update and deactivate venues; extend the venue record with `latitude`, `longitude` and `isActive`.
 - [ ] 1.2 `dashboard/settings/venues` page: list with located / not located and active / inactive.
-- [ ] 1.3 Venue form with map pin (Q6); sends both coordinates or neither.
+- [ ] 1.3 Venue form with two coordinate fields and a "use my location" button (Q6 = no map); sends both coordinates or neither.
 - [ ] 1.4 Readable messages for `BRANCH_LOCATION_INCOMPLETE`, `BRANCH_LOCATION_INVALID`, `BRANCH_LOCATION_OUT_OF_RANGE`.
 - [ ] 1.5 Tests per scenario in `specs/growth-dashboard` "Venue Management".
 
