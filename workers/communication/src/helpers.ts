@@ -85,6 +85,7 @@ export function buildWhatsAppOutboundRequestedEvent(
   parameters: Record<string, string>,
   idempotencyKey: string,
   phone?: string,
+  requestId?: string,
 ): EventEnvelope {
   const payload: Record<string, unknown> = {
     customer_id: customerId,
@@ -100,7 +101,7 @@ export function buildWhatsAppOutboundRequestedEvent(
 
   return createEnvelope(
     WHATSAPP_OUTBOUND_REQUESTED,
-    { business_id: businessId, timestamp: new Date().toISOString() },
+    { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
 }

@@ -1,5 +1,6 @@
 import { createDb, messageLog } from '@vyloop/db';
 import { PUSH_CAMPAIGN_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
+import { getRequestId } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -307,7 +308,7 @@ router.post('/v1/communication/push/campaigns', async (c) => {
     c.env.DELIVERY_QUEUE,
     createEnvelope(
       PUSH_CAMPAIGN_REQUESTED,
-      { business_id: businessId, timestamp: new Date().toISOString() },
+      { business_id: businessId, timestamp: new Date().toISOString(), request_id: getRequestId(c) },
       payload,
     ),
   );

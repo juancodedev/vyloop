@@ -416,6 +416,7 @@ export function buildPointsAssignedEvent(
   pointsMultiplier: number,
   balanceAfter: number,
   referenceId: string,
+  requestId?: string,
 ): EventEnvelope {
   const payload = {
     customer_id: customerId,
@@ -428,7 +429,7 @@ export function buildPointsAssignedEvent(
 
   return createEnvelope(
     POINTS_ASSIGNED,
-    { business_id: businessId, timestamp: new Date().toISOString() },
+    { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
 }
@@ -448,6 +449,7 @@ export function buildRewardRedeemedEvent(
   partial: boolean,
   rewardName?: string,
   rewardId?: string,
+  requestId?: string,
 ): EventEnvelope {
   const payload: Record<string, unknown> = {
     customer_id: customerId,
@@ -467,7 +469,7 @@ export function buildRewardRedeemedEvent(
 
   return createEnvelope(
     REWARD_REDEEMED,
-    { business_id: businessId, timestamp: new Date().toISOString() },
+    { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
 }
@@ -484,6 +486,7 @@ export function buildRewardAutoGrantedEvent(
   rewardId: string,
   rewardName: string,
   balanceAfter: number,
+  requestId?: string,
 ): EventEnvelope {
   const payload = {
     customer_id: customerId,
@@ -495,7 +498,7 @@ export function buildRewardAutoGrantedEvent(
 
   return createEnvelope(
     REWARD_AUTO_GRANTED,
-    { business_id: businessId, timestamp: new Date().toISOString() },
+    { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
 }
@@ -518,10 +521,11 @@ export function buildRewardAvailableAtBranchEvent(
   rewardName: string,
   grantId: string,
   branchIds: string[],
+  requestId?: string,
 ): EventEnvelope {
   return createEnvelope(
     REWARD_AVAILABLE_AT_BRANCH,
-    { business_id: businessId, timestamp: new Date().toISOString() },
+    { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     {
       customer_id: customerGlobalId,
       reward_id: rewardId,

@@ -109,6 +109,7 @@ export function requireOperatorRole(auth: AuthHeaders): OperatorRoleGuard {
 export function buildCustomerRegisteredEvent(
   customer: { globalId: string; fullName: string | null },
   businessId: string,
+  requestId?: string,
 ) {
   const payload = {
     customer_id: customer.globalId,
@@ -118,7 +119,7 @@ export function buildCustomerRegisteredEvent(
 
   return createEnvelope(
     CUSTOMER_REGISTERED,
-    { business_id: businessId, timestamp: new Date().toISOString() },
+    { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
 }

@@ -2,6 +2,7 @@ import type { Queue } from '@cloudflare/workers-types';
 import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, rewardBranches, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword, branches, customerEvents } from '@vyloop/db';
 import { publish, createEnvelope, CUSTOMER_CHECKED_IN } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
+import { getRequestId } from '@vyloop/request-context';
 import { eq, and, count, sql, or, isNull, lte, gte, gt, desc, inArray, notInArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
@@ -1037,6 +1038,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
       tierMultiplier,
       Number(tx.balance_after),
       body.reference_id,
+      getRequestId(c),
     );
 
     await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
@@ -1842,6 +1844,7 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
       isPartial,
       resolvedRewardName,
       resolvedRewardId,
+      getRequestId(c),
     );
 
     await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
@@ -2303,6 +2306,7 @@ async function creditCheckin(
         tierMultiplier,
         balanceAfter,
         referenceId,
+        getRequestId(c),
       ),
     );
 

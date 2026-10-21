@@ -119,6 +119,7 @@ export function buildWorkflowTriggeredEvent(
   templateName?: string,
   skipped?: boolean,
   skipReason?: string,
+  requestId?: string,
 ): EventEnvelope {
   const payload: Record<string, unknown> = {
     workflow_id: workflowId,
@@ -141,7 +142,7 @@ export function buildWorkflowTriggeredEvent(
 
   return createEnvelope(
     WORKFLOW_TRIGGERED,
-    { business_id: businessId, timestamp: new Date().toISOString() },
+    { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
 }
