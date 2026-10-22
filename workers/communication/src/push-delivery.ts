@@ -60,6 +60,10 @@ export interface PushNotificationPayload {
   url?: string;
   /** A key that identifies the message, so the same one is not delivered twice. */
   reference_id?: string;
+  /** Campaign-level fields persisted so campaigns can be listed/read back. */
+  target?: unknown;
+  target_type?: 'branch' | 'radius';
+  audience_size?: number;
 }
 
 export interface PushDeliveryOutcome {
@@ -243,6 +247,9 @@ export async function deliverPushNotification(
           body: payload.body,
           url: payload.url ?? '/',
           reference_id: referenceId,
+          ...(payload.target !== undefined ? { target: payload.target } : {}),
+          ...(payload.target_type !== undefined ? { target_type: payload.target_type } : {}),
+          ...(payload.audience_size !== undefined ? { audience_size: payload.audience_size } : {}),
         },
       })
       .returning();
