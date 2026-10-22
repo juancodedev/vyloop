@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { checkAudit, formatReport } from './check-audit.mjs';
+import { checkAudit, formatReport, isTransientFailure, runAuditWithRetries } from './check-audit.mjs';
 
 const NOW = new Date('2026-10-20T00:00:00Z');
 
@@ -141,5 +141,97 @@ describe('formatReport', () => {
     expect(text).toContain('BLOCKED');
     expect(text).toContain('braces');
     expect(text).toContain('GHSA-aaaa-bbbb-cccc');
+  });
+});
+
+// What the retry must and must not swallow. The `pnpm audit` payload for a
+// socket timeout is JSON with an `error` object, not empty output — that shape
+// is the one CI actually produced.
+describe('isTransientFailure', () => {
+  it('treats a socket timeout in the payload as transient', () => {
+    expect(
+      isTransientFailure({
+        stdout: JSON.stringify({ error: { code: 'ERR_SOCKET_TIMEOUT', summary: 'request timed out' } }),
+        stderr: '',
+      }),
+    ).toBe(true);
+  });
+
+  it('treats a spawn timeout as transient', () => {
+    expect(isTransientFailure({ error: { code: 'ETIMEDOUT' } })).toBe(true);
+  });
+
+  it('treats a socket error on stderr as transient', () => {
+    expect(isTransientFailure({ stdout: '', stderr: 'request to registry failed: socket hang up' })).toBe(true);
+  });
+
+  it('does not retry a payload that carries advisories', () => {
+    // `pnpm audit` exits 1 when it finds something. That is an answer, and
+    // retrying it would only delay the failure.
+    expect(isTransientFailure({ stdout: JSON.stringify(report([advisory('GHSA-aaaa-bbbb-cccc', 'braces')])) })).toBe(
+      false,
+    );
+  });
+
+  it('does not retry an error that is not the network', () => {
+    expect(isTransientFailure({ stdout: JSON.stringify({ error: { code: 'E404', summary: 'not found' } }) })).toBe(
+      false,
+    );
+    expect(isTransientFailure({ stdout: 'not json', stderr: 'ELIFECYCLE command failed' })).toBe(false);
+  });
+
+  it('does not invent a retry out of silence', () => {
+    expect(isTransientFailure({ stdout: '', stderr: '' })).toBe(false);
+  });
+});
+
+describe('runAuditWithRetries', () => {
+  const timeoutPayload = { stdout: JSON.stringify({ error: { code: 'ERR_SOCKET_TIMEOUT' } }), stderr: '' };
+  const goodPayload = { stdout: JSON.stringify(report([])), stderr: '' };
+
+  it('retries a transport failure and returns the answer it eventually got', () => {
+    const queue = [timeoutPayload, goodPayload];
+    const sleeps = [];
+    const retries = [];
+
+    const outcome = runAuditWithRetries({
+      runAudit: () => queue.shift(),
+      sleep: (ms) => sleeps.push(ms),
+      onRetry: (info) => retries.push(info),
+    });
+
+    expect(outcome.attempts).toBe(2);
+    expect(outcome.audit).toBe(goodPayload);
+    expect(sleeps).toEqual([2_000]);
+    expect(retries[0].detail).toBe('ERR_SOCKET_TIMEOUT');
+  });
+
+  it('stops at the attempt budget and returns the failure to block on', () => {
+    const sleeps = [];
+    const outcome = runAuditWithRetries({
+      runAudit: () => timeoutPayload,
+      sleep: (ms) => sleeps.push(ms),
+      attempts: 3,
+    });
+
+    expect(outcome.attempts).toBe(3);
+    expect(outcome.audit).toBe(timeoutPayload);
+    expect(sleeps).toEqual([2_000, 8_000]);
+  });
+
+  it('does not retry a report that already has advisories', () => {
+    let calls = 0;
+    const outcome = runAuditWithRetries({
+      runAudit: () => {
+        calls += 1;
+        return { stdout: JSON.stringify(report([advisory('GHSA-aaaa-bbbb-cccc', 'braces')])), stderr: '' };
+      },
+      sleep: () => {
+        throw new Error('should not sleep');
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(outcome.attempts).toBe(1);
   });
 });
