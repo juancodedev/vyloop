@@ -168,8 +168,8 @@ export default function CampaignComposerPage() {
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setLatitude(String(pos.coords.latitude));
-        setLongitude(String(pos.coords.longitude));
+        setLatitude(String(pos.coords.latitude).replace(',', '.'));
+        setLongitude(String(pos.coords.longitude).replace(',', '.'));
         showToast('success', 'Ubicación capturada');
       },
       (err) => showToast('error', 'No se pudo obtener la ubicación: ' + err.message),
@@ -294,13 +294,13 @@ export default function CampaignComposerPage() {
                       <input
                         id="latitude"
                         type="number"
-                        step="0.000001"
+                        step="any"
                         min="-90"
                         max="90"
                         className="form-control"
                         placeholder="-34.6037"
                         value={latitude}
-                        onChange={(e) => { setLatitude(e.target.value); if (fieldErrors.latitude) setFieldErrors(prev => ({ ...prev, latitude: '' })); }}
+                        onChange={(e) => { setLatitude(e.target.value.replace(',', '.')); if (fieldErrors.latitude) setFieldErrors(prev => ({ ...prev, latitude: '' })); }}
                         disabled={sending}
                       />
                       {isSecureContext && (
@@ -322,13 +322,13 @@ export default function CampaignComposerPage() {
                     <input
                       id="longitude"
                       type="number"
-                      step="0.000001"
+                      step="any"
                       min="-180"
                       max="180"
                       className="form-control"
                       placeholder="-58.3816"
                       value={longitude}
-                      onChange={(e) => { setLongitude(e.target.value); if (fieldErrors.longitude) setFieldErrors(prev => ({ ...prev, longitude: '' })); }}
+                      onChange={(e) => { setLongitude(e.target.value.replace(',', '.')); if (fieldErrors.longitude) setFieldErrors(prev => ({ ...prev, longitude: '' })); }}
                       disabled={sending}
                     />
                     {fieldErrors.longitude && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.longitude}</p>}
