@@ -489,9 +489,7 @@ describe('profile pass behavior', () => {
 
     // getCustomerConsents is called to load the initial state
     const apiModule = await import('../lib/api');
-    await waitFor(() =>
-      expect(apiModule.api.getCustomerConsents).toHaveBeenCalled(),
-    );
+    expect(apiModule.api.getCustomerConsents).toHaveBeenCalled();
   });
 
   it('writes consent changes to the API', async () => {
