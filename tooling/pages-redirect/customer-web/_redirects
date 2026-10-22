@@ -1,0 +1,27 @@
+# Why this file exists, and why it must not be deleted
+#
+# `vyloop-customer-web.pages.dev` is an external contract, not an address we
+# control. It is encoded in merchant QR codes that are already printed and on
+# counters, and it is written into passes that are already in customers' Google
+# Wallets. Neither can be redeployed. A pass can be re-issued by reconciliation;
+# a printed code cannot be re-issued at all.
+#
+# The application now deploys as a Worker, so the Pages project has nothing left
+# to serve. Left alone it would keep serving its last build — a deployment that
+# answers 200 while running code that is no longer this repository. That is
+# worse than a 404, because it looks healthy.
+#
+# So the project is kept alive with exactly one job: hand the old hostname to the
+# Worker. This replaces the stale build instead of leaving it behind, and every
+# QR code and issued pass keeps working.
+#
+# The Worker hostname is the destination, not a proxy. New QR codes and new
+# passes point at the Worker directly and do not come through here.
+#
+# This directory carries no `_worker.js` on purpose: a Pages project in advanced
+# mode ignores `_redirects` entirely. That is the bug that made `/program` return
+# 404 from a build that looked correct on disk, and this file must not repeat it.
+#
+# Delete this directory and the QR codes die. There is no second chance.
+
+/*  https://vyloop-customer-web.cl-jmunoz.workers.dev/:splat  301

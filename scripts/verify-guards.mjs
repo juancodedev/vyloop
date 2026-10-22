@@ -300,14 +300,14 @@ const MUTATIONS = [
     label: 'wrangler: point WALLET_WEB_BASE_URL back at the customer web',
     file: 'workers/wallet/wrangler.jsonc',
     from: '"WALLET_WEB_BASE_URL": "https://media.juancode.dev"',
-    to: '"WALLET_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev"',
+    to: '"WALLET_WEB_BASE_URL": "https://vyloop-customer-web.cl-jmunoz.workers.dev"',
     dir: 'workers/wallet',
     expect: /same host|gateway serves both routes/,
   },
   {
     label: 'wrangler: build the pass links from the gateway origin',
     file: 'workers/wallet/wrangler.jsonc',
-    from: '"WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev"',
+    from: '"WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.cl-jmunoz.workers.dev"',
     to: '"WALLET_CUSTOMER_WEB_BASE_URL": "https://media.juancode.dev"',
     dir: 'workers/wallet',
     expect: /keeps the links host separate/,
@@ -317,9 +317,9 @@ const MUTATIONS = [
     // The exact-list assertion's reason for existing. A subset assertion would
     // let this through and keep passing.
     file: 'workers/wallet/wrangler.jsonc',
-    from: '"WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev"',
+    from: '"WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.cl-jmunoz.workers.dev"',
     to:
-      '"WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev",\n    "WALLET_DEBUG": "true"',
+      '"WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.cl-jmunoz.workers.dev",\n    "WALLET_DEBUG": "true"',
     dir: 'workers/wallet',
     expect: /exactly the intended vars/,
   },

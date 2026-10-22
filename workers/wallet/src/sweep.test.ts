@@ -96,7 +96,7 @@ const PROVISIONING = {
   issuerId: ISSUER,
   mediaBaseUrl: 'https://media.juancode.dev',
   webBaseUrl: 'https://media.juancode.dev',
-  customerWebBaseUrl: 'https://vyloop-customer-web.pages.dev',
+  customerWebBaseUrl: 'https://vyloop-customer-web.cl-jmunoz.workers.dev',
   callbackBaseUrl: 'https://media.juancode.dev',
 };
 

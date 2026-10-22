@@ -1,0 +1,11 @@
+# Same reasoning as `tooling/pages-redirect/customer-web/_redirects`.
+#
+# `vyloop-dashboard.pages.dev` is weaker external surface than the customer web —
+# no printed QR code points at it — but it is still in bookmarks and in links
+# that were shared, and leaving it serving a stale build is the same failure in
+# a quieter place. The dashboard has a login, so an old deployment is old code
+# sitting in front of authenticated data.
+#
+# No `_worker.js` here either, for the reason given in the customer-web file.
+
+/*  https://vyloop-dashboard.cl-jmunoz.workers.dev/:splat  301

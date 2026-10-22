@@ -4,9 +4,9 @@
  *
  * ## Why this route is here rather than in the dashboard
  *
- * Measured, not assumed. `vyloop-customer-web.pages.dev/program` is a server
+ * Measured, not assumed. `vyloop-customer-web.cl-jmunoz.workers.dev/program` is a server
  * component and serves 5,917 characters of visible text; the dashboard renders
- * on the client, so its whole `/dashboard` HTML is 9,638 bytes of which **18**
+ * on the client, so its whole `/dashboard` HTML is 8,610 bytes of which **18**
  * are text — every byte of content arrives from the client. A review page placed there would hand Google's reviewer a `<title>`
  * and nothing else.
  *
@@ -134,7 +134,7 @@ const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * The pages.dev deployment rather than a custom domain, because those routes
  * exist in `apps/customer-web/app` and are served from there.
  */
-export const DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+export const DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.cl-jmunoz.workers.dev';
 
 /**
  * Read the customer-web base URL, with a documented default and no trailing slash.

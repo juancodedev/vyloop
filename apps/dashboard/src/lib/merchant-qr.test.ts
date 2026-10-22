@@ -36,7 +36,7 @@ describe('registerHrefFor', () => {
     // registers from a printed QR and a customer who arrives from a merchant's
     // link are sent to different places, and nothing local would look broken.
     expect(registerHrefFor(DEFAULT_CUSTOMER_WEB_BASE_URL, 'ferreteria-sur')).toBe(
-      'https://vyloop-customer-web.pages.dev/register?biz=ferreteria-sur',
+      'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=ferreteria-sur',
     );
   });
 
@@ -141,7 +141,7 @@ describe('customerWebBaseUrl', () => {
     // equal: `workers/wallet/src/helpers.ts` and `apps/gateway/src/merchant-page.ts`
     // both carry this value, and a fourth copy drifting from the other three is
     // how a customer ends up registering on a host nobody else knows about.
-    expect(DEFAULT_CUSTOMER_WEB_BASE_URL).toBe('https://vyloop-customer-web.pages.dev');
+    expect(DEFAULT_CUSTOMER_WEB_BASE_URL).toBe('https://vyloop-customer-web.cl-jmunoz.workers.dev');
   });
 });
 

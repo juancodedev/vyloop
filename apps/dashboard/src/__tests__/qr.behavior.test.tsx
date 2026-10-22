@@ -117,7 +117,7 @@ describe('the QR points at this merchant, not a constant', () => {
     await waitFor(() => expect(qr()).not.toBeNull());
 
     expect(qrValue()).toBe(
-      'https://vyloop-customer-web.pages.dev/register?biz=panaderia-del-barrio',
+      'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=panaderia-del-barrio',
     );
   });
 
@@ -155,7 +155,7 @@ describe('the QR points at this merchant, not a constant', () => {
           node.getAttribute('data-qr-value'),
         ),
       ).toContain(
-        'https://vyloop-customer-web.pages.dev/register?biz=ferreteria-sur',
+        'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=ferreteria-sur',
       ),
     );
 
@@ -163,10 +163,10 @@ describe('the QR points at this merchant, not a constant', () => {
       node.getAttribute('data-qr-value'),
     );
     expect(values).toContain(
-      'https://vyloop-customer-web.pages.dev/register?biz=panaderia-del-barrio',
+      'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=panaderia-del-barrio',
     );
     expect(values).toContain(
-      'https://vyloop-customer-web.pages.dev/register?biz=ferreteria-sur',
+      'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=ferreteria-sur',
     );
   });
 
@@ -294,7 +294,7 @@ describe('the QR does not change destination once the slug is known', () => {
     const afterRerender = qrValue();
 
     expect(afterSettled).toBe(
-      'https://vyloop-customer-web.pages.dev/register?biz=panaderia-del-barrio',
+      'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=panaderia-del-barrio',
     );
     // Either nothing yet, or already correct. A third value would be the bug.
     expect([null, afterSettled]).toContain(beforeSettled);
@@ -393,7 +393,7 @@ describe('the copied link is the same URL the QR encodes', async () => {
 
     expect(writeText).toHaveBeenCalledWith(qrValue());
     expect(writeText).toHaveBeenCalledWith(
-      'https://vyloop-customer-web.pages.dev/register?biz=panaderia-del-barrio',
+      'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=panaderia-del-barrio',
     );
   });
 
