@@ -440,8 +440,9 @@ router.get('/v1/communication/push/campaigns/:referenceId', async (c) => {
     GROUP BY split_part(content->>'reference_id', ':', 1)
   `);
 
-  const result = (rows as { rows?: unknown[] }).rows ?? rows;
-  const r = Array.isArray(result) ? (result[0] as Record<string, unknown> | undefined) ?? null : null;
+  const wrapped = rows as { rows?: unknown[] };
+  const result = Array.isArray(wrapped) ? wrapped : (wrapped.rows ?? []);
+  const r = (result as unknown[]).length ? (result as unknown[])[0] as Record<string, unknown> : null;
   if (!r) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Campaign not found.' } }, 404);
   }
