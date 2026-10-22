@@ -27,6 +27,7 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
 
   // Hydrate from localStorage and matchMedia on mount
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsed(localStorage.getItem('vy-sidebar-collapsed') === 'true');
     setIsMobile(window.matchMedia('(max-width: 767px)').matches);
   }, []);

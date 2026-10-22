@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useState, type FormEvent } from 'react';
+import { Suspense, useState, useCallback, type FormEvent } from 'react';
 
 import { signupBusiness } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -211,6 +211,7 @@ function SignupCard({ onDone }: { onDone: () => void }) {
  */
 function WhichForm() {
   const searchParams = useSearchParams();
+  const goToLogin = useGoToLogin();
 
   // `signup=true` is the only spelling that opens the signup form. Anything else is
   // the login, so a stray query parameter cannot replace one form with the other.
@@ -222,8 +223,9 @@ function WhichForm() {
  * a place, and backing out of it should not return to the form the merchant just
  * completed.
  */
-function goToLogin() {
-  useRouter().replace('/login');
+function useGoToLogin() {
+  const router = useRouter();
+  return useCallback(() => router.replace('/login'), [router]);
 }
 
 export default function LoginPage() {

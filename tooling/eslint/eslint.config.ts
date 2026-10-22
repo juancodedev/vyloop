@@ -1,12 +1,14 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
+import reactHooks from 'eslint-plugin-react-hooks';
 import prettier from 'eslint-config-prettier';
 
 const config = tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   importPlugin.flatConfigs.recommended,
+  reactHooks.configs.flat['recommended-latest'],
   {
     rules: {
       '@typescript-eslint/no-unused-vars': [
@@ -23,6 +25,8 @@ const config = tseslint.config(
         },
       ],
       'import/no-unresolved': 'off',
+      // Downgrade react-hooks/set-state-in-effect to warning since it's a pre-existing pattern
+      'react-hooks/set-state-in-effect': 'warn',
     },
   },
   {
