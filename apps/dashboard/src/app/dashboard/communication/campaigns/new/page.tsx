@@ -53,10 +53,10 @@ export default function CampaignComposerPage() {
 
    
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadVenues();
   }, [loadVenues]);
 
-  // eslint-disable-line react-hooks/set-state-in-effect
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
 

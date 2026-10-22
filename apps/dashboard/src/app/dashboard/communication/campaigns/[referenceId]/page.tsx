@@ -36,6 +36,7 @@ export default function CampaignDetailPage() {
 
    
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadCampaign();
   }, [loadCampaign]);
 

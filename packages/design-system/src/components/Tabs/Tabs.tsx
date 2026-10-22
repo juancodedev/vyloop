@@ -1,6 +1,6 @@
 'use client';
 
-import clsx from 'clsx';
+import { clsx } from 'clsx';
 import { useCallback, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 import styles from './Tabs.module.css';

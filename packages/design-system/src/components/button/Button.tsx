@@ -1,6 +1,6 @@
 'use client';
 
-import clsx from 'clsx';
+import { clsx } from 'clsx';
 import { Loader2 } from 'lucide-react';
 import { forwardRef, type ForwardedRef } from 'react';
 

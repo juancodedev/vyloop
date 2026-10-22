@@ -1,7 +1,7 @@
 'use client';
 
 import * as Dialog from '@radix-ui/react-dialog';
-import clsx from 'clsx';
+import { clsx } from 'clsx';
 import { X } from 'lucide-react';
 import { forwardRef, type ForwardedRef } from 'react';
 

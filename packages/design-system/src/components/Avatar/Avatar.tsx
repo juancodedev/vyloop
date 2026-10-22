@@ -1,6 +1,6 @@
 'use client';
 
-import clsx from 'clsx';
+import { clsx } from 'clsx';
 import { useState, useCallback, type SyntheticEvent } from 'react';
 
 import styles from './Avatar.module.css';
