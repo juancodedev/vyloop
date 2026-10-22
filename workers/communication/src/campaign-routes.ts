@@ -361,7 +361,6 @@ router.get('/v1/communication/push/campaigns', async (c) => {
 
   const page = Math.max(1, Number(c.req.query('page') ?? '1') || 1);
   const perPage = Math.min(100, Math.max(1, Number(c.req.query('per_page') ?? '20') || 20));
-  const statusFilter = c.req.query('status');
 
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
@@ -388,17 +387,20 @@ router.get('/v1/communication/push/campaigns', async (c) => {
     LIMIT ${perPage} OFFSET ${(page - 1) * perPage}
   `);
 
-  const campaigns = (rows as any).rows ?? rows;
-  const list = (Array.isArray(campaigns) ? campaigns : []).map((r: any) => ({
-    reference_id: r.reference_id,
-    title: r.title,
-    target_type: r.target_type ?? 'branch',
-    audience_size: Number(r.audience_size ?? 0),
-    delivered: Number(r.delivered ?? 0),
-    failed: Number(r.failed ?? 0),
-    skipped: Number(r.skipped ?? 0),
-    created_at: r.created_at,
-  }));
+  const campaigns = (rows as { rows?: unknown[] }).rows ?? rows;
+  const list = (Array.isArray(campaigns) ? campaigns : []).map((r) => {
+    const x = r as Record<string, unknown>;
+    return {
+      reference_id: x.reference_id,
+      title: x.title,
+      target_type: (x.target_type as string) ?? 'branch',
+      audience_size: Number(x.audience_size ?? 0),
+      delivered: Number(x.delivered ?? 0),
+      failed: Number(x.failed ?? 0),
+      skipped: Number(x.skipped ?? 0),
+      created_at: x.created_at,
+    };
+  });
 
   return c.json({ campaigns: list, total: list.length });
 });
@@ -438,22 +440,22 @@ router.get('/v1/communication/push/campaigns/:referenceId', async (c) => {
     GROUP BY split_part(content->>'reference_id', ':', 1)
   `);
 
-  const result = (rows as any).rows ?? rows;
-  const r = Array.isArray(result) ? result[0] : null;
+  const result = (rows as { rows?: unknown[] }).rows ?? rows;
+  const r = Array.isArray(result) ? (result[0] as Record<string, unknown> | undefined) ?? null : null;
   if (!r) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Campaign not found.' } }, 404);
   }
 
-  let target: any = null;
-  try { target = r.target ? JSON.parse(r.target) : null; } catch { target = null; }
+  let target: unknown = null;
+  try { target = r.target ? JSON.parse(r.target as string) : null; } catch { target = null; }
 
   return c.json({
     reference_id: r.reference_id,
     title: r.title,
     body: r.body,
-    url: r.url && r.url !== '/' ? r.url : undefined,
-    target: target ?? {},
-    target_type: r.target_type ?? 'branch',
+    url: r.url && r.url !== '/' ? (r.url as string) : undefined,
+    target: (target ?? {}) as Record<string, unknown>,
+    target_type: (r.target_type as string) ?? 'branch',
     audience_size: Number(r.audience_size ?? 0),
     delivered: Number(r.delivered ?? 0),
     failed: Number(r.failed ?? 0),
