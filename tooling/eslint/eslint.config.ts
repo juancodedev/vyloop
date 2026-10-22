@@ -67,6 +67,8 @@ const config = tseslint.config(
       '**/node_modules/**',
       '**/.next/**',
       '**/.vercel/**',
+      '**/.open-next/**',
+      '**/.wrangler/**',
       '**/drizzle/**',
       '**/next-env.d.ts',
     ],
