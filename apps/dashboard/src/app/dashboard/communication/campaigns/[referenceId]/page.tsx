@@ -17,10 +17,10 @@ export default function CampaignDetailPage() {
 
   const [campaign, setCampaign] = useState<PushCampaignDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
   const [showResendConfirm, setShowResendConfirm] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [toast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   const loadCampaign = useCallback(async () => {
     setLoading(true);
