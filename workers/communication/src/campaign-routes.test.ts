@@ -17,7 +17,7 @@ vi.mock('@vyloop/db', async () => {
   // The table is real so that the duplicate probe renders into the SQL a
   // reader can check: the prefix it looks for is the rule, not an
   // implementation detail of it.
-  const { pgTable, uuid, jsonb } = await import('drizzle-orm/pg-core');
+  const { pgTable, uuid, jsonb, text } = await import('drizzle-orm/pg-core');
   const messageLogTable = pgTable('message_log', {
     id: uuid('id').primaryKey(),
     businessId: uuid('business_id').notNull(),
@@ -25,10 +25,16 @@ vi.mock('@vyloop/db', async () => {
     content: jsonb('content'),
   });
 
+  const branchesTable = pgTable('branches', {
+    id: uuid('id').primaryKey(),
+    name: text('name'),
+  });
+
   return {
     createDb: vi.fn(() => dbMock),
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
     messageLog: messageLogTable,
+    branches: branchesTable,
   };
 });
 
