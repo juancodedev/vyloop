@@ -37,16 +37,18 @@ describe('Stage 4 club-barrio pass contract', () => {
     expect(page).not.toMatch(/stampsCompleted|stampsTotal|\b8\/10\b/);
   });
 
-  it('cannot call a consent endpoint that does not exist', () => {
-    expect(apiClient).not.toMatch(/updateConsent/);
-    expect(apiClient).not.toMatch(/me\/consent/);
-    // The profile still RENDERS the read-only, disabled consent list, so the
-    // guarantee is narrower than "no consent anywhere": nothing here may write,
-    // and no control may present itself as a toggle that stores a choice.
-    expect(page).not.toMatch(/updateConsent/);
-    expect(page).not.toMatch(/me\/consent/);
-    expect(page).not.toMatch(/handleConsentToggle|setConsentWhatsapp|savingConsent/);
-    expect(page).not.toMatch(/role="switch"/);
+  it('exposes consent controls that can read and write', () => {
+    // The profile page now renders interactive consent controls (Promociones,
+    // Avisos cercanos) that load the current consent state from the backend and
+    // persist changes via the API.
+    expect(apiClient).toMatch(/getCustomerConsents/);
+    expect(apiClient).toMatch(/updateCustomerConsent/);
+    expect(apiClient).toMatch(/me\/consents/);
+    // The ConsentList component renders interactive checkboxes.
+    const consentList = readFileSync(new URL('../components/consent-list.tsx', import.meta.url), 'utf8');
+    expect(consentList).toMatch(/getCustomerConsents/);
+    expect(consentList).toMatch(/updateCustomerConsent/);
+    expect(consentList).not.toMatch(/role="switch"/); // uses checkboxes, not switches
   });
 
   it('does not read a metadata field the backend never sends', () => {

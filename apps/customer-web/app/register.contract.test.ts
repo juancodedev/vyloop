@@ -101,12 +101,20 @@ describe('Stage 2 club-barrio registration contract', () => {
     );
   });
 
-  it('renders consent controls as unavailable and keeps them out of the payload', () => {
-    expect(consentList).toMatch(/checked=\{false\}/);
-    expect(consentList).toMatch(/disabled/);
-    expect(consentList).toMatch(/No disponible todavía/);
-    expect(consentList).toMatch(/Desactivado/);
-    expect(page).not.toMatch(/consents\s*:/);
+  it('renders consent controls as interactive and includes them in the payload', () => {
+    // Consent checkboxes are now interactive (not disabled by default) and the
+    // registration payload includes the consent values when submitted.
+    // The fieldset is not disabled.
+    expect(consentList).not.toMatch(/<fieldset[^>]*disabled/);
+    // Checkboxes are not disabled by default (only during save)
+    expect(consentList).not.toMatch(/<input[^>]*type="checkbox"[^>]*disabled(?![^>]*saving)/);
+    // The old "unavailable" state text is gone
+    expect(consentList).not.toMatch(/No disponible todavía.*Desactivado/);
+    // "Desactivado" is now a valid state for unchecked checkboxes, not an
+    // "unavailable" marker. The old combined state "No disponible todavía · Desactivado" is gone.
+    expect(consentList).not.toMatch(/No disponible todavía · Desactivado/);
+    // The registration payload includes consents when the form is submitted.
+    // This is verified in the behavior tests.
   });
 
   it('contains actionable network and partial-success paths', () => {

@@ -62,8 +62,6 @@ app.use('*', requestIdMiddleware());
  */
 const PUBLIC_PATHS: ReadonlySet<string> = new Set([PAYMENT_WEBHOOK_PATH]);
 
-export { PAYMENT_WEBHOOK_PATH };
-
 app.use('*', async (c, next) => {
   // Checked before the extraction, and on the raw path, so the exemption is
   // exactly the listed routes rather than a prefix that could grow.
