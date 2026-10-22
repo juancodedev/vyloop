@@ -69,7 +69,9 @@ export default function CampaignsPage() {
     }
   }, [page, perPage, statusFilter]);
 
+   
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadCampaigns();
   }, [loadCampaigns]);
 

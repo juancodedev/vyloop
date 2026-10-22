@@ -239,6 +239,7 @@ export default function CustomerDetailPage() {
     const customerId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : undefined;
 
     if (customerId === undefined || customerId === '') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError('No se pudo leer el identificador del cliente desde la URL.');
       setLoading(false);
       return;

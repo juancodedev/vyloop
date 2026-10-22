@@ -18,6 +18,9 @@ export const ROUTE_MAP: ServiceBinding[] = [
   { prefix: '/v1/auth', binding: 'identity' },
   { prefix: '/v1/me', binding: 'identity' },
   { prefix: '/v1/businesses', binding: 'identity' },
+  // The identity worker owns the customer's consent endpoints even though
+  // they live under the broader customer namespace.
+  { prefix: '/v1/customers/me/consents', binding: 'identity' },
   { prefix: '/v1/customers', binding: 'customer' },
   { prefix: '/v1/loyalty', binding: 'growth' },
   { prefix: '/v1/growth', binding: 'growth' },

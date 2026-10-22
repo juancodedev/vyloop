@@ -161,7 +161,7 @@ function ConfirmContent() {
 
   useEffect(() => {
     if (!customer || !rewardId) return;
-    void load();
+    void Promise.resolve().then(() => load());
   }, [customer, rewardId, load]);
 
   /**

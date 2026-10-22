@@ -110,8 +110,6 @@ app.use('*', requestIdMiddleware());
  * gateway's copy of this path is compared against `routes.ts` by
  * `apps/gateway/src/wallet-callback-path.contract.test.ts`.
  */
-export { WALLET_CALLBACK_PATH };
-
 /**
  * The set of paths that arrive without a gateway-injected identity.
  *
@@ -178,12 +176,30 @@ app.onError(createErrorHandler('wallet'));
 // Public surface
 // ---------------------------------------------------------------------------
 
+// Public API re-exports (explicit, not export *, to avoid leaking constants like ASSERTION_LIFETIME_SECONDS, BALANCE_DISPLAY_MAX)
 export * from './callbacks';
 export * from './callback-handler';
-export * from './balance';
+export {
+  BalanceNotDisplayableError,
+  balanceDisplayFailure,
+  formatBalance,
+} from './balance';
 export * from './class';
 export * from './drizzle-store';
-export * from './google-client';
+export {
+  createGoogleWalletRestClient,
+  type GoogleWalletClient,
+  type GoogleWalletRestClientOptions,
+  type GoogleWalletErrorDetail,
+  GoogleWalletApiError,
+  GoogleWalletAuthError,
+  GoogleWalletResponseError,
+  googleReviewStatusFor,
+  type LoyaltyClassPatch,
+  type LoyaltyObjectPatch,
+  type FetchLike,
+  storedReviewStatusFor,
+} from './google-client';
 export * from './helpers';
 export * from './ids';
 export * from './issuance';

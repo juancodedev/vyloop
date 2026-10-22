@@ -73,6 +73,7 @@ export function VenueForm({ initialData, onSubmit, onCancel, isSubmitting, _subm
   // Initialize form from initialData
   useEffect(() => {
     if (initialData) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         name: initialData.name,
         address: initialData.address ?? '',

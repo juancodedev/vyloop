@@ -108,39 +108,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = getSession();
     if (!stored) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setIsLoading(false);
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            setIsLoading(false);
       return;
     }
 
     if (stored.token && !isTokenExpired(stored.token)) {
       // Token still valid — restore
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setUser(stored.user);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setToken(stored.token);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setRefreshToken(stored.refreshToken);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setIsLoading(false);
+            setUser(stored.user);
+            setToken(stored.token);
+            setRefreshToken(stored.refreshToken);
+            setIsLoading(false);
       return;
     }
 
     // Token expired — try refreshing
     refreshAccessToken().then((newSession) => {
       if (newSession) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setUser(newSession.user);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setToken(newSession.token);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setRefreshToken(newSession.refreshToken);
+                setUser(newSession.user);
+                setToken(newSession.token);
+                setRefreshToken(newSession.refreshToken);
       } else {
         // Refresh failed — clear session silently (no redirect on init)
         clearSession(false);
       }
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setIsLoading(false);
+            setIsLoading(false);
     });
   }, []);
 

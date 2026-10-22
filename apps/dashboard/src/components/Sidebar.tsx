@@ -1,6 +1,6 @@
 'use client';
 
-import clsx from 'clsx';
+import { clsx } from 'clsx';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';

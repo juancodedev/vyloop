@@ -2152,6 +2152,14 @@ a {
   text-wrap: balance;
 }
 
+.club-push {
+  margin-top: var(--space-6);
+}
+
+.club-push__status {
+  margin: var(--space-2) 0 0;
+}
+
 .club-activity__list {
   display: flex;
   flex-direction: column;

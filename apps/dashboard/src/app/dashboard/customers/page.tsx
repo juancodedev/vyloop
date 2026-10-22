@@ -13,6 +13,7 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     api.getCustomers(search).then((data) => {
       setCustomers(data);

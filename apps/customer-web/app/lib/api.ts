@@ -306,6 +306,19 @@ export const api = {
     return result.data;
   },
 
+  async getCustomerConsents(): Promise<{ consents: Record<string, boolean> }> {
+    const result = (await apiFetch('/v1/customers/me/consents')) as { consents: Record<string, boolean> };
+    return result;
+  },
+
+  async updateCustomerConsent(payload: { consentType: string; granted: boolean }): Promise<{ ok: true }> {
+    await apiFetch('/v1/customers/me/consents', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return { ok: true };
+  },
+
   /**
    * A Google Wallet save link for the **caller's own** pass.
    *

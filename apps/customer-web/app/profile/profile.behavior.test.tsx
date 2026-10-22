@@ -56,7 +56,12 @@ vi.mock('../lib/auth', () => ({
 // asserted in `wallet-card.behavior.test.tsx`; what is asserted here is that the
 // profile asks at all.
 vi.mock('../lib/api', () => ({
-  api: { getProfile: mocks.getProfile, getWalletPass: mocks.getWalletPass },
+  api: {
+    getProfile: mocks.getProfile,
+    getWalletPass: mocks.getWalletPass,
+    getCustomerConsents: vi.fn().mockResolvedValue({ consents: { promotions: false, nearbyNotifications: false } }),
+    updateCustomerConsent: vi.fn().mockResolvedValue({ ok: true }),
+  },
 }));
 
 vi.mock('qrcode', () => ({
@@ -462,43 +467,47 @@ describe('profile pass behavior', () => {
     expect(mocks.getProfile).toHaveBeenCalledTimes(2);
   });
 
-  // ─── Consent: present, disabled, never wired to a fetch ───────────────
+  // ─── Consent: interactive, loads from API, writes on change ──────────────
 
-  it('shows the consent controls disabled, matching the register page treatment', async () => {
+  it('shows interactive consent controls that load from the API', async () => {
     await renderPage();
 
     const group = screen.getByRole('group', { name: 'Comunicaciones' });
-    expect((group as HTMLFieldSetElement).disabled).toBe(true);
+    expect((group as HTMLFieldSetElement).disabled).toBe(false);
 
-    const checkboxes = within(group).getAllByRole('checkbox');
+    // Wait for checkboxes to appear (ConsentList finishes loading)
+    const checkboxes = await screen.findAllByRole('checkbox');
     expect(checkboxes.length).toBeGreaterThan(0);
     for (const box of checkboxes) {
-      expect((box as HTMLInputElement).disabled).toBe(true);
-      expect((box as HTMLInputElement).checked).toBe(false);
+      expect((box as HTMLInputElement).disabled).toBe(false);
     }
-    expect(within(group).getAllByText(/No disponible todavía/).length).toBe(checkboxes.length);
+    expect(screen.queryAllByText(/No disponible todavía/)).toHaveLength(0);
   });
 
-  it('never issues a consent write: no PUT to the consent endpoint, and no fetch at all', async () => {
+  it('loads consent state from the API on mount', async () => {
     await renderPage();
 
-    const group = screen.getByRole('group', { name: 'Comunicaciones' });
-    for (const box of within(group).getAllByRole('checkbox')) {
-      await act(async () => {
-        fireEvent.click(box);
-      });
-    }
-
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
-    expect(mocks.getProfile).toHaveBeenCalledTimes(1);
+    // getCustomerConsents is called to load the initial state
+    const apiModule = await import('../lib/api');
+    expect(apiModule.api.getCustomerConsents).toHaveBeenCalled();
   });
 
-  it('exposes no consent method on the api client for the page to call', async () => {
-    const apiModule = await import('../lib/api');
+  it('writes consent changes to the API', async () => {
+    await renderPage();
 
-    // The real module is not the mocked one here, so this reads the source of
-    // truth: the method that called a 404-only endpoint must not exist.
-    expect('updateConsent' in apiModule.api).toBe(false);
+    const _group = screen.getByRole('group', { name: 'Comunicaciones' });
+    // Wait for checkboxes to appear (ConsentList finishes loading)
+    const checkboxes = await screen.findAllByRole('checkbox');
+    expect(checkboxes.length).toBeGreaterThan(0);
+
+    // Click the first checkbox to toggle it
+    await act(async () => {
+      fireEvent.click(checkboxes[0]);
+    });
+
+    // The API should be called to update the consent
+    const apiModule = await import('../lib/api');
+    expect(apiModule.api.updateCustomerConsent).toHaveBeenCalled();
   });
 
   // ─── QR ────────────────────────────────────────────────────────────────

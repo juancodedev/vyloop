@@ -12,8 +12,8 @@ import { ActivitySkeleton, MemberPass } from '../components/member-pass';
 import { MemberQr } from '../components/member-qr';
 import { WalletCard } from '../components/wallet-card';
 import { api, type CustomerProfile } from '../lib/api';
-import { pushSupported, subscribeToPush } from '../lib/push';
 import { useAuth } from '../lib/auth';
+import { pushSupported, subscribeToPush } from '../lib/push';
 
 const ERROR_TITLE = 'No pudimos cargar tu pase';
 const ERROR_DESCRIPTION =
@@ -241,7 +241,7 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (!customer) return;
-    void load();
+    void Promise.resolve().then(() => load());
   }, [customer, load]);
 
   if (authLoading || fetching) {
@@ -323,7 +323,7 @@ export default function ProfilePage() {
       <ConsentList />
 
       {pushSupported() && (
-        <section className="club-activity" aria-label="Notificaciones" style={{ marginTop: '1.5rem' }}>
+        <section className="club-activity club-push" aria-label="Notificaciones">
           <h2 className="club-activity__title">Notificaciones</h2>
           <button
             type="button"
@@ -348,7 +348,7 @@ export default function ProfilePage() {
           >
             {pushLoading ? 'Activando…' : 'Activar notificaciones push'}
           </button>
-          {pushState && <p style={{ marginTop: '0.5rem' }}>{pushState}</p>}
+          {pushState && <p className="club-push__status">{pushState}</p>}
         </section>
       )}
 

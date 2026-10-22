@@ -1,6 +1,6 @@
 'use client';
 
-import clsx from 'clsx';
+import { clsx } from 'clsx';
 import { forwardRef, type ForwardedRef, useId } from 'react';
 
 import styles from './Input.module.css';

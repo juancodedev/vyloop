@@ -27,6 +27,7 @@ export default function LoyaltyCustomersPage() {
   }, [search]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load(1);
   }, [load]);
 

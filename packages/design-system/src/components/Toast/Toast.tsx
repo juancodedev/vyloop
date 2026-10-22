@@ -1,6 +1,6 @@
 'use client';
 
-import clsx from 'clsx';
+import { clsx } from 'clsx';
 import { CircleCheckBig, CircleX, AlertTriangle, Info, X } from 'lucide-react';
 import {
   createContext,
