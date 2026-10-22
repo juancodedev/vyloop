@@ -41,6 +41,7 @@ export {
   rewardGrants,
   rewardBranches,
   messageLog,
+  pushCampaigns,
   whatsappTemplates,
   tenantWalletPrograms,
   customerWalletPasses,

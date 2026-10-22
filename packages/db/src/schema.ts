@@ -834,6 +834,24 @@ export const messageLog = pgTable('message_log', {
   ),
 ]);
 
+// ============================================================================
+// Push campaigns (composed by an operator; one row per campaign).
+// ============================================================================
+
+export const pushCampaigns = pgTable('push_campaigns', {
+  referenceId: text('reference_id').primaryKey(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  body: text('body').notNull(),
+  url: text('url'),
+  target: jsonb('target').notNull().default({}),
+  targetType: text('target_type').notNull().default('branch'),
+  audienceSize: integer('audience_size').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  index('idx_push_campaigns_business').on(sql`${table.businessId}`, sql`${table.createdAt} DESC`),
+]);
+
 export const whatsappTemplates = pgTable('whatsapp_templates', {
   id: uuid('id').primaryKey().defaultRandom(),
   businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
@@ -1263,6 +1281,8 @@ export type LocalizationConfig = typeof localizationConfigs.$inferSelect;
 export type NewLocalizationConfig = typeof localizationConfigs.$inferInsert;
 
 export type MessageLog = typeof messageLog.$inferSelect;
+export type PushCampaign = typeof pushCampaigns.$inferSelect;
+export type NewPushCampaign = typeof pushCampaigns.$inferInsert;
 export type NewMessageLog = typeof messageLog.$inferInsert;
 
 export type WhatsAppTemplate = typeof whatsappTemplates.$inferSelect;

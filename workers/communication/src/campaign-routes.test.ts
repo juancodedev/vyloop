@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const dbMock: any = {
   select: vi.fn(),
-  insert: vi.fn(),
+  insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing: vi.fn() })) })),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
 };
 
@@ -35,6 +35,7 @@ vi.mock('@vyloop/db', async () => {
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
     messageLog: messageLogTable,
     branches: branchesTable,
+    pushCampaigns: pgTable('push_campaigns', { referenceId: text('reference_id').primaryKey() }),
   };
 });
 

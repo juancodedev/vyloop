@@ -1,8 +1,8 @@
-import { createDb, messageLog, branches } from '@vyloop/db';
+import { createDb, messageLog, branches, pushCampaigns } from '@vyloop/db';
 import { PUSH_CAMPAIGN_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { getRequestId } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import { findBranchesInRadius } from '../../../packages/db/src/proximity';
@@ -335,6 +335,17 @@ router.post('/v1/communication/push/campaigns', async (c) => {
     target: parsed.value.target,
   };
 
+  await db.insert(pushCampaigns).values({
+    referenceId,
+    businessId,
+    title: parsed.value.title,
+    body: parsed.value.body,
+    url: parsed.value.url ?? null,
+    target: parsed.value.target,
+    targetType: 'branch_id' in parsed.value.target ? 'branch' : 'radius',
+    audienceSize: audience.length,
+  }).onConflictDoNothing();
+
   await publish(
     c.env.DELIVERY_QUEUE,
     createEnvelope(
@@ -365,42 +376,22 @@ router.get('/v1/communication/push/campaigns', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
 
-  const rows = await db.execute(sql`
-    SELECT
-      split_part(content->>'reference_id', ':', 1) AS reference_id,
-      (array_agg(content->>'title'))[1] AS title,
-      (array_agg(content->>'target_type'))[1] AS target_type,
-      (array_agg(content->>'audience_size'))[1] AS audience_size,
-      (array_agg(content->>'target'))[1] AS target,
-      (array_agg(content->>'body'))[1] AS body,
-      (array_agg(content->>'url'))[1] AS url,
-      min(created_at) AS created_at,
-      count(*) FILTER (WHERE status = 'sent')::int AS delivered,
-      count(*) FILTER (WHERE status = 'failed')::int AS failed,
-      count(*) FILTER (WHERE status = 'queued')::int AS skipped
-    FROM message_log
-    WHERE business_id = ${businessId}
-      AND channel = 'push'
-      AND content->>'reference_id' IS NOT NULL
-    GROUP BY split_part(content->>'reference_id', ':', 1)
-    ORDER BY min(created_at) DESC
-    LIMIT ${perPage} OFFSET ${(page - 1) * perPage}
-  `);
+  const rows = await db.select().from(pushCampaigns)
+    .where(eq(pushCampaigns.businessId, businessId))
+    .orderBy(desc(pushCampaigns.createdAt))
+    .limit(perPage)
+    .offset((page - 1) * perPage);
 
-  const campaigns = (rows as { rows?: unknown[] }).rows ?? rows;
-  const list = (Array.isArray(campaigns) ? campaigns : []).map((r) => {
-    const x = r as Record<string, unknown>;
-    return {
-      reference_id: x.reference_id,
-      title: x.title,
-      target_type: (x.target_type as string) ?? 'branch',
-      audience_size: Number(x.audience_size ?? 0),
-      delivered: Number(x.delivered ?? 0),
-      failed: Number(x.failed ?? 0),
-      skipped: Number(x.skipped ?? 0),
-      created_at: x.created_at,
-    };
-  });
+  const list = rows.map((r) => ({
+    reference_id: r.referenceId,
+    title: r.title,
+    target_type: r.targetType,
+    audience_size: r.audienceSize,
+    delivered: 0,
+    failed: 0,
+    skipped: 0,
+    created_at: r.createdAt,
+  }));
 
   return c.json({ campaigns: list, total: list.length });
 });
@@ -420,49 +411,27 @@ router.get('/v1/communication/push/campaigns/:referenceId', async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
 
-  const rows = await db.execute(sql`
-    SELECT
-      split_part(content->>'reference_id', ':', 1) AS reference_id,
-      (array_agg(content->>'title'))[1] AS title,
-      (array_agg(content->>'body'))[1] AS body,
-      (array_agg(content->>'url'))[1] AS url,
-      (array_agg(content->>'target'))[1] AS target,
-      (array_agg(content->>'target_type'))[1] AS target_type,
-      (array_agg(content->>'audience_size'))[1] AS audience_size,
-      min(created_at) AS created_at,
-      count(*) FILTER (WHERE status = 'sent')::int AS delivered,
-      count(*) FILTER (WHERE status = 'failed')::int AS failed,
-      count(*) FILTER (WHERE status = 'queued')::int AS skipped
-    FROM message_log
-    WHERE business_id = ${businessId}
-      AND channel = 'push'
-      AND split_part(content->>'reference_id', ':', 1) = ${referenceId}
-    GROUP BY split_part(content->>'reference_id', ':', 1)
-  `);
+  const [r] = await db.select().from(pushCampaigns)
+    .where(eq(pushCampaigns.referenceId, referenceId))
+    .limit(1);
 
-  const wrapped = rows as { rows?: unknown[] };
-  const result = Array.isArray(wrapped) ? wrapped : (wrapped.rows ?? []);
-  const r = (result as unknown[]).length ? (result as unknown[])[0] as Record<string, unknown> : null;
-  if (!r) {
+  if (!r || r.businessId !== businessId) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Campaign not found.' } }, 404);
   }
 
-  let target: unknown = null;
-  try { target = r.target ? JSON.parse(r.target as string) : null; } catch { target = null; }
-
   return c.json({
-    reference_id: r.reference_id,
+    reference_id: r.referenceId,
     title: r.title,
     body: r.body,
-    url: r.url && r.url !== '/' ? (r.url as string) : undefined,
-    target: (target ?? {}) as Record<string, unknown>,
-    target_type: (r.target_type as string) ?? 'branch',
-    audience_size: Number(r.audience_size ?? 0),
-    delivered: Number(r.delivered ?? 0),
-    failed: Number(r.failed ?? 0),
-    skipped: Number(r.skipped ?? 0),
+    url: r.url && r.url !== '/' ? r.url : undefined,
+    target: (r.target ?? {}) as Record<string, unknown>,
+    target_type: r.targetType,
+    audience_size: r.audienceSize,
+    delivered: 0,
+    failed: 0,
+    skipped: 0,
     per_branch: [],
-    created_at: r.created_at,
+    created_at: r.createdAt,
   });
 });
 
