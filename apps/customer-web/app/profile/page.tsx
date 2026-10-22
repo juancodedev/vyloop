@@ -12,6 +12,7 @@ import { ActivitySkeleton, MemberPass } from '../components/member-pass';
 import { MemberQr } from '../components/member-qr';
 import { WalletCard } from '../components/wallet-card';
 import { api, type CustomerProfile } from '../lib/api';
+import { pushSupported, subscribeToPush } from '../lib/push';
 import { useAuth } from '../lib/auth';
 
 const ERROR_TITLE = 'No pudimos cargar tu pase';
@@ -216,6 +217,8 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [fetching, setFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pushState, setPushState] = useState<string | null>(null);
+  const [pushLoading, setPushLoading] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !customer) {
@@ -318,6 +321,36 @@ export default function ProfilePage() {
           the profile says the same thing in the same words. Two pages
           describing the same unavailable capability must not disagree. */}
       <ConsentList />
+
+      {pushSupported() && (
+        <section className="club-activity" aria-label="Notificaciones" style={{ marginTop: '1.5rem' }}>
+          <h2 className="club-activity__title">Notificaciones</h2>
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={async () => {
+              setPushLoading(true);
+              setPushState(null);
+              try {
+                const result = await subscribeToPush();
+                if (result.ok) {
+                  setPushState('Notificaciones activadas.');
+                } else {
+                  setPushState(result.message);
+                }
+              } catch (e) {
+                setPushState(e instanceof Error ? e.message : 'No pudimos activar las notificaciones.');
+              } finally {
+                setPushLoading(false);
+              }
+            }}
+            disabled={pushLoading}
+          >
+            {pushLoading ? 'Activando…' : 'Activar notificaciones push'}
+          </button>
+          {pushState && <p style={{ marginTop: '0.5rem' }}>{pushState}</p>}
+        </section>
+      )}
 
       <button
         type="button"
