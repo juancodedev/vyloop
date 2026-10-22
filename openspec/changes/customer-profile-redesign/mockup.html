@@ -1,0 +1,603 @@
+<title>Vyloop Profile Redesign</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Instrument+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: a proposal document. Phones sit in a row (today / proposed / QR sheet), the spec reads below in one column. */
+:root {
+  /* Document chrome */
+  --bg: oklch(0.975 0.004 67.5);
+  --fg: oklch(0.215 0.012 67.5);
+  --muted: oklch(0.511 0.012 67.5);
+  --line: oklch(0.915 0.006 67.5);
+  --panel: oklch(1 0 0);
+  --accent: oklch(0.502 0.158 62.5);
+  --accent-soft: oklch(0.945 0.056 95.5);
+  --danger: oklch(0.55 0.22 28);
+  --stage: oklch(0.935 0.006 67.5);
+  --font-doc: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* App mockup: the real customer-web tokens (light only, as the app ships) */
+  --app-page: oklch(0.975 0.004 67.5);
+  --app-card: oklch(1 0 0);
+  --app-text: oklch(0.215 0.012 67.5);
+  --app-body: oklch(0.389 0.013 67.5);
+  --app-sub: oklch(0.511 0.012 67.5);
+  --app-muted: oklch(0.686 0.01 67.5);
+  --app-border: oklch(0.915 0.006 67.5);
+  --app-brand: oklch(0.683 0.18 82.5);
+  --app-brand-50: oklch(0.987 0.026 95.5);
+  --app-brand-100: oklch(0.945 0.056 95.5);
+  --app-brand-200: oklch(0.887 0.12 93.5);
+  --app-brand-800: oklch(0.424 0.132 54.5);
+  --app-brand-900: oklch(0.352 0.108 48.5);
+  --app-error: oklch(0.55 0.22 28);
+  --app-success: oklch(0.58 0.16 145);
+  --app-ink: oklch(0.146 0.008 67.5);
+  --font-app: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: oklch(0.18 0.008 67.5);
+    --fg: oklch(0.94 0.005 67.5);
+    --muted: oklch(0.72 0.01 67.5);
+    --line: oklch(0.3 0.01 67.5);
+    --panel: oklch(0.22 0.009 67.5);
+    --accent: oklch(0.822 0.162 91.5);
+    --accent-soft: oklch(0.3 0.05 80);
+    --danger: oklch(0.72 0.16 28);
+    --stage: oklch(0.24 0.009 67.5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: oklch(0.18 0.008 67.5);
+  --fg: oklch(0.94 0.005 67.5);
+  --muted: oklch(0.72 0.01 67.5);
+  --line: oklch(0.3 0.01 67.5);
+  --panel: oklch(0.22 0.009 67.5);
+  --accent: oklch(0.822 0.162 91.5);
+  --accent-soft: oklch(0.3 0.05 80);
+  --danger: oklch(0.72 0.16 28);
+  --stage: oklch(0.24 0.009 67.5);
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-doc);
+  font-size: 16px;
+  line-height: 1.55;
+}
+.wrap {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-block: 40px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+h1, h2, h3 { text-wrap: balance; color: var(--fg); }
+h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.08; font-weight: 700; margin: 0 0 14px; letter-spacing: -0.02em; }
+h2 { font-size: 24px; line-height: 1.2; margin: 0 0 12px; letter-spacing: -0.01em; }
+h3 { font-size: 17px; margin: 0 0 6px; }
+p { margin: 0 0 12px; }
+.lede { font-size: 18px; color: var(--muted); max-width: 64ch; }
+.doc { max-width: 760px; margin: 0 auto; display: grid; gap: 56px; }
+.doc section { display: grid; gap: 12px; }
+.doc p, .doc li { max-width: 68ch; }
+code { font-size: 0.88em; background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* --- Stage with phones --- */
+.stage {
+  margin: 36px 0 64px;
+  background: var(--stage);
+  border-radius: 28px;
+  padding: 32px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  justify-content: center;
+  align-items: flex-start;
+}
+.shot { display: grid; gap: 12px; justify-items: center; max-width: 100%; }
+.shot figcaption { font-size: 14px; color: var(--muted); text-align: center; max-width: 34ch; }
+.shot figcaption strong { color: var(--fg); display: block; font-size: 15px; }
+.phone {
+  width: 340px;
+  max-width: 100%;
+  border-radius: 36px;
+  background: var(--app-ink);
+  padding: 10px;
+  box-shadow: 0 20px 40px -24px oklch(0.2 0.02 60 / 0.5);
+}
+.screen {
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--app-page);
+  font-family: var(--font-app);
+  color: var(--app-body);
+  font-size: 13px;
+  line-height: 1.45;
+  position: relative;
+}
+
+/* --- Today (wireframe) --- */
+.wf { padding: 18px 16px 22px; display: grid; gap: 8px; }
+.wf__block {
+  border: 1.5px dashed var(--app-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--app-card);
+  display: flex; justify-content: space-between; gap: 8px;
+  color: var(--app-sub);
+  font-size: 12px;
+}
+.wf__block b { color: var(--app-text); font-weight: 600; }
+.wf__block--tall { min-height: 92px; align-items: flex-start; }
+.wf__block--qr { min-height: 150px; align-items: flex-start; }
+.wf__note { font-size: 11px; color: var(--app-muted); text-align: right; white-space: nowrap; }
+
+/* --- Proposed app --- */
+.bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px 6px;
+}
+.bar__club { font-weight: 700; color: var(--app-text); font-size: 14px; }
+.bar__help { font-size: 12px; color: var(--app-sub); }
+
+.app { padding: 8px 14px 96px; display: grid; gap: 22px; }
+
+.id {
+  background: var(--app-card);
+  border-radius: 22px;
+  padding: 20px 18px 18px;
+  box-shadow: 0 1px 0 var(--app-border), 0 10px 24px -18px oklch(0.3 0.05 70 / 0.35);
+  display: grid; gap: 16px;
+}
+.id__top { display: flex; gap: 14px; align-items: center; }
+.avatar {
+  width: 58px; height: 58px; border-radius: 50%;
+  background: var(--app-brand-100);
+  color: var(--app-brand-900);
+  display: grid; place-items: center;
+  font-weight: 700; font-size: 20px; letter-spacing: 0.02em;
+  flex: none;
+  border: 2px solid var(--app-brand-200);
+}
+.id__name { color: var(--app-text); font-weight: 700; font-size: 18px; line-height: 1.2; margin: 0; }
+.id__since { color: var(--app-sub); font-size: 12px; margin: 2px 0 0; }
+.tierchip {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 6px;
+  font-size: 11px; font-weight: 600;
+  color: var(--app-brand-900);
+  background: var(--app-brand-50);
+  border: 1px solid var(--app-brand-200);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.stats { display: grid; gap: 10px; }
+.stat { background: var(--app-page); border-radius: 14px; padding: 10px 12px; }
+.stat__v { color: var(--app-text); font-weight: 800; font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat__v small { font-size: 13px; font-weight: 600; color: var(--app-body); margin-left: 4px; }
+.stat__l { font-size: 11.5px; color: var(--app-sub); }
+.tierline { display: grid; gap: 6px; }
+.tierline p { margin: 0; font-size: 12px; color: var(--app-body); }
+.track { height: 6px; border-radius: 99px; background: var(--app-border); overflow: hidden; }
+.track i { display: block; height: 100%; background: var(--app-brand); border-radius: inherit; }
+
+.sec__h { display: flex; justify-content: space-between; align-items: baseline; margin: 0 4px 10px; }
+.sec__h h4 { margin: 0; font-size: 15px; color: var(--app-text); font-weight: 700; }
+.sec__h a, .sec__h button {
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--app-brand-800);
+  background: none; border: 0; padding: 0; text-decoration: none; cursor: pointer;
+}
+
+/* Signature: stamp card */
+.stampcard {
+  background: var(--app-brand-50);
+  border: 1px solid var(--app-brand-200);
+  border-radius: 20px;
+  padding: 16px;
+  display: grid; gap: 12px;
+  position: relative;
+  overflow: hidden;
+}
+.stampcard::after {
+  /* the perforated edge of a paper loyalty card */
+  content: ""; position: absolute; top: 0; bottom: 0; right: 64px; width: 0;
+  border-left: 2px dotted var(--app-brand-200);
+}
+.stampcard__head { display: flex; justify-content: space-between; gap: 10px; padding-right: 64px; }
+.stampcard__title { margin: 0; color: var(--app-text); font-weight: 800; font-size: 17px; }
+.stampcard__sub { margin: 2px 0 0; font-size: 12px; color: var(--app-brand-900); }
+.stampcard__cost {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 64px;
+  display: grid; place-content: center; text-align: center;
+  color: var(--app-brand-900); font-size: 10.5px; line-height: 1.2;
+}
+.stampcard__cost b { display: block; font-size: 22px; font-weight: 800; }
+.meter { display: grid; gap: 6px; padding-right: 64px; }
+.meter__track { height: 12px; border-radius: 99px; background: var(--app-card); border: 1px solid var(--app-brand-200); overflow: hidden; }
+.meter__track i { display: block; height: 100%; background: var(--app-brand); border-radius: inherit; }
+.meter__nums { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--app-brand-900); font-variant-numeric: tabular-nums; }
+.meter__nums b { font-weight: 700; }
+.tl__pts { font-size: 12px; font-weight: 700; color: var(--app-brand-800); white-space: nowrap; text-align: right; }
+.tl__pts span { display: block; font-weight: 400; color: var(--app-sub); font-size: 11.5px; }
+.nudge { margin: 2px 0 0; font-size: 12px; color: var(--app-brand-900); background: var(--app-brand-50); border-radius: 10px; padding: 8px 10px; }
+
+/* Activity timeline */
+.tl { list-style: none; margin: 0; padding: 0; display: grid; }
+.tl li { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; position: relative; padding-bottom: 14px; }
+.tl li::before {
+  content: ""; position: absolute; left: 10px; top: 20px; bottom: 0;
+  border-left: 1.5px solid var(--app-border);
+}
+.tl li:last-child::before { display: none; }
+.tl__dot {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 13px; line-height: 1;
+  background: var(--app-brand-100); color: var(--app-brand-900);
+}
+.tl__dot--out { background: oklch(0.97 0.02 28); color: var(--app-error); }
+.tl__dot--neutral { background: var(--app-page); color: var(--app-sub); border: 1px solid var(--app-border); }
+.tl__what { color: var(--app-text); font-weight: 600; margin: 0; }
+.tl__where { margin: 0; font-size: 12px; color: var(--app-sub); }
+.tl__when { font-size: 11.5px; color: var(--app-sub); white-space: nowrap; }
+
+.wallet {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border: 1px solid var(--app-border); border-radius: 16px; padding: 12px 14px; background: var(--app-card);
+}
+.wallet p { margin: 0; font-size: 12px; color: var(--app-sub); }
+.wallet b { display: block; color: var(--app-text); font-size: 13px; }
+.btn-dark {
+  background: var(--app-ink); color: oklch(1 0 0); border-radius: 999px;
+  font-size: 12px; font-weight: 600; padding: 7px 12px; white-space: nowrap;
+}
+
+.info { background: var(--app-card); border-radius: 16px; border: 1px solid var(--app-border); margin: 0; }
+.info div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--app-border); }
+.info div:first-child { border-top: 0; }
+.info dt { color: var(--app-sub); }
+.info dd { margin: 0; color: var(--app-text); font-weight: 500; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+
+.pref { background: var(--app-card); border-radius: 16px; border: 1px solid var(--app-border); }
+.pref__row { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 11px 14px; border-top: 1px solid var(--app-border); }
+.pref__row:first-child { border-top: 0; }
+.pref__row p { margin: 0; color: var(--app-text); font-weight: 500; }
+.pref__row span { display: block; font-size: 11.5px; color: var(--app-sub); font-weight: 400; }
+.toggle { width: 36px; height: 22px; border-radius: 99px; background: var(--app-border); position: relative; flex: none; }
+.toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: oklch(1 0 0); box-shadow: 0 1px 2px oklch(0 0 0 / 0.2); }
+.toggle--on { background: var(--app-brand); }
+.toggle--on::after { left: 17px; }
+
+.acct { display: grid; gap: 4px; justify-items: center; padding-top: 4px; }
+.acct span { font-size: 13px; font-weight: 600; padding: 8px; color: var(--app-body); }
+.acct .acct__danger { color: var(--app-error); font-weight: 500; font-size: 12.5px; }
+
+.dock {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 12px 14px 16px;
+  background: linear-gradient(to top, var(--app-page) 70%, oklch(0.975 0.004 67.5 / 0));
+}
+.dock__btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--app-text); color: oklch(1 0 0);
+  border-radius: 16px; padding: 14px; font-weight: 700; font-size: 14px;
+}
+.dock__btn svg { width: 18px; height: 18px; }
+
+/* QR sheet */
+.sheet { background: var(--app-ink); padding: 0; min-height: 640px; display: grid; align-content: end; }
+.sheet__panel {
+  background: oklch(1 0 0); border-radius: 26px 26px 0 0; padding: 12px 22px 26px;
+  display: grid; gap: 14px; justify-items: center; text-align: center;
+}
+.sheet__grip { width: 40px; height: 4px; border-radius: 99px; background: var(--app-border); }
+.sheet__panel h5 { margin: 4px 0 0; font-size: 16px; color: var(--app-text); }
+.sheet__panel p { margin: 0; color: var(--app-sub); font-size: 12px; max-width: 30ch; }
+.qr { width: 210px; max-width: 100%; aspect-ratio: 1; display: block; }
+.code { font-family: var(--font-app); font-weight: 800; font-size: 26px; letter-spacing: 0.18em; color: var(--app-text); font-variant-numeric: tabular-nums; }
+.sheet__close { font-weight: 600; color: var(--app-text); font-size: 13px; border: 1px solid var(--app-border); border-radius: 12px; padding: 10px; width: 100%; }
+
+/* --- Spec chrome --- */
+.order { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--line); }
+.order li { display: grid; grid-template-columns: 2.2em 1fr; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); max-width: none; }
+.order li span:first-child { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.order b { display: block; }
+.order small { color: var(--muted); font-size: 14px; }
+
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 560px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 13px; }
+tr:last-child td { border-bottom: 0; }
+.need { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 99px; padding: 1px 9px; white-space: nowrap; }
+.need--be { background: var(--accent-soft); color: var(--accent); }
+.need--fe { background: var(--stage); color: var(--muted); }
+
+.cmp { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.cmp div { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.cmp h3 { font-size: 15px; }
+.cmp ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14.5px; }
+
+.states { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.state { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.state h3 { font-size: 15px; }
+.state p { font-size: 14px; color: var(--muted); margin: 0; }
+.state q { color: var(--fg); quotes: "“" "”"; }
+
+ul.plain { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.ac li::marker { color: var(--accent); }
+
+@media (max-width: 420px) {
+  .stage { padding: 20px 8px; border-radius: 20px; }
+  .phone { border-radius: 30px; padding: 7px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>A loyalty card in your pocket, not a dashboard</h1>
+    <p class="lede">Redesign proposal for <code>/profile</code> in customer-web. It keeps Vyloop's amber and stone tokens and Inter, borrows the reference's identity-first layout, and makes the next reward the one thing you see. Proposal only: nothing here is implemented.</p>
+  </header>
+
+  <div class="stage" role="group" aria-label="Screen comparison">
+    <figure class="shot">
+      <div class="phone"><div class="screen">
+        <div class="wf" aria-label="Current page structure">
+          <div class="wf__block"><span><b>Club del barrio</b><br>Hola, Juan</span><span class="wf__note">header</span></div>
+          <div class="wf__block wf__block--tall"><span><b>Tu saldo</b><br>30 puntos<br>Nivel —</span><span class="wf__note">MemberPass</span></div>
+          <div class="wf__block"><span>Acumulados, 30 días, miembro desde</span><span class="wf__note">meta</span></div>
+          <div class="wf__block wf__block--tall"><span><b>Escalera de niveles</b></span><span class="wf__note">TierLadder</span></div>
+          <div class="wf__block wf__block--qr"><span><b>Tu código QR</b></span><span class="wf__note">MemberQr</span></div>
+          <div class="wf__block"><span><b>Google Wallet</b></span><span class="wf__note">WalletCard</span></div>
+          <div class="wf__block wf__block--tall"><span><b>Actividad</b><br>5 movimientos</span><span class="wf__note">Activity</span></div>
+          <div class="wf__block"><span>Ver historial / Canjear puntos</span><span class="wf__note">nav</span></div>
+          <div class="wf__block"><span>Consentimientos (deshabilitado)</span><span class="wf__note">ConsentList</span></div>
+          <div class="wf__block"><span>Cerrar sesión</span><span class="wf__note">button</span></div>
+        </div>
+      </div></div>
+      <figcaption><strong>Today</strong>Ten stacked blocks of equal weight. No personal data, no reward in sight.</figcaption>
+    </figure>
+
+    <figure class="shot">
+      <div class="phone"><div class="screen">
+        <div class="bar"><span class="bar__club">Burger Club</span><span class="bar__help">Ayuda</span></div>
+        <div class="app">
+          <section class="id" aria-label="Identity">
+            <div class="id__top">
+              <div class="avatar" aria-hidden="true">JM</div>
+              <div>
+                <p class="id__name">Juan Muñoz Castillo</p>
+                <p class="id__since">Miembro desde diciembre de 2025</p>
+                <span class="tierchip">Nivel Plata</span>
+              </div>
+            </div>
+            <div class="stats">
+              <div class="stat"><div class="stat__v">30<small>puntos</small></div><div class="stat__l">Tu saldo</div></div>
+            </div>
+            <div class="tierline">
+              <p>Te faltan 120 puntos para el nivel Oro</p>
+              <div class="track" role="img" aria-label="20% hacia Oro"><i style="width:20%"></i></div>
+            </div>
+          </section>
+
+          <section aria-label="Tu próximo canje">
+            <div class="sec__h"><h4>Tu próximo canje</h4><a href="#">Ver los 4</a></div>
+            <div class="stampcard">
+              <div class="stampcard__head">
+                <div>
+                  <p class="stampcard__title">Burger gratis</p>
+                  <p class="stampcard__sub">Te faltan 70 puntos</p>
+                </div>
+              </div>
+              <div class="meter">
+                <div class="meter__track" role="img" aria-label="30 de 100 puntos"><i style="width:30%"></i></div>
+                <div class="meter__nums"><span><b>30</b> de 100 puntos</span><span>30%</span></div>
+              </div>
+              <div class="stampcard__cost"><span><b>100</b>puntos</span></div>
+            </div>
+          </section>
+
+          <section aria-label="Actividad reciente">
+            <div class="sec__h"><h4>Actividad reciente</h4><a href="#">Ver todo</a></div>
+            <ul class="tl">
+              <li><span class="tl__dot">+</span><div><p class="tl__what">Compra de $11.400</p><p class="tl__where">Hace 2 días</p></div><span class="tl__pts">+20 puntos<span>saldo 30</span></span></li>
+              <li><span class="tl__dot">+</span><div><p class="tl__what">Compra de $5.900</p><p class="tl__where">28 sep</p></div><span class="tl__pts">+10 puntos<span>saldo 10</span></span></li>
+            </ul>
+            <p class="nudge">Con 70 puntos más, tu canje Burger gratis es tuyo.</p>
+          </section>
+
+          <div class="wallet"><div><b>Tu tarjeta en el teléfono</b><p>Se actualiza sola con tu saldo.</p></div><span class="btn-dark">Agregar a Wallet</span></div>
+
+          <section aria-label="Tus datos">
+            <div class="sec__h"><h4>Tus datos</h4><button type="button">Editar</button></div>
+            <dl class="info">
+              <div><dt>Nombre</dt><dd>Juan Muñoz Castillo</dd></div>
+              <div><dt>Teléfono</dt><dd>+56 9 9830 7778</dd></div>
+              <div><dt>Email</dt><dd>cl.jmunoz@gmail.com</dd></div>
+              <div><dt>Cumpleaños</dt><dd>27 de julio</dd></div>
+            </dl>
+          </section>
+
+          <section aria-label="Avisos">
+            <div class="sec__h"><h4>Avisos</h4></div>
+            <div class="pref">
+              <div class="pref__row"><p>Cuando estés cerca<span>Te avisamos si pasás por un local del club.</span></p><span class="toggle toggle--on" aria-hidden="true"></span></div>
+              <div class="pref__row"><p>Promociones<span>Ofertas y novedades del club.</span></p><span class="toggle" aria-hidden="true"></span></div>
+            </div>
+          </section>
+
+          <div class="acct"><span>Cerrar sesión</span><span class="acct__danger">Eliminar mi cuenta</span></div>
+        </div>
+        <div class="dock"><div class="dock__btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg>Mostrar mi código</div></div>
+      </div></div>
+      <figcaption><strong>Proposed</strong>Identity, then the next reward as a ticket-style card, then purchases. The QR is one tap away from anywhere.</figcaption>
+    </figure>
+
+    <figure class="shot">
+      <div class="phone"><div class="screen sheet">
+        <div class="sheet__panel">
+          <span class="sheet__grip" aria-hidden="true"></span>
+          <h5>Mostrale esto en caja</h5>
+          <svg class="qr" id="qr" viewBox="0 0 29 29" role="img" aria-label="Código QR de ejemplo" shape-rendering="crispEdges"></svg>
+          <div class="code">K7F 2QX</div>
+          <p>Si no pueden escanear, dictá el código. Subimos el brillo mientras esta pantalla esté abierta.</p>
+          <span class="sheet__close">Listo</span>
+        </div>
+      </div></div>
+      <figcaption><strong>QR sheet</strong>Opens from the dock. Code and QR at full contrast, nothing else competing.</figcaption>
+    </figure>
+  </div>
+
+  <main class="doc">
+    <section>
+      <h2>Why change it</h2>
+      <p>The current page answers "what do I have" well (the balance is the single big number), but it never answers "what do I get, and when". The customer has to open <code>/profile/rewards</code> to find out. It also shows no personal data, so a customer cannot check or fix the phone or email the club uses to reach them.</p>
+      <p>The reference screen gets the order right: who you are, what you can win, what happened, your data. It also has problems worth not copying, listed below.</p>
+      <div class="cmp">
+        <div><h3>Take from the reference</h3><ul><li>Identity card with initials avatar</li><li>Rewards above activity</li><li>Timeline with a rail</li><li>Personal data block with Edit</li><li>Delete account at the end</li></ul></div>
+        <div><h3>Leave out</h3><ul><li>English dates ("a year ago") in a Spanish UI</li><li>All-caps stat labels</li><li>"7 puntos" next to a reward priced in Burger: two units for one thing</li><li>Empty fields shown as "-" (Tipo cliente)</li><li>A thin progress bar that hides how close the reward is</li></ul></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Page order</h2>
+      <p>Ordered by how often a customer needs each block. The QR leaves the scroll and becomes a fixed button, because at the counter speed matters more than anything else on this page.</p>
+      <ol class="order">
+        <li><span>1</span><span><b>Identity card</b><small>Avatar, full name, member since, tier chip, points balance, progress to next tier.</small></span></li>
+        <li><span>2</span><span><b>Next redemption card ("Tu próximo canje")</b><small>The signature element: a ticket with the price on a perforated stub and a progress bar. Links to the full catalog.</small></span></li>
+        <li><span>3</span><span><b>Recent purchases</b><small>Last 3 to 5 purchases with date, amount and points earned, closed by how close the next reward is. "Ver todo" goes to <code>/profile/history</code>.</small></span></li>
+        <li><span>4</span><span><b>Wallet card</b><small>Today's <code>WalletCard</code>, reduced to one row.</small></span></li>
+        <li><span>5</span><span><b>Your data</b><small>Name, phone, email, birthday. Only filled fields render.</small></span></li>
+        <li><span>6</span><span><b>Notifications</b><small>Consent toggles, including <code>nearby_notifications</code> from the enable-nearby-consent change.</small></span></li>
+        <li><span>7</span><span><b>Account</b><small>Log out, then delete account in a quiet danger color.</small></span></li>
+        <li><span>+</span><span><b>Dock: "Mostrar mi código"</b><small>Fixed at the bottom, opens the QR sheet with the member code.</small></span></li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Component specs</h2>
+
+      <h3>Identity card</h3>
+      <ul class="plain">
+        <li>Initials from the first given name and first surname (<code>Juan Muñoz Castillo</code> gives <code>JM</code>), on <code>--brand-100</code> with <code>--brand-900</code> text.</li>
+        <li>One stat: the points balance with the program's <code>pointsCurrency</code>, as the page shows it today. No purchase or visit counts. "Acumulados" and "Últimos 30 días" move to <code>/profile/history</code>.</li>
+        <li>The tier chip renders only when today's rule holds (<code>currentTierId</code> set and a program exists). Same for the tier line; at the top tier it reads "Estás en el nivel más alto".</li>
+        <li>No program configured: keep today's "Tu programa se está configurando" status in place of stats and tier line.</li>
+      </ul>
+
+      <h3>Next redemption card</h3>
+      <ul class="plain">
+        <li>Heading "Tu próximo canje", with the reward's own catalog name as the title. Everything is counted in points; the reward name never becomes the unit.</li>
+        <li>Points are earned by purchase amount, not by visit, so the card uses a progress bar with numbers ("30 de 100 puntos") instead of stamps. A stamp reads as one visit; here one purchase can add many points.</li>
+        <li>The card keeps the shape of a paper ticket: the price sits on a stub behind a perforated edge.</li>
+        <li>Shows the cheapest active reward the customer cannot afford yet. If some reward is already affordable, the card switches to "Ya podés canjear Burger gratis" with a "Canjear" button to <code>/profile/rewards/confirm</code>.</li>
+        <li>Price, balance and remaining use the same unit: "Te faltan 70 puntos".</li>
+        <li>Sold-out rewards (<code>stock === 0</code>) are skipped when choosing.</li>
+      </ul>
+
+      <h3>Recent purchases</h3>
+      <ul class="plain">
+        <li>One row per purchase: amount spent as the title, date below, points earned and resulting balance on the right. No item detail.</li>
+        <li>Redemptions show as their own rows ("Canjeaste Burger gratis", "−100 puntos"). Text carries the direction, never color or glyph alone, as today.</li>
+        <li>The list closes with one line tying it to the goal: "Con 70 puntos más, tu canje Burger gratis es tuyo". It disappears when no reward is in the catalog.</li>
+        <li>Dates are relative up to 7 days ("Hace 2 días"), then short absolute ("28 sep").</li>
+        <li>Rows without a purchase amount (manual adjustments, welcome bonus) fall back to their note, so nothing shows "$0".</li>
+      </ul>
+
+      <h3>Your data</h3>
+      <ul class="plain">
+        <li>Read-only list. "Editar" opens a form for name, email and birthday. Phone is the login identity and stays read-only, with a hint to contact the club to change it.</li>
+        <li>Birthday shows day and month only; the year is not useful to show back.</li>
+      </ul>
+
+      <h3>QR sheet</h3>
+      <ul class="plain">
+        <li>Bottom sheet over a dark scrim, QR at 210px minimum, member code in groups of three for dictation.</li>
+        <li>Requests a screen wake lock while open and tolerates refusal.</li>
+        <li>When the member code has not been minted yet, the sheet shows only the QR and says the code appears after adding the card to Wallet, matching today's <code>WalletCard</code> behavior.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>States</h2>
+      <div class="states">
+        <div class="state"><h3>Loading</h3><p>Skeleton of the new order: identity card, reward card, three purchase rows. No spinner.</p></div>
+        <div class="state"><h3>No activity</h3><p><q>Todavía no hay movimientos. Cuando sumes en el local, aparecen acá.</q></p></div>
+        <div class="state"><h3>No rewards in catalog</h3><p>The stamp card is hidden. No placeholder reward is invented.</p></div>
+        <div class="state"><h3>Error</h3><p>Today's <code>ClubError</code> with "Reintentar". No fallback profile.</p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>What the backend needs</h2>
+      <p>The codebase already decides that derived values come from the server (<code>nextTier</code> in <code>CustomerProfile</code>). The proposal follows that rule.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Need</th><th>Today</th><th>Proposal</th><th>Owner</th></tr></thead>
+          <tbody>
+            <tr><td>Next reward</td><td>Catalog exists at <code>/v1/loyalty/rewards</code>, choice would be client-side</td><td>Add <code>nextReward</code> and <code>affordableRewardsCount</code>, derived server-side like <code>nextTier</code></td><td><span class="need need--be">Backend</span></td></tr>
+            <tr><td>Purchase amount per movement</td><td><code>RecentTransaction</code> carries points, balance and note, but no amount spent</td><td>Add <code>purchaseAmount</code> (and currency) to recent transactions and to the history endpoint</td><td><span class="need need--be">Backend</span></td></tr>
+            <tr><td>Edit data</td><td>No write endpoint for the customer</td><td><code>PATCH /v1/customers/me</code> for name, email, birthDate</td><td><span class="need need--be">Backend</span></td></tr>
+            <tr><td>Delete account</td><td>No endpoint</td><td>Endpoint plus a confirm step in the page, retention rules to define</td><td><span class="need need--be">Backend</span></td></tr>
+            <tr><td>Consents</td><td><code>ConsentList</code> disabled</td><td>Covered by enable-nearby-consent</td><td><span class="need need--be">In progress</span></td></tr>
+            <tr><td>Club name in top bar</td><td><code>business.name</code> exists</td><td>Use as is; a logo is optional later</td><td><span class="need need--fe">Frontend</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Everything else (order, identity card, timeline, dock, QR sheet, personal data read-only) ships with the current API.</p>
+    </section>
+
+    <section>
+      <h2>Suggested slicing</h2>
+      <ol class="plain">
+        <li>Frontend only: new order, identity card without visits, timeline, dock and QR sheet, read-only data.</li>
+        <li>Backend <code>nextReward</code> and <code>purchaseAmount</code>, then the redemption card and purchase rows.</li>
+        <li>Edit data with <code>PATCH /v1/customers/me</code>.</li>
+        <li>Delete account, after retention rules are agreed.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Acceptance criteria</h2>
+      <ul class="plain ac">
+        <li>The QR is reachable in one tap from any scroll position.</li>
+        <li>Balance, reward price and points missing all use the program's <code>pointsCurrency</code>. A reward's name is never used as a unit.</li>
+        <li>No tier, reward or code is shown unless the API returned it.</li>
+        <li>All dates are in Spanish (es-CL), relative up to 7 days and absolute after.</li>
+        <li>Empty personal fields are hidden, not shown as "-".</li>
+        <li>Existing behavior tests in <code>app/profile/*.test.tsx</code> keep passing or are updated for the new order with the same assertions on data honesty.</li>
+      </ul>
+    </section>
+  </main>
+</div>
+
+<script>
+// Draws an illustrative QR-like pattern (not a real code) so the mockup reads correctly.
+(function () {
+  var svg = document.getElementById('qr');
+  if (!svg) return;
+  var n = 29, seed = 7, out = '';
+  function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+  function finder(x, y) {
+    out += '<rect x="' + x + '" y="' + y + '" width="7" height="7" fill="#1c1917"/>' +
+      '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="5" height="5" fill="#fff"/>' +
+      '<rect x="' + (x + 2) + '" y="' + (y + 2) + '" width="3" height="3" fill="#1c1917"/>';
+  }
+  out += '<rect width="29" height="29" fill="#fff"/>';
+  for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) {
+    var inFinder = (x < 8 && y < 8) || (x > 20 && y < 8) || (x < 8 && y > 20);
+    if (!inFinder && rnd() > 0.52) out += '<rect x="' + x + '" y="' + y + '" width="1" height="1" fill="#1c1917"/>';
+  }
+  finder(0, 0); finder(22, 0); finder(0, 22);
+  svg.innerHTML = out;
+})();
+</script>
