@@ -1,10 +1,5 @@
 const consentOptions = [
   {
-    name: 'serviceWhatsapp',
-    label: 'Mensajes de servicio por WhatsApp',
-    description: 'Avisos importantes sobre tu cuenta y tu programa.',
-  },
-  {
     name: 'promotions',
     label: 'Promociones y novedades',
     description: 'Ofertas y novedades que el commerce quiera compartirte.',
