@@ -83,7 +83,7 @@ describe('Database schema', () => {
     // the proximity work added (the venue interaction index and the
     // subscription freshness index), the pos_terminals listing index, and the
     // reward_branches venue index.
-    expect(db.allIndexes.length).toBe(24);
+    expect(db.allIndexes.length).toBe(25);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -127,6 +127,7 @@ describe('Database schema', () => {
       idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
       idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
       idxPosTerminalsBusiness: 'idx_pos_terminals_business',
+      idxPushCampaignsBusiness: 'idx_push_campaigns_business',
     };
 
     for (const [binding, sqlName] of Object.entries(expectedNames)) {
@@ -376,6 +377,7 @@ describe('Database schema', () => {
       'messageLog',
       'pointsTransactions',
       'posTerminals',
+      'pushCampaigns',
       'pushSubscriptions',
       'referrals',
       'rewardBranches',

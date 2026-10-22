@@ -15,6 +15,7 @@ import {
   customerWalletPasses,
   walletCallbackDeliveries,
   posTerminals,
+  pushCampaigns,
 } from './schema';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ const INDEXED_TABLES: readonly PgTable[] = [
   customerWalletPasses,
   walletCallbackDeliveries,
   posTerminals,
+  pushCampaigns,
 ];
 
 /**
@@ -92,6 +94,7 @@ const INDEX_NAMES = {
   idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
   idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
   idxPosTerminalsBusiness: 'idx_pos_terminals_business',
+  idxPushCampaignsBusiness: 'idx_push_campaigns_business',
 } as const satisfies Record<string, string>;
 
 /**
@@ -151,3 +154,4 @@ export const idxWalletCallbackDeliveriesReceived = indexByName(
  * Serves `GET /v1/loyalty/terminals`: one tenant's tills, newest first.
  */
 export const idxPosTerminalsBusiness = indexByName(INDEX_NAMES.idxPosTerminalsBusiness);
+export const idxPushCampaignsBusiness = indexByName(INDEX_NAMES.idxPushCampaignsBusiness);

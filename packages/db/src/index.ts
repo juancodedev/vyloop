@@ -186,6 +186,7 @@ export {
   idxCustomerWalletPassesTenant,
   idxWalletCallbackDeliveriesReceived,
   idxPosTerminalsBusiness,
+  idxPushCampaignsBusiness,
   indexByName,
   allIndexes,
 } from './indexes';
