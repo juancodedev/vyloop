@@ -49,14 +49,14 @@ Items marked **(verify)** depend on OpenNext or Cloudflare behaviour that MUST b
 
 ## Unit 1: Dashboard on OpenNext
 
-- [ ] 1.1 `apps/dashboard/package.json` — add `@opennextjs/cloudflare` as a devDependency; replace `"pages:build": "next-on-pages"` with an OpenNext build script (e.g. `"cf:build"`) and add a local preview script **(verify the CLI command names)**
-- [ ] 1.2 `apps/dashboard/open-next.config.ts` — minimal configuration, no incremental cache **(verify the required shape)**
-- [ ] 1.3 `apps/dashboard/wrangler.jsonc` — Worker `vyloop-dashboard`, `main` and `assets` as emitted by the build, `compatibility_flags: ["nodejs_compat"]`, `compatibility_date` no older than OpenNext requires **(verify)**
-- [ ] 1.4 `apps/dashboard/src/app/dashboard/customers/[id]/page.tsx:3` — remove `export const runtime = 'edge'`
-- [ ] 1.5 `.gitignore` and `tooling/eslint/eslint.config.ts:69` — ignore the OpenNext output directory (`.open-next/` **(verify)**) the way `.vercel` is ignored today
-- [ ] 1.6 `apps/dashboard/src/__tests__/` — a contract test that reads `package.json` and asserts no `next-on-pages` dependency and no `runtime = 'edge'` under `src/app`
-- [ ] 1.7 `.github/workflows/deploy.yml` (`deploy-dashboard`, lines 489-521) — build with the OpenNext script, keep `NEXT_PUBLIC_API_URL` on the build step, deploy with `wrangler deploy` from `apps/dashboard`; keep the Pages project untouched
-- [ ] 1.8 Verify locally: the preview serves `/login`, `/dashboard`, `/dashboard/customers/<id>`; check the reported bundle size against the plan limit **(verify the limit)**
+- [x] 1.1 `apps/dashboard/package.json` — add `@opennextjs/cloudflare` as a devDependency; replace `"pages:build": "next-on-pages"` with an OpenNext build script (e.g. `"cf:build"`) and add a local preview script **(verify the CLI command names)**
+- [x] 1.2 `apps/dashboard/open-next.config.ts` — minimal configuration, no incremental cache **(verify the required shape)**
+- [x] 1.3 `apps/dashboard/wrangler.jsonc` — Worker `vyloop-dashboard`, `main` and `assets` as emitted by the build, `compatibility_flags: ["nodejs_compat"]`, `compatibility_date` no older than OpenNext requires **(verify)**
+- [x] 1.4 `apps/dashboard/src/app/dashboard/customers/[id]/page.tsx:3` — remove `export const runtime = 'edge'`
+- [x] 1.5 `.gitignore` and `tooling/eslint/eslint.config.ts:69` — ignore the OpenNext output directory (`.open-next/` **(verify)**) the way `.vercel` is ignored today
+- [x] 1.6 `apps/dashboard/src/__tests__/` — a contract test that reads `package.json` and asserts no `next-on-pages` dependency and no `runtime = 'edge'` under `src/app`
+- [x] 1.7 `.github/workflows/deploy.yml` (`deploy-dashboard`, lines 489-521) — build with the OpenNext script, keep `NEXT_PUBLIC_API_URL` on the build step, deploy with `wrangler deploy` from `apps/dashboard`; keep the Pages project untouched
+- [x] 1.8 Verify locally: the preview serves `/login`, `/dashboard`, `/dashboard/customers/<id>`; check the reported bundle size against the plan limit **(verify the limit)**
 - [ ] 1.9 Confirm `CLOUDFLARE_API_TOKEN` has Workers Scripts edit permission before merging
 
 ## Unit 2: Customer web on OpenNext

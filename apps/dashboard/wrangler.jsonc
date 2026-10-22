@@ -1,0 +1,21 @@
+{
+  // The Worker the OpenNext build produces. `main` and `assets.directory` are
+  // the paths the adapter emits, taken from its own `templates/wrangler.jsonc`
+  // rather than guessed.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vyloop-dashboard",
+  "main": ".open-next/worker.js",
+  // The adapter's template default. It warns when the date is older than six
+  // months, and the gateway's 2025-04-01 is well past that.
+  "compatibility_date": "2026-08-01",
+  // `nodejs_compat` because the adapter runs the Node.js runtime on Workers;
+  // `global_fetch_strictly_public` because Next's fetch must not resolve an
+  // internal origin as if it were public.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
+  // No `r2_buckets`: there is no incremental cache. No `images` binding: the
+  // dashboard has no `next/image` import.
+}
