@@ -26,6 +26,25 @@ Chain strategy: stacked-to-main
 | 3    | Hostname cut-over: redirectors and new defaults            | PR #3     | ~120  | Needs Units 1 and 2 verified in production.        |
 | 4    | Remove the old adapter and its stale references            | PR #4     | ~80   | Last; proves `braces` leaves the lockfile.         |
 
+### Prerequisites, measured 2026-10-21
+
+`@opennextjs/cloudflare@1.20.13` declares `next: ">=15.5.28 <16 || >=16.4.1"` and
+`wrangler: "^4.148.0"`. The repository had Next `16.3.8` — inside neither branch of
+the Next range — and wrangler `4.107.0`. Neither Unit 1 nor Unit 2 can install the
+adapter until both are satisfied, so the bumps come first and are not part of the
+migration's line budget:
+
+- wrangler `4.107.0` → `^4.151.3` (this branch). Verified with
+  `wrangler deploy --dry-run` on `apps/gateway` and `workers/wallet` under Node 22,
+  which the repository already requires (`.nvmrc`). Wrangler 4.148+ refuses Node 20,
+  so a workstation on Node 20 cannot run the dry run at all.
+- Next `16.3.8` → `16.4.2` (Dependabot #257). A Next upgrade is normally out of scope
+  here; this one is a precondition, not an upgrade.
+
+The peer range excludes 16.4.0 and earlier 16.0–16.3 on purpose, so `^16.3.8` resolving
+to `16.4.x` tomorrow does not make the migration installable today: the lockfile pins
+what is installed.
+
 Items marked **(verify)** depend on OpenNext or Cloudflare behaviour that MUST be checked against the documentation current at implementation time.
 
 ## Unit 1: Dashboard on OpenNext
