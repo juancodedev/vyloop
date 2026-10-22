@@ -38,8 +38,8 @@ export const PASS_UNKNOWN = 'unknown';
  *
  * Was `/program`. It is now `/p/{slug}` — the per-merchant page the gateway
  * renders server-side from `loyalty_programs.promo_copy` — because a class review
- * is judged on the bytes Google's reviewer receives, and a `next-on-pages` static
- * export serves 18 characters of text no matter how good the page behind it is.
+ * is judged on the bytes Google's reviewer receives, and a client-rendered
+ * dashboard serves 18 characters of text no matter how good the page behind it is.
  *
  * A prefix, not a complete path, and that is the whole reason the slug is
  * threaded in from the database: probing `/p` alone would read a 404 on a route

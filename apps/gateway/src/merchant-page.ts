@@ -5,10 +5,9 @@
  * ## Why this route is here rather than in the dashboard
  *
  * Measured, not assumed. `vyloop-customer-web.pages.dev/program` is a server
- * component and serves 5,917 characters of visible text; the dashboard is a
- * `next-on-pages` static export whose whole `/dashboard` HTML is 9,638 bytes of
- * which **18** are text, because every byte of content is fetched from the
- * client. A review page placed there would hand Google's reviewer a `<title>`
+ * component and serves 5,917 characters of visible text; the dashboard renders
+ * on the client, so its whole `/dashboard` HTML is 9,638 bytes of which **18**
+ * are text — every byte of content arrives from the client. A review page placed there would hand Google's reviewer a `<title>`
  * and nothing else.
  *
  * ## Why it renders in the worker, with no JavaScript

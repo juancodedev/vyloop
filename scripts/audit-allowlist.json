@@ -1,10 +1,1 @@
-[
-  {
-    "id": "GHSA-vfj7-8cjw-p6xm",
-    "package": "braces",
-    "path": "apps/customer-web > @cloudflare/next-on-pages@1.13.16 > chokidar@3.6.0 > braces@3.0.3; apps/dashboard > @cloudflare/next-on-pages@1.13.16 > chokidar@3.6.0 > braces@3.0.3",
-    "reason": "Build-time only path through next-on-pages; no patched version exists. Removed by pages-opennext-migration.",
-    "acceptedBy": "juancodedev",
-    "expires": "2027-01-31"
-  }
-]
+[]

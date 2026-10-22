@@ -57,7 +57,7 @@ Items marked **(verify)** depend on OpenNext or Cloudflare behaviour that MUST b
 - [x] 1.6 `apps/dashboard/src/__tests__/` — a contract test that reads `package.json` and asserts no `next-on-pages` dependency and no `runtime = 'edge'` under `src/app`
 - [x] 1.7 `.github/workflows/deploy.yml` (`deploy-dashboard`, lines 489-521) — build with the OpenNext script, keep `NEXT_PUBLIC_API_URL` on the build step, deploy with `wrangler deploy` from `apps/dashboard`; keep the Pages project untouched
 - [x] 1.8 Verify locally: the preview serves `/login`, `/dashboard`, `/dashboard/customers/<id>`; check the reported bundle size against the plan limit **(verify the limit)**
-- [ ] 1.9 Confirm `CLOUDFLARE_API_TOKEN` has Workers Scripts edit permission before merging
+- [x] 1.9 Confirm `CLOUDFLARE_API_TOKEN` has Workers Scripts edit permission before merging — verified by the real thing rather than by inspecting the token: `deploy-dashboard` ran `wrangler deploy` on `main` after #268 and succeeded in 59s (Deploy run 39714809767). A token without Workers Scripts: Edit fails at that step, not after it
 
 ## Unit 2: Customer web on OpenNext
 
@@ -81,8 +81,8 @@ Items marked **(verify)** depend on OpenNext or Cloudflare behaviour that MUST b
 
 ## Unit 4: Remove the old adapter
 
-- [ ] 4.1 Remove `@cloudflare/next-on-pages` from both `package.json` files and refresh `pnpm-lock.yaml`; confirm `braces` and `chokidar@3.6.0` no longer appear, and close Dependabot #124 with that evidence
-- [ ] 4.2 `README.md:428-429` — the deploy job descriptions
-- [ ] 4.3 Reword "`next-on-pages` static export" in `workers/wallet/src/helpers.ts:200`, `apps/gateway/src/merchant-page.ts:9`, `apps/gateway/src/merchant-route.test.ts:97`, `workers/wallet/src/provision.test.ts:558`, `scripts/check-wallet-readiness.mjs:39`
-- [ ] 4.4 `docs/18-Trabajo-Pendiente.md:20` — mark `pages-opennext-migration` done
-- [ ] 4.5 Run `pnpm -r lint`, `pnpm -r typecheck`, `pnpm -r test`
+- [x] 4.1 Remove `@cloudflare/next-on-pages` from both `package.json` files and refresh `pnpm-lock.yaml`; confirm `braces` and `chokidar@3.6.0` no longer appear, and close Dependabot #124 with that evidence — the dependency was gone from both manifests since Units 1 and 2, but `pnpm install` kept an **unreachable snapshot** of `next-on-pages` in the lock (0 importers, nothing installed), and `pnpm audit` reads the lock, so `braces` stayed alive and the allowlist entry kept covering it. `pnpm dedupe` pruned 638 lines: `next-on-pages`, `braces` and `chokidar@3.6.0` are gone, and the now-stale allowlist entry was removed, leaving the file empty. Side effect, disclosed: dedupe re-resolved four pins within their declared ranges (three patches, plus `lucide-react` 1.23.0 → 1.59.0); all checked green below. There is no open Dependabot alert for `braces` to close — `GET /dependabot/alerts?state=all` returns `[]` — and #124 is a merged wallet PR, not an alert, so the task's reference does not resolve
+- [x] 4.2 `README.md:428-429` — the deploy job descriptions: now "OpenNext build + Worker deploy"
+- [x] 4.3 Reword "`next-on-pages` static export" in `workers/wallet/src/helpers.ts:200`, `apps/gateway/src/merchant-page.ts:9`, `apps/gateway/src/merchant-route.test.ts:97`, `workers/wallet/src/provision.test.ts:558`, `scripts/check-wallet-readiness.mjs:39`
+- [x] 4.4 `docs/18-Trabajo-Pendiente.md:20` — **not marked done**, because it is not: Units 1, 2 and 4 are, and Unit 3 is still blocked on the hostname decision. The row stays, rewritten to say exactly that. Marking it done would have made the backlog lie about a cut-over that has not happened
+- [x] 4.5 Run `pnpm -r lint`, `pnpm -r typecheck`, `pnpm -r test` — all green, plus `pnpm install --frozen-lockfile` (what CI runs) and `pnpm deps:audit` → PASS with no stale allowlist note
