@@ -665,28 +665,6 @@ export const api = {
   },
 
   /**
-   * The business's venues, for choosing where a reward can be redeemed.
-   *
-   * The venue route is tenant-scoped by path, and the dashboard does not carry
-   * the business id in its own state: it reads it from the token via `/v1/me`
-   * once per page load. Sending the id from local storage would make the UI a
-   * second source of truth for the tenant, which is exactly what the signed
-   * token exists to avoid.
-   */
-  async getVenues(): Promise<Venue[]> {
-    const businessId = await currentBusinessId();
-    const result = await apiFetch(`/v1/businesses/${businessId}/branches`) as {
-      branches?: ApiVenueRecord[];
-    };
-    return (result.branches || []).map((b) => ({
-      id: b.id,
-      name: b.name,
-      ...(b.city != null && { city: b.city }),
-      isActive: b.is_active,
-    }));
-  },
-
-  /**
    * Accumulate under a **visit** program: `points` is the qualifying count.
    *
    * `POST /v1/loyalty/points/assign` reads the tenant's `earn_by` and consumes a
@@ -837,6 +815,93 @@ export const api = {
   async getTimeline(): Promise<TimelineEvent[]> {
     return apiFetch('/v1/analytics/timeline') as Promise<TimelineEvent[]>;
   },
+
+  // ============================================================================
+  // Venues (Branches)
+  // ============================================================================
+
+  /**
+   * List the business's venues with pagination and filters.
+   *
+   * Uses `/v1/businesses/me/branches` (the gateway injects `business_id` from the token).
+   */
+  async getVenues(filters: VenueFilters = {}): Promise<{
+    branches: BranchView[];
+    total: number;
+  }> {
+    const params = new URLSearchParams();
+    if (filters.page) params.set('page', String(filters.page));
+    if (filters.per_page) params.set('per_page', String(filters.per_page));
+    if (filters.includeInactive) params.set('include_inactive', 'true');
+
+    const raw = await apiFetch(`/v1/businesses/me/branches?${params}`) as {
+      branches: BranchView[];
+      total: number;
+    };
+    return raw;
+  },
+
+  /**
+   * Create a new venue.
+   *
+   * Location is sent as `{ latitude, longitude }` when both are provided;
+   * `null` when both are omitted (clears position).
+   */
+  async createVenue(data: VenueFormData): Promise<BranchView> {
+    const raw = await apiFetch('/v1/businesses/me/branches', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: data.name,
+        address: data.address ?? null,
+        city: data.city ?? null,
+        country: data.country,
+        timezone: data.timezone ?? null,
+        location: data.latitude !== null && data.longitude !== null
+          ? { latitude: data.latitude, longitude: data.longitude }
+          : null,
+      }),
+    }) as { branch: BranchView };
+    return raw.branch;
+  },
+
+  /**
+   * Update an existing venue.
+   *
+   * Only changed fields are sent. Location is handled specially:
+   * - `undefined` → leave unchanged
+   * - `null` (both lat/long null) → clear position
+   * - object with both lat/long → set position
+   */
+  async updateVenue(id: string, data: Partial<VenueFormData>): Promise<BranchView> {
+    const body: Record<string, unknown> = {};
+
+    if (data.name !== undefined) body.name = data.name;
+    if (data.address !== undefined) body.address = data.address;
+    if (data.city !== undefined) body.city = data.city;
+    if (data.country !== undefined) body.country = data.country;
+    if (data.timezone !== undefined) body.timezone = data.timezone;
+
+    if (data.latitude !== undefined && data.longitude !== undefined) {
+      if (data.latitude !== null && data.longitude !== null) {
+        body.location = { latitude: data.latitude, longitude: data.longitude };
+      } else {
+        body.location = null;
+      }
+    }
+
+    const raw = await apiFetch(`/v1/businesses/me/branches/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }) as { branch: BranchView };
+    return raw.branch;
+  },
+
+  /**
+   * Deactivate a venue (soft delete).
+   */
+  async deactivateVenue(id: string): Promise<void> {
+    await apiFetch(`/v1/businesses/me/branches/${id}`, { method: 'DELETE' });
+  },
 };
 
 /**
@@ -851,11 +916,61 @@ export interface Venue {
   isActive: boolean;
 }
 
-interface ApiVenueRecord {
+/**
+ * Full venue view as returned by the identity worker.
+ * Matches the `BranchView` shape from `workers/identity/src/branches.ts`.
+ */
+export interface BranchView {
   id: string;
   name: string;
-  city?: string | null;
+  address: string | null;
+  city: string | null;
+  country: string;
+  timezone: string | null;
   is_active: boolean;
+  latitude: number | null;
+  longitude: number | null;
+  geohash: string | null;
+  geohash_precision: number | null;
+  located_at: string | null;
+}
+
+/** Filters for listing venues. */
+export interface VenueFilters {
+  page?: number;
+  per_page?: number;
+  includeInactive?: boolean;
+}
+
+/** Form data for creating/updating a venue. */
+export interface VenueFormData {
+  name: string;
+  address?: string | null;
+  city?: string | null;
+  country: string;
+  timezone?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  isActive?: boolean;
+}
+
+/** Server error codes for location validation. */
+export const LOCATION_ERROR_CODES = {
+  BRANCH_LOCATION_INCOMPLETE: 'Ambas coordenadas son obligatorias si se proporciona una',
+  BRANCH_LOCATION_INVALID: 'Latitud debe estar entre -90 y 90, longitud entre -180 y 180',
+  BRANCH_LOCATION_OUT_OF_RANGE: 'El valor supera el rango permitido',
+} as const;
+
+export type LocationErrorCode = keyof typeof LOCATION_ERROR_CODES;
+
+/** Map a server error code to a user-readable message for location fields. */
+export function locationErrorMessage(code: string): string {
+  return LOCATION_ERROR_CODES[code as LocationErrorCode] ?? `Error de ubicación: ${code}`;
+}
+
+/** Check if an ApiError is a location validation error. */
+export function isLocationError(err: unknown): err is ApiError & { code: LocationErrorCode } {
+  return err instanceof ApiError && err.code in LOCATION_ERROR_CODES;
 }
 
 /**
@@ -864,17 +979,6 @@ interface ApiVenueRecord {
  * Cached for the page load only: a reload re-reads it, so a token swap cannot
  * leave the dashboard pointed at the previous business.
  */
-let cachedBusinessId: string | null = null;
-
-async function currentBusinessId(): Promise<string> {
-  if (cachedBusinessId) return cachedBusinessId;
-  const me = await apiFetch('/v1/me') as { business_id?: string };
-  if (!me.business_id) {
-    throw new Error('El token no identifica un negocio');
-  }
-  cachedBusinessId = me.business_id;
-  return cachedBusinessId;
-}
 
 function mapReward(r: ApiRewardRecord): Reward {
   return {

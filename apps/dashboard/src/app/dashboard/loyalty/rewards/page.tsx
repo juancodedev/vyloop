@@ -48,7 +48,16 @@ export default function LoyaltyRewardsPage() {
     loadRewards();
     // Venues are only needed inside the modal, so a failure here must not stop
     // the catalog from rendering: the form then offers "all venues" alone.
-    api.getVenues().then(setVenues).catch(() => setVenues([]));
+    api.getVenues()
+      .then(({ branches }) => setVenues(
+        branches.map(v => ({
+          id: v.id,
+          name: v.name,
+          city: v.city ?? '',
+          isActive: v.is_active,
+        }))
+      ))
+      .catch(() => setVenues([]));
   }, []);
 
   async function loadRewards() {
