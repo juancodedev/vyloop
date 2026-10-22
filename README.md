@@ -99,7 +99,7 @@ están en [`docs/14-Backlog.md`](docs/14-Backlog.md).
 | App | URL | Descripción |
 |-----|-----|-------------|
 | Dashboard | [vyloop.juancode.dev](https://vyloop.juancode.dev) | Login + gestión del comercio. **También el alta**: `/login?signup=true` |
-| Customer Web | [vyloop-customer-web.pages.dev](https://vyloop-customer-web.pages.dev) | Tarjeta de puntos del cliente |
+| Customer Web | [vyloop-customer-web.cl-jmunoz.workers.dev](https://vyloop-customer-web.cl-jmunoz.workers.dev) | Tarjeta de puntos del cliente |
 | API Gateway | `gateway.cl-jmunoz.workers.dev` | Backend API (8 workers) |
 | Gateway (dominio propio) | `media.juancode.dev` | Sirve `/p/{slug}`, `/brand/*`, `robots.txt` y el callback de Google. Sin path raíz: responde 404, y es lo esperado |
 | Página del comercio | [media.juancode.dev/p/cafe-central](https://media.juancode.dev/p/cafe-central) | Página pública que Google revisa como `homepageUri` |
@@ -108,7 +108,7 @@ están en [`docs/14-Backlog.md`](docs/14-Backlog.md).
 ### El link del cliente lo define el comercio, no la app
 
 ```
-https://vyloop-customer-web.pages.dev/register?biz=<slug>
+https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=<slug>
 ```
 
 **Sin `?biz=` no hay login ni registro**, y eso es deliberado: un teléfono no es único entre
@@ -121,7 +121,7 @@ alta, y es lo mismo que imprime como QR.
 
 ### Demo: Tarjeta del Cliente
 
-1. Entrá a [vyloop-customer-web.pages.dev/register?biz=cafe-central](https://vyloop-customer-web.pages.dev/register?biz=cafe-central)
+1. Entrá a [vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=cafe-central](https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=cafe-central)
 2. Iniciá sesión con teléfono `+56956789012`
 3. Ves el perfil de Lucía Fernández con:
    - **Avatar con glow** y animación de puntos

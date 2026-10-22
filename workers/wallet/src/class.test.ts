@@ -195,14 +195,14 @@ describe('buildLoyaltyClass', () => {
     const fullyPopulated = buildLoyaltyClass({
       ...baseInput,
       programLogo: { sourceUri: { uri: 'https://media.juancode.dev/brand/t.jpg' } },
-      homepageUri: { uri: 'https://vyloop-customer-web.pages.dev/program', description: 'Programa' },
+      homepageUri: { uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/program', description: 'Programa' },
       hexBackgroundColor: '#1F3A2E',
       accountNameLabel: 'Cliente',
       accountIdLabel: 'Código',
       rewardsTierLabel: 'Nivel',
       promoCopy: '¡Cada 10 sellos, un burger gratis!',
       links: [
-        { uri: 'https://vyloop-customer-web.pages.dev/profile', description: 'Ver mi perfil' },
+        { uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/profile', description: 'Ver mi perfil' },
       ],
     });
 
@@ -288,15 +288,15 @@ describe('buildLoyaltyClass', () => {
     const loyaltyClass = buildLoyaltyClass({
       ...baseInput,
       links: [
-        { uri: 'https://vyloop-customer-web.pages.dev/profile', description: 'Ver mi perfil' },
-        { uri: 'https://vyloop-customer-web.pages.dev/profile/history', description: 'Mi historial' },
+        { uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/profile', description: 'Ver mi perfil' },
+        { uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/profile/history', description: 'Mi historial' },
       ],
     });
 
     expect(loyaltyClass.linksModuleData).toEqual({
       uris: [
-        { uri: 'https://vyloop-customer-web.pages.dev/profile', description: 'Ver mi perfil' },
-        { uri: 'https://vyloop-customer-web.pages.dev/profile/history', description: 'Mi historial' },
+        { uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/profile', description: 'Ver mi perfil' },
+        { uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/profile/history', description: 'Mi historial' },
       ],
     });
   });
@@ -351,7 +351,7 @@ describe('buildLoyaltyClass', () => {
     expect(() =>
       buildLoyaltyClass({
         ...baseInput,
-        links: [{ uri: 'https://vyloop-customer-web.pages.dev/profile', description: tooLong }],
+        links: [{ uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/profile', description: tooLong }],
       }),
     ).toThrow(/description/);
   });
@@ -377,7 +377,7 @@ describe('buildLoyaltyClass', () => {
       ...baseInput,
       programLogo: { sourceUri: { uri: 'https://media.juancode.dev/brand/t.jpg' } },
       promoCopy: 'Diez sellos, uno gratis',
-      links: [{ uri: 'https://vyloop-customer-web.pages.dev/profile', description: 'Perfil' }],
+      links: [{ uri: 'https://vyloop-customer-web.cl-jmunoz.workers.dev/profile', description: 'Perfil' }],
     });
 
     expect(loyaltyClass).not.toHaveProperty('heroImage');

@@ -43,7 +43,7 @@
     // in `src/merchant-page.ts`, and `wrangler-config.contract.test.ts` asserts
     // the two agree — so a staging deployment that moves this host and leaves the
     // constant behind fails here instead of drifting.
-    "WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev",
+    "WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.cl-jmunoz.workers.dev",
     // The inbox a human reads for the support form on the card screen.
     // `POST /v1/support`, in `src/support.ts`.
     //

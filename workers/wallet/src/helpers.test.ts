@@ -226,7 +226,7 @@ describe('parseCustomerWebBaseUrl', () => {
     for (const raw of [undefined, null, '', '   ']) {
       expect(parseCustomerWebBaseUrl(raw)).toBe(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL);
     }
-    expect(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL).toBe('https://vyloop-customer-web.pages.dev');
+    expect(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL).toBe('https://vyloop-customer-web.cl-jmunoz.workers.dev');
     expect(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL).not.toBe(DEFAULT_WALLET_WEB_BASE_URL);
     expect(DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL).not.toBe(DEFAULT_WALLET_MEDIA_BASE_URL);
   });
