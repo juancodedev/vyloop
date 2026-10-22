@@ -3,12 +3,16 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  // This package's tsconfig sets `"jsx": "preserve"` for Next.js, which tells
-  // esbuild not to transform JSX at all — correct for the build, and wrong for a
-  // test file that contains JSX. `automatic` is the same setting the customer-web
-  // test config uses, for the same reason.
-  esbuild: {
-    jsx: 'automatic',
+  // This package's tsconfig sets `"jsx": "preserve"` for Next.js, which leaves
+  // JSX untransformed — correct for the build, and wrong for a test file that
+  // contains JSX. `automatic` is the same setting the customer-web test config
+  // uses, for the same reason.
+  //
+  // Configured through `oxc`, not `esbuild`: Vite 8 transforms TSX with Oxc, and
+  // the deprecated `esbuild.jsx` option no longer reaches it, so leaving JSX to
+  // `esbuild` made every rendering suite fail on `Unexpected JSX expression`.
+  oxc: {
+    jsx: { runtime: 'automatic' },
   },
   resolve: {
 // Every page in this app imports through `@/`, per the `paths` entry in
