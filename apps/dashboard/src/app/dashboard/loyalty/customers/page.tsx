@@ -27,6 +27,7 @@ export default function LoyaltyCustomersPage() {
   }, [search]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load(1);
   }, [load]);
 
@@ -47,121 +48,101 @@ export default function LoyaltyCustomersPage() {
     <>
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-4">
-        <div className="search-input-wrapper">
-          <svg
-            className="search-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
+        <h1 className="text-2xl font-semibold">Clientes</h1>
+        <div className="flex items-center gap-2">
           <input
-            type="text"
-            className="form-control"
-            placeholder="Buscar cliente por nombre…"
+            type="search"
+            placeholder="Buscar por nombre o email…"
             value={search}
-            onInput={(e) => handleSearch(e.currentTarget.value)}
+            onChange={(e) => handleSearch(e.target.value)}
+            className="w-64 px-3 py-2 rounded border bg-white"
+            aria-label="Buscar clientes"
           />
         </div>
-        <span className="text-sm text-muted">
-          {data.total} cliente{data.total !== 1 ? 's' : ''}
-        </span>
       </div>
 
       {/* Table */}
-      <div className="card">
-        <div className="table-container">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Nombre</th>
-                <th>Puntos Actuales</th>
-                <th>Nivel</th>
-                <th>Total Acumulado</th>
-                <th>Miembro desde</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={5} className="text-center text-muted" style={{ padding: '2rem' }}>
-                    Cargando…
-                  </td>
+      {loading ? (
+        <div className="text-center py-8 text-muted">Cargando…</div>
+      ) : data.items.length === 0 ? (
+        <div className="text-center py-8 text-muted">
+          No hay clientes. Cuando se registren, aparecerán aquí.
+        </div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="text-left text-sm text-muted border-b">
+                  <th className="pb-2 pr-4">Nombre</th>
+                  <th className="pb-2 pr-4">Email</th>
+                  <th className="pb-2 pr-4">Puntos</th>
+                  <th className="pb-2 pr-4">Nivel</th>
+                  <th className="pb-2 pr-4">Última visita</th>
                 </tr>
-              ) : data.items.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="text-center text-muted" style={{ padding: '2rem' }}>
-                    No se encontraron clientes
-                  </td>
-                </tr>
-              ) : (
-                data.items.map((c) => (
+              </thead>
+              <tbody>
+                {data.items.map((customer) => (
                   <tr
-                    key={c.id}
-                    onClick={() => handleRowClick(c)}
-                    style={{ cursor: 'pointer' }}
+                    key={customer.id}
+                    className="border-b hover:bg-[var(--surface-hover)] cursor-pointer"
+                    onClick={() => handleRowClick(customer)}
                   >
-                    <td>
-                      <div style={{ fontWeight: 500 }}>{c.fullName}</div>
-                      {c.email && (
-                        <div className="text-xs text-muted">{c.email}</div>
-                      )}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>
-                      {c.points.toLocaleString()}
-                    </td>
-                    <td>
-                      <span className={`badge badge-${c.currentTier.toLowerCase()}`}>
-                        {c.currentTier}
+                    <td className="py-3 pr-4 font-medium">{customer.fullName}</td>
+                    <td className="py-3 pr-4 text-muted">{customer.email}</td>
+                    <td className="py-3 pr-4">{customer.pointsBalance.toLocaleString('es-CL')}</td>
+                    <td className="py-3 pr-4">
+                      <span
+                        className={`inline-block px-2 py-0.5 text-xs rounded-full ${
+                          customer.tier === 'Oro'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : customer.tier === 'Plata'
+                              ? 'bg-gray-100 text-gray-800'
+                              : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {customer.tier}
                       </span>
                     </td>
-                    <td>{c.totalPointsEarned.toLocaleString()}</td>
-                    <td className="text-sm text-muted">{c.createdAt}</td>
+                    <td className="py-3 pr-4 text-muted">
+                      {customer.lastVisitAt
+                        ? new Date(customer.lastVisitAt).toLocaleDateString('es-CL', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                          })
+                        : '—'}
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-        {/* Pagination */}
-        {data.totalPages > 1 && (
-          <div className="pagination" style={{ padding: '0.75rem 1.5rem', borderTop: '1px solid var(--border)' }}>
-            <div className="pagination-info">
-              Página {data.page} de {data.totalPages} ({data.total} clientes)
-            </div>
-            <div className="pagination-controls">
+          {/* Pagination */}
+          {data.totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 mt-4">
               <button
                 onClick={() => goToPage(data.page - 1)}
-                disabled={data.page <= 1}
+                disabled={data.page === 1}
+                className="px-3 py-1 rounded border disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Anterior
               </button>
-              {Array.from({ length: data.totalPages }, (_, i) => i + 1).map((p) => (
-                <button
-                  key={p}
-                  className={p === data.page ? 'active' : ''}
-                  onClick={() => goToPage(p)}
-                >
-                  {p}
-                </button>
-              ))}
+              <span className="px-3 text-sm text-muted">
+                Página {data.page} de {data.totalPages}
+              </span>
               <button
                 onClick={() => goToPage(data.page + 1)}
-                disabled={data.page >= data.totalPages}
+                disabled={data.page === data.totalPages}
+                className="px-3 py-1 rounded border disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Siguiente
               </button>
             </div>
-          </div>
-        )}
-      </div>
-
+          )}
+        </>
+      )}
     </>
   );
 }

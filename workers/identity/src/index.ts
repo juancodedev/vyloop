@@ -909,7 +909,6 @@ app.get('/v1/customers/me/consents', async (c) => {
 
   const db = createDb(dbUrl);
   const { consents } = await import('@vyloop/db');
-  const { eq, and } = await import('drizzle-orm');
 
   const rows = await db
     .select()
@@ -995,7 +994,6 @@ app.post('/v1/customers/me/consents', async (c) => {
 
   const db = createDb(dbUrl);
   const { consents } = await import('@vyloop/db');
-  const { eq, and } = await import('drizzle-orm');
   const { sql } = await import('drizzle-orm');
 
   await db

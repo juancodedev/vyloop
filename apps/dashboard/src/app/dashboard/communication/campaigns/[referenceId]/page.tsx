@@ -34,6 +34,7 @@ export default function CampaignDetailPage() {
     }
   }, [referenceId]);
 
+   
   useEffect(() => {
     loadCampaign();
   }, [loadCampaign]);

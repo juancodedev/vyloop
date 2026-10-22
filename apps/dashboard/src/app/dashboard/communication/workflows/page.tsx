@@ -86,6 +86,7 @@ export default function WorkflowsPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchWorkflows();
   }, []);
 

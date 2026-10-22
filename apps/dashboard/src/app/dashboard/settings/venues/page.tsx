@@ -48,14 +48,14 @@ function TrashIcon({ className = 'w-4 h-4' }: { className?: string }) {
 function ToastContainer() {
   const [toasts, setToasts] = useState<Array<{ id: number; type: 'success' | 'error' | 'info'; message: string }>>([]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   const showToast = useCallback((type: 'success' | 'error' | 'info', message: string) => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, type, message }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   useEffect(() => {
     const handler = (e: CustomEvent) => {
       const { type, message } = e.detail;
@@ -112,6 +112,7 @@ export default function VenuesPage() {
   }, [page, perPage, includeInactive]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadVenues();
   }, [loadVenues]);
 
