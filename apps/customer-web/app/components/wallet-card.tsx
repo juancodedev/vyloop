@@ -112,8 +112,6 @@ export function WalletCard() {
     // state on a dead component, and a retry bumps `attempt` to ask again.
     let live = true;
 
-    setState({ kind: 'asking' });
-
     api
       .getWalletPass()
       .then((pass) => {
@@ -130,7 +128,10 @@ export function WalletCard() {
     };
   }, [attempt]);
 
-  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  const retry = useCallback(() => {
+    setState({ kind: 'asking' });
+    setAttempt((n) => n + 1);
+  }, []);
 
   return (
     <section className="club-wallet" aria-label="Tu tarjeta en Google Wallet">

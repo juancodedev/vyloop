@@ -106,7 +106,7 @@ export default function HistoryPage() {
 
   useEffect(() => {
     if (!customer) return;
-    void load(filter);
+    void Promise.resolve().then(() => load(filter));
   }, [customer, filter, load]);
 
   if (isLoading || (fetching && !answered)) {

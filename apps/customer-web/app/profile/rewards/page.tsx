@@ -48,7 +48,7 @@ export default function RewardsPage() {
 
   useEffect(() => {
     if (!customer) return;
-    void load();
+    void Promise.resolve().then(() => load());
   }, [customer, load]);
 
   if (authLoading) {

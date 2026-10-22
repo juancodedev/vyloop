@@ -867,7 +867,160 @@ app.get('/v1/me', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /v1/businesses/{id}
+// Consent routes (customer-scoped)
+// ---------------------------------------------------------------------------
+
+app.get('/v1/customers/me/consents', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return c.json(
+      { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing or invalid Authorization header' } },
+      401,
+    );
+  }
+
+  const secret = c.env.JWT_SECRET;
+  if (!secret) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'JWT secret not configured' } }, 500);
+  }
+
+  let claims: JwtClaims;
+  try {
+    claims = await validateToken(secret, authHeader.slice(7));
+  } catch {
+    return c.json(
+      { error: { code: 'AUTH_TOKEN_INVALID', message: 'Token invalid or expired' } },
+      401,
+    );
+  }
+
+  // Only customers can access their own consents
+  if (claims.role !== 'customer') {
+    return c.json(
+      { error: { code: 'FORBIDDEN', message: 'Only customers can view consents' } },
+      403,
+    );
+  }
+
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  const db = createDb(dbUrl);
+  const { consents } = await import('@vyloop/db');
+  const { eq, and } = await import('drizzle-orm');
+
+  const rows = await db
+    .select()
+    .from(consents)
+    .where(and(eq(consents.businessId, claims.business_id), eq(consents.customerId, claims.sub)));
+
+  const consentsMap = rows.reduce((acc, row) => {
+    acc[row.consentType] = row.granted;
+    return acc;
+  }, {} as Record<string, boolean>);
+
+  return c.json({ consents: consentsMap });
+});
+
+app.post('/v1/customers/me/consents', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return c.json(
+      { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing or invalid Authorization header' } },
+      401,
+    );
+  }
+
+  const secret = c.env.JWT_SECRET;
+  if (!secret) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'JWT secret not configured' } }, 500);
+  }
+
+  let claims: JwtClaims;
+  try {
+    claims = await validateToken(secret, authHeader.slice(7));
+  } catch {
+    return c.json(
+      { error: { code: 'AUTH_TOKEN_INVALID', message: 'Token invalid or expired' } },
+      401,
+    );
+  }
+
+  if (claims.role !== 'customer') {
+    return c.json(
+      { error: { code: 'FORBIDDEN', message: 'Only customers can update consents' } },
+      403,
+    );
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'The body must be JSON.' } },
+      422,
+    );
+  }
+
+  const candidate = body as Record<string, unknown>;
+  if (typeof candidate.consentType !== 'string' || candidate.consentType.trim() === '') {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'consentType is required and must be a non-empty string.' } },
+      422,
+    );
+  }
+
+  if (typeof candidate.granted !== 'boolean') {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'granted is required and must be a boolean.' } },
+      422,
+    );
+  }
+
+  const allowedTypes = ['nearby_notifications', 'promotions', 'whatsapp'];
+  if (!allowedTypes.includes(candidate.consentType)) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'Invalid consentType.' } },
+      422,
+    );
+  }
+
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  const db = createDb(dbUrl);
+  const { consents } = await import('@vyloop/db');
+  const { eq, and } = await import('drizzle-orm');
+  const { sql } = await import('drizzle-orm');
+
+  await db
+    .insert(consents)
+    .values({
+      businessId: claims.business_id,
+      customerId: claims.sub,
+      consentType: candidate.consentType,
+      granted: candidate.granted,
+      grantedAt: candidate.granted ? sql`now()` : null,
+      revokedAt: candidate.granted ? null : sql`now()`,
+    })
+    .onConflictDoUpdate({
+      target: [consents.businessId, consents.customerId, consents.consentType],
+      set: {
+        granted: candidate.granted,
+        grantedAt: candidate.granted ? sql`now()` : null,
+        revokedAt: candidate.granted ? null : sql`now()`,
+      },
+    });
+
+  return c.json({ ok: true });
+});
+
+
 // ---------------------------------------------------------------------------
 
 app.get('/v1/businesses/:id', async (c) => {

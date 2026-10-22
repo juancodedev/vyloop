@@ -1,3 +1,7 @@
+import { useEffect, useState } from 'react';
+
+import { api } from '../lib/api';
+
 const consentOptions = [
   {
     name: 'promotions',
@@ -15,25 +19,67 @@ const consentOptions = [
   },
 ] as const;
 
+interface ConsentState {
+  [key: string]: boolean;
+}
+
 export function ConsentList() {
+  const [consents, setConsents] = useState<ConsentState>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadConsents = async () => {
+      try {
+        const data = await api.getCustomerConsents();
+        setConsents(data.consents || {});
+      } catch (e) {
+        console.error('Failed to load consents', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadConsents();
+  }, []);
+
+  const handleChange = async (name: string, granted: boolean) => {
+    setSaving(name);
+    try {
+      await api.updateCustomerConsent({ consentType: name, granted });
+      setConsents((prev) => ({ ...prev, [name]: granted }));
+    } catch (e) {
+      console.error('Failed to update consent', e);
+      setConsents((prev) => ({ ...prev, [name]: !granted }));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <fieldset className="club-consent">
+        <legend className="club-consent__title">Comunicaciones</legend>
+        <p className="club-consent__intro">Cargando preferencias…</p>
+      </fieldset>
+    );
+  }
+
   return (
-    <fieldset className="club-consent" disabled>
+    <fieldset className="club-consent">
       <legend className="club-consent__title">Comunicaciones</legend>
-      <p className="club-consent__intro">
-        Estos controles todavía no están disponibles. No se guardan como consentimientos.
-      </p>
       <div className="club-consent__rows">
         {consentOptions.map((option) => {
           const descriptionId = `${option.name}-description`;
+          const checked = consents[option.name] ?? false;
 
           return (
             <label className="club-consent__row" key={option.name}>
               <input
                 type="checkbox"
                 name={option.name}
-                checked={false}
-                readOnly
-                disabled
+                checked={checked}
+                onChange={(e) => handleChange(option.name, e.target.checked)}
+                disabled={saving === option.name}
                 aria-describedby={descriptionId}
               />
               <span className="club-consent__copy">
@@ -42,7 +88,9 @@ export function ConsentList() {
                   {option.description}
                 </span>
               </span>
-              <span className="club-consent__state">No disponible todavía · Desactivado</span>
+              <span className="club-consent__state">
+                {saving === option.name ? 'Guardando…' : checked ? 'Activado' : 'Desactivado'}
+              </span>
             </label>
           );
         })}

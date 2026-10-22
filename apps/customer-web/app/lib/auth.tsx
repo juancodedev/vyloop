@@ -110,24 +110,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore session from localStorage on mount
   useEffect(() => {
-    const jwt = localStorage.getItem(JWT_KEY);
-    const stored = localStorage.getItem(CUSTOMER_KEY);
+    queueMicrotask(() => {
+      const jwt = localStorage.getItem(JWT_KEY);
+      const stored = localStorage.getItem(CUSTOMER_KEY);
 
-    if (jwt && stored && isTokenValid(jwt)) {
-      try {
-        setCustomer(JSON.parse(stored));
-      } catch {
-        // Corrupted data — clear everything
+      if (jwt && stored && isTokenValid(jwt)) {
+        try {
+          setCustomer(JSON.parse(stored));
+        } catch {
+          // Corrupted data — clear everything
+          localStorage.removeItem(JWT_KEY);
+          localStorage.removeItem(CUSTOMER_KEY);
+        }
+      } else if (jwt && !isTokenValid(jwt)) {
+        // Expired token — clean up
         localStorage.removeItem(JWT_KEY);
         localStorage.removeItem(CUSTOMER_KEY);
       }
-    } else if (jwt && !isTokenValid(jwt)) {
-      // Expired token — clean up
-      localStorage.removeItem(JWT_KEY);
-      localStorage.removeItem(CUSTOMER_KEY);
-    }
 
-    setIsLoading(false);
+      setIsLoading(false);
+    });
   }, []);
 
   const login = useCallback(
