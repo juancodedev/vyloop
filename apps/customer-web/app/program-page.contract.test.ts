@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-const pagePath = new URL('../public/program/index.html', import.meta.url).pathname;
+const pagePath = new URL('../public/program.html', import.meta.url).pathname;
 const page = readFileSync(pagePath, 'utf8');
 
 /**

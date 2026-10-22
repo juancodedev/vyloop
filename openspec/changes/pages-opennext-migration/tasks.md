@@ -61,13 +61,13 @@ Items marked **(verify)** depend on OpenNext or Cloudflare behaviour that MUST b
 
 ## Unit 2: Customer web on OpenNext
 
-- [ ] 2.1 `apps/customer-web/package.json` — same dependency and script change as 1.1
-- [ ] 2.2 `apps/customer-web/open-next.config.ts` and `apps/customer-web/wrangler.jsonc` — Worker `vyloop-customer-web`, as in 1.2-1.3
-- [ ] 2.3 `apps/customer-web/next.config.mjs` — keep the `/program` rewrite and both production guards; rewrite the comment at lines 6-15 so it explains the Workers-with-assets routing instead of Pages advanced mode
-- [ ] 2.4 `apps/customer-web/app/program-route.contract.test.ts` — keep the assertions (rewrite present, destination exists, no `public/_redirects`); rewrite the header comment (lines 11-23) for the new runtime
-- [ ] 2.5 Served-request proof of `/program`: run the preview, request `/program`, record status 200 and the page title in the PR description **(verify assets-vs-Worker routing order)**
-- [ ] 2.6 `.github/workflows/deploy.yml` (`deploy-customer-web`, lines 523-571) — build with the OpenNext script, keep `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` and `NEXT_PUBLIC_VAPID_PUBLIC_KEY` on the build step, deploy with `wrangler deploy`
-- [ ] 2.7 Verify on the Worker hostname: `/`, `/register?biz=<slug>`, `/login`, `/profile`, `/program`, the service worker `/sw.js` and `/manifest.webmanifest` (push transport depends on both)
+- [x] 2.1 `apps/customer-web/package.json` — same dependency and script change as 1.1
+- [x] 2.2 `apps/customer-web/open-next.config.ts` and `apps/customer-web/wrangler.jsonc` — Worker `vyloop-customer-web`, as in 1.2-1.3
+- [x] 2.3 `apps/customer-web/next.config.mjs` — keep the `/program` rewrite and both production guards; rewrite the comment at lines 6-15 so it explains the Workers-with-assets routing instead of Pages advanced mode
+- [x] 2.4 `apps/customer-web/app/program-route.contract.test.ts` — keep the assertions (rewrite present, destination exists, no `public/_redirects`); rewrite the header comment (lines 11-23) for the new runtime
+- [x] 2.5 Served-request proof of `/program`: run the preview, request `/program`, record status 200 and the page title in the PR description **(verify assets-vs-Worker routing order)** — measured: the directory form `public/program/index.html` made the assets layer answer `/program` with a `307` to `/program/` before the app saw the request, and the Next rewrite to `/program/index.html` returned Next's own `404` because a public file is served by the assets binding, not by a rewrite. Renaming the page to `public/program.html` serves `/program` with `200` directly, so the rewrite was removed rather than re-proved: the reason it existed was a Pages-era limitation that Workers static assets do not have
+- [x] 2.6 `.github/workflows/deploy.yml` (`deploy-customer-web`, lines 523-571) — build with the OpenNext script, keep `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` and `NEXT_PUBLIC_VAPID_PUBLIC_KEY` on the build step, deploy with `wrangler deploy`
+- [x] 2.7 Verify on the Worker hostname: `/`, `/register?biz=<slug>`, `/login`, `/profile`, `/program`, the service worker `/sw.js` and `/manifest.webmanifest` (push transport depends on both) — measured: all `200`, as do `/`, `/login`, `/profile` and `/register?biz=<slug>`
 
 ## Unit 3: Hostname cut-over
 

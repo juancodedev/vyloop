@@ -1,20 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // `/program` must open the programme page on its own. Next.js serves files in
-  // `public/` at the root but does not resolve a directory index, so
-  // `public/program/index.html` is reachable at `/program/index.html` and nowhere
-  // else. That URL is what went to Google's publishing review, and a link that
-  // has to carry `.html` reads as an unfinished deployment.
-  //
-  // This lives here rather than in a `public/_redirects` file because
-  // `@cloudflare/next-on-pages` emits a `_worker.js`, which puts the project in
-  // Cloudflare's advanced mode — and in advanced mode Pages ignores
-  // `_redirects` entirely. The file was deployed, it was in the upload, and it
-  // did nothing: `/program` kept returning 404 from a build that looked correct
-  // on disk. Only the Worker's own routing is consulted.
-  async rewrites() {
-    return [{ source: '/program', destination: '/program/index.html' }];
-  },
   eslint: {
     // ESLint false positives on relative imports — webpack resolves correctly
     ignoreDuringBuilds: true,
