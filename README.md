@@ -430,6 +430,45 @@ Ver [docs/](./docs) para:
 
 ---
 
+## Cambio de hostname (Unit 3 de `pages-opennext-migration`)
+
+**Esto está documentado para que no se nos olvide.**
+
+### Lo que está atado al hostname viejo
+
+`vyloop-customer-web.pages.dev` está impreso en **QR de papel** en mostadores y grabado en **pases ya emitidos** en Google Wallet. Ninguno se puede redesplegar.
+
+### Lo que se puede cambiar mañana (sin re-review de Google)
+
+| Qué | Variable | Dónde se usa |
+|---|---|---|
+| Links del pas (`/profile`, `/profile/history`) | `WALLET_CUSTOMER_WEB_BASE_URL` | `workers/wallet/src/helpers.ts`, `workers/wallet/wrangler.jsonc`, `apps/gateway/wrangler.jsonc` |
+| Redirector en Pages (`vyloop-customer-web.pages.dev` → Worker) | `_redirects` en `tooling/pages-redirect/` | `wrangler pages deploy tooling/pages-redirect/customer-web --project-name=vyloop-customer-web` |
+| Redirector del dashboard | `_redirects` en `tooling/pages-redirect/dashboard/` | `wrangler pages deploy tooling/pages-redirect/dashboard --project-name=vyloop-dashboard` |
+
+> **Regla práctica:** si comprás `vyloop.app`, cambias `WALLET_CUSTOMER_WEB_BASE_URL` al Worker de customer-web en el dominio nuevo, y actualizás los dos redirectores en Pages. Los QR de papel y los pases existentes siguen funcionando.
+
+### Lo que NO se puede cambiar sin re-review de Google
+
+| Qué | Variable | Por qué |
+|---|---|---|
+| `homepageUri` (link principal "Programa de lealtad" del pas) | `WALLET_WEB_BASE_URL` (gateway) | Google lo valida en review; cambiar el host manda la clase a re-review y una clase revisada no vuelve a draft |
+| `callbackUrl` (donde Google POSTea save/delete) | `WALLET_WEB_BASE_URL` (gateway) | Se escribe en la clase al insertar; esa clase reporta a ese host para toda su vida |
+
+> **Regla práctica:** el gateway (`WALLET_WEB_BASE_URL`) se asienta **antes de emitir la primera clase**. Después es intocable.
+
+### Por qué hay dos variables separadas
+
+La separación existe **para esto**: que puedas mover el front del cliente (`customer-web`) sin tocar lo que Google revisa (`homepageUri`) ni lo que Google callbackea (`callbackUrl`). Fue una decisión de diseño deliberada — no un accidente.
+
+### El redirector mata el zombi
+
+Antes de Unit 3, el proyecto de Pages servía su último build — **200 OK pero código stale**. Eso es peor que un 404 porque parece sano. El redirector 301 lo reemplaza; el hostname viejo ahora va directo al Worker actual.
+
+> **Detalle técnico:** el redirector **no lleva `_worker.js`**. Un Pages project en modo avanzado ignora `_redirects` — ese era el bug de `next-on-pages` que hacía que `/program` devolviera 404 desde un build que parecía correcto en disco. Este archivo no repite ese error.
+
+---
+
 ## License
 
 TODO — not yet licensed.
