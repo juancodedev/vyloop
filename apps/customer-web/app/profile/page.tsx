@@ -323,7 +323,7 @@ export default function ProfilePage() {
       <ConsentList />
 
       {pushSupported() && (
-        <section className="club-activity" aria-label="Notificaciones" style={{ marginTop: '1.5rem' }}>
+        <section className="club-activity club-push" aria-label="Notificaciones">
           <h2 className="club-activity__title">Notificaciones</h2>
           <button
             type="button"
@@ -348,7 +348,7 @@ export default function ProfilePage() {
           >
             {pushLoading ? 'Activando…' : 'Activar notificaciones push'}
           </button>
-          {pushState && <p style={{ marginTop: '0.5rem' }}>{pushState}</p>}
+          {pushState && <p className="club-push__status">{pushState}</p>}
         </section>
       )}
 

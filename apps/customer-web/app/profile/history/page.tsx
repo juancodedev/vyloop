@@ -106,7 +106,10 @@ export default function HistoryPage() {
 
   useEffect(() => {
     if (!customer) return;
-    void Promise.resolve().then(() => load(filter));
+    // Loading must flip synchronously so the filter shows its loading state in
+    // the same render as the click; deferring it lets stale rows show through.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load(filter);
   }, [customer, filter, load]);
 
   if (isLoading || (fetching && !answered)) {

@@ -472,7 +472,7 @@ describe('profile pass behavior', () => {
   it('shows interactive consent controls that load from the API', async () => {
     await renderPage();
 
-    const _group = screen.getByRole('group', { name: 'Comunicaciones' });
+    const group = screen.getByRole('group', { name: 'Comunicaciones' });
     expect((group as HTMLFieldSetElement).disabled).toBe(false);
 
     // Wait for checkboxes to appear (ConsentList finishes loading)
