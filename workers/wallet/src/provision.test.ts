@@ -555,8 +555,8 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
     // The regression this replaces, and why the default changed.
     //
     // The previous default pointed `homepageUri` at the customer web's
-    // `/program`. The dashboard is worse still: a `next-on-pages` static export
-    // whose whole page is 9,638 bytes of which **18** are text, so a reviewer
+    // `/program`. The dashboard is worse still: it renders on the client, so
+    // its whole page is 9,638 bytes of which **18** are text, and a reviewer
     // opening it reads a `<title>` and nothing else.
     const store = fakeStore();
     const client = fakeClient();

@@ -93,9 +93,9 @@ describe('GET /p/{slug} through the gateway', () => {
   });
 
   it('puts the merchant name in the served bytes', async () => {
-    // The reason this page is in the gateway at all. The dashboard is a
-    // `next-on-pages` static export whose HTML is 9,638 bytes of which 18 are
-    // text; Google's reviewer would read a `<title>` and nothing else.
+    // The reason this page is in the gateway at all. The dashboard renders on
+    // the client, so its HTML is 9,638 bytes of which 18 are text; Google's
+    // reviewer would read a `<title>` and nothing else.
     const res = await app.fetch(new Request('https://api.test/p/cafe-central'), mockEnv());
 
     const body = await res.text();

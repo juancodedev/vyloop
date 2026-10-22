@@ -197,12 +197,12 @@ export const DEFAULT_WALLET_MEDIA_BASE_URL = 'https://media.juancode.dev';
  *
  * - `vyloop-customer-web.pages.dev/program` is a server component and serves
  *   5,917 characters of visible text.
- * - The dashboard is a `next-on-pages` static export. Its whole page is 9,638
- *   bytes of which **18** are text — every byte of content is fetched from the
- *   client, so the HTML a crawler reads is empty.
+ * - The dashboard renders on the client. Its whole page is 9,638 bytes of
+ *   which **18** are text — every byte of content is fetched from the client,
+ *   so the HTML a crawler reads is empty.
  *
- * A review page placed on the static export would hand the reviewer a `<title>`
- * and nothing else.
+ * A review page placed on the dashboard would hand the reviewer a `<title>` and
+ * nothing else.
  *
  * ## Why this host, and why it cannot be changed later
  *

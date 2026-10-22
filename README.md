@@ -425,8 +425,8 @@ Ver [docs/](./docs) para:
 
 1. **quality** — lint + typecheck + test (105+ tests)
 2. **deploy-workers** — 8 workers a Cloudflare Workers (matrix paralelo)
-3. **deploy-dashboard** — build next-on-pages + Pages deploy
-4. **deploy-customer-web** — build next-on-pages + Pages deploy
+3. **deploy-dashboard** — OpenNext build + Worker deploy
+4. **deploy-customer-web** — OpenNext build + Worker deploy
 
 ---
 
