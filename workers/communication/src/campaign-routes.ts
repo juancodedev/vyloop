@@ -1,9 +1,11 @@
-import { createDb, messageLog } from '@vyloop/db';
+import { createDb, messageLog, branches } from '@vyloop/db';
 import { PUSH_CAMPAIGN_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { getRequestId } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+
+import { findBranchesInRadius } from '../../../packages/db/src/proximity';
 
 import type { Bindings } from './helpers';
 import { extractAuthHeaders, withRls } from './helpers';
@@ -247,6 +249,8 @@ router.post('/v1/communication/push/campaigns', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.message } }, 422);
   }
 
+  const dryRun = c.req.query('dry_run') === 'true';
+
   const db = createDb(c.env.DATABASE_URL);
   await withRls(db, businessId);
 
@@ -256,12 +260,10 @@ router.post('/v1/communication/push/campaigns', async (c) => {
   const referenceId = parsed.value.reference_id ?? crypto.randomUUID();
 
   // -----------------------------------------------------------------------
-  // The duplicate probe
+  // The duplicate probe (skipped on dry-run: a preview is not a composition)
   // -----------------------------------------------------------------------
-  // The rows of a campaign carry `<reference id>:<the subscription id>`, so
-  // the campaign's own rows are found by the prefix. A campaign composed
-  // twice is one campaign, and the second composition sends nothing.
-  const [existing] = await db
+  if (!dryRun) {
+    const [existing] = await db
     .select({ id: messageLog.id })
     .from(messageLog)
     .where(
@@ -288,12 +290,41 @@ router.post('/v1/communication/push/campaigns', async (c) => {
       409,
     );
   }
+  }
 
   // -----------------------------------------------------------------------
   // The audience
   // -----------------------------------------------------------------------
   // Resolved on the server, from the interactions at the target's venues.
   const audience = await resolveCampaignAudience(db, businessId, parsed.value.target);
+
+  // Per-branch breakdown (name + distance) for the preview/detail views.
+  let perBranch: Array<{ branch_id: string; name: string; distance_m: number }> = [];
+  if ('branch_id' in parsed.value.target) {
+    const [branch] = await db
+      .select({ id: branches.id, name: branches.name })
+      .from(branches)
+      .where(eq(branches.id, parsed.value.target.branch_id))
+      .limit(1);
+    if (branch) {
+      perBranch = [{ branch_id: branch.id, name: branch.name, distance_m: 0 }];
+    }
+  } else {
+    const found = await findBranchesInRadius(db, {
+      businessId,
+      latitude: parsed.value.target.latitude,
+      longitude: parsed.value.target.longitude,
+      radiusMeters: parsed.value.target.radius_m,
+    });
+    perBranch = found.map((b) => ({ branch_id: b.id, name: b.name, distance_m: b.distanceMeters }));
+  }
+
+  if (dryRun) {
+    return c.json(
+      { reference_id: referenceId, audience_size: audience.length, per_branch: perBranch },
+      202,
+    );
+  }
 
   const payload: PushCampaignPayload = {
     business_id: businessId,
