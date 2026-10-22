@@ -195,6 +195,25 @@
           "name": "idx_reward_branches_branch"
         }
       ]
+    },
+    {
+      "tag": "0022_flimsy_red_skull",
+      "when": 1792698118774,
+      "hash": "9934dc3b9bba43f6bbd4ff6636514d1844827da94392766ca6116d4b09290783",
+      "evidence": [
+        {
+          "kind": "table",
+          "name": "push_campaigns"
+        },
+        {
+          "kind": "constraint",
+          "name": "push_campaigns_business_id_tenants_id_fk"
+        },
+        {
+          "kind": "index",
+          "name": "idx_push_campaigns_business"
+        }
+      ]
     }
   ]
 }
