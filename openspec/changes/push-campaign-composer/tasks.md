@@ -8,30 +8,30 @@
 |
 ## Unit 3: Campaign Detail Page
 
-- [ ] 3.1 `apps/dashboard/src/app/dashboard/communication/campaigns/[referenceId]/page.tsx`:
+- [x] 3.1 `apps/dashboard/src/app/dashboard/communication/campaigns/[referenceId]/page.tsx`:
   - Shows title, body, link, target type, audience size, delivered/failed/skipped counts
   - Per-branch breakdown for radius targets (name, distance, delivered, failed)
   - "Reenviar" button: POST same payload (idempotent via reference_id)
   - Toast confirmation on resend, auto-refresh counts
 
-- [ ] 3.2 `apps/dashboard/src/app/dashboard/communication/campaigns/page.tsx`:
+- [x] 3.2 `apps/dashboard/src/app/dashboard/communication/campaigns/page.tsx`:
   - Make table rows clickable → navigate to detail page
   - Add "Ver detalle" button in actions column
 
-- [ ] 3.3 Tests en `specs/growth-dashboard` "Campaign Detail"
+- [x] 3.3 Tests en `specs/growth-dashboard` "Campaign Detail"
 
 ## Unit 4: Dry-Run Endpoint (Worker)
 
-- [ ] 4.1 `workers/communication/src/campaign-routes.ts`:
+- [x] 4.1 `workers/communication/src/campaign-routes.ts`:
   - Add `?dry_run=true` query param to `POST /v1/communication/push/campaigns`
   - Same validation and audience resolution as real compose
   - Does NOT publish `PushCampaignRequested` event
   - Does NOT write to `messageLog`
   - Returns `{ reference_id, audience_size, per_branch }` with generated UUID
 
-- [ ] 4.2 Tests en `specs/communication-push` "Dry-run endpoint"
+- [x] 4.2 Tests en `specs/communication-push` "Dry-run endpoint"
 
-- [ ] 4.3 Update `specs/communication-push` with dry-run behavior
+- [x] 4.3 Update `specs/communication-push` with dry-run behavior
 
 ---
 
