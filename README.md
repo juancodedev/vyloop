@@ -145,6 +145,23 @@ alta, y es lo mismo que imprime como QR.
 8. Opcional: ingresá puntos a canjear como descuento
 9. **Cobrar** → asigna puntos, registra la venta, muestra recibo
 
+### Demo: Push Campaign Composer
+
+1. Entrá a [vyloop.juancode.dev](https://vyloop.juancode.dev)
+2. Login con email `demo@cafecentral.com` / contraseña `demo123`
+3. Navegá a **Comunicación > Campañas push**
+4. Click en **Nueva campaña**
+5. Completá:
+   - **Título** (máx 40 caracteres)
+   - **Cuerpo** (máx 300 caracteres)
+   - **Link opcional** (debe ser URL del dominio permitido)
+   - **Objetivo**: elegí "Una sede" (dropdown) o "Radio" (lat/long + radio en metros, máx 50 km)
+   - Opcional: **Usar mi ubicación** (solo HTTPS/localhost) para autocompletar lat/long
+   - **Referencia** opcional (clave de idempotencia, auto-generada si vacío)
+4. Click **Previsualizar audiencia** → muestra `audience_size` + breakdown por sede (sin enviar)
+5. Click **Enviar campaña** → toast con `reference_id` y `audience_size`, navega al detalle
+6. En el detalle: ver métricas, breakdown por sede, botón **Reenviar** (idempotente)
+
 ### Demo: Dashboard
 
 1. Entrá a [vyloop.juancode.dev](https://vyloop.juancode.dev)
@@ -427,6 +444,12 @@ Ver [docs/](./docs) para:
 2. **deploy-workers** — 8 workers a Cloudflare Workers (matrix paralelo)
 3. **deploy-dashboard** — OpenNext build + Worker deploy
 4. **deploy-customer-web** — OpenNext build + Worker deploy
+
+> 📝 **Recordatorio:** Cada PR que añada features debe actualizar:
+> - `README.md` — sección de demos, links, o features nuevas
+> - `openspec/changes/<feature>/specs/` — deltas de spec (ADDED/MODIFIED/REMOVED Requirements)
+> - `openspec/changes/<feature>/tasks.md` — tareas completadas
+> - Si es un feature nuevo: crear `openspec/changes/<feature>/` con proposal.md, specs/, tasks.md
 
 ---
 
