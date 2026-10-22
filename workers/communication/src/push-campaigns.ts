@@ -264,6 +264,9 @@ export async function handlePushCampaignRequested(
         // The campaign's own reference. The delivery appends each browser's
         // subscription id, which makes `<campaign>:<subscription>`.
         reference_id: campaignReferenceId,
+        target: payload.target,
+        target_type: 'branch_id' in payload.target ? 'branch' : 'radius',
+        audience_size: audience.length,
       },
       businessId,
       env,

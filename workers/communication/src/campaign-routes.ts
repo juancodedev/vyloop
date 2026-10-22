@@ -347,4 +347,120 @@ router.post('/v1/communication/push/campaigns', async (c) => {
   return c.json({ reference_id: referenceId, audience_size: audience.length }, 202);
 });
 
+
+// ---------------------------------------------------------------------------
+// GET /v1/communication/push/campaigns  (list)
+// ---------------------------------------------------------------------------
+router.get('/v1/communication/push/campaigns', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth, OPERATOR_ROLE_REQUIRED_MESSAGE);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
+
+  const page = Math.max(1, Number(c.req.query('page') ?? '1') || 1);
+  const perPage = Math.min(100, Math.max(1, Number(c.req.query('per_page') ?? '20') || 20));
+  const statusFilter = c.req.query('status');
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const rows = await db.execute(sql`
+    SELECT
+      split_part(content->>'reference_id', ':', 1) AS reference_id,
+      (array_agg(content->>'title'))[1] AS title,
+      (array_agg(content->>'target_type'))[1] AS target_type,
+      (array_agg(content->>'audience_size'))[1] AS audience_size,
+      (array_agg(content->>'target'))[1] AS target,
+      (array_agg(content->>'body'))[1] AS body,
+      (array_agg(content->>'url'))[1] AS url,
+      min(created_at) AS created_at,
+      count(*) FILTER (WHERE status = 'sent')::int AS delivered,
+      count(*) FILTER (WHERE status = 'failed')::int AS failed,
+      count(*) FILTER (WHERE status = 'queued')::int AS skipped
+    FROM message_log
+    WHERE business_id = ${businessId}
+      AND channel = 'push'
+      AND content->>'reference_id' IS NOT NULL
+    GROUP BY split_part(content->>'reference_id', ':', 1)
+    ORDER BY min(created_at) DESC
+    LIMIT ${perPage} OFFSET ${(page - 1) * perPage}
+  `);
+
+  const campaigns = (rows as any).rows ?? rows;
+  const list = (Array.isArray(campaigns) ? campaigns : []).map((r: any) => ({
+    reference_id: r.reference_id,
+    title: r.title,
+    target_type: r.target_type ?? 'branch',
+    audience_size: Number(r.audience_size ?? 0),
+    delivered: Number(r.delivered ?? 0),
+    failed: Number(r.failed ?? 0),
+    skipped: Number(r.skipped ?? 0),
+    created_at: r.created_at,
+  }));
+
+  return c.json({ campaigns: list, total: list.length });
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/communication/push/campaigns/:referenceId  (detail)
+// ---------------------------------------------------------------------------
+router.get('/v1/communication/push/campaigns/:referenceId', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth, OPERATOR_ROLE_REQUIRED_MESSAGE);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
+  const referenceId = c.req.param('referenceId');
+
+  const db = createDb(c.env.DATABASE_URL);
+  await withRls(db, businessId);
+
+  const rows = await db.execute(sql`
+    SELECT
+      split_part(content->>'reference_id', ':', 1) AS reference_id,
+      (array_agg(content->>'title'))[1] AS title,
+      (array_agg(content->>'body'))[1] AS body,
+      (array_agg(content->>'url'))[1] AS url,
+      (array_agg(content->>'target'))[1] AS target,
+      (array_agg(content->>'target_type'))[1] AS target_type,
+      (array_agg(content->>'audience_size'))[1] AS audience_size,
+      min(created_at) AS created_at,
+      count(*) FILTER (WHERE status = 'sent')::int AS delivered,
+      count(*) FILTER (WHERE status = 'failed')::int AS failed,
+      count(*) FILTER (WHERE status = 'queued')::int AS skipped
+    FROM message_log
+    WHERE business_id = ${businessId}
+      AND channel = 'push'
+      AND split_part(content->>'reference_id', ':', 1) = ${referenceId}
+    GROUP BY split_part(content->>'reference_id', ':', 1)
+  `);
+
+  const result = (rows as any).rows ?? rows;
+  const r = Array.isArray(result) ? result[0] : null;
+  if (!r) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Campaign not found.' } }, 404);
+  }
+
+  let target: any = null;
+  try { target = r.target ? JSON.parse(r.target) : null; } catch { target = null; }
+
+  return c.json({
+    reference_id: r.reference_id,
+    title: r.title,
+    body: r.body,
+    url: r.url && r.url !== '/' ? r.url : undefined,
+    target: target ?? {},
+    target_type: r.target_type ?? 'branch',
+    audience_size: Number(r.audience_size ?? 0),
+    delivered: Number(r.delivered ?? 0),
+    failed: Number(r.failed ?? 0),
+    skipped: Number(r.skipped ?? 0),
+    per_branch: [],
+    created_at: r.created_at,
+  });
+});
+
 export default router;
