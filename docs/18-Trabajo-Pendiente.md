@@ -17,7 +17,7 @@ de lo que hay que implementar.
 | `tenant-isolation-rls` | RLS desplegado: el aislamiento entre comercios deja de depender de que cada ruta filtre por `business_id`; los barridos sin tenant tienen un camino explícito. **Hallazgo:** `withRls` hoy no tiene efecto (`set_config(…, true)` fuera de una transacción) y los workers conectan como dueño de las tablas | Grande | Alto |
 | `campaign-delivery-idempotency` | Un push de campaña llega una sola vez aunque dos consumidores o dos POST compitan | Grande | Alto |
 | `message-log-schema-alignment` | `message_log` de producción igual al schema, y el gate de drift aprende a verificar `ALTER COLUMN` y `DROP` | Mediano | Bajo |
-| `pages-opennext-migration` | `customer-web` y `dashboard` ya construyen y despliegan con OpenNext en lugar de `@cloudflare/next-on-pages` (en desuso): Unidades 1, 2 y 4 hechas (#268/#269, agente retirado del árbol de dependencias). **Queda la Unidad 3**, el cambio de hostname, que espera la decisión sobre los QR ya impresos y los pases ya emitidos | Mediano | Medio |
+| `pages-opennext-migration` | **Hecho.** `customer-web` y `dashboard` construyen y despliegan con OpenNext en lugar de `@cloudflare/next-on-pages` (agente retirado del árbol de dependencias). Unidades 1, 2, 3 y 4 completas: la Unidad 3 cambió el hostname via redirector 301 en Pages (`vyloop-customer-web.pages.dev` → Worker), preservando los QR impresos y los pases ya emitidos | Mediano | Medio |
 | `wallet-pass-correctness` | Saldo entero hacia Google, `member_code` al registrarse, y el comercio gestiona los pases | Mediano–Grande | Medio |
 
 ### Hecho — archivado en OpenSpec

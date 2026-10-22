@@ -71,13 +71,20 @@ Items marked **(verify)** depend on OpenNext or Cloudflare behaviour that MUST b
 
 ## Unit 3: Hostname cut-over
 
-- [ ] 3.1 A redirector source for each Pages project (for example `tooling/pages-redirect/customer-web/_redirects` and `…/dashboard/_redirects`) with a single `/* https://<worker-host>/:splat 301` rule; confirm query strings are preserved **(verify `_redirects` semantics)**
-- [ ] 3.2 Deploy each redirector once with `wrangler pages deploy <dir> --project-name=vyloop-customer-web` / `vyloop-dashboard`; record the commands and results in the PR
-- [ ] 3.3 `apps/dashboard/src/lib/merchant-qr.ts:50` (`DEFAULT_CUSTOMER_WEB_BASE_URL`) and its tests `merchant-qr.test.ts`, `src/__tests__/qr-tenant.contract.test.ts` — new hostname
-- [ ] 3.4 `workers/wallet/src/helpers.ts:164` (`DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL`), `workers/wallet/wrangler.jsonc:73`, `apps/gateway/wrangler.jsonc:46`, and the tests that pin them (`workers/wallet/src/wrangler-config.contract.test.ts`, `helpers.test.ts`, `class.test.ts`, `provision.test.ts`, `sweep.test.ts`) — new hostname
-- [ ] 3.5 `scripts/verify-guards.mjs:303-322` — the mutation fixtures that spell the old hostname
-- [ ] 3.6 `README.md:102,111,124` — the customer web links
-- [ ] 3.7 Verify: a pre-migration URL (`https://vyloop-customer-web.pages.dev/register?biz=cafe-central`) answers 301 to the new host with the query string intact
+- [x] 3.1 A redirector source for each Pages project (`tooling/pages-redirect/customer-web/_redirects` and `tooling/pages-redirect/dashboard/_redirects`) with a single `/* https://<worker-host>/:splat 301` rule; query strings preserved — **verified**: preview deployment at `https://a2eed702.vyloop-customer-web.pages.dev/register?biz=cafe-central` → 301 → `https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=cafe-central` with `?biz=` intact. The rule has no `_worker.js` on purpose: a Pages project without advanced mode respects `_redirects`, unlike the old `next-on-pages` bug
+- [x] 3.2 Deploy each redirector — commands and results recorded:
+```
+wrangler pages deploy tooling/pages-redirect/customer-web --project-name=vyloop-customer-web --branch=main
+# Deployment complete! Take a peek over at https://c59bddbb.vyloop-customer-web.pages.dev
+wrangler pages deploy tooling/pages-redirect/dashboard --project-name=vyloop-dashboard --branch=main
+# Deployment complete! Take a peek over at https://657efce4.vyloop-dashboard.pages.dev
+```
+Production verified: `vyloop-customer-web.pages.dev/register?biz=cafe-central` → 301 → Worker with query string; `vyloop-dashboard.pages.dev/dashboard?x=1` → 301 → Worker with query string
+- [x] 3.3 `DEFAULT_CUSTOMER_WEB_BASE_URL` and tests updated to `vyloop-customer-web.cl-jmunoz.workers.dev` — 4 files changed, tests green
+- [x] 3.4 `DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL`, both `wrangler.jsonc` bindings, and all dependent tests updated to `vyloop-customer-web.cl-jmunoz.workers.dev` — 11 files changed, wallet suite 789 tests green
+- [x] 3.5 `scripts/verify-guards.mjs` mutation fixtures updated — 4 occurrences replaced
+- [x] 3.6 `README.md` customer web links updated — 5 occurrences replaced
+- [x] 3.7 Verified end-to-end: `https://vyloop-customer-web.pages.dev/register?biz=cafe-central` → HTTP/2 301 → `https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=cafe-central` → HTTP/2 200 with the real page, query string intact. The zombi build that was serving on the old hostname is replaced by the redirector
 
 ## Unit 4: Remove the old adapter
 

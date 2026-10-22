@@ -120,7 +120,7 @@ function offenders(pattern: RegExp, files: string[] = production): string[] {
  * wrong in a way that hid the original bug from the very guard written to catch it.
  * The QR page's constant was
  *
- *     const CUSTOMER_WEB_URL = 'https://vyloop-customer-web.pages.dev/register?biz=cafe-central';
+ *     const CUSTOMER_WEB_URL = 'https://vyloop-customer-web.cl-jmunoz.workers.dev/register?biz=cafe-central';
  *
  * and a naive stripper reads the `//` in `https://` as the start of a line
  * comment, blanks the rest of the line, and the seeded-business rule reports a

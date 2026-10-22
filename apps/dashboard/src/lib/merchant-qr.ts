@@ -47,7 +47,7 @@
  * at build time, which is exactly when a Pages deploy has to be pointed at the right
  * origin.
  */
-export const DEFAULT_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+export const DEFAULT_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.cl-jmunoz.workers.dev';
 
 /**
  * The slug shape, identical to the gateway's.

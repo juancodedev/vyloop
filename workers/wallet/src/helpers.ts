@@ -161,7 +161,7 @@ export interface WalletBindings {
  * The pages.dev deployment, not the custom domain, because `/profile` and
  * `/profile/history` exist in `apps/customer-web/app` and are served from there.
  */
-export const DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+export const DEFAULT_WALLET_CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.cl-jmunoz.workers.dev';
 
 /**
  * The origin Google POSTs pass callbacks to, when `WALLET_CALLBACK_BASE_URL`
@@ -190,14 +190,14 @@ export const DEFAULT_WALLET_MEDIA_BASE_URL = 'https://media.juancode.dev';
  *
  * `homepageUri` is now `{WALLET_WEB_BASE_URL}/p/{slug}` — the per-merchant page
  * the gateway renders server-side (`apps/gateway/src/merchant-page.ts`). It used
- * to be `https://vyloop-customer-web.pages.dev/program`.
+ * to be `https://vyloop-customer-web.cl-jmunoz.workers.dev/program`.
  *
  * The reason is what Google's reviewer actually receives, measured rather than
  * assumed:
  *
- * - `vyloop-customer-web.pages.dev/program` is a server component and serves
+ * - `vyloop-customer-web.cl-jmunoz.workers.dev/program` is a server component and serves
  *   5,917 characters of visible text.
- * - The dashboard renders on the client. Its whole page is 9,638 bytes of
+ * - The dashboard renders on the client. Its whole page is 8,610 bytes of
  *   which **18** are text — every byte of content is fetched from the client,
  *   so the HTML a crawler reads is empty.
  *

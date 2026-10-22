@@ -13,7 +13,7 @@
     // offer a pass are listed: the customer web, and the operator console on the
     // dashboard. Comma-separated, no trailing slash, and the value is compared
     // against the request's own `Origin`.
-    "WALLET_ALLOWED_ORIGINS": "https://vyloop-customer-web.pages.dev,https://vyloop.juancode.dev",
+    "WALLET_ALLOWED_ORIGINS": "https://vyloop-customer-web.cl-jmunoz.workers.dev,https://vyloop.juancode.dev",
     // Not a secret, and not a fact we can read from Google. Google's publishing
     // approval is a single grant for the whole issuer account and this
     // deployment has not been granted it, so passes minted here only reach the
@@ -70,7 +70,7 @@
     // Building them from the gateway origin makes every link on every pass a
     // 404 — the `homepageUri` defect at a different URL, where nothing errors
     // and the link is simply a lie.
-    "WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.pages.dev",
+    "WALLET_CUSTOMER_WEB_BASE_URL": "https://vyloop-customer-web.cl-jmunoz.workers.dev",
 
     // Where Google POSTs save/delete callbacks for a class's passes. Same
     // gateway host as MEDIA and WEB, and kept separate for the same reason they

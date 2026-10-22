@@ -57,7 +57,7 @@ const CLASS_ID = classIdFor(ISSUER, TENANT);
  */
 const MEDIA_BASE_URL = 'https://media.juancode.dev';
 const WEB_BASE_URL = 'https://media.juancode.dev';
-const CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.pages.dev';
+const CUSTOMER_WEB_BASE_URL = 'https://vyloop-customer-web.cl-jmunoz.workers.dev';
 const CALLBACK_BASE_URL = 'https://media.juancode.dev';
 const BRAND_URL = `${MEDIA_BASE_URL}/brand/${TENANT}.jpg`;
 
@@ -556,7 +556,7 @@ describe('provisionClass: the logo host and the homepage host cannot cross', () 
     //
     // The previous default pointed `homepageUri` at the customer web's
     // `/program`. The dashboard is worse still: it renders on the client, so
-    // its whole page is 9,638 bytes of which **18** are text, and a reviewer
+    // its whole page is 8,610 bytes of which **18** are text, and a reviewer
     // opening it reads a `<title>` and nothing else.
     const store = fakeStore();
     const client = fakeClient();

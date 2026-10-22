@@ -56,7 +56,7 @@ const env = { DATABASE_URL: 'postgres://mock' };
  * The customer-web origin the CTA points at, injected so a test can prove the
  * *value* is used rather than a default baked into the renderer.
  */
-const CUSTOMER_WEB_BASE = 'https://vyloop-customer-web.pages.dev';
+const CUSTOMER_WEB_BASE = 'https://vyloop-customer-web.cl-jmunoz.workers.dev';
 
 /**
  * The two hosts the CTA must NOT resolve to.
