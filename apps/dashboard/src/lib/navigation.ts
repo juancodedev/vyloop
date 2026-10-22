@@ -49,6 +49,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'Comunicación',
     items: [
+      { label: 'Campañas', href: '/dashboard/communication/campaigns', icon: MessageSquare },
       { label: 'Plantillas', href: '/dashboard/communication/templates', icon: MessageSquare },
       { label: 'Mensajes', href: '/dashboard/communication/messages', icon: MessageSquare },
       { label: 'Flujos', href: '/dashboard/communication/workflows', icon: MessageSquare },
@@ -86,6 +87,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard/communication/templates': 'Plantillas',
   '/dashboard/communication/messages': 'Mensajes',
   '/dashboard/communication/workflows': 'Flujos',
+  '/dashboard/communication/campaigns': 'Campañas push',
   '/dashboard/communication/send': 'Enviar Mensaje',
 };
 
