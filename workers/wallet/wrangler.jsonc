@@ -104,4 +104,6 @@
   //
   // Adding a cron to this file will fail CI. That is the intended behaviour, not
   // a bug to work around: it means the account needs a plan that has room.
+,
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
 }
