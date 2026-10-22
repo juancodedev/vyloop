@@ -18,6 +18,14 @@
 //      (no current advisory matches it) is reported and passes. Forcing a stale
 //      entry out would make every dependency bump a red build.
 //
+// Rule 1 is about what the payload means, not about how many times to ask. A
+// single dropped socket is not a registry outage, and `ERR_SOCKET_TIMEOUT` on
+// one of three attempts told us nothing about the dependencies. So a transport
+// failure is retried a bounded number of times with a growing pause, and an
+// exhausted budget still blocks. The retry never touches a payload that carries
+// advisories: that is an answer even when `pnpm audit` exits 1, and retrying it
+// would hide a real finding behind a delay.
+//
 // The pure functions are exported for `check-audit.test.mjs`; the CLI is the
 // only part that touches the network. Like the other operational scripts, this
 // one is run by `Test operational scripts` in CI, not by `pnpm -r test`.
@@ -29,6 +37,17 @@ const ALLOWLIST_PATH = 'scripts/audit-allowlist.json';
 const SEVERE = new Set(['high', 'critical']);
 const REQUIRED_FIELDS = ['id', 'package', 'path', 'reason', 'acceptedBy', 'expires'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Three attempts, and the pauses are long enough to clear a dropped connection
+// without turning a real outage into a ten-minute job.
+const AUDIT_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [2_000, 8_000];
+
+// The ways "we could not reach the registry" reaches us. Everything else — a
+// parse error, an unexpected payload, an `EACCES` from a broken install — is not
+// the network and is not made better by asking again.
+const TRANSIENT =
+  /ERR_SOCKET_TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|socket hang up|ERR_NETWORK|UND_ERR_/i;
 
 const isoDate = (date) => date.toISOString().slice(0, 10);
 
@@ -49,6 +68,54 @@ export function parseAuditReport(stdout) {
     throw new Error('pnpm audit returned a non-object payload');
   }
   return parsed;
+}
+
+/** A synchronous pause: `main` is sync by design, so `setTimeout` is not available. */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+const detailOf = ({ error, stdout, stderr }) => {
+  if (error) return String(error.code || error.message || 'spawn error');
+  try {
+    const parsed = JSON.parse(stdout);
+    if (parsed?.error) return parsed.error.summary || parsed.error.code || 'unknown error';
+    if (parsed?.advisories && typeof parsed.advisories === 'object') return 'a report';
+  } catch {
+    // Not JSON. The text on stderr is the only clue there is.
+  }
+  return (stderr || '').trim().split('\n')[0] || 'no output';
+};
+
+/**
+ * Did this attempt fail to reach the registry, or did it bring an answer?
+ *
+ * Only the first is worth retrying. A payload with an `advisories` object is an
+ * answer even when the exit code is 1, and a payload with an `error` that is not
+ * a transport error (an auth failure, a malformed lockfile) would fail the same
+ * way three times.
+ */
+export function isTransientFailure({ error, stdout, stderr } = {}) {
+  if (error) {
+    return TRANSIENT.test(String(error.code || '')) || TRANSIENT.test(String(error.message || ''));
+  }
+
+  const text = `${stdout || ''}\n${stderr || ''}`.trim();
+  if (text === '') return false;
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    // Fall through to matching the raw text.
+  }
+
+  if (parsed && typeof parsed === 'object' && !parsed.error) return false;
+
+  const signal = parsed?.error
+    ? `${parsed.error.code || ''} ${parsed.error.summary || ''}`
+    : text;
+  return TRANSIENT.test(signal);
 }
 
 /** Validate the allowlist shape. Returns one message per unusable entry. */
@@ -255,10 +322,38 @@ function runPnpmAudit() {
   return spawnSync(command, ['audit', '--json'], {
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
+    // A hung request used to hold the job until the runner's own timeout. This
+    // bounds one attempt and turns it into a transport failure we can retry.
+    timeout: 90_000,
   });
 }
 
-export function main(argv = [], { runAudit = runPnpmAudit, now = new Date() } = {}) {
+/**
+ * Run the audit, retrying only transport failures.
+ *
+ * Returns the last attempt plus how many were made, so the report can say
+ * "after 3 attempts" instead of implying a single one.
+ */
+export function runAuditWithRetries({
+  runAudit = runPnpmAudit,
+  sleep = sleepSync,
+  onRetry = () => {},
+  attempts = AUDIT_ATTEMPTS,
+} = {}) {
+  let audit = runAudit();
+  let made = 1;
+
+  while (made < attempts && isTransientFailure(audit)) {
+    onRetry({ attempt: made + 1, of: attempts, detail: detailOf(audit) });
+    sleep(RETRY_DELAYS_MS[Math.min(made - 1, RETRY_DELAYS_MS.length - 1)]);
+    audit = runAudit();
+    made += 1;
+  }
+
+  return { audit, attempts: made };
+}
+
+export function main(argv = [], { runAudit = runPnpmAudit, now = new Date(), sleep = sleepSync } = {}) {
   const allowlistPath = flagValue(argv, '--allowlist', ALLOWLIST_PATH);
 
   let allowlist;
@@ -273,7 +368,18 @@ export function main(argv = [], { runAudit = runPnpmAudit, now = new Date() } = 
     return 1;
   }
 
-  const audit = runAudit();
+  const { audit } = runAuditWithRetries({
+    runAudit,
+    sleep,
+    onRetry: ({ attempt, of, detail }) => {
+      process.stdout.write(
+        `\n  Vyloop dependency audit\n  ${'-'.repeat(60)}\n` +
+          `  [retry] pnpm audit did not reach the registry (${detail}) — ` +
+          `attempt ${attempt} of ${of}\n`,
+      );
+    },
+  });
+
   if (audit.error) {
     process.stdout.write(
       formatReport({
