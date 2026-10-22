@@ -1,0 +1,19 @@
+{
+  // The Worker the OpenNext build produces. `main` and `assets.directory` are
+  // the paths the adapter emits, taken from its own `templates/wrangler.jsonc`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vyloop-customer-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
+  // No `r2_buckets`: there is no incremental cache. No `images` binding: this
+  // application has no `next/image` import.
+  //
+  // `public/sw.js` and `public/manifest.webmanifest` reach the browser through
+  // this assets binding, not through a Worker route. Push transport depends on
+  // both, so they are part of the preview check, not assumed.
+}
