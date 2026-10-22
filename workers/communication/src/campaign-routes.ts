@@ -5,11 +5,12 @@ import { requireOperatorRole } from '@vyloop/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 
+import { findBranchesInRadius } from '../../../packages/db/src/proximity';
+
 import type { Bindings } from './helpers';
 import { extractAuthHeaders, withRls } from './helpers';
 import type { PushCampaignPayload, PushCampaignTarget } from './push-campaigns';
 import { resolveCampaignAudience } from './push-campaigns';
-import { findBranchesInRadius } from '../../../packages/db/src/proximity';
 
 // ---------------------------------------------------------------------------
 // Composing a push campaign.
