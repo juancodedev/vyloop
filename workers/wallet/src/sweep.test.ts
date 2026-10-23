@@ -148,6 +148,10 @@ function remoteObject(id: string, balance: number, state: LoyaltyObject['state']
  * the test would see it.
  */
 class SweepStore implements WalletStore {
+  async getIssuerId(): Promise<string> {
+    throw new Error('getIssuerId is not used by sweep tests');
+  }
+
   readonly calls: Array<{ method: string; tenantId: string }> = [];
   readonly reconciliations: PassReconciliationUpdate[] = [];
   readonly lifecycles: PassLifecycleUpdate[] = [];
@@ -541,6 +545,7 @@ type FakeClient = {
   patchClass: Mock;
   insertObject: Mock;
   saveUriForJwt: Mock;
+  addMessage: Mock;
   /** The class ids `insertClass` was asked to create, in call order. */
   classesCreated: string[];
 };
@@ -627,6 +632,9 @@ function fakeGoogle(opts: {
       throw new Error('not used');
     }),
     saveUriForJwt: vi.fn(async () => {
+      throw new Error('not used');
+    }),
+    addMessage: vi.fn(async () => {
       throw new Error('not used');
     }),
     getObject: vi.fn(async (id: string) => remote.get(id) ?? null),

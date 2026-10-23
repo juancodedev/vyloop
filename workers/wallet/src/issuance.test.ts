@@ -106,6 +106,10 @@ interface Call {
 }
 
 class FakeStore implements WalletStore {
+  async getIssuerId(): Promise<string> {
+    throw new Error('getIssuerId is not used by the issuance tests');
+  }
+
   readonly calls: Call[] = [];
 
   constructor(

@@ -160,6 +160,14 @@ export interface PushNotification {
   offerId?: string;
 }
 
+/** Message accepted by Google's `loyaltyobject.addMessage` request. */
+export interface LoyaltyObjectMessage {
+  header: string;
+  body: string;
+  id: string;
+  messageType: 'TEXT' | 'TEXT_AND_NOTIFY';
+}
+
 export interface LoyaltyObject {
   /** `<issuerId>.member-<customerGlobalId>`. */
   id: string;

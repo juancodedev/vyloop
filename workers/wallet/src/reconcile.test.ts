@@ -8,6 +8,7 @@ import type { LoyaltyObject } from './object';
 import {
   PassPatchNotAppliedError,
   reconcilePass,
+  updatePassPushNotifications,
 } from './reconcile';
 import type {
   PassLifecycleUpdate,
@@ -69,6 +70,10 @@ function passRow(overrides: Partial<WalletPassRow> = {}): WalletPassRow {
 // ---------------------------------------------------------------------------
 
 class FakeStore implements WalletStore {
+  async getIssuerId(): Promise<string> {
+    throw new Error('getIssuerId is not used by the reconcile tests');
+  }
+
   readonly calls: Array<{ method: string; tenantId: string }> = [];
   readonly reconciliations: PassReconciliationUpdate[] = [];
   readonly lifecycles: PassLifecycleUpdate[] = [];
@@ -367,6 +372,7 @@ type FakeClient = GoogleWalletClient & {
   getClass: Mock;
   insertObject: Mock;
   listObjects: Mock;
+  addMessage: Mock;
 };
 
 /**
@@ -406,6 +412,9 @@ function fakeClient(remote: LoyaltyObject | null): FakeClient {
     }),
     listObjects: vi.fn(async () => ({ objects: [], nextPageToken: null })),
     saveUriForJwt: vi.fn(async () => {
+      throw new Error('not used');
+    }),
+    addMessage: vi.fn(async () => {
       throw new Error('not used');
     }),
   } as unknown as FakeClient;
@@ -1105,5 +1114,45 @@ describe('reconcilePass: a patch that provably did not apply', () => {
 
     expect(error).toBeInstanceOf(PassPatchNotAppliedError);
     expect((error as PassPatchNotAppliedError).objectId).toBe(OBJECT_ID);
+  });
+});
+
+describe('updatePassPushNotifications', () => {
+  it("uses the tenant program's stored class ID when adding a message", async () => {
+    client.addMessage.mockResolvedValue(fakeObject());
+
+    const updated = await updatePassPushNotifications(
+      { store, client, demoMode: false },
+      { tenantId: TENANT, customerId: CUSTOMER_ID },
+      [{ title: 'Nearby reward', body: 'A reward is ready.' }],
+    );
+
+    expect(updated).toBe(true);
+    expect(client.addMessage).toHaveBeenCalledWith(
+      OBJECT_ID,
+      classIdFor(ISSUER, TENANT),
+      expect.objectContaining({
+        header: 'Nearby reward',
+        body: 'A reward is ready.',
+        messageType: 'TEXT_AND_NOTIFY',
+      }),
+    );
+    expect(store.calls).toEqual([
+      { method: 'findPass', tenantId: TENANT },
+      { method: 'findProgram', tenantId: TENANT },
+    ]);
+  });
+
+  it('does not call Google when the tenant has no wallet program', async () => {
+    store = readyStore({ program: null });
+
+    const updated = await updatePassPushNotifications(
+      { store, client, demoMode: false },
+      { tenantId: TENANT, customerId: CUSTOMER_ID },
+      [{ title: 'Nearby reward', body: 'A reward is ready.' }],
+    );
+
+    expect(updated).toBe(false);
+    expect(client.addMessage).not.toHaveBeenCalled();
   });
 });

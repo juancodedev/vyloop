@@ -48,6 +48,10 @@ const CLASS_A = `${ISSUER}.tenant-${TENANT_A}`;
 const CLASS_B = `${ISSUER}.tenant-${TENANT_B}`;
 
 class FakeStore implements WalletStore {
+  async getIssuerId(): Promise<string> {
+    throw new Error('getIssuerId is not used by the callback path');
+  }
+
   /** Every method call, in order. The "nothing happened" assertions read this. */
   readonly calls: string[] = [];
 

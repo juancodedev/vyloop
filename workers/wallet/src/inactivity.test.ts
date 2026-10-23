@@ -128,6 +128,10 @@ interface SeedPass {
  * the fake does not quietly hide a cross-tenant bug by scoping itself.
  */
 class CountingStore implements WalletStore {
+  async getIssuerId(): Promise<string> {
+    throw new Error('getIssuerId is not used by inactivity tests');
+  }
+
   readonly calls: string[] = [];
   /** Every mutating call, in order. Empty means nothing was written. */
   readonly writes: Array<{ method: string; value: unknown }> = [];
@@ -356,6 +360,9 @@ class CountingClient implements GoogleWalletClient {
   async getObject(objectId: string): Promise<LoyaltyObject | null> {
     this.reads.push(objectId);
     return null;
+  }
+  async addMessage(): Promise<LoyaltyObject> {
+    throw new Error('addMessage is not used by inactivity tests');
   }
   async insertObject(object: LoyaltyObject): Promise<LoyaltyObject> {
     this.patches.push({ objectId: object.id, patch: object });

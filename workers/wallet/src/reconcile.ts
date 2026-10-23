@@ -379,22 +379,27 @@ async function recordObservation(
 /**
  * Update push notifications on a customer's loyalty pass.
  *
- * This patches the LoyaltyObject at Google with new push notifications.
- * Returns true if the patch was applied, false if the object doesn't exist.
+ * This adds Google Wallet messages to an existing loyalty object.
+ * Returns true if the messages were added, false if the pass or its program is missing.
  */
 export async function updatePassPushNotifications(
   deps: ReconcileDeps,
   input: ReconcileInput,
   notifications: PushNotification[],
 ): Promise<boolean> {
-  const pass = await deps.store.findPass(input.tenantId, input.customerId);
+  const pass = await deps.store.findPass(input.customerId, input.tenantId);
   if (!pass || !pass.objectId) {
     return false;
   }
 
+  const program = await deps.store.findProgram(input.tenantId);
+  if (!program) {
+    return false;
+  }
+
   const client = deps.client;
-  const classId = pass.classId || deps.store.issuerId + ".tenant-" + input.tenantId;
-  
+  const classId = program.classId;
+
   for (const notification of notifications) {
     const messageId = crypto.randomUUID();
     await client.addMessage(pass.objectId, classId, {
