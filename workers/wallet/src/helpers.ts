@@ -74,6 +74,12 @@ export interface WalletBindings {
    */
   WALLET_DEMO_MODE?: string | undefined;
   /**
+   * Secret for signing and verifying JWT tokens (HS256).
+   * Used for service-to-service authentication (e.g., communication worker calling wallet worker).
+   * Set via `wrangler secret put JWT_SECRET`.
+   */
+  JWT_SECRET?: string;
+  /**
    * The gateway origin a class's `programLogo` is built from.
    *
    * Google downloads the logo from a public HTTPS URL, so this is not a vanity
@@ -353,6 +359,12 @@ export function extractAuthHeaders(c: Context): AuthHeaders {
 const CUSTOMER_ROLE = 'customer';
 
 /**
+ * The role a service-to-service token carries. Used by the communication
+ * worker to call the wallet worker's push-notifications endpoint.
+ */
+const SERVICE_ROLE = 'service';
+
+/**
  * Is this the customer app's own token?
  *
  * The single owner of that question within this worker, mirroring
@@ -362,6 +374,16 @@ const CUSTOMER_ROLE = 'customer';
  */
 export function isCustomerRole(auth: AuthHeaders): boolean {
   return auth.userRole === CUSTOMER_ROLE;
+}
+
+/**
+ * Is this a service-to-service token?
+ *
+ * Used by the wallet worker to allow the communication worker to push
+ * notifications to Google Wallet passes.
+ */
+export function isServiceRole(auth: AuthHeaders): boolean {
+  return auth.userRole === SERVICE_ROLE;
 }
 
 /** Stable, specific code. Callers can branch on this without parsing prose. */

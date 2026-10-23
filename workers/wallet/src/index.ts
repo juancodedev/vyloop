@@ -1,7 +1,10 @@
 import { createDb } from '@vyloop/db';
 import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { jwtVerify } from 'jose';
+import type { JWTPayload } from 'jose';
 
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
 import type { AuthHeaders, WalletBindings } from './helpers';
@@ -125,6 +128,54 @@ const PUBLIC_PATHS: ReadonlySet<string> = new Set([WALLET_CALLBACK_PATH]);
 // Global middleware: auth header extraction
 // ---------------------------------------------------------------------------
 
+interface JwtClaims extends JWTPayload {
+  sub: string;
+  business_id: string;
+  role: string;
+  scopes: string[];
+}
+
+function secretKey(secret: string): Uint8Array {
+  return new TextEncoder().encode(secret);
+}
+
+async function verifyAndInjectJwt(c: Context<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders } }>, next: () => Promise<void>): Promise<void> {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return;
+  }
+
+  const token = authHeader.slice(7);
+  const secret = c.env.JWT_SECRET;
+  if (!secret) {
+    // JWT_SECRET not configured, skip JWT verification (gateway-injected headers will be used)
+    return;
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, secretKey(secret), {
+      issuer: 'vyloop',
+      algorithms: ['HS256'],
+      clockTolerance: 60,
+    });
+
+    const claims = payload as unknown as JwtClaims;
+    if (!claims.sub || !claims.business_id || !claims.role || !claims.scopes) {
+      return;
+    }
+
+    // Inject headers as if they came from the gateway
+    const req = c.req.raw;
+    const headers = new Headers(req.headers);
+    headers.set('X-User-Id', claims.sub);
+    headers.set('X-Business-Id', claims.business_id);
+    headers.set('X-User-Role', claims.role);
+    c.req.raw = new Request(req, { headers });
+  } catch {
+    // Invalid token - let extractAuthHeaders handle the error
+  }
+}
+
 app.use('*', async (c, next) => {
   // Checked before the extraction, and on the raw path, so the exemption is
   // exactly the listed routes rather than a prefix that could grow.
@@ -134,7 +185,10 @@ app.use('*', async (c, next) => {
   }
 
   try {
-    // Extract and validate auth headers (injected by gateway).
+    // First, try to verify and inject JWT from Authorization header (for direct service-to-service calls)
+    await verifyAndInjectJwt(c, next);
+
+    // Then extract and validate auth headers (injected by gateway or by JWT verification above).
     extractAuthHeaders(c);
 
     await next();

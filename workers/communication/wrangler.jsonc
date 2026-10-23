@@ -4,7 +4,8 @@
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "WHATSAPP_API_VERSION": "v21.0"
+    "WHATSAPP_API_VERSION": "v21.0",
+    "WALLET_WORKER_URL": "https://wallet.cl-jmunoz.workers.dev"
   },
   "kv_namespaces": [
     {

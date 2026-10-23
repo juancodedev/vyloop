@@ -1235,15 +1235,15 @@ router.post('/v1/wallet/push-notifications', async (c) => {
   const auth = extractAuthHeaders(c);
   const tenantId = auth.businessId;
 
-  // Only customers can update their own pass
-  if (auth.userRole !== 'customer') {
+  // Customers can update their own pass; services can push notifications for campaigns
+  if (auth.userRole !== 'customer' && auth.userRole !== 'service') {
     return c.json(
-      { error: { code: 'FORBIDDEN', message: 'Only customers can update push notifications' } },
+      { error: { code: 'FORBIDDEN', message: 'Only customers or services can update push notifications' } },
       403,
     );
   }
 
-  let body: { notifications: PushNotification[] };
+  let body: { notifications: PushNotification[]; customer_id?: string };
   try {
     body = await c.req.json();
   } catch {
@@ -1264,7 +1264,20 @@ router.post('/v1/wallet/push-notifications', async (c) => {
   const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
   const store = createDrizzleWalletStore(db);
 
-  const customer = await store.findCustomer(auth.userId, tenantId);
+  // For customer role, use the authenticated user's ID
+  // For service role, require customer_id in the request body
+  let customerId = auth.userId;
+  if (auth.userRole === 'service') {
+    if (typeof candidate.customer_id !== 'string' || candidate.customer_id.trim() === '') {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'customer_id is required for service role' } },
+        422,
+      );
+    }
+    customerId = candidate.customer_id;
+  }
+
+  const customer = await store.findCustomer(customerId, tenantId);
   if (!customer) {
     return c.json(
       { error: { code: 'CUSTOMER_SELF_NOT_FOUND', message: 'Customer not found' } },
