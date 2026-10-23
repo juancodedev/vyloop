@@ -8,10 +8,9 @@ import {
   Settings,
   LogOut,
   MessageSquare,
+  MapPin,
   type LucideIcon,
 } from 'lucide-react';
-
-import { MapPinIcon } from './icons/map-pin';
 
 export interface NavItem {
   label: string;
@@ -46,7 +45,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: 'Programa', href: '/dashboard/loyalty', icon: Gift },
       { label: 'Canjes', href: '/dashboard/loyalty/rewards', icon: Star },
       { label: 'QR', href: '/dashboard/qr', icon: QrCode },
-      { label: 'Sedes', href: '/dashboard/settings/venues', icon: MapPinIcon },
+      { label: 'Sedes', href: '/dashboard/settings/venues', icon: MapPin },
     ],
   },
   {
