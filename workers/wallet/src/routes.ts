@@ -34,8 +34,8 @@ import {
   linkForExistingPass,
   reasonCodeFor,
   TIER_HEADER_UNAVAILABLE } from './issuance';
-import { reconcilePass, updatePassPushNotifications } from './reconcile';
 import type { PushNotification } from './object';
+import { reconcilePass, updatePassPushNotifications } from './reconcile';
 
 // ---------------------------------------------------------------------------
 // Router
