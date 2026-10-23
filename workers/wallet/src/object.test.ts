@@ -43,6 +43,7 @@ describe('buildLoyaltyObject', () => {
       accountId: MEMBER_CODE,
       loyaltyPoints: { label: 'puntos', balance: { string: '96942' } },
       barcode: { type: 'QR_CODE', value: CUSTOMER_GLOBAL_ID },
+      pushNotifications: [],
     });
   });
 

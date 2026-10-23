@@ -68,7 +68,7 @@ import { balanceDisplayFailure, formatBalance } from './balance';
 import type { GoogleWalletClient } from './google-client';
 import { classReadinessFor, reasonCodeFor } from './issuance';
 import type { WalletUnavailableReason } from './issuance';
-import { normaliseGoogleObjectState, type LoyaltyObject } from './object';
+import { normaliseGoogleObjectState, type LoyaltyObject, type PushNotification } from './object';
 import type { ReconciliationState, WalletStore } from './store';
 
 // ---------------------------------------------------------------------------
@@ -374,4 +374,28 @@ async function recordObservation(
     tenantId: input.tenantId,
     observedAt,
   });
+}
+
+/**
+ * Update push notifications on a customer's loyalty pass.
+ *
+ * This patches the LoyaltyObject at Google with new push notifications.
+ * Returns true if the patch was applied, false if the object doesn't exist.
+ */
+export async function updatePassPushNotifications(
+  deps: ReconcileDeps,
+  input: ReconcileInput,
+  notifications: PushNotification[],
+): Promise<boolean> {
+  const pass = await deps.store.findPass(input.tenantId, input.customerId);
+  if (!pass || !pass.objectId) {
+    return false;
+  }
+
+  const client = deps.client;
+  await client.patchObject(pass.objectId, {
+    pushNotifications: notifications,
+  });
+
+  return true;
 }

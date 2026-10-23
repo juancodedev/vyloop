@@ -153,6 +153,13 @@ export interface TextModuleData {
   id: string;
 }
 
+export interface PushNotification {
+  title: string;
+  body: string;
+  url?: string;
+  offerId?: string;
+}
+
 export interface LoyaltyObject {
   /** `<issuerId>.member-<customerGlobalId>`. */
   id: string;
@@ -168,6 +175,7 @@ export interface LoyaltyObject {
   barcode: Barcode;
   /** The customer's tier, from `membership_tiers.name`. */
   textModulesData?: TextModuleData[];
+  pushNotifications?: PushNotification[];
 }
 
 /** Stable id for the tier row, so a later patch replaces it rather than appends. */
@@ -245,6 +253,7 @@ export interface BuildLoyaltyObjectInput {
    */
   tierHeader?: string | undefined;
   passState: PassTrackingState;
+  pushNotifications?: PushNotification[];
 }
 
 /**
@@ -270,6 +279,7 @@ export function buildLoyaltyObject(input: BuildLoyaltyObjectInput): LoyaltyObjec
     classId: input.classId,
     state: objectStateFor(input.passState, input.customerId),
     accountId: input.memberCode,
+    pushNotifications: input.pushNotifications ?? [],
     loyaltyPoints: {
       label: input.pointsCurrency,
       balance: { string: formatBalance(input.balancePoints) },

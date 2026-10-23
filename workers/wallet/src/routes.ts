@@ -34,7 +34,8 @@ import {
   linkForExistingPass,
   reasonCodeFor,
   TIER_HEADER_UNAVAILABLE } from './issuance';
-import { reconcilePass } from './reconcile';
+import { reconcilePass, updatePassPushNotifications } from './reconcile';
+import type { PushNotification } from './object';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -1222,6 +1223,62 @@ router.post('/v1/wallet/program/sync', async (c) => {
       last_synced_at: syncedAt.toISOString(),
     },
   });
+});
+
+
+// POST /v1/wallet/push-notifications
+//
+// Update push notifications on the authenticated customer's loyalty pass.
+//
+// This is called when a campaign is sent, to add a notification to the pass.
+router.post('/v1/wallet/push-notifications', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const tenantId = auth.businessId;
+
+  // Only customers can update their own pass
+  if (auth.userRole !== 'customer') {
+    return c.json(
+      { error: { code: 'FORBIDDEN', message: 'Only customers can update push notifications' } },
+      403,
+    );
+  }
+
+  let body: { notifications: PushNotification[] };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'The body must be JSON.' } },
+      422,
+    );
+  }
+
+  const candidate = body as Record<string, unknown>;
+  if (!Array.isArray(candidate.notifications)) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'notifications is required and must be an array.' } },
+      422,
+    );
+  }
+
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const store = createDrizzleWalletStore(db);
+
+  const customer = await store.findCustomer(auth.userId, tenantId);
+  if (!customer) {
+    return c.json(
+      { error: { code: 'CUSTOMER_SELF_NOT_FOUND', message: 'Customer not found' } },
+      404,
+    );
+  }
+
+  const success = await updatePassPushNotifications(
+    { store, client: googleWalletClientFor(c.env), demoMode: false },
+    { tenantId, customerId: customer.id },
+    body.notifications,
+  );
+
+  return c.json({ ok: success });
 });
 
 export default router;
