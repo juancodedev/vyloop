@@ -323,7 +323,30 @@ app.use('/v1/*', async (c, next) => {
   return authInjectMiddleware()(c, next);
 });
 
-// Middleware 3: X-Business-ID enforcement — skip /v1/auth/* + registration + webhooks
+// Middleware 3: Rewrite /v1/businesses/me/* → /v1/businesses/{business_id}/*
+// Must run after authInjectMiddleware (injects X-Business-ID) and before routerMiddleware.
+app.use('/v1/businesses/me/*', async (c, next) => {
+  const businessId = c.req.header('X-Business-ID');
+  if (!businessId) {
+    return c.json(
+      {
+        error: {
+          code: 'AUTH_BUSINESS_MISMATCH',
+          message: 'Missing X-Business-ID header',
+          request_id: getRequestId(c),
+        },
+      },
+      403,
+    );
+  }
+
+  const url = new URL(c.req.url);
+  url.pathname = url.pathname.replace('/v1/businesses/me/', `/v1/businesses/${businessId}/`);
+  c.req.raw = new Request(url.toString(), c.req.raw);
+  await next();
+});
+
+// Middleware 4: X-Business-ID enforcement — skip /v1/auth/* + registration + webhooks
 app.use('/v1/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   const method = c.req.method;
@@ -334,7 +357,7 @@ app.use('/v1/*', async (c, next) => {
   return businessIdMiddleware(c, next) as unknown as ReturnType<typeof next>;
 });
 
-  // Middleware 4: Rate limiting
+  // Middleware 5: Rate limiting
   //
   // `/v1/auth/*` used to be skipped wholesale, which was right while every route
   // under it was a cheap credential check. It is no longer right: signup creates a
@@ -376,14 +399,14 @@ app.use('/v1/*', async (c, next) => {
   })(c, next);
 });
 
-// Middleware 5: Route dispatch to service bindings
+// Middleware 6: Route dispatch to service bindings
 app.use('/v1/*', routerMiddleware);
 
 // ---------------------------------------------------------------------------
 // Event ingestor — authenticated
 // ---------------------------------------------------------------------------
 //
-// Registered **below** the five middlewares above, and that position is the
+// Registered **below** the six middlewares above, and that position is the
 // authentication.
 //
 // This used to be mounted at `/` before any of them, carrying its own full
