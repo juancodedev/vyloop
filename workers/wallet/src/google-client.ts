@@ -27,7 +27,7 @@
 import { SignJWT, importPKCS8 } from 'jose';
 
 import type { LoyaltyClass } from './class';
-import type { LoyaltyObject } from './object';
+import type { LoyaltyObject, LoyaltyObjectMessage } from './object';
 
 /** Fields Google accepts in a class `patch`. */
 export type LoyaltyClassPatch = Partial<Omit<LoyaltyClass, 'id'>>;
@@ -106,6 +106,8 @@ export interface GoogleWalletClient {
   listObjects(request: LoyaltyObjectListRequest): Promise<LoyaltyObjectListPage>;
   /** `jwt.insert`. */
   saveUriForJwt(jwt: string): Promise<string>;
+  /** \`loyaltyobject.addMessage\`. Adds a push notification message to a loyalty object. */
+  addMessage(objectId: string, classId: string, message: LoyaltyObjectMessage): Promise<LoyaltyObject>;
 }
 
 /**
@@ -169,7 +171,8 @@ export function createUnimplementedGoogleWalletClient(): GoogleWalletClient {
     patchObject: () => Promise.reject(new GoogleWalletClientNotImplementedError('patchObject')),
     listObjects: () => Promise.reject(new GoogleWalletClientNotImplementedError('listObjects')),
     saveUriForJwt: () => Promise.reject(new GoogleWalletClientNotImplementedError('saveUriForJwt')),
-  };
+    addMessage: () => Promise.reject(new GoogleWalletClientNotImplementedError('addMessage')),
+};
 }
 
 // ---------------------------------------------------------------------------
@@ -720,6 +723,16 @@ export function createGoogleWalletRestClient(
       }
 
       return resource.saveUri;
+    },
+
+    async addMessage(objectId, classId, message) {
+      const id = requireId(objectId, 'addMessage');
+      return callForResource<LoyaltyObject>(
+        'POST',
+        "/loyaltyObject/" + encodeURIComponent(id) + "/addMessage",
+        'loyaltyobject.addMessage',
+        { classId, message },
+      );
     },
   };
 }

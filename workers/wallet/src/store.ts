@@ -365,6 +365,12 @@ export interface PassCallbackClaim {
 
 export interface WalletStore {
   /**
+   * Get the Google Wallet issuer ID for this tenant.
+   * This is the Google-issued issuer ID for the wallet program.
+   */
+  getIssuerId(): Promise<string>;
+
+  /**
    * Find a customer by `globalId` **within one tenant**.
    *
    * Both halves are load-bearing. The same person is a separate row per

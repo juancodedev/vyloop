@@ -393,9 +393,19 @@ export async function updatePassPushNotifications(
   }
 
   const client = deps.client;
-  await client.patchObject(pass.objectId, {
-    pushNotifications: notifications,
-  });
+  const classId = pass.classId || deps.store.issuerId + ".tenant-" + input.tenantId;
+  
+  for (const notification of notifications) {
+    const messageId = crypto.randomUUID();
+    await client.addMessage(pass.objectId, classId, {
+      header: notification.title,
+      body: notification.body,
+      id: messageId,
+      messageType: 'TEXT_AND_NOTIFY',
+      ...(notification.url ? { url: notification.url } : {}),
+      ...(notification.offerId ? { offerId: notification.offerId } : {}),
+    });
+  }
 
   return true;
 }

@@ -144,6 +144,13 @@ const PROGRAM_COLUMNS = {
  */
 export function createDrizzleWalletStore(db: Db): WalletStore {
   return {
+    async getIssuerId(): Promise<string> {
+      const programRow = await db
+        .select({ issuerId: tenantWalletPrograms.issuerId })
+        .from(tenantWalletPrograms)
+        .limit(1);
+      return programRow[0]?.issuerId ?? '';
+    },
     async findCustomer(globalId: string, tenantId: string): Promise<WalletCustomerRow | null> {
       const [row] = await db
         .select(CUSTOMER_COLUMNS)
