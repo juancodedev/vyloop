@@ -281,6 +281,7 @@ async function handlePushCampaignRequestedEvent(
 
   console.log(
     `${tag(event)} Push campaign ${payload.reference_id ?? '(no reference)'}: ` +
-      `${outcome.delivered} delivered, ${outcome.failed} failed, ${outcome.skipped} skipped`,
+      `web_push: ${outcome.web_push.delivered} delivered, ${outcome.web_push.failed} failed, ${outcome.web_push.skipped} skipped; ` +
+      `wallet: ${outcome.wallet.delivered} delivered, ${outcome.wallet.failed} failed, ${outcome.wallet.skipped} skipped`,
   );
 }

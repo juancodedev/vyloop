@@ -275,6 +275,7 @@ let fakeClientHandle: {
     getObject: ReturnType<typeof vi.fn>;
     insertObject: ReturnType<typeof vi.fn>;
     patchObject: ReturnType<typeof vi.fn>;
+    addMessage: ReturnType<typeof vi.fn>;
   };
   
   // What `insertObject` does next, so a test can make Google refuse the create.
@@ -327,6 +328,9 @@ let fakeClientHandle: {
       remoteObject = { ...(remoteObject ?? {}), ...patch };
       return remoteObject as never;
     }),
+    addMessage: vi.fn(async (objectId: string, classId: string, message: unknown) => {
+      googleCalls.push({ method: 'addMessage', args: [objectId, classId, message] });
+    }),
   } as never;
 
   vi.mocked(googleWalletClientFor).mockReturnValue({
@@ -343,6 +347,7 @@ getObject: fakeClientHandle.getObject,
       // that Google has never been told about, and nothing here would fail.
       insertObject: fakeClientHandle.insertObject,
     patchObject: fakeClientHandle.patchObject,
+    addMessage: fakeClientHandle.addMessage,
     saveUriForJwt: vi.fn(async () => {
       throw new Error('not used');
     }),
@@ -1985,5 +1990,65 @@ describe('GET /v1/wallet/status: the pass tracking state', () => {
 
     const json = (await res.json()) as { data: { pass_state: string | null } };
     expect(json.data.pass_state).toBeNull();
+  });
+});
+
+// ============================================================================
+// POST /v1/wallet/push-notifications
+// ============================================================================
+
+describe('POST /v1/wallet/push-notifications', () => {
+  const SERVICE_AUTH: TestAuth = {
+    userId: 'communication-worker',
+    businessId: TENANT,
+    userRole: 'service',
+  };
+
+  const push = (body: unknown) =>
+    reqAs('POST', '/v1/wallet/push-notifications', SERVICE_AUTH, body);
+
+  const notification = { title: 'Coffee', body: 'Two for one today' };
+
+  it('answers 409 PASS_NOT_ISSUED when the customer holds no pass', async () => {
+    const res = await push({ customer_id: CUSTOMER_GLOBAL_ID, notifications: [notification] });
+
+    // A campaign is delivered to a whole audience, and most of it holds no
+    // wallet pass. The caller has to be able to tell "nobody to notify" from
+    // "the provider failed", so this is a 409 with its own code, not a 500.
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('PASS_NOT_ISSUED');
+    expect(googleCalls).toHaveLength(0);
+  });
+
+  it('adds the message to the pass, with the program class id', async () => {
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: TENANT,
+        objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+        state: 'issued',
+        lastSyncedAt: null,
+      },
+    ];
+
+    const res = await push({ customer_id: CUSTOMER_GLOBAL_ID, notifications: [notification] });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const call = googleCalls.find((entry) => entry.method === 'addMessage');
+    expect(call).toBeDefined();
+    const [objectId, classId, message] = call!.args as [string, string, Record<string, unknown>];
+    expect(objectId).toBe(`${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`);
+    // The class comes from the stored program, not derived again here: the two
+    // can disagree while a class is being renamed, and Google writes against
+    // the stored one.
+    expect(classId).toBe(classIdFor(ISSUER, TENANT));
+    expect(message).toMatchObject({
+      header: 'Coffee',
+      body: 'Two for one today',
+      messageType: 'TEXT_AND_NOTIFY',
+    });
   });
 });

@@ -41,7 +41,11 @@ vi.mock('@vyloop/db', () => ({
 }));
 
 const handlePushCampaignRequested = vi.hoisted(() =>
-  vi.fn(async () => ({ audience: 2, delivered: 2, failed: 0, skipped: 0 })),
+  vi.fn(async () => ({
+    audience: 2,
+    web_push: { delivered: 2, failed: 0, skipped: 0 },
+    wallet: { delivered: 0, failed: 0, skipped: 0 },
+  })),
 );
 
 vi.mock('./push-campaigns', () => ({ handlePushCampaignRequested }));

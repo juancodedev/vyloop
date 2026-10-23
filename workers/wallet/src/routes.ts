@@ -1291,7 +1291,15 @@ router.post('/v1/wallet/push-notifications', async (c) => {
     body.notifications,
   );
 
-  return c.json({ ok: success });
+  if (!success) {
+    // No issued pass for this customer, or missing program
+    return c.json(
+      { error: { code: 'PASS_NOT_ISSUED', message: 'Customer has no issued wallet pass' } },
+      409,
+    );
+  }
+
+  return c.json({ ok: true });
 });
 
 export default router;
