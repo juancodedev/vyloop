@@ -996,24 +996,29 @@ app.post('/v1/customers/me/consents', async (c) => {
   const { consents } = await import('@vyloop/db');
   const { sql } = await import('drizzle-orm');
 
-  await db
-    .insert(consents)
-    .values({
-      businessId: claims.business_id,
-      customerId: claims.sub,
-      consentType: candidate.consentType,
-      granted: candidate.granted,
-      grantedAt: candidate.granted ? sql`now()` : null,
-      revokedAt: candidate.granted ? null : sql`now()`,
-    })
-    .onConflictDoUpdate({
-      target: [consents.businessId, consents.customerId, consents.consentType],
-      set: {
+  try {
+    await db
+      .insert(consents)
+      .values({
+        businessId: claims.business_id,
+        customerId: claims.sub,
+        consentType: candidate.consentType,
         granted: candidate.granted,
         grantedAt: candidate.granted ? sql`now()` : null,
         revokedAt: candidate.granted ? null : sql`now()`,
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: [consents.businessId, consents.customerId, consents.consentType],
+        set: {
+          granted: candidate.granted,
+          grantedAt: candidate.granted ? sql`now()` : null,
+          revokedAt: candidate.granted ? null : sql`now()`,
+        },
+      });
+  } catch (err) {
+    console.error('Consent upsert error:', err);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to save consent' } }, 500);
+  }
 
   return c.json({ ok: true });
 });
