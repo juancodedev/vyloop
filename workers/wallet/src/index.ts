@@ -139,7 +139,7 @@ function secretKey(secret: string): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-async function verifyAndInjectJwt(c: Context<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders } }>, next: () => Promise<void>): Promise<void> {
+async function verifyAndInjectJwt(c: Context<{ Bindings: WalletBindings; Variables: { auth: AuthHeaders } }>, _next: () => Promise<void>): Promise<void> {
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     return;
