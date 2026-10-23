@@ -52,6 +52,11 @@ export interface PushCampaignPayload {
 
 export interface PushCampaignOutcome {
   audience: number;
+  web_push: ChannelOutcome;
+  wallet: ChannelOutcome;
+}
+
+export interface ChannelOutcome {
   delivered: number;
   failed: number;
   skipped: number;
@@ -143,17 +148,133 @@ export async function resolveCampaignAudience(
 }
 
 /**
- * Deliver a campaign to its audience.
- *
- * One delivery per target, through the delivery that already exists. The
- * reference the delivery writes into `message_log` is
- * `<campaign reference id>:<subscription id>`, so the rows of one campaign
- * share a prefix and the campaign's own reference never blocks the other
- * subscribers of that campaign.
+ * Deliver web push notifications to a single audience member.
  *
  * A throw from the delivery is not caught: the push service asking us to
  * slow down (`429`) has to be retried by the queue, and a campaign that
  * swallowed the retry would drop the message.
+ */
+async function deliverWebPushChannel(
+  member: CampaignAudienceMember,
+  payload: PushCampaignPayload,
+  campaignReferenceId: string,
+  businessId: string,
+  audienceSize: number,
+  env: Bindings,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+): Promise<ChannelOutcome> {
+  const subscriptions = await readPushSubscriptions(db, {
+    businessId,
+    customerId: member.customerId,
+  });
+
+  if (subscriptions.length === 0) {
+    return { delivered: 0, failed: 0, skipped: 1 };
+  }
+
+  const outcome = await deliverPushNotification(
+    {
+      customer_id: member.globalId,
+      business_id: businessId,
+      title: payload.title,
+      body: payload.body,
+      ...(payload.url !== undefined ? { url: payload.url } : {}),
+      reference_id: campaignReferenceId,
+      target: payload.target,
+      target_type: 'branch_id' in payload.target ? 'branch' : 'radius',
+      audience_size: audienceSize,
+    },
+    businessId,
+    env,
+  );
+
+  return {
+    delivered: outcome.delivered,
+    failed: outcome.failed,
+    skipped: 0,
+  };
+}
+
+/**
+ * Deliver Google Wallet push notification to a single audience member.
+ */
+async function deliverWalletChannel(
+  member: CampaignAudienceMember,
+  payload: PushCampaignPayload,
+  campaignReferenceId: string,
+  businessId: string,
+  env: Bindings,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+): Promise<ChannelOutcome> {
+  try {
+    const pass = await db
+      .select({ objectId: _customerWalletPasses.objectId })
+      .from(_customerWalletPasses)
+      .where(
+        and(
+          eq(_customerWalletPasses.customerId, member.customerId),
+          eq(_customerWalletPasses.tenantId, businessId),
+          eq(_customerWalletPasses.state, 'issued'),
+        ),
+      )
+      .limit(1);
+
+    if (pass.length === 0) {
+      return { delivered: 0, failed: 0, skipped: 1 };
+    }
+
+    const response = await env.wallet.fetch('https://wallet.internal/v1/wallet/push-notifications', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Business-Id': businessId,
+        'X-User-Id': 'communication-worker',
+        'X-User-Role': 'service',
+      },
+      body: JSON.stringify({
+        customer_id: member.globalId,
+        notifications: [{
+          title: payload.title,
+          body: payload.body,
+          ...(payload.url !== undefined ? { url: payload.url } : {}),
+          offerId: campaignReferenceId,
+        }],
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      // 409 PASS_NOT_ISSUED means no issued pass for this customer → skip, not fail
+      if (response.status === 409 && text.includes('PASS_NOT_ISSUED')) {
+        return { delivered: 0, failed: 0, skipped: 1 };
+      }
+      const msg = `Wallet push failed: ${response.status} ${text}`;
+      console.error('Wallet push error:', msg);
+      throw new Error(msg);
+    }
+
+    return { delivered: 1, failed: 0, skipped: 0 };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Failed to send Google Wallet notification:', message);
+    return { delivered: 0, failed: 1, skipped: 0 };
+  }
+}
+
+/**
+ * Deliver a campaign to its audience.
+ *
+ * Two independent channels per member: a browser push and a Google Wallet
+ * notification. Their counters are reported separately, so a member with no
+ * browser subscription is still counted as reached when the wallet delivers,
+ * and a wallet failure never hides a successful push.
+ *
+ * The reference the push delivery writes into `message_log` is
+ * `<campaign reference id>:<subscription id>`, so the rows of one campaign
+ * share a prefix and the campaign's own reference never blocks the other
+ * subscribers of that campaign.
  */
 export async function handlePushCampaignRequested(
   payload: PushCampaignPayload,
@@ -169,9 +290,8 @@ export async function handlePushCampaignRequested(
   // is what names its rows, and what the composing route refuses to repeat.
   const campaignReferenceId = payload.reference_id ?? crypto.randomUUID();
 
-  let delivered = 0;
-  let failed = 0;
-  let skipped = 0;
+  const webPush = { delivered: 0, failed: 0, skipped: 0 };
+  const wallet = { delivered: 0, failed: 0, skipped: 0 };
 
   for (const member of audience) {
     const consents = await readConsentMap(db, {
@@ -180,90 +300,42 @@ export async function handlePushCampaignRequested(
     });
 
     if (consents[PUSH_CONSENT_TYPE] !== true) {
-      skipped += 1;
+      webPush.skipped += 1;
+      wallet.skipped += 1;
       continue;
     }
 
-    const subscriptions = await readPushSubscriptions(db, {
+    // Channel 1: Web Push (browser)
+    const webPushResult = await deliverWebPushChannel(
+      member,
+      payload,
+      campaignReferenceId,
       businessId,
-      customerId: member.customerId,
-    });
+      audience.length,
+      env,
+      db,
+    );
+    webPush.delivered += webPushResult.delivered;
+    webPush.failed += webPushResult.failed;
+    webPush.skipped += webPushResult.skipped;
 
-    if (subscriptions.length === 0) {
-      skipped += 1;
-      continue;
-    }
-
-    const outcome = await deliverPushNotification(
-      {
-        customer_id: member.globalId,
-        business_id: businessId,
-        title: payload.title,
-        body: payload.body,
-        ...(payload.url !== undefined ? { url: payload.url } : {}),
-        // The campaign's own reference. The delivery appends each browser's
-        // subscription id, which makes `<campaign>:<subscription>`.
-        reference_id: campaignReferenceId,
-        target: payload.target,
-        target_type: 'branch_id' in payload.target ? 'branch' : 'radius',
-        audience_size: audience.length,
-      },
+    // Channel 2: Google Wallet (independent)
+    const walletResult = await deliverWalletChannel(
+      member,
+      payload,
+      campaignReferenceId,
       businessId,
       env,
+      db,
     );
-
-    delivered += outcome.delivered;
-    failed += outcome.failed;
-
-    // Also send Google Wallet push notification if customer has a saved pass
-    try {
-      const pass = await db
-        .select({ objectId: _customerWalletPasses.objectId })
-        .from(_customerWalletPasses)
-        .where(
-          and(
-            eq(_customerWalletPasses.customerId, member.customerId),
-            eq(_customerWalletPasses.tenantId, businessId),
-            eq(_customerWalletPasses.state, 'issued'),
-          ),
-        )
-        .limit(1);
-
-      if (pass.length > 0) {
-        const _objectId = pass[0].objectId;
-        // Call wallet worker's push-notifications endpoint via service binding
-        // Include auth headers so wallet worker's auth middleware accepts the request
-        const response = await env.wallet.fetch('https://wallet.internal/v1/wallet/push-notifications', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Business-Id': businessId,
-            'X-User-Id': 'communication-worker',
-            'X-User-Role': 'service',
-          },
-          body: JSON.stringify({
-            customer_id: member.globalId,
-            notifications: [{
-              title: payload.title,
-              body: payload.body,
-              ...(payload.url !== undefined ? { url: payload.url } : {}),
-              offerId: campaignReferenceId,
-            }],
-          }),
-        });
-        if (!response.ok) {
-          const text = await response.text().catch(() => '');
-          const msg = `Wallet push failed: ${response.status} ${text}`;
-          console.error('Wallet push error:', msg);
-          throw new Error(msg);
-        }
-      }
-    } catch (err) {
-      // Log but don't fail the campaign if wallet notification fails
-      const message = err instanceof Error ? err.message : String(err);
-      console.error('Failed to send Google Wallet notification:', message);
-    }
+    wallet.delivered += walletResult.delivered;
+    wallet.failed += walletResult.failed;
+    wallet.skipped += walletResult.skipped;
   }
 
-  return { audience: audience.length, delivered, failed, skipped };
+  return {
+    audience: audience.length,
+    web_push: webPush,
+    wallet,
+  };
 }

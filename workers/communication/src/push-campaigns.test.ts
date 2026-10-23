@@ -1,4 +1,4 @@
-import type { KVNamespace, Queue } from '@cloudflare/workers-types';
+import type { KVNamespace, Queue, Fetcher } from '@cloudflare/workers-types';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,11 +34,22 @@ vi.mock('@vyloop/db', async () => {
     businessId: uuid('business_id').notNull(),
   });
 
+  // Real, for the same reason as the tables above: the wallet channel's
+  // predicate has to compile, so a query that ignored the tenant or the
+  // `issued` state would admit rows the production query must reject.
+  const customerWalletPassesTable = pgTable('customer_wallet_passes', {
+    customerId: uuid('customer_id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    objectId: text('object_id').notNull(),
+    state: text('state').notNull(),
+  });
+
   return {
     createDb: vi.fn(() => dbMock),
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
     customerEvents: customerEventsTable,
     customers: customersTable,
+    customerWalletPasses: customerWalletPassesTable,
     readConsentMap: vi.fn(async () => ({ nearby_notifications: true })),
     readPushSubscriptions: vi.fn(async () => []),
   };
@@ -68,7 +79,11 @@ const { handlePushCampaignRequested, resolveCampaignAudience, INTERACTION_WINDOW
       payload: unknown,
       businessId: string,
       env: unknown,
-    ) => Promise<{ audience: number; delivered: number; failed: number; skipped: number }>;
+    ) => Promise<{
+      audience: number;
+      web_push: { delivered: number; failed: number; skipped: number };
+      wallet: { delivered: number; failed: number; skipped: number };
+    }>;
     resolveCampaignAudience: (
       db: unknown,
       businessId: string,
@@ -92,7 +107,19 @@ const mockEnv = {
   VAPID_PUBLIC_KEY: 'public',
   VAPID_PRIVATE_KEY: 'private',
   VAPID_SUBJECT: 'mailto:ops@example.test',
+  wallet: {
+    fetch: vi.fn(async () => {
+      const body = JSON.stringify({ error: { code: 'PASS_NOT_ISSUED', message: 'Customer has no issued wallet pass' } });
+      return {
+        ok: false,
+        status: 409,
+        text: async () => body,
+      };
+    }),
+  } as unknown as Fetcher,
 };
+
+const walletFetch = mockEnv.wallet.fetch as unknown as ReturnType<typeof vi.fn>;
 
 /** A chainable stand-in for a Drizzle query, resolving to `rows`. */
 function createQueryChain(rows: unknown[] = []) {
@@ -108,6 +135,19 @@ function createQueryChain(rows: unknown[] = []) {
 
 /** The rows the audience query answers with. */
 function audienceRows(rows: unknown[]) {
+  const chain = createQueryChain(rows);
+  dbMock.select.mockReturnValueOnce(chain);
+  return chain;
+}
+
+/**
+ * The rows the wallet channel's pass query answers with.
+ *
+ * The query asks for an `issued` pass; the fake honours the table read and the
+ * fixture decides the answer, which is enough to drive the two branches that
+ * matter here: a pass to notify, and no pass at all.
+ */
+function walletPassRows(rows: unknown[] = []) {
   const chain = createQueryChain(rows);
   dbMock.select.mockReturnValueOnce(chain);
   return chain;
@@ -250,40 +290,46 @@ describe('handlePushCampaignRequested', () => {
 
   it('delivers to the audience and counts it', async () => {
     audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows();
 
     const outcome = await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
 
     expect(outcome.audience).toBe(1);
-    expect(outcome.delivered).toBe(1);
-    expect(outcome.failed).toBe(0);
-    expect(outcome.skipped).toBe(0);
+    expect(outcome.web_push.delivered).toBe(1);
+    expect(outcome.web_push.failed).toBe(0);
+    expect(outcome.web_push.skipped).toBe(0);
+    expect(outcome.wallet.skipped).toBe(1); // no wallet pass in test
   });
 
   it('skips a target without the nearby-notification consent', async () => {
     audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows();
     readConsentMap.mockResolvedValue({ whatsapp: true });
 
     const outcome = await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
 
     expect(outcome.audience).toBe(1);
-    expect(outcome.skipped).toBe(1);
-    expect(outcome.delivered).toBe(0);
+    expect(outcome.web_push.skipped).toBe(1);
+    expect(outcome.wallet.skipped).toBe(1);
+    expect(outcome.web_push.delivered).toBe(0);
     expect(deliverPushNotification).not.toHaveBeenCalled();
   });
 
   it('skips a target with no browser registered', async () => {
     audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows();
     readPushSubscriptions.mockResolvedValue([]);
 
     const outcome = await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
 
-    expect(outcome.skipped).toBe(1);
-    expect(outcome.delivered).toBe(0);
+    expect(outcome.web_push.skipped).toBe(1);
+    expect(outcome.web_push.delivered).toBe(0);
     expect(deliverPushNotification).not.toHaveBeenCalled();
   });
 
   it('delivers through the existing push delivery, by global id', async () => {
     audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows();
 
     await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
 
@@ -301,6 +347,7 @@ describe('handlePushCampaignRequested', () => {
 
   it('names the campaign and the subscription in the message reference', async () => {
     audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows();
 
     await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
 
@@ -309,5 +356,76 @@ describe('handlePushCampaignRequested', () => {
     // Suffixing it here as well would store `campaign-7:sub-1:sub-1`.
     const [delivered] = deliverPushNotification.mock.calls[0] as [Record<string, unknown>];
     expect(delivered.reference_id).toBe('campaign-7');
+  });
+
+  it('notifies the wallet pass of a customer who holds one', async () => {
+    audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows([{ objectId: 'issuer.member-1' }]);
+    walletFetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' });
+
+    const outcome = await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
+
+    expect(outcome.wallet).toEqual({ delivered: 1, failed: 0, skipped: 0 });
+    expect(outcome.web_push.delivered).toBe(1);
+  });
+
+  it('addresses the wallet notification by global id and campaign reference', async () => {
+    audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows([{ objectId: 'issuer.member-1' }]);
+    walletFetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' });
+
+    await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
+
+    const [url, init] = walletFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://wallet.internal/v1/wallet/push-notifications');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toMatchObject({
+      'X-Business-Id': 'biz-1',
+      'X-User-Role': 'service',
+    });
+    // The wallet worker resolves the pass by the customer the campaign knows,
+    // and the offer id is the campaign's own reference.
+    expect(JSON.parse(String(init.body))).toEqual({
+      customer_id: 'global-1',
+      notifications: [{ title: 'Coffee', body: 'Two for one today', offerId: 'campaign-7' }],
+    });
+  });
+
+  it('counts a pass the wallet service no longer knows as skipped, not failed', async () => {
+    audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows([{ objectId: 'issuer.member-1' }]);
+    // The default mock answers 409 PASS_NOT_ISSUED: the tracking row exists
+    // here, the pass does not — the race the 409 exists for.
+
+    const outcome = await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
+
+    expect(outcome.wallet).toEqual({ delivered: 0, failed: 0, skipped: 1 });
+    expect(outcome.web_push.delivered).toBe(1);
+  });
+
+  it('counts a wallet failure without failing the web push channel', async () => {
+    audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows([{ objectId: 'issuer.member-1' }]);
+    walletFetch.mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'boom' });
+
+    const outcome = await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
+
+    expect(outcome.wallet).toEqual({ delivered: 0, failed: 1, skipped: 0 });
+    expect(outcome.web_push.delivered).toBe(1);
+    expect(outcome.web_push.failed).toBe(0);
+  });
+
+  it('delivers the wallet notification even with no browser registered', async () => {
+    audienceRows([{ customerId: 'cust-1', globalId: 'global-1' }]);
+    walletPassRows([{ objectId: 'issuer.member-1' }]);
+    walletFetch.mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' });
+    readPushSubscriptions.mockResolvedValue([]);
+
+    const outcome = await handlePushCampaignRequested(payload, 'biz-1', mockEnv);
+
+    // The two channels are independent: the browser is one delivery path and
+    // the wallet is another, so a customer with only the wallet is reachable.
+    expect(outcome.web_push.skipped).toBe(1);
+    expect(outcome.wallet.delivered).toBe(1);
   });
 });
