@@ -44,6 +44,8 @@ export const BUSINESS_ID_TABLES = [
   'message_log',
   'whatsapp_templates',
   'checkins',
+  // Push campaigns composed by an operator; one row per campaign.
+  'push_campaigns',
   // A counter is scoped to the merchant that installed it, and the token exchange
   // mints a credential for it, so a row read by terminal id still has to be a row
   // this tenant owns. Omitted here it would have received no policy when the RLS
