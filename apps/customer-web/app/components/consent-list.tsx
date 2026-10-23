@@ -9,7 +9,7 @@ const consentOptions = [
     description: 'Ofertas y novedades que el commerce quiera compartirte.',
   },
   {
-    name: 'nearbyNotifications',
+    name: 'nearby_notifications',
     label: 'Avisos cercanos',
     // Q2 of `branch-reward-trigger`: this consent also carries the push that
     // says a reward can be redeemed somewhere, so the copy has to say so. A

@@ -59,7 +59,7 @@ vi.mock('../lib/api', () => ({
   api: {
     getProfile: mocks.getProfile,
     getWalletPass: mocks.getWalletPass,
-    getCustomerConsents: vi.fn().mockResolvedValue({ consents: { promotions: false, nearbyNotifications: false } }),
+    getCustomerConsents: vi.fn().mockResolvedValue({ consents: { promotions: false, nearby_notifications: false } }),
     updateCustomerConsent: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
@@ -500,14 +500,18 @@ describe('profile pass behavior', () => {
     const checkboxes = await screen.findAllByRole('checkbox');
     expect(checkboxes.length).toBeGreaterThan(0);
 
-    // Click the first checkbox to toggle it
+    const nearbyNotifications = screen.getByRole('checkbox', { name: /Avisos cercanos/ });
+
     await act(async () => {
-      fireEvent.click(checkboxes[0]);
+      fireEvent.click(nearbyNotifications);
     });
 
-    // The API should be called to update the consent
+    // The UI identifier must match the canonical consent type accepted by the API.
     const apiModule = await import('../lib/api');
-    expect(apiModule.api.updateCustomerConsent).toHaveBeenCalled();
+    expect(apiModule.api.updateCustomerConsent).toHaveBeenCalledWith({
+      consentType: 'nearby_notifications',
+      granted: true,
+    });
   });
 
   // ─── QR ────────────────────────────────────────────────────────────────
