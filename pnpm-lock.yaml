@@ -22,6 +22,10 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
     devDependencies:
       '@eslint/js':
         specifier: ^9.39.5
