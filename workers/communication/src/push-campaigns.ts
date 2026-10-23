@@ -232,10 +232,14 @@ export async function handlePushCampaignRequested(
       if (pass.length > 0) {
         const _objectId = pass[0].objectId;
         // Call wallet worker's push-notifications endpoint via service binding
+        // Include auth headers so wallet worker's auth middleware accepts the request
         const response = await env.wallet.fetch('https://wallet.internal/v1/wallet/push-notifications', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'X-Business-Id': businessId,
+            'X-User-Id': 'communication-worker',
+            'X-User-Role': 'service',
           },
           body: JSON.stringify({
             customer_id: member.globalId,
