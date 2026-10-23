@@ -4,7 +4,7 @@ import {
   customers,
   readConsentMap,
   readPushSubscriptions,
-  customerWalletPasses,
+  customerWalletPasses as _customerWalletPasses,
 } from '@vyloop/db';
 import type { ConsentType } from '@vyloop/types';
 import { and, eq, gte, inArray } from 'drizzle-orm';
@@ -12,17 +12,14 @@ import { and, eq, gte, inArray } from 'drizzle-orm';
 import { findBranchesInRadius } from '../../../packages/db/src/proximity';
 
 import type { Bindings } from './helpers';
-
 declare module './helpers' {
   interface Bindings {
     WALLET_WORKER_URL?: string;
     WALLET_SERVICE_TOKEN?: string;
   }
 }
-
 import { withRls } from './helpers';
 import { deliverPushNotification } from './push-delivery';
-import { customerWalletPasses as customerWalletPassesTable } from '@vyloop/db';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -221,19 +218,19 @@ export async function handlePushCampaignRequested(
     // Also send Google Wallet push notification if customer has a saved pass
     try {
       const pass = await db
-        .select({ objectId: customerWalletPassesTable.objectId })
-        .from(customerWalletPassesTable)
+        .select({ objectId: _customerWalletPasses.objectId })
+        .from(_customerWalletPasses)
         .where(
           and(
-            eq(customerWalletPassesTable.customerId, member.customerId),
-            eq(customerWalletPassesTable.tenantId, businessId),
-            eq(customerWalletPassesTable.state, 'issued'),
+            eq(_customerWalletPasses.customerId, member.customerId),
+            eq(_customerWalletPasses.tenantId, businessId),
+            eq(_customerWalletPasses.state, 'issued'),
           ),
         )
         .limit(1);
 
       if (pass.length > 0) {
-        const objectId = pass[0].objectId;
+        const _objectId = pass[0].objectId;
         // Call wallet worker's push-notifications endpoint
         const walletUrl = env.WALLET_WORKER_URL || 'https://wallet.cl-jmunoz.workers.dev';
         await fetch(walletUrl + '/v1/wallet/push-notifications', {
