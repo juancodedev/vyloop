@@ -240,7 +240,7 @@ export async function handlePushCampaignRequested(
             'Authorization': 'Bearer ' + env.WALLET_SERVICE_TOKEN,
           },
           body: JSON.stringify({
-            customer_id: member.customerId,
+            customer_id: member.globalId,
             notifications: [{
               title: payload.title,
               body: payload.body,
