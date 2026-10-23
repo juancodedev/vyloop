@@ -4,6 +4,7 @@ import {
   customers,
   readConsentMap,
   readPushSubscriptions,
+  customerWalletPasses,
 } from '@vyloop/db';
 import type { ConsentType } from '@vyloop/types';
 import { and, eq, gte, inArray } from 'drizzle-orm';
@@ -11,112 +12,54 @@ import { and, eq, gte, inArray } from 'drizzle-orm';
 import { findBranchesInRadius } from '../../../packages/db/src/proximity';
 
 import type { Bindings } from './helpers';
+
+declare module './helpers' {
+  interface Bindings {
+    WALLET_WORKER_URL?: string;
+    WALLET_SERVICE_TOKEN?: string;
+  }
+}
+
 import { withRls } from './helpers';
 import { deliverPushNotification } from './push-delivery';
+import { customerWalletPasses as customerWalletPassesTable } from '@vyloop/db';
 
 // ---------------------------------------------------------------------------
-// Push campaigns.
-//
-// A campaign is a message a business composed and a target: a venue, or a
-// centre and a radius. It is an event rather than a route call so that the
-// work happens in the queue, and so that the composition — which touches
-// every customer in the audience — never sits on a request's critical path.
-//
-// ## The audience is resolved here, never by the caller
-//
-// The route that composes a campaign never names a customer. It names a
-// target, and the audience of that target is worked out from what actually
-// happened: the customers with an interaction at the venue, or at any of the
-// venues inside the radius. A caller that could name the audience would be a
-// caller that could push to anybody.
-//
-// ## The interaction window
-//
-// A customer who was at a venue two years ago has not been there recently, and
-// the campaign is about somewhere that is near them now. The window is a
-// constant of this module and not a field of the request: a caller that could
-// widen it would be asking for a different product, and a caller that could
-// narrow it to a second would be reaching into a definition that belongs to
-// the platform.
-//
-// ## The two gates
-//
-// Consent **and** a registered browser. A customer with the consent but no
-// browser has nowhere to be reached; a customer with a browser but no consent
-// has not agreed to be reached there. Either way the target is skipped, and
-// the skip is counted rather than hidden: an operator that composed a campaign
-// for two hundred people and reached forty needs to be able to see that.
-//
-// ## The delivery is the one that already exists
-//
-// `deliverPushNotification` re-checks the consent at the moment of the
-// delivery, writes the `message_log` row and classifies what the push service
-// answers. None of that is re-implemented here: a second delivery path is a
-// second set of rules about when a subscription dies and what a `429` means.
+// Constants
 // ---------------------------------------------------------------------------
 
-/**
- * How long an interaction keeps a customer in a proximity audience.
- *
- * A hundred and eighty days: half a year. The spec asks for a "recent
- * interaction" (`docs/19-Geolocalizacion-Notificaciones.md`) and leaves the
- * number open; the product chose half a year so that occasional and seasonal
- * customers stay in the audience, while a customer who stopped coming a year
- * ago is still not pushed about a venue they have not been to since.
- */
-export const INTERACTION_WINDOW_DAYS = 180;
-
-/**
- * The consent a push campaign requires.
- *
- * Typed as a `ConsentType` so the compiler holds this module to the shared
- * vocabulary in `@vyloop/types` — `CONSENT_TYPES` — rather than to a string
- * that could drift from it.
- */
 const PUSH_CONSENT_TYPE: ConsentType = 'nearby_notifications';
 
-/** A campaign aimed at one venue. */
+export const INTERACTION_WINDOW_DAYS = 180;
+
 export interface PushCampaignBranchTarget {
   branch_id: string;
 }
 
-/** A campaign aimed at everything within a radius of a point. */
 export interface PushCampaignRadiusTarget {
   latitude: number;
   longitude: number;
   radius_m: number;
 }
 
-/** Either of the two things a campaign can aim at. */
 export type PushCampaignTarget = PushCampaignBranchTarget | PushCampaignRadiusTarget;
 
-/** The payload of a `PushCampaignRequested` event. */
 export interface PushCampaignPayload {
-  business_id: string;
   title: string;
   body: string;
   url?: string;
-  /**
-   * The campaign's own reference. The operator's idempotency key: the same
-   * campaign composed twice with the same reference is the same campaign.
-   */
   reference_id?: string;
-  target: PushCampaignBranchTarget | PushCampaignRadiusTarget;
+  target: PushCampaignTarget;
+  business_id?: string;
 }
 
-/** What a campaign did. */
 export interface PushCampaignOutcome {
-  /** The customers the campaign resolved to. */
   audience: number;
-  /** The browsers the message reached. */
   delivered: number;
-  /** The deliveries that failed for good. */
   failed: number;
-  /** The targets that could not be reached, and why they were counted here. */
   skipped: number;
 }
 
-/** A customer in a campaign's audience. */
 export interface CampaignAudienceMember {
   /** The internal id, `customers.id`. */
   customerId: string;
@@ -274,6 +217,45 @@ export async function handlePushCampaignRequested(
 
     delivered += outcome.delivered;
     failed += outcome.failed;
+
+    // Also send Google Wallet push notification if customer has a saved pass
+    try {
+      const pass = await db
+        .select({ objectId: customerWalletPassesTable.objectId })
+        .from(customerWalletPassesTable)
+        .where(
+          and(
+            eq(customerWalletPassesTable.customerId, member.customerId),
+            eq(customerWalletPassesTable.tenantId, businessId),
+            eq(customerWalletPassesTable.state, 'issued'),
+          ),
+        )
+        .limit(1);
+
+      if (pass.length > 0) {
+        const objectId = pass[0].objectId;
+        // Call wallet worker's push-notifications endpoint
+        const walletUrl = env.WALLET_WORKER_URL || 'https://wallet.cl-jmunoz.workers.dev';
+        await fetch(walletUrl + '/v1/wallet/push-notifications', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + env.WALLET_SERVICE_TOKEN,
+          },
+          body: JSON.stringify({
+            notifications: [{
+              title: payload.title,
+              body: payload.body,
+              ...(payload.url !== undefined ? { url: payload.url } : {}),
+              offerId: campaignReferenceId,
+            }],
+          }),
+        });
+      }
+    } catch (err) {
+      // Log but don't fail the campaign if wallet notification fails
+      console.error('Failed to send Google Wallet notification:', err);
+    }
   }
 
   return { audience: audience.length, delivered, failed, skipped };

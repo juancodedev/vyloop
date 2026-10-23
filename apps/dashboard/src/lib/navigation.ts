@@ -11,6 +11,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+import { MapPinIcon } from './icons/map-pin';
+
 export interface NavItem {
   label: string;
   href: string;
@@ -44,6 +46,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: 'Programa', href: '/dashboard/loyalty', icon: Gift },
       { label: 'Canjes', href: '/dashboard/loyalty/rewards', icon: Star },
       { label: 'QR', href: '/dashboard/qr', icon: QrCode },
+      { label: 'Sedes', href: '/dashboard/settings/venues', icon: MapPinIcon },
     ],
   },
   {
@@ -81,6 +84,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard/loyalty/config': 'Configuración de Lealtad',
   '/dashboard/loyalty/tiers': 'Niveles de Lealtad',
   '/dashboard/loyalty/rewards': 'Recompensas',
+  '/dashboard/settings/venues': 'Sedes',
   '/dashboard/loyalty/customers': 'Puntos de Clientes',
   '/dashboard/qr': 'QR del Negocio',
   '/dashboard/settings': 'Configuración',
