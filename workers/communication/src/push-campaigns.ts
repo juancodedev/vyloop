@@ -233,7 +233,7 @@ export async function handlePushCampaignRequested(
         const _objectId = pass[0].objectId;
         // Call wallet worker's push-notifications endpoint
         const walletUrl = env.WALLET_WORKER_URL || 'https://wallet.cl-jmunoz.workers.dev';
-        await fetch(walletUrl + '/v1/wallet/push-notifications', {
+        const response = await fetch(walletUrl + '/v1/wallet/push-notifications', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -249,6 +249,10 @@ export async function handlePushCampaignRequested(
             }],
           }),
         });
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Wallet push failed: ${response.status} ${text}`);
+        }
       }
     } catch (err) {
       // Log but don't fail the campaign if wallet notification fails
