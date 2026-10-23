@@ -30,5 +30,11 @@
     ]
   }
 ,
+  "services": [
+    {
+      "binding": "wallet",
+      "service": "wallet"
+    }
+  ],
   "observability": { "enabled": true, "head_sampling_rate": 1 }
 }

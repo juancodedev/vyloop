@@ -1,4 +1,4 @@
-import type { Queue, KVNamespace } from '@cloudflare/workers-types';
+import type { Queue, KVNamespace, Fetcher } from '@cloudflare/workers-types';
 import { setCurrentBusinessId } from '@vyloop/db';
 import { WHATSAPP_OUTBOUND_REQUESTED, createEnvelope } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
@@ -44,6 +44,8 @@ export interface Bindings {
   VAPID_PRIVATE_KEY: string;
   /** Who to contact about this sender, as a `mailto:` URL. */
   VAPID_SUBJECT: string;
+  /** Wallet worker service binding for Google Wallet push notifications. */
+  wallet: Fetcher;
 }
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: AuthHeaders } };

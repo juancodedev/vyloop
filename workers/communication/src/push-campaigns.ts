@@ -231,13 +231,11 @@ export async function handlePushCampaignRequested(
 
       if (pass.length > 0) {
         const _objectId = pass[0].objectId;
-        // Call wallet worker's push-notifications endpoint
-        const walletUrl = env.WALLET_WORKER_URL || 'https://wallet.cl-jmunoz.workers.dev';
-        const response = await fetch(walletUrl + '/v1/wallet/push-notifications', {
+        // Call wallet worker's push-notifications endpoint via service binding
+        const response = await env.wallet.fetch('https://wallet.internal/v1/wallet/push-notifications', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + env.WALLET_SERVICE_TOKEN,
           },
           body: JSON.stringify({
             customer_id: member.globalId,

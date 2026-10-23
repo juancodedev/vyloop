@@ -1,4 +1,4 @@
-import type { KVNamespace, Queue } from '@cloudflare/workers-types';
+import type { KVNamespace, Queue, Fetcher } from '@cloudflare/workers-types';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -107,6 +107,10 @@ const mockEnv = {
   VAPID_PUBLIC_KEY: 'public',
   VAPID_PRIVATE_KEY: 'private',
   VAPID_SUBJECT: 'mailto:ops@example.test',
+  wallet: { 
+    fetch: vi.fn(async () => new Response(null, { status: 200 })),
+    connect: vi.fn(),
+  } as unknown as Fetcher,
 };
 
 const SUBSCRIPTION = {
