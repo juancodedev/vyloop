@@ -251,12 +251,15 @@ export async function handlePushCampaignRequested(
         });
         if (!response.ok) {
           const text = await response.text().catch(() => '');
-          throw new Error(`Wallet push failed: ${response.status} ${text}`);
+          const msg = `Wallet push failed: ${response.status} ${text}`;
+          console.error('Wallet push error:', msg);
+          throw new Error(msg);
         }
       }
     } catch (err) {
       // Log but don't fail the campaign if wallet notification fails
-      console.error('Failed to send Google Wallet notification:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('Failed to send Google Wallet notification:', message);
     }
   }
 
