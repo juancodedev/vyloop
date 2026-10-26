@@ -5,14 +5,14 @@ and `pnpm -r lint` before closing a phase.
 
 ## Phase 1: Frontend with the current API
 
-- [ ] 1.1 Add date helpers in `apps/customer-web/app/lib/format.ts`: `formatMovementDate` (relative up to 6 days, then "28 sep", year when not current), `formatClp`, `initials`. Unit tests.
-- [ ] 1.2 `ProfileTopBar` and `IdentityCard` (avatar, name, member since, tier chip, balance, tier line). Reuse `currentTierName` rules from `member-pass.tsx`. Behavior tests for the identity-card scenarios.
-- [ ] 1.3 `PurchaseTimeline` replacing `Activity`, keeping `buildTimeline`. Handles optional `purchaseAmount` (absent today, so titles fall back to note). Behavior tests for the row scenarios.
-- [ ] 1.4 `PersonalData` read-only list (omit empty fields, birthday as day and month). No "Editar" yet.
+- [x] 1.1 Add date helpers in `apps/customer-web/app/lib/format.ts`: `formatMovementDate` (relative up to 6 days, then "28 sep", year when not current), `formatClp`, `initials`. Unit tests.
+- [x] 1.2 `ProfileTopBar` and `IdentityCard` (avatar, name, member since, tier chip, balance, tier line). Reuse `currentTierName` rules from `member-pass.tsx`. Behavior tests for the identity-card scenarios.
+- [x] 1.3 `PurchaseTimeline` replacing `Activity`, keeping `buildTimeline`. Handles optional `purchaseAmount` (absent today, so titles fall back to note). Behavior tests for the row scenarios.
+- [x] 1.4 `PersonalData` read-only list (omit empty fields, birthday as day and month). No "Editar" yet.
 - [ ] 1.5 `QrDock` + `QrSheet` (dialog, focus trap, Esc, wake lock with tolerated refusal, member code from the wallet pass when present). Remove the inline `MemberQr` from the page.
-- [ ] 1.6 `WalletCard` compact variant.
-- [ ] 1.7 Recompose `app/profile/page.tsx` in the new order with the new skeleton. Update `profile.behavior.test.tsx` and `profile.contract.test.ts`, keeping every data-honesty assertion.
-- [ ] 1.8 Styles in `globals.css` using design-system tokens only. Check at 360px and with reduced motion.
+- [x] 1.6 `WalletCard` compact variant.
+- [x] 1.7 Recompose `app/profile/page.tsx` in the new order with the new skeleton. Update `profile.behavior.test.tsx` and `profile.contract.test.ts`, keeping every data-honesty assertion.
+- [x] 1.8 Styles in `globals.css` using design-system tokens only. Check at 360px and with reduced motion.
 
 ## Phase 2: Store the purchase amount
 
