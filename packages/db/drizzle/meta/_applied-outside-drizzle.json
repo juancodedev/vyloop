@@ -214,6 +214,21 @@
           "name": "idx_push_campaigns_business"
         }
       ]
+    },
+    {
+      "tag": "0023_wallet_messages",
+      "when": 1792800000000,
+      "hash": "9bfec8ede21eb16c7202ca26cc4ffbe1584160e824caab25a26b5798042a7cb9",
+      "evidence": [
+        {
+          "kind": "table",
+          "name": "wallet_messages"
+        },
+        {
+          "kind": "constraint",
+          "name": "wallet_message_deliveries_pkey"
+        }
+      ]
     }
   ]
 }
