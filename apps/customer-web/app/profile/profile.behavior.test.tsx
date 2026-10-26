@@ -218,7 +218,7 @@ describe('profile pass behavior', () => {
 
     render(<ProfilePage />);
 
-    await screen.findByRole('region', { name: 'Cargando tu pase' });
+    expect(screen.getByRole('status').textContent).toContain('Cargando tu pase');
     expect(mocks.replace).not.toHaveBeenCalled();
     expect(mocks.getProfile).not.toHaveBeenCalled();
   });
@@ -570,14 +570,20 @@ describe('profile pass behavior', () => {
   // ─── Honest session handling ───────────────────────────────────────────
 
   it('clears the session and returns home on logout', async () => {
-    await renderPage();
+    const { rerender } = await renderPage();
+    mocks.logout.mockImplementation(() => {
+      mocks.customer = null;
+    });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Cerrar sesión' }));
     });
 
+    rerender(<ProfilePage />);
+
     expect(mocks.logout).toHaveBeenCalledTimes(1);
     expect(mocks.push).toHaveBeenCalledWith('/');
+    expect(mocks.replace).not.toHaveBeenCalled();
   });
 
   // ─── The Google Wallet pass ────────────────────────────────────────────

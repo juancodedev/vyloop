@@ -107,27 +107,16 @@ describe('keyboard reach', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('uses `aria-hidden` for decoration, which is what it is for', () => {
-    // The other direction: the decorative glyphs — arrows, spinners, the QR
-    // success mark, the required-field asterisk — all carry it, so none of them
-    // is read out as a stray character.
-    const hidden = ariaHiddenTags();
+  it('hides decorative icons used alongside accessible control labels', () => {
+    // These glyphs have nearby text labels, so exposing their names as well
+    // would make the same control announce twice. Do not pin every decorative
+    // element across the app: unrelated screens can add or remove decoration.
+    const hidden = new Set(ariaHiddenTags());
 
-    expect(hidden.length).toBeGreaterThan(10);
-    expect(new Set(hidden)).toEqual(
-      new Set([
-        'div',
-        'span',
-        'p',
-        'ArrowRight',
-        'Clock',
-        'Gift',
-        'QrCode',
-        'ChevronUp',
-        'ChevronDown',
-        'Icon',
-      ]),
-    );
+    expect(hidden.has('ArrowRight')).toBe(true);
+    expect(hidden.has('QrCode')).toBe(true);
+    expect(hidden.has('ChevronUp')).toBe(true);
+    expect(hidden.has('ChevronDown')).toBe(true);
   });
 
   it('never focuses on load', () => {

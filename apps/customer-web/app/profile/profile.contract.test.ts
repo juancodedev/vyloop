@@ -82,11 +82,9 @@ describe('Stage 4 club-barrio pass contract', () => {
     expect(page).not.toMatch(/no ten[eé]s (una |tu )?(tarjeta|pase)/i);
     expect(page).not.toMatch(/tu cuenta (est[áa] mal|no tiene)/i);
 
-    // And the member code is shown, with the reason it only appears here. A
-    // customer who sees a profile without one has to be told it is normal, or
-    // they conclude their account is broken — see `issuance.ts` for why the
-    // code is minted lazily rather than at registration.
-    expect(page).toMatch(/MEMBER_CODE_PEPPER/);
+    // Member-code issuance is server-owned and lazy. The customer page must not
+    // contain or depend on the server-side pepper.
+    expect(page).not.toMatch(/MEMBER_CODE_PEPPER/);
   });
 
   it('leaves the save link to the API rather than building one', () => {
