@@ -60,10 +60,10 @@ Chained PRs recommended: Yes
 
 ## Unit 4: API and Delivery
 
-- [ ] 4.1 `addObjectMessage` on the Google client (loyalty object `addmessage`).
-- [ ] 4.2 `POST /v1/wallet/messages`: operator gate, validation, link allowlist, daily limit, `202` with `eligible`.
-- [ ] 4.3 Queue fan-out, one idempotent job per object; budget decides `TEXT_AND_NOTIFY` vs `TEXT`; `QuotaExceededException` → `TEXT`, no retry.
-- [ ] 4.4 `GET /v1/wallet/messages` with counts, tenant-scoped.
+- [x] 4.1 `addObjectMessage` on the Google client (loyalty object `addmessage`).
+- [x] 4.2 `POST /v1/wallet/messages`: operator gate, validation, link allowlist, daily limit, `202` with `eligible`.
+- [x] 4.3 Queue fan-out, one idempotent job per object; budget decides `TEXT_AND_NOTIFY` vs `TEXT`; `QuotaExceededException` → `TEXT`, no retry.
+- [x] 4.4 `GET /v1/wallet/messages` with counts, tenant-scoped.
 - [ ] 4.5 Gateway route, `docs/08` entry.
 
 ## Unit 5: Wallet Section

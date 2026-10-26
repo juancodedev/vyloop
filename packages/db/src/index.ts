@@ -43,6 +43,8 @@ export {
   messageLog,
   pushCampaigns,
   whatsappTemplates,
+  walletMessages,
+  walletMessageDeliveries,
   tenantWalletPrograms,
   customerWalletPasses,
 } from './schema';

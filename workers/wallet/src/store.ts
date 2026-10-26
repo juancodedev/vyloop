@@ -865,6 +865,7 @@ export interface WalletStore {
    */
   listConsentingPasses(input: {
     tenantId: string;
+    consentType: string;
     after: string | null;
     limit: number;
   }): Promise<ConsentingPassRow[]>;

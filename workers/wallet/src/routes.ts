@@ -1,4 +1,6 @@
-import { createDb } from '@vyloop/db';
+import { createDb, walletMessageDeliveries, walletMessages } from '@vyloop/db';
+import { WALLET_MESSAGE_LIMITS } from '@vyloop/types';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import { BalanceNotDisplayableError, balanceDisplayFailure } from './balance';
@@ -22,6 +24,7 @@ import {
   extractAuthHeaders,
   googleWalletClientFor,
   parseAllowedOrigins,
+  parseCustomerWebBaseUrl,
   parseDemoMode,
   requireOperatorRole,
 } from './helpers';
@@ -37,6 +40,9 @@ import {
 import { createLocationsSource } from './locations-source';
 import type { PushNotification } from './object';
 import { reconcilePass, updatePassPushNotifications } from './reconcile';
+
+// One message per business per day (decided Q3).
+const WALLET_DAILY_MESSAGE_LIMIT = 1;
 
 // ---------------------------------------------------------------------------
 // Router
@@ -1304,6 +1310,226 @@ router.post('/v1/wallet/push-notifications', async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+// POST /v1/wallet/messages
+//
+// Compose and send a manual message to every eligible pass of the business.
+//
+// Eligible means: the pass is issued and its customer granted `promotions`.
+// The message is recorded first, then delivered asynchronously, one pass at a
+// time, so a 202 here means "accepted" and not "sent".
+router.post('/v1/wallet/messages', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  const tenantId = auth.businessId;
+
+  let body: { header?: unknown; body?: unknown; link?: unknown };
+  try {
+    body = (await c.req.json()) as { header?: unknown; body?: unknown; link?: unknown };
+  } catch {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Body must be JSON' } }, 422);
+  }
+
+  const candidate = body as Record<string, unknown>;
+
+  const header = candidate.header;
+  if (typeof header !== 'string' || header.trim() === '') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'header is required' } }, 422);
+  }
+  if (header.length < WALLET_MESSAGE_LIMITS.header.min || header.length > WALLET_MESSAGE_LIMITS.header.max) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: `header must be ${WALLET_MESSAGE_LIMITS.header.min}-${WALLET_MESSAGE_LIMITS.header.max} characters` } },
+      422,
+    );
+  }
+
+  const messageBody = candidate.body;
+  if (typeof messageBody !== 'string' || messageBody.trim() === '') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'body is required' } }, 422);
+  }
+  if (messageBody.length < WALLET_MESSAGE_LIMITS.body.min || messageBody.length > WALLET_MESSAGE_LIMITS.body.max) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: `body must be ${WALLET_MESSAGE_LIMITS.body.min}-${WALLET_MESSAGE_LIMITS.body.max} characters` } },
+      422,
+    );
+  }
+
+  const link = candidate.link;
+  let linkValue: string | null = null;
+  if (link !== undefined && link !== null) {
+    if (typeof link !== 'string') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'link must be a string' } }, 422);
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(link);
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'link must be a valid URL' } }, 422);
+    }
+    const allowedOrigin = new URL(parseCustomerWebBaseUrl(c.env.WALLET_CUSTOMER_WEB_BASE_URL)).origin;
+    if (parsed.origin !== allowedOrigin) {
+      return c.json({ error: { code: 'LINK_NOT_ALLOWED', message: 'link origin is not allowed' } }, 422);
+    }
+    linkValue = link;
+  }
+
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const store = createDrizzleWalletStore(db);
+
+  // Daily limit: one message per business per day.
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const recent = await db
+    .select()
+    .from(walletMessages)
+    .where(and(eq(walletMessages.businessId, tenantId), gte(walletMessages.createdAt, since)));
+  if (Array.isArray(recent) && recent.length >= WALLET_DAILY_MESSAGE_LIMIT) {
+    return c.json({ error: { code: 'WALLET_MESSAGE_LIMIT', message: 'Daily message limit reached' } }, 429);
+  }
+
+  // Eligible passes: issued, with promotions consent.
+  const eligibleRows = await store.listConsentingPasses({ tenantId, consentType: 'promotions', after: null, limit: 10000 });
+  const eligible = eligibleRows.length;
+
+  const messageId = crypto.randomUUID();
+  await db.insert(walletMessages).values({
+    id: messageId,
+    businessId: tenantId,
+    header,
+    body: messageBody,
+    link: linkValue,
+    createdBy: auth.userId,
+  });
+
+  // Fan out asynchronously. Each delivery is idempotent on (message_id, object_id)
+  // via the primary key, so a retry never double-delivers.
+  const fanOut = async () => {
+    const program = await store.findProgram(tenantId);
+    if (!program) return;
+    const client = googleWalletClientFor(c.env);
+
+    const passes = await store.listConsentingPasses({ tenantId, consentType: 'promotions', after: null, limit: 10000 });
+    for (let i = 0; i < passes.length; i += 5) {
+      const batch = passes.slice(i, i + 5);
+      await Promise.allSettled(
+        batch.map(async (pass) => {
+          // Idempotency: claim the delivery row first.
+          try {
+            await db.insert(walletMessageDeliveries).values({
+              messageId,
+              businessId: tenantId,
+              objectId: pass.objectId,
+              mode: 'pending',
+              status: 'pending',
+              deliveredAt: null,
+            });
+          } catch {
+            // Already claimed by a previous run — skip.
+            return;
+          }
+
+          const budget = await store.countNotifyingDeliveries({ tenantId, objectId: pass.objectId, since });
+          const mode = budget < 3 ? 'notify' : 'text';
+
+          try {
+            await client.addMessage(pass.objectId, program.classId, {
+              header,
+              body: messageBody,
+              id: messageId,
+              messageType: mode === 'notify' ? 'TEXT_AND_NOTIFY' : 'TEXT',
+              ...(linkValue ? { url: linkValue } : {}),
+            });
+            await db
+              .update(walletMessageDeliveries)
+              .set({ mode, status: 'delivered', deliveredAt: new Date() })
+              .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId)));
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const status = msg.includes('QuotaExceededException') ? 'rejected' : 'failed';
+            const finalMode = msg.includes('QuotaExceededException') ? 'text' : mode;
+            try {
+              // Retry once as TEXT if the quota was exceeded.
+              if (msg.includes('QuotaExceededException')) {
+                await client.addMessage(pass.objectId, program.classId, {
+                  header,
+                  body: messageBody,
+                  id: messageId,
+                  messageType: 'TEXT',
+                  ...(linkValue ? { url: linkValue } : {}),
+                });
+                await db
+                  .update(walletMessageDeliveries)
+                  .set({ mode: 'text', status: 'delivered', deliveredAt: new Date() })
+                  .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId)));
+                return;
+              }
+            } catch {
+              // fall through to recording failure
+            }
+            await db
+              .update(walletMessageDeliveries)
+              .set({ mode: finalMode, status })
+              .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId)));
+          }
+        }),
+      );
+    }
+  };
+
+  let waitUntil: ((p: Promise<unknown>) => void) | undefined;
+  try {
+    waitUntil = c.executionCtx.waitUntil.bind(c.executionCtx);
+  } catch {
+    waitUntil = undefined;
+  }
+  if (waitUntil) {
+    waitUntil(fanOut());
+  } else {
+    // No execution context (tests): run inline so the delivery is observable.
+    await fanOut();
+  }
+
+  return c.json({ messageId, eligible }, 202);
+});
+
+// GET /v1/wallet/messages
+router.get('/v1/wallet/messages', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  const tenantId = auth.businessId;
+  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+
+  const messages = await db
+    .select()
+    .from(walletMessages)
+    .where(eq(walletMessages.businessId, tenantId))
+    .orderBy(desc(walletMessages.createdAt));
+
+  const result = [];
+  for (const m of messages) {
+    const deliveries = await db
+      .select()
+      .from(walletMessageDeliveries)
+      .where(eq(walletMessageDeliveries.messageId, m.id));
+    const counts = { total: deliveries.length, delivered: 0, failed: 0, rejected: 0, pending: 0 };
+    for (const d of deliveries) {
+      if (d.status === 'delivered') counts.delivered += 1;
+      else if (d.status === 'failed') counts.failed += 1;
+      else if (d.status === 'rejected') counts.rejected += 1;
+      else counts.pending += 1;
+    }
+    result.push({ ...m, counts });
+  }
+
+  return c.json({ messages: result });
 });
 
 export default router;

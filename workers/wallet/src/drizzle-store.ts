@@ -854,6 +854,7 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
      */
     async listConsentingPasses(input: {
       tenantId: string;
+      consentType: string;
       after: string | null;
       limit: number;
     }): Promise<ConsentingPassRow[]> {
@@ -866,7 +867,7 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
           JOIN consents c
             ON c.business_id = p.tenant_id
            AND c.customer_id = p.customer_id
-           AND c.consent_type = 'nearby_notifications'
+           AND c.consent_type = ${input.consentType}
            AND c.granted = true
          WHERE p.tenant_id = ${input.tenantId}::uuid
            AND p.state = 'issued'

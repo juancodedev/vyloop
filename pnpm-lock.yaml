@@ -593,6 +593,9 @@ importers:
       '@vyloop/request-context':
         specifier: workspace:*
         version: link:../../packages/request-context
+      '@vyloop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)

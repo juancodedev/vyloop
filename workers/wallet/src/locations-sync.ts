@@ -138,6 +138,7 @@ export async function syncBusinessLocations(
   // passing a huge number.
   const rows = await deps.store.listConsentingPasses({
     tenantId: input.tenantId,
+    consentType: 'nearby_notifications',
     after: input.after ?? null,
     limit: limit + 1,
   });
