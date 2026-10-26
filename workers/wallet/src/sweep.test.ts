@@ -504,6 +504,10 @@ class SweepStore implements WalletStore {
     throw new Error('findInactivePassCandidates is not reachable from the sweep.');
   }
 
+  async listConsentingPasses(): Promise<never> {
+    throw new Error('listConsentingPasses is not reachable from the sweep.');
+  }
+
   async setProgramDemoMode(tenant: string, demoMode: boolean): Promise<number> {
     this.record('setProgramDemoMode', tenant);
     const row = this.programs[tenant];

@@ -38,19 +38,19 @@ Chained PRs recommended: Yes
 
 ## Unit 1: Venues Section (step 1)
 
-- [ ] 1.1 API client in `apps/dashboard/src/lib/api.ts`: create, update and deactivate venues; extend the venue record with `latitude`, `longitude` and `isActive`.
-- [ ] 1.2 `dashboard/settings/venues` page: list with located / not located and active / inactive.
-- [ ] 1.3 Venue form with two coordinate fields and a "use my location" button (Q6 = no map); sends both coordinates or neither.
-- [ ] 1.4 Readable messages for `BRANCH_LOCATION_INCOMPLETE`, `BRANCH_LOCATION_INVALID`, `BRANCH_LOCATION_OUT_OF_RANGE`.
-- [ ] 1.5 Tests per scenario in `specs/growth-dashboard` "Venue Management".
+- [x] 1.1 API client in `apps/dashboard/src/lib/api.ts`: create, update and deactivate venues; extend the venue record with `latitude`, `longitude` and `isActive`.
+- [x] 1.2 `dashboard/settings/venues` page: list with located / not located and active / inactive.
+- [x] 1.3 Venue form with two coordinate fields and a "use my location" button (Q6 = no map); sends both coordinates or neither.
+- [x] 1.4 Readable messages for `BRANCH_LOCATION_INCOMPLETE`, `BRANCH_LOCATION_INVALID`, `BRANCH_LOCATION_OUT_OF_RANGE`.
+- [x] 1.5 Tests per scenario in `specs/growth-dashboard` "Venue Management".
 
 ## Unit 2: Venue Locations on the Pass
 
-- [ ] 2.1 Add `merchantLocations` to `LoyaltyObject` / `LoyaltyObjectPatch` in `google-client.ts`; keep the class builder free of it (`class.test.ts` whitelist stays as is).
-- [ ] 2.2 Pure selector: venues → at most 10 `MerchantLocation`, filtered by active and located (Q1 order).
-- [ ] 2.3 Build objects with locations only for consenting customers (`object.ts`, `issuance.ts`).
-- [ ] 2.4 Sync on consent grant/withdraw and on venue register/update/deactivate; no `notifyPreference`.
-- [ ] 2.5 Tests per scenario in `specs/google-wallet` "Venue Locations on the Pass" and "Keep Locations in Step".
+- [x] 2.1 Add `merchantLocations` to `LoyaltyObject` / `LoyaltyObjectPatch` in `google-client.ts`; keep the class builder free of it (`class.test.ts` whitelist stays as is).
+- [x] 2.2 Pure selector: venues → at most 10 `MerchantLocation`, filtered by active and located (Q1 order).
+- [x] 2.3 Build objects with locations only for consenting customers (`object.ts`, `issuance.ts`).
+- [x] 2.4 Sync on consent grant/withdraw and on venue register/update/deactivate; no `notifyPreference`.
+- [x] 2.5 Tests per scenario in `specs/google-wallet` "Venue Locations on the Pass" and "Keep Locations in Step".
 
 ## Unit 3: Storage
 

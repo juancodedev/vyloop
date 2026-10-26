@@ -187,8 +187,7 @@ class CountingStore implements WalletStore {
     tenantId: string;
     cutoff: Date;
     limit: number;
-  }): Promise<InactivityCandidateRow[]> {
-    this.calls.push('findInactivePassCandidates');
+  }): Promise<InactivityCandidateRow[]> {    this.calls.push('findInactivePassCandidates');
     this.candidateQueries.push(input);
 
     // The tenant filter first, and honestly: rows belonging to other tenants are
@@ -209,6 +208,10 @@ class CountingStore implements WalletStore {
       }));
 
     return candidates;
+  }
+
+  async listConsentingPasses(): Promise<never> {
+    throw new Error('listConsentingPasses is not used by the inactivity rule.');
   }
 
   async recordPassLifecycle(update: PassLifecycleUpdate): Promise<number> {

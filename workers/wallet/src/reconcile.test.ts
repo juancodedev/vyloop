@@ -303,6 +303,14 @@ class FakeStore implements WalletStore {
     throw new Error('findInactivePassCandidates is not used by this test suite.');
   }
 
+  /**
+   * The nearby-locations fan-out. Unreachable from this suite for the same
+   * reason as the query above.
+   */
+  async listConsentingPasses(): Promise<never> {
+    throw new Error('listConsentingPasses is not used by this test suite.');
+  }
+
   async setProgramDemoMode(): Promise<number> {
     this.record('setProgramDemoMode', TENANT);
     return 1;

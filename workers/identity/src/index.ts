@@ -56,6 +56,12 @@ export interface Env {
  */
 export interface WalletWorker {
   provisionClass(input: { tenantId: string }): Promise<unknown>;
+  syncLocations(input: {
+    tenantId: string;
+    customerGlobalId?: string;
+    businessWide?: boolean;
+    after?: string | null;
+  }): Promise<unknown>;
 }
 
 type Variables = {
@@ -727,6 +733,81 @@ function scheduleWalletProvisioning(c: Context<AppEnv>, tenantId: string): void 
   waitUntil(handled);
 }
 
+/**
+ * Bring a customer's pass, or a business's consenting passes, in step with the
+ * venue catalogue.
+ *
+ * ## Why this is a best-effort dispatch, like `scheduleWalletProvisioning`
+ *
+ * The consent or venue change is already committed by the time this runs, so
+ * the wallet's failure to project it is not a reason to fail the request that
+ * recorded it. A business that registered a venue and saw a 500 would believe
+ * the venue did not register, and the pass would be stale either way.
+ *
+ * ## Why business-wide mode pages
+ *
+ * See `SyncLocationsInput` in the wallet worker. The caller loops so that a
+ * tenant with more passes than one call handles is still reached, bounded by
+ * `MAX_LOCATION_SYNC_PAGES`; a tenant beyond that is left to a manual re-run,
+ * which is logged.
+ */
+const MAX_LOCATION_SYNC_PAGES = 20;
+
+function scheduleLocationsSync(
+  c: Context<AppEnv>,
+  input: { tenantId: string; customerGlobalId?: string; businessWide?: boolean },
+): void {
+  const wallet = c.env?.WALLET;
+  if (!wallet) {
+    console.error(
+      `[identity] No WALLET service binding, so the locations for tenant ${input.tenantId} were not ` +
+        'synchronised. The venue or consent change is recorded; the pass will not reflect it.',
+    );
+    return;
+  }
+
+  let dispatch: () => Promise<unknown>;
+  if (input.customerGlobalId !== undefined) {
+    dispatch = async () => wallet.syncLocations({ tenantId: input.tenantId, customerGlobalId: input.customerGlobalId! });
+  } else {
+    dispatch = async () => {
+      let after: string | null = null;
+      for (let page = 0; page < MAX_LOCATION_SYNC_PAGES; page++) {
+        const result = await wallet.syncLocations({ tenantId: input.tenantId, businessWide: true, after });
+        const next = (result as { kind?: string; outcome?: { nextCursor?: string | null } } | undefined)?.outcome?.nextCursor;
+        after = next ?? null;
+        if (after === null) return result;
+      }
+      console.warn(
+        `[identity] Locations sync for tenant ${input.tenantId} stopped after ${MAX_LOCATION_SYNC_PAGES} pages; ` +
+          'passes beyond that were not reached by this trigger.',
+      );
+    };
+  }
+
+  let handled: Promise<unknown>;
+  try {
+    handled = dispatch();
+  } catch (err: unknown) {
+    console.error(`[identity] Could not reach the wallet to synchronise locations for tenant ${input.tenantId}:`, err);
+    return;
+  }
+
+  let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+  try {
+    waitUntil = c.executionCtx.waitUntil.bind(c.executionCtx);
+  } catch {
+    waitUntil = undefined;
+  }
+
+  if (waitUntil === undefined) {
+    console.error(`[identity] No ExecutionContext to hand tenant ${input.tenantId}'s location sync to.`);
+    return;
+  }
+
+  waitUntil(handled);
+}
+
 app.post('/v1/auth/business/signup', async (c) => {
   const dbUrl = c.env.DATABASE_URL;
   if (!dbUrl) {
@@ -908,17 +989,8 @@ app.get('/v1/customers/me/consents', async (c) => {
   }
 
   const db = createDb(dbUrl);
-  const { consents } = await import('@vyloop/db');
-
-  const rows = await db
-    .select()
-    .from(consents)
-    .where(and(eq(consents.businessId, claims.business_id), eq(consents.customerId, claims.sub)));
-
-  const consentsMap = rows.reduce((acc, row) => {
-    acc[row.consentType] = row.granted;
-    return acc;
-  }, {} as Record<string, boolean>);
+  const { readCustomerConsents } = await import('./customer-consents');
+  const consentsMap = await readCustomerConsents(db, claims.sub, claims.business_id);
 
   return c.json({ consents: consentsMap });
 });
@@ -993,31 +1065,36 @@ app.post('/v1/customers/me/consents', async (c) => {
   }
 
   const db = createDb(dbUrl);
-  const { consents } = await import('@vyloop/db');
-  const { sql } = await import('drizzle-orm');
+  const { recordCustomerConsent } = await import('./customer-consents');
 
+  let recorded: boolean;
   try {
-    await db
-      .insert(consents)
-      .values({
-        businessId: claims.business_id,
-        customerId: claims.sub,
-        consentType: candidate.consentType,
-        granted: candidate.granted,
-        grantedAt: candidate.granted ? sql`now()` : null,
-        revokedAt: candidate.granted ? null : sql`now()`,
-      })
-      .onConflictDoUpdate({
-        target: [consents.businessId, consents.customerId, consents.consentType],
-        set: {
-          granted: candidate.granted,
-          grantedAt: candidate.granted ? sql`now()` : null,
-          revokedAt: candidate.granted ? null : sql`now()`,
-        },
-      });
+    recorded = await recordCustomerConsent(db, {
+      globalId: claims.sub,
+      businessId: claims.business_id,
+      consentType: candidate.consentType,
+      granted: candidate.granted,
+      ipAddress: c.req.header('CF-Connecting-IP') ?? null,
+    });
   } catch (err) {
     console.error('Consent upsert error:', err);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to save consent' } }, 500);
+  }
+
+  if (!recorded) {
+    return c.json({ error: { code: 'CUSTOMER_SELF_NOT_FOUND', message: 'Customer not found' } }, 404);
+  }
+
+  // A nearby-notifications change moves the consent-bearing field on the pass.
+  // The grant or withdrawal is already recorded, so a wallet that is unreachable
+  // only delays the projection; the daily sweep is not the backstop for a
+  // withdrawal, which is why this is dispatched here rather than left to one.
+  const consentType = candidate.consentType;
+  if (consentType === 'nearby_notifications') {
+    scheduleLocationsSync(c, {
+      tenantId: claims.business_id,
+      customerGlobalId: claims.sub,
+    });
   }
 
   return c.json({ ok: true });
@@ -1325,6 +1402,10 @@ app.post('/v1/businesses/:id/branches', async (c) => {
     location: location.present ? location.location : null,
   });
 
+  if (location.present) {
+    scheduleLocationsSync(c, { tenantId: auth.businessId, businessWide: true });
+  }
+
   return c.json({ branch: venue }, 201);
 });
 
@@ -1392,12 +1473,12 @@ app.patch('/v1/businesses/:id/branches/:branchId', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Venue not found' } }, 404);
   }
 
+  if (location.present) {
+    scheduleLocationsSync(c, { tenantId: auth.businessId, businessWide: true });
+  }
+
   return c.json({ branch: venue });
 });
-
-// ---------------------------------------------------------------------------
-// DELETE /v1/businesses/{id}/branches/{branchId}
-// ---------------------------------------------------------------------------
 
 app.delete('/v1/businesses/:id/branches/:branchId', async (c) => {
   const auth = await authorizeVenueRequest(c);
@@ -1420,12 +1501,10 @@ app.delete('/v1/businesses/:id/branches/:branchId', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Venue not found' } }, 404);
   }
 
+  scheduleLocationsSync(c, { tenantId: auth.businessId, businessWide: true });
+
   return c.json({ branch: venue });
 });
-
-// ---------------------------------------------------------------------------
-// 404 handler
-// ---------------------------------------------------------------------------
 
 app.notFound((c) => {
   return c.json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, 404);

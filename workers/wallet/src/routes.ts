@@ -34,6 +34,7 @@ import {
   linkForExistingPass,
   reasonCodeFor,
   TIER_HEADER_UNAVAILABLE } from './issuance';
+import { createLocationsSource } from './locations-source';
 import type { PushNotification } from './object';
 import { reconcilePass, updatePassPushNotifications } from './reconcile';
 
@@ -644,6 +645,9 @@ router.get('/v1/wallet/pass', async (c) => {
       serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
       privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
       origins,
+      // Read here, with the session already armed for this tenant, so the pass
+      // carries positions only when the customer's consent allows them.
+      locations: createLocationsSource(db),
     };
     const issueInput = {
       tenantId,

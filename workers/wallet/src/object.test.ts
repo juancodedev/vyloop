@@ -231,3 +231,23 @@ describe('objectStateFor', () => {
     );
   });
 });
+
+describe('buildLoyaltyObject: merchantLocations', () => {
+  const locations = [
+    { latitude: -12.0464, longitude: -77.0428 },
+    { latitude: -12.05, longitude: -77.04 },
+  ];
+
+  it('carries the positions it is given', () => {
+    const loyaltyObject = buildLoyaltyObject({ ...baseInput, merchantLocations: locations });
+
+    expect(loyaltyObject.merchantLocations).toEqual(locations);
+  });
+
+  it('omits the field when the list is empty, so a pass without consent claims nothing', () => {
+    expect(buildLoyaltyObject({ ...baseInput, merchantLocations: [] })).not.toHaveProperty(
+      'merchantLocations',
+    );
+    expect(buildLoyaltyObject(baseInput)).not.toHaveProperty('merchantLocations');
+  });
+});
