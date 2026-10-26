@@ -852,6 +852,30 @@ export const pushCampaigns = pgTable('push_campaigns', {
   index('idx_push_campaigns_business').on(sql`${table.businessId}`, sql`${table.createdAt} DESC`),
 ]);
 
+export const walletMessages = pgTable('wallet_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  header: text('header').notNull(),
+  body: text('body').notNull(),
+  link: text('link'),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  index('idx_wallet_messages_business').on(sql`${table.businessId}`, sql`${table.createdAt} DESC`),
+]);
+
+export const walletMessageDeliveries = pgTable('wallet_message_deliveries', {
+  messageId: uuid('message_id').notNull().references(() => walletMessages.id, { onDelete: 'cascade' }),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  objectId: text('object_id').notNull(),
+  mode: text('mode').notNull(),
+  status: text('status').notNull(),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+}, (table) => [
+  primaryKey({ columns: [table.messageId, table.objectId] }),
+  index('idx_wallet_message_deliveries_message').on(sql`${table.messageId}`),
+]);
+
 export const whatsappTemplates = pgTable('whatsapp_templates', {
   id: uuid('id').primaryKey().defaultRandom(),
   businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
@@ -1301,3 +1325,8 @@ export type NewTenantWalletProgram = typeof tenantWalletPrograms.$inferInsert;
 
 export type CustomerWalletPass = typeof customerWalletPasses.$inferSelect;
 export type NewCustomerWalletPass = typeof customerWalletPasses.$inferInsert;
+
+export type WalletMessage = typeof walletMessages.$inferSelect;
+export type NewWalletMessage = typeof walletMessages.$inferInsert;
+export type WalletMessageDelivery = typeof walletMessageDeliveries.$inferSelect;
+export type NewWalletMessageDelivery = typeof walletMessageDeliveries.$inferInsert;

@@ -103,6 +103,10 @@ class FakeStore implements WalletStore {
     throw new Error('listConsentingPasses is not used by this test suite.');
   }
 
+  async countNotifyingDeliveries(): Promise<never> {
+    throw new Error('countNotifyingDeliveries is not used by this test suite.');
+  }
+
   async recordPassCallback(
     update: { customerId: string; tenantId: string } & { eventType: 'save' | 'del' },
     observedAt: Date,

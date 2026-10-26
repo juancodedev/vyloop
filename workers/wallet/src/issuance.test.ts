@@ -302,6 +302,10 @@ class FakeStore implements WalletStore {
     throw new Error('listConsentingPasses is not used by this test suite.');
   }
 
+  async countNotifyingDeliveries(): Promise<never> {
+    throw new Error('countNotifyingDeliveries is not used by this test suite.');
+  }
+
   async updateProgramReviewStatus(tenantId: string, reviewStatus: string): Promise<void> {
     this.record('updateProgramReviewStatus', tenantId);
     const row = this.programs[tenantId];

@@ -54,16 +54,16 @@ Chained PRs recommended: Yes
 
 ## Unit 3: Storage
 
-- [ ] 3.1 Migration: `wallet_messages` (id, business_id, header, body, link, created_by, created_at) and `wallet_message_deliveries` (message_id, object_id, mode `notify|text`, status, delivered_at), PK `(message_id, object_id)`; both in `BUSINESS_ID_TABLES`.
-- [ ] 3.2 Add the consent type decided in Q2 to `CONSENT_TYPES` and the customer-web consent list.
-- [ ] 3.3 Budget query: notifying deliveries per object in the last 24h.
+- [x] 3.1 Migration: `wallet_messages` (id, business_id, header, body, link, created_by, created_at) and `wallet_message_deliveries` (message_id, object_id, mode `notify|text`, status, delivered_at), PK `(message_id, object_id)`; both in `BUSINESS_ID_TABLES`.
+- [x] 3.2 Add the consent type decided in Q2 to `CONSENT_TYPES` and the customer-web consent list.
+- [x] 3.3 Budget query: notifying deliveries per object in the last 24h.
 
 ## Unit 4: API and Delivery
 
-- [ ] 4.1 `addObjectMessage` on the Google client (loyalty object `addmessage`).
-- [ ] 4.2 `POST /v1/wallet/messages`: operator gate, validation, link allowlist, daily limit, `202` with `eligible`.
-- [ ] 4.3 Queue fan-out, one idempotent job per object; budget decides `TEXT_AND_NOTIFY` vs `TEXT`; `QuotaExceededException` → `TEXT`, no retry.
-- [ ] 4.4 `GET /v1/wallet/messages` with counts, tenant-scoped.
+- [x] 4.1 `addObjectMessage` on the Google client (loyalty object `addmessage`).
+- [x] 4.2 `POST /v1/wallet/messages`: operator gate, validation, link allowlist, daily limit, `202` with `eligible`.
+- [x] 4.3 Queue fan-out, one idempotent job per object; budget decides `TEXT_AND_NOTIFY` vs `TEXT`; `QuotaExceededException` → `TEXT`, no retry.
+- [x] 4.4 `GET /v1/wallet/messages` with counts, tenant-scoped.
 - [ ] 4.5 Gateway route, `docs/08` entry.
 
 ## Unit 5: Wallet Section

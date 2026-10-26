@@ -43,6 +43,8 @@ export {
   messageLog,
   pushCampaigns,
   whatsappTemplates,
+  walletMessages,
+  walletMessageDeliveries,
   tenantWalletPrograms,
   customerWalletPasses,
 } from './schema';
@@ -185,6 +187,8 @@ export {
   idxCustomersMemberCode,
   idxCustomerWalletPassesTenant,
   idxWalletCallbackDeliveriesReceived,
+  idxWalletMessagesBusiness,
+  idxWalletMessageDeliveriesMessage,
   idxPosTerminalsBusiness,
   idxPushCampaignsBusiness,
   indexByName,

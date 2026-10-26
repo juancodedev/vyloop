@@ -82,8 +82,8 @@ describe('Database schema', () => {
     // the consent uniqueness, the three push subscription indexes, the two
     // the proximity work added (the venue interaction index and the
     // subscription freshness index), the pos_terminals listing index, and the
-    // reward_branches venue index.
-    expect(db.allIndexes.length).toBe(25);
+    // reward_branches venue index, plus the two wallet-message indexes.
+    expect(db.allIndexes.length).toBe(27);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -126,6 +126,8 @@ describe('Database schema', () => {
       idxCustomersMemberCode: 'uq_customers_business_member_code',
       idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
       idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
+      idxWalletMessagesBusiness: 'idx_wallet_messages_business',
+      idxWalletMessageDeliveriesMessage: 'idx_wallet_message_deliveries_message',
       idxPosTerminalsBusiness: 'idx_pos_terminals_business',
       idxPushCampaignsBusiness: 'idx_push_campaigns_business',
     };
@@ -388,6 +390,8 @@ describe('Database schema', () => {
       'tenants',
       'users',
       'walletCallbackDeliveries',
+      'walletMessageDeliveries',
+      'walletMessages',
       'whatsappTemplates',
       'workflowExecutions',
       'workflows',

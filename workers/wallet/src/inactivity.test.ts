@@ -214,6 +214,10 @@ class CountingStore implements WalletStore {
     throw new Error('listConsentingPasses is not used by the inactivity rule.');
   }
 
+  async countNotifyingDeliveries(): Promise<never> {
+    throw new Error('countNotifyingDeliveries is not used by the inactivity rule.');
+  }
+
   async recordPassLifecycle(update: PassLifecycleUpdate): Promise<number> {
     this.calls.push('recordPassLifecycle');
     this.writes.push({ method: 'recordPassLifecycle', value: update });

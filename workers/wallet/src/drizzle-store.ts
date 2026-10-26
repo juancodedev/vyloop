@@ -854,6 +854,7 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
      */
     async listConsentingPasses(input: {
       tenantId: string;
+      consentType: string;
       after: string | null;
       limit: number;
     }): Promise<ConsentingPassRow[]> {
@@ -866,7 +867,7 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
           JOIN consents c
             ON c.business_id = p.tenant_id
            AND c.customer_id = p.customer_id
-           AND c.consent_type = 'nearby_notifications'
+           AND c.consent_type = ${input.consentType}
            AND c.granted = true
          WHERE p.tenant_id = ${input.tenantId}::uuid
            AND p.state = 'issued'
@@ -881,6 +882,27 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
         customerId: String(row.customer_id),
         objectId: String(row.object_id),
       }));
+    },
+
+    async countNotifyingDeliveries(input: {
+      tenantId: string;
+      objectId: string;
+      since: Date;
+    }): Promise<number> {
+      const result = await db.execute(sql`
+        SELECT count(*)::int AS n
+          FROM wallet_message_deliveries d
+          JOIN wallet_messages m ON m.id = d.message_id
+         WHERE m.business_id = ${input.tenantId}::uuid
+           AND d.object_id = ${input.objectId}
+           AND d.mode = 'notify'
+           AND d.delivered_at IS NOT NULL
+           AND d.delivered_at >= ${input.since}::timestamptz
+      `);
+
+      const rows = (result as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+      const n = rows[0]?.n;
+      return typeof n === 'number' ? n : Number(n ?? 0);
     },
 
 
