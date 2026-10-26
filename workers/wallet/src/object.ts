@@ -168,6 +168,12 @@ export interface LoyaltyObjectMessage {
   messageType: 'TEXT' | 'TEXT_AND_NOTIFY';
 }
 
+/** One position Google evaluates for a nearby notification. */
+export interface MerchantLocation {
+  latitude: number;
+  longitude: number;
+}
+
 export interface LoyaltyObject {
   /** `<issuerId>.member-<customerGlobalId>`. */
   id: string;
@@ -184,6 +190,13 @@ export interface LoyaltyObject {
   /** The customer's tier, from `membership_tiers.name`. */
   textModulesData?: TextModuleData[];
   pushNotifications?: PushNotification[];
+  /**
+   * The business's positions, for Google's on-device proximity evaluation.
+   *
+   * Object-level, never class-level: a class reaches every holder, and the
+   * consent that allows nearby notifications is per customer.
+   */
+  merchantLocations?: MerchantLocation[];
 }
 
 /** Stable id for the tier row, so a later patch replaces it rather than appends. */
@@ -262,6 +275,13 @@ export interface BuildLoyaltyObjectInput {
   tierHeader?: string | undefined;
   passState: PassTrackingState;
   pushNotifications?: PushNotification[];
+  /**
+   * Eligible positions, as `selectMerchantLocations` returns them.
+   *
+   * Empty or absent means the pass carries none: a customer without the
+   * consent, or a business with no located venue.
+   */
+  merchantLocations?: MerchantLocation[];
 }
 
 /**
@@ -311,6 +331,13 @@ export function buildLoyaltyObject(input: BuildLoyaltyObjectInput): LoyaltyObjec
     loyaltyObject.textModulesData = [
       { header: input.tierHeader, body: input.tierName, id: REWARDS_TIER_MODULE_ID },
     ];
+  }
+
+  // Omitted when empty rather than sent as `[]`: an empty list and an absent
+  // field mean the same thing to Google, and absence keeps the payload honest
+  // about a customer who never granted the consent.
+  if (input.merchantLocations !== undefined && input.merchantLocations.length > 0) {
+    loyaltyObject.merchantLocations = input.merchantLocations;
   }
 
   return loyaltyObject;

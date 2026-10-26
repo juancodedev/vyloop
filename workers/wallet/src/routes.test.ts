@@ -51,6 +51,31 @@ vi.mock('@vyloop/db', async () => {
       name: text('name').notNull(),
       slug: text('slug').notNull(),
     }),
+    // Present because the pass object now reads the nearby-locations source,
+    // which reads this table. A mock missing it fails as a 500 that says
+    // nothing about the pass, so it is defined here even though these cases do
+    // not assert on consents.
+    consents: pgTable('consents', {
+      businessId: uuid('business_id').notNull(),
+      customerId: uuid('customer_id').notNull(),
+      consentType: text('consent_type').notNull(),
+      granted: integer('granted').notNull(),
+      grantedAt: timestamp('granted_at'),
+      revokedAt: timestamp('revoked_at'),
+    }),
+    // The venue catalog the locations source would read after consent. Never
+    // reached by these cases, and defined so a future one can.
+    branches: pgTable('branches', {
+      id: uuid('id').primaryKey(),
+      businessId: uuid('business_id').notNull(),
+      latitude: text('latitude'),
+      longitude: text('longitude'),
+      isActive: integer('is_active').notNull(),
+      locatedAt: timestamp('located_at'),
+    }),
+    // Consent is opt-in: an empty map is the state of a customer who never
+    // granted nearby notifications, which is what these cases describe.
+    readConsentMap: vi.fn(async () => ({})),
     loyaltyPrograms: pgTable('loyalty_programs', {
       id: uuid('id').primaryKey(),
       businessId: uuid('business_id').notNull(),

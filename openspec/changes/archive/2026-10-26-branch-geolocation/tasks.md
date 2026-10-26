@@ -82,20 +82,20 @@ Chained PRs recommended: No
 
 ## Unit 0: Verify Prerequisites
 
-- [ ] 0.1 Confirm `POST /v1/loyalty/branches` exists and accepts `latitude`, `longitude`, `isActive`
-- [ ] 0.2 Confirm `PUT /v1/loyalty/branches/:id` exists for updates
-- [ ] 0.3 Confirm `POST /v1/loyalty/branches/:id/revoke` or `PATCH` with `isActive` exists
-- [ ] 0.4 If any route missing → create `identity-worker-branches-crud` change first
+- [x] 0.1 Confirm `POST /v1/loyalty/branches` exists and accepts `latitude`, `longitude`, `isActive`
+- [x] 0.2 Confirm `PUT /v1/loyalty/branches/:id` exists for updates
+- [x] 0.3 Confirm `POST /v1/loyalty/branches/:id/revoke` or `PATCH` with `isActive` exists
+- [x] 0.4 If any route missing → create `identity-worker-branches-crud` change first
 
 ## Unit 1: API Client + List Page + Form
 
-- [ ] 1.1 `apps/dashboard/src/lib/api.ts`: add `getVenues`, `createVenue`, `updateVenue`, `deactivateVenue`
-- [ ] 1.2 `apps/dashboard/src/app/dashboard/settings/venues/page.tsx`:
+- [x] 1.1 `apps/dashboard/src/lib/api.ts`: add `getVenues`, `createVenue`, `updateVenue`, `deactivateVenue`
+- [x] 1.2 `apps/dashboard/src/app/dashboard/settings/venues/page.tsx`:
   - Tabla paginada: Nombre, Dirección, Coordenadas (badge "Ubicada" / "Sin coordenadas"), Estado (Activa/Inactiva), Acciones
   - Filtro: incluir inactivas (checkbox)
   - Empty state con CTA "Registrar primera sede"
   - Botón "Nueva sede" → abre formulario en modal o navega a `/dashboard/settings/venues/new`
-- [ ] 1.3 `apps/dashboard/src/components/venue-form.tsx` (reutilizable crear/editar):
+- [x] 1.3 `apps/dashboard/src/components/venue-form.tsx` (reutilizable crear/editar):
   - Props: `initialData?`, `onSubmit`, `onCancel`
   - Campos: nombre, dirección, latitud, longitud, toggle activa
   - Botón "Usar mi ubicación" → `navigator.geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 })` → rellena lat/long
@@ -105,7 +105,7 @@ Chained PRs recommended: No
     - `BRANCH_LOCATION_INVALID` → "Latitud debe estar entre -90 y 90, longitud entre -180 y 180"
     - `BRANCH_LOCATION_OUT_OF_RANGE` → "El valor supera el rango permitido"
   - Submit → llama API client, toast éxito/error, cierra modal o navega
-- [ ] 1.4 Tests en `specs/growth-dashboard` "Venue Management"
+- [x] 1.4 Tests en `specs/growth-dashboard` "Venue Management"
 
 ---
 

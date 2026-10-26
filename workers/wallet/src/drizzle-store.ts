@@ -48,6 +48,7 @@ import {
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
 import type {
+  ConsentingPassRow,
   InactivityCandidateRow,
   PassCallbackClaim,
   PassCallbackWrite,
@@ -789,8 +790,7 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
       tenantId: string;
       cutoff: Date;
       limit: number;
-    }): Promise<InactivityCandidateRow[]> {
-      const limit = Math.min(2000, Math.max(1, Math.trunc(input.limit)));
+    }): Promise<InactivityCandidateRow[]> {      const limit = Math.min(2000, Math.max(1, Math.trunc(input.limit)));
 
       const result = await db.execute(sql`
         SELECT p.customer_id,
@@ -824,6 +824,62 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
           row.last_activity_at === null || row.last_activity_at === undefined
             ? null
             : new Date(row.last_activity_at as string),
+      }));
+    },
+
+    /**
+     * The consenting pass holders of one tenant, one keyset page at a time.
+     *
+     * ## Why a join and not two reads
+     *
+     * The fan-out needs "consented **and** has an issued pass", and the two
+     * facts live in two tables. Reading the consents and then filtering passes in
+     * JavaScript would pull a tenant's whole consent table across the wire to
+     * discard most of it, and the keyset cursor would then be over a set the
+     * database never ordered.
+     *
+     * ## Why the consent key is `customers.id`
+     *
+     * Because that is the key every reader of the consent uses. The identity
+     * routes used to write `customers.global_id` here — the JWT subject — and
+     * those rows are invisible to `readConsentMap`, to the communication worker
+     * and to this query alike. A consent stored under a key nobody reads is not
+     * a consent, it is a row.
+     *
+     * ## The cursor
+     *
+     * `customer_id` is the primary key of `customer_wallet_passes`, so it is
+     * unique per page and stable under concurrent inserts. An `OFFSET` would
+     * skip a customer when a row before it disappeared between calls.
+     */
+    async listConsentingPasses(input: {
+      tenantId: string;
+      after: string | null;
+      limit: number;
+    }): Promise<ConsentingPassRow[]> {
+      const limit = Math.min(500, Math.max(1, Math.trunc(input.limit)));
+
+      const result = await db.execute(sql`
+        SELECT p.customer_id,
+               p.object_id
+          FROM customer_wallet_passes p
+          JOIN consents c
+            ON c.business_id = p.tenant_id
+           AND c.customer_id = p.customer_id
+           AND c.consent_type = 'nearby_notifications'
+           AND c.granted = true
+         WHERE p.tenant_id = ${input.tenantId}::uuid
+           AND p.state = 'issued'
+           AND (${input.after}::uuid IS NULL OR p.customer_id > ${input.after}::uuid)
+         ORDER BY p.customer_id
+         LIMIT ${limit}
+      `);
+
+      const rows = (result as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+
+      return rows.map((row) => ({
+        customerId: String(row.customer_id),
+        objectId: String(row.object_id),
       }));
     },
 

@@ -294,6 +294,14 @@ class FakeStore implements WalletStore {
     throw new Error('findInactivePassCandidates is not used by this test suite.');
   }
 
+  /**
+   * The nearby-locations fan-out. Unreachable from this suite for the same
+   * reason as the query above.
+   */
+  async listConsentingPasses(): Promise<never> {
+    throw new Error('listConsentingPasses is not used by this test suite.');
+  }
+
   async updateProgramReviewStatus(tenantId: string, reviewStatus: string): Promise<void> {
     this.record('updateProgramReviewStatus', tenantId);
     const row = this.programs[tenantId];
@@ -333,6 +341,9 @@ function deps(store: WalletStore, overrides: Partial<IssuePassDeps> = {}): Issue
     serviceAccountEmail: SERVICE_ACCOUNT,
     privateKeyPem,
     origins: ORIGINS,
+    // Consent-free by default: the cases below are about the pass lifecycle,
+    // and the locations cases opt in explicitly.
+    locations: { merchantLocationsFor: async () => [] },
     now: new Date('2026-09-28T12:00:00.000Z'),
     ...overrides,
   };
@@ -1295,5 +1306,30 @@ describe('linkForExistingPass', () => {
     await linkForExistingPass(deps(store), existingInput());
 
     expect(store.tenantsTouched()).toEqual([TENANT]);
+  });
+});
+
+// ============================================================================
+// Nearby locations on the object
+// ============================================================================
+
+describe('nearby locations', () => {
+  const positions = [{ latitude: -12.0464, longitude: -77.0428 }];
+
+  it('puts the consent-filtered positions on the pass', async () => {
+    const store = readyStore();
+    const issued = await issuePass(
+      deps(store, { locations: { merchantLocationsFor: async () => positions } }),
+      passInput(),
+    );
+
+    expect(issued.loyaltyObject.merchantLocations).toEqual(positions);
+  });
+
+  it('carries no positions when the source answers with none', async () => {
+    const store = readyStore();
+    const issued = await issuePass(deps(store), passInput());
+
+    expect(issued.loyaltyObject).not.toHaveProperty('merchantLocations');
   });
 });

@@ -22,6 +22,16 @@ import {
   planInactivityDeactivation,
 } from './inactivity';
 import type { InactivityApplyReport, InactivityPlan } from './inactivity';
+import { createLocationsSource } from './locations-source';
+import {
+  syncBusinessLocations,
+  syncCustomerLocations,
+} from './locations-sync';
+import type {
+  BusinessLocationsOutcome,
+  CustomerLocationsOutcome,
+  LocationsSyncDeps,
+} from './locations-sync';
 import { provisionTenantClass } from './provision';
 import type { ProvisionOutcome } from './provision';
 import { reconcilePass } from './reconcile';
@@ -486,6 +496,98 @@ export async function reconcileCustomer(
 }
 
 // ---------------------------------------------------------------------------
+// Nearby-locations sync trigger
+// ---------------------------------------------------------------------------
+
+/**
+ * One customer's pass, or one page of a business's consenting passes.
+ *
+ * Either `customerGlobalId` or `businessWide` names the work; nothing else does.
+ * A customer token carries the global id, which is what the identity worker
+ * holds when a consent changes, and `customers.id` is resolved here rather than
+ * at the caller — the same id-space conversion `reconcileCustomer` avoids by
+ * taking an internal id, and the one this call cannot avoid because its caller
+ * only ever sees the token.
+ *
+ * ## Why a service binding and not a route
+ *
+ * Same reason as `reconcileCustomer` and `provisionClass`: the caller is another
+ * worker, and a `fetch` would have to forward this worker's credentials across a
+ * boundary that takes customer input. The binding runs the method with this
+ * worker's bindings and its Google service account.
+ *
+ * ## Why the business-wide mode is paged
+ *
+ * A venue change touches every consenting pass a merchant has. Patching them all
+ * inside the call that answers the operator would make one dashboard edit as slow
+ * as the merchant's customer count, and a tenant large enough would be killed
+ * mid-fan-out with nothing recording where it stopped. So the caller pages:
+ * `nextCursor` is `null` on the last page, and any other value is what the next
+ * call must pass as `after`.
+ */
+export interface SyncLocationsInput {
+  /** The tenant the change belongs to. The only tenant this call may touch. */
+  tenantId: string;
+  /**
+   * `customers.global_id` — the JWT subject, not `customers.id`.
+   *
+   * Named for the id space rather than `customerId` because the two coexist in
+   * this codebase and a caller that guessed wrong would silently patch nothing.
+   */
+  customerGlobalId?: string | undefined;
+  /** Patch every consenting pass of the tenant, one page at a time. */
+  businessWide?: boolean | undefined;
+  /** The cursor from the previous page; `null` or absent starts at the beginning. */
+  after?: string | null | undefined;
+}
+
+export type SyncLocationsResult =
+  | { kind: 'customer'; outcome: CustomerLocationsOutcome }
+  | { kind: 'business'; outcome: BusinessLocationsOutcome }
+  | { kind: 'customer_not_found' }
+  | { kind: 'nothing_to_do' };
+
+export async function syncLocations(
+  input: SyncLocationsInput,
+  env: WalletBindings,
+): Promise<SyncLocationsResult> {
+  const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
+
+  const deps: LocationsSyncDeps = {
+    store: createDrizzleWalletStore(db),
+    client: googleWalletClientFor(env),
+    locations: createLocationsSource(db),
+  };
+
+  if (input.customerGlobalId !== undefined) {
+    const customer = await deps.store.findCustomer(input.customerGlobalId, input.tenantId);
+    if (customer === null) {
+      return { kind: 'customer_not_found' };
+    }
+
+    return {
+      kind: 'customer',
+      outcome: await syncCustomerLocations(deps, {
+        tenantId: input.tenantId,
+        customerId: customer.id,
+      }),
+    };
+  }
+
+  if (input.businessWide === true) {
+    return {
+      kind: 'business',
+      outcome: await syncBusinessLocations(deps, {
+        tenantId: input.tenantId,
+        after: input.after ?? null,
+      }),
+    };
+  }
+
+  return { kind: 'nothing_to_do' };
+}
+
+// ---------------------------------------------------------------------------
 // Onboarding trigger
 // ---------------------------------------------------------------------------
 
@@ -556,6 +658,7 @@ export default {
   fetch: app.fetch.bind(app),
   scheduled,
   reconcileCustomer,
+  syncLocations,
   provisionClass,
   deactivateInactivePasses,
 };

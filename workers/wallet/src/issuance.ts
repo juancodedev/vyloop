@@ -22,6 +22,7 @@
 
 import { DEMO_MODE_NAME_PREFIX, classIdFor, objectIdFor } from './ids';
 import { createSaveToWalletUrl } from './jwt';
+import type { LocationsSource } from './locations-source';
 import { findAvailableMemberCode, isValidMemberCode } from './member-code';
 import { buildLoyaltyObject } from './object';
 import type { LoyaltyObject } from './object';
@@ -382,6 +383,13 @@ export interface IssuePassDeps extends EnsureMemberCodeDeps {
   /** `WALLET_ALLOWED_ORIGINS`, already parsed. Must not be empty. */
   origins: readonly string[];
   /**
+   * The positions this customer's pass may carry, already consent-filtered.
+   *
+   * A port rather than a store method: the pass lifecycle and the venue catalog
+   * are different reads, and the builder only needs the answer.
+   */
+  locations: LocationsSource;
+  /**
    * Clock injection, so `iat` is assertable. Defaults to the system clock.
    *
    * Typed `Date | undefined` rather than plain `Date` because
@@ -506,6 +514,11 @@ async function buildSignedPass(
   // object inside the save token is the object as it will be once Google has
   // applied it, and Google applies it ACTIVE. The tracking row is not advanced
   // — see the module comment.
+  const merchantLocations = await deps.locations.merchantLocationsFor(
+    input.customerId,
+    input.tenantId,
+  );
+
   let loyaltyObject = buildLoyaltyObject({
     issuerId: input.issuerId,
     classId: input.classId,
@@ -519,6 +532,7 @@ async function buildSignedPass(
     tierName: null,
     tierHeader: TIER_HEADER_UNAVAILABLE ?? undefined,
     passState: 'issued',
+    merchantLocations,
   });
 
   if (existingObjectId === undefined) {

@@ -132,6 +132,19 @@ export interface InactivityCandidateRow {
   lastActivityAt: Date | null;
 }
 
+/**
+ * A pass whose holder has granted `nearby_notifications`.
+ *
+ * Only the two ids: the sync patch reads nothing else, and widening the row
+ * would make every caller depend on columns it does not use.
+ */
+export interface ConsentingPassRow {
+  /** `customers.id` — the key every consent reader uses. */
+  customerId: string;
+  /** `customer_wallet_passes.object_id`, the Google object to patch. */
+  objectId: string;
+}
+
 /** The slice of `membership_tiers` the pass needs. */
 export interface WalletTierRow {
   /** `membership_tiers.name`. */
@@ -830,6 +843,31 @@ export interface WalletStore {
     cutoff: Date;
     limit: number;
   }): Promise<InactivityCandidateRow[]>;
+
+  /**
+   * One page of the passes whose holder has granted `nearby_notifications`.
+   *
+   * The fan-out for a venue change needs exactly this set: a pass we believe
+   * Google holds, whose customer consented. Three predicates, each load-bearing:
+   *
+   *   - `p.tenant_id = <tenantId>` — the crossing defence every statement in
+   *     this file carries.
+   *   - `p.state = 'issued'` — a pass we believe exists at Google. Patching a
+   *     `not_saved` object is a 404 and patching an `expired` one is a write to
+   *     something Google no longer shows.
+   *   - `consent.granted = true` — the whole reason locations are object-level.
+   *     A business-wide fan-out that ignored it would write positions onto a
+   *     pass whose holder refused them.
+   *
+   * `after` is a keyset cursor on `customers.id`, not an offset: rows change
+   * between calls, and an offset would skip or repeat a customer. `null` starts
+   * at the beginning.
+   */
+  listConsentingPasses(input: {
+    tenantId: string;
+    after: string | null;
+    limit: number;
+  }): Promise<ConsentingPassRow[]>;
 
   /** Write a freshly observed review status and sync timestamp. */
   updateProgramReviewStatus(tenantId: string, reviewStatus: string, syncedAt: Date): Promise<void>;
