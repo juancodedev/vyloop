@@ -44,6 +44,7 @@ CREATE INDEX "idx_wallet_messages_business" ON "wallet_messages" ("business_id",
 
 CREATE TABLE "wallet_message_deliveries" (
 	"message_id" uuid NOT NULL REFERENCES "wallet_messages"("id") ON DELETE CASCADE,
+	"business_id" uuid NOT NULL REFERENCES "tenants"("id") ON DELETE CASCADE,
 	"object_id" text NOT NULL,
 	"mode" text NOT NULL,
 	"status" text NOT NULL,

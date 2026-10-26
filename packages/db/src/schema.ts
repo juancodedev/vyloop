@@ -866,6 +866,7 @@ export const walletMessages = pgTable('wallet_messages', {
 
 export const walletMessageDeliveries = pgTable('wallet_message_deliveries', {
   messageId: uuid('message_id').notNull().references(() => walletMessages.id, { onDelete: 'cascade' }),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
   objectId: text('object_id').notNull(),
   mode: text('mode').notNull(),
   status: text('status').notNull(),

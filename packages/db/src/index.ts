@@ -185,6 +185,8 @@ export {
   idxCustomersMemberCode,
   idxCustomerWalletPassesTenant,
   idxWalletCallbackDeliveriesReceived,
+  idxWalletMessagesBusiness,
+  idxWalletMessageDeliveriesMessage,
   idxPosTerminalsBusiness,
   idxPushCampaignsBusiness,
   indexByName,

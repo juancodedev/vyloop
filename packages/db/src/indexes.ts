@@ -14,6 +14,8 @@ import {
   whatsappTemplates,
   customerWalletPasses,
   walletCallbackDeliveries,
+  walletMessages,
+  walletMessageDeliveries,
   posTerminals,
   pushCampaigns,
 } from './schema';
@@ -53,6 +55,8 @@ const INDEXED_TABLES: readonly PgTable[] = [
   whatsappTemplates,
   customerWalletPasses,
   walletCallbackDeliveries,
+  walletMessages,
+  walletMessageDeliveries,
   posTerminals,
   pushCampaigns,
 ];
@@ -93,6 +97,8 @@ const INDEX_NAMES = {
   idxCustomersMemberCode: 'uq_customers_business_member_code',
   idxCustomerWalletPassesTenant: 'idx_customer_wallet_passes_tenant',
   idxWalletCallbackDeliveriesReceived: 'idx_wallet_callback_deliveries_received',
+  idxWalletMessagesBusiness: 'idx_wallet_messages_business',
+  idxWalletMessageDeliveriesMessage: 'idx_wallet_message_deliveries_message',
   idxPosTerminalsBusiness: 'idx_pos_terminals_business',
   idxPushCampaignsBusiness: 'idx_push_campaigns_business',
 } as const satisfies Record<string, string>;
@@ -155,3 +161,5 @@ export const idxWalletCallbackDeliveriesReceived = indexByName(
  */
 export const idxPosTerminalsBusiness = indexByName(INDEX_NAMES.idxPosTerminalsBusiness);
 export const idxPushCampaignsBusiness = indexByName(INDEX_NAMES.idxPushCampaignsBusiness);
+export const idxWalletMessagesBusiness = indexByName(INDEX_NAMES.idxWalletMessagesBusiness);
+export const idxWalletMessageDeliveriesMessage = indexByName(INDEX_NAMES.idxWalletMessageDeliveriesMessage);
