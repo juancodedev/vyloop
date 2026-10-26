@@ -70,5 +70,5 @@ Chained PRs recommended: Yes
 
 - [x] 5.1 `dashboard/communication/wallet` page: form, preview, eligible count, budget notice, error codes.
 - [x] 5.2 History list with counts.
-- [ ] 5.3 Venues section: nearby-notification status per venue.
+- [x] 5.3 Venues section: nearby-notification status per venue.
 - [x] 5.4 `docs/19` records the Google Wallet channel.

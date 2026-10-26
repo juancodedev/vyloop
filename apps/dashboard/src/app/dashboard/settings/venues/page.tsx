@@ -80,6 +80,26 @@ function ToastContainer() {
 // Venues Page
 // ---------------------------------------------------------------------------
 
+const MERCHANT_LOCATION_LIMIT = 10;
+
+function nearbyStatus(venue: BranchView, all: BranchView[]) {
+  if (!venue.is_active) {
+    return <span className="badge badge-muted">Inactiva</span>;
+  }
+  if (venue.latitude === null || venue.longitude === null) {
+    return <span className="badge badge-muted">Sin posición</span>;
+  }
+  const eligible = all
+    .filter((v) => v.is_active && v.latitude !== null && v.longitude !== null)
+    .sort((a, b) => new Date(b.located_at ?? 0).getTime() - new Date(a.located_at ?? 0).getTime())
+    .slice(0, MERCHANT_LOCATION_LIMIT);
+  const carried = eligible.some((v) => v.id === venue.id);
+  if (carried) {
+    return <span className="badge badge-success">En pases</span>;
+  }
+  return <span className="badge badge-warning">Fuera del límite</span>;
+}
+
 export default function VenuesPage() {
   const [venues, setVenues] = useState<BranchView[]>([]);
   const [total, setTotal] = useState(0);
@@ -206,6 +226,7 @@ export default function VenuesPage() {
                   <th>Nombre</th>
                   <th>Dirección</th>
                   <th>Coordenadas</th>
+                  <th>Notificaciones cercanas</th>
                   <th>Estado</th>
                   <th style={{ width: '160px' }}>Acciones</th>
                 </tr>
@@ -213,14 +234,14 @@ export default function VenuesPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={5} className="text-center text-muted" style={{ padding: '2rem' }}>
+                    <td colSpan={6} className="text-center text-muted" style={{ padding: '2rem' }}>
                       Cargando…
                     </td>
                   </tr>
                 )}
                 {!loading && venues.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="text-center text-muted" style={{ padding: '2rem' }}>
+                    <td colSpan={6} className="text-center text-muted" style={{ padding: '2rem' }}>
                       <p>No hay sedes registradas</p>
                       <button className="btn btn-primary mt-2" onClick={openCreateModal} disabled={loading}>
                         Registrar primera sede
@@ -249,6 +270,9 @@ export default function VenuesPage() {
                       ) : (
                         <span className="badge badge-muted">Sin coordenadas</span>
                       )}
+                    </td>
+                    <td>
+                      {nearbyStatus(v, venues)}
                     </td>
                     <td>
                       <label className="switch" style={{ marginRight: '0.5rem' }}>
