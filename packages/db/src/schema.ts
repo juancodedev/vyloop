@@ -462,6 +462,7 @@ export const pointsTransactions = pgTable('points_transactions', {
   balanceAfter: integer('balance_after').notNull(),
   referenceId: text('reference_id'),
   note: text('note'),
+  purchaseAmount: numeric('purchase_amount', { precision: 12, scale: 2 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [
   unique('uq_points_tx_reference').on(table.customerId, table.referenceId),

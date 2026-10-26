@@ -16,9 +16,9 @@ and `pnpm -r lint` before closing a phase.
 
 ## Phase 2: Store the purchase amount
 
-- [ ] 2.1 Migration: `points_transactions.purchase_amount numeric(12,2) NULL` with the positive `CHECK`. Update `schema.ts`, journal, and regenerate the drift baseline.
-- [ ] 2.2 Growth earn route writes `amount_pesos` into `purchase_amount` for purchase programs, `NULL` otherwise. Tests for purchase, visit, redeem and idempotent retry.
-- [ ] 2.3 Return `purchase_amount` from `GET /v1/loyalty/points/transactions` and `purchaseAmount` in `recent_transactions` of `GET /v1/customers/me`. Update `Transaction` and `RecentTransaction` types in `apps/customer-web/app/lib/api.ts`.
+- [x] 2.1 Migration: `points_transactions.purchase_amount numeric(12,2) NULL` with the positive `CHECK`. Update `schema.ts`, journal, and regenerate the drift baseline.
+- [x] 2.2 Growth earn route writes `amount_pesos` into `purchase_amount` for purchase programs, `NULL` otherwise. Tests for purchase, visit, redeem and idempotent retry.
+- [x] 2.3 Return `purchase_amount` from `GET /v1/loyalty/points/transactions` and `purchaseAmount` in `recent_transactions` of `GET /v1/customers/me`. Update `Transaction` and `RecentTransaction` types in `apps/customer-web/app/lib/api.ts`.
 
 ## Phase 3: Next reward
 

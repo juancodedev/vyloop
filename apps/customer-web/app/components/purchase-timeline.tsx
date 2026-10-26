@@ -1,4 +1,4 @@
-import { formatMovementDate } from '../lib/format';
+import { formatClp, formatMovementDate } from '../lib/format';
 import type { CustomerProfile, RecentTransaction } from '../lib/api';
 
 interface PurchaseTimelineProps {
@@ -13,6 +13,7 @@ function signFor(type: string): '+' | '−' | '•' {
 
 export function PurchaseTimeline({ profile }: PurchaseTimelineProps) {
   const transactions = profile.recent_transactions ?? [];
+  const currency = profile.program?.pointsCurrency ?? null;
 
   return (
     <section className="club-purchase-timeline" aria-label="Actividad reciente">
@@ -25,7 +26,10 @@ export function PurchaseTimeline({ profile }: PurchaseTimelineProps) {
             <li key={tx.id} className="club-purchase-timeline__row">
               <span className="club-purchase-timeline__sign">{signFor(tx.type)}</span>
               <div className="club-purchase-timeline__info">
-                <span className="club-purchase-timeline__note">{tx.note ?? (tx.type === 'earn' ? 'Puntos ganados' : 'Canje')}</span>
+                <span className="club-purchase-timeline__note">
+                  {tx.note ?? (tx.type === 'earn' ? 'Puntos ganados' : 'Canje')}
+                  {tx.purchaseAmount ? ` · ${formatClp(tx.purchaseAmount)}` : ''}
+                </span>
                 <span className="club-purchase-timeline__date">{formatMovementDate(tx.createdAt)}</span>
               </div>
               <span className="club-purchase-timeline__points">{Math.abs(tx.points)}</span>

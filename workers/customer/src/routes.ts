@@ -1069,6 +1069,7 @@ router.get('/v1/customers/:id', async (c) => {
         points: pointsTransactions.points,
         balanceAfter: pointsTransactions.balanceAfter,
         note: pointsTransactions.note,
+        purchaseAmount: pointsTransactions.purchaseAmount,
         createdAt: pointsTransactions.createdAt,
       })
       .from(pointsTransactions)

@@ -169,6 +169,13 @@
       "when": 1792800000000,
       "tag": "0023_wallet_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792900000000,
+      "tag": "0024_purchase_amount",
+      "breakpoints": true
     }
   ]
 }

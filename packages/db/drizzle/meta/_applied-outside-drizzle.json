@@ -229,6 +229,17 @@
           "name": "wallet_message_deliveries_pkey"
         }
       ]
+    },
+    {
+      "tag": "0024_purchase_amount",
+      "when": 1792900000000,
+      "hash": "81a572f85eb112c570c1ea7c36fb96b7df8620c7eea1d45102c588c882ce5bd6",
+      "evidence": [
+        {
+          "kind": "column",
+          "name": "points_transactions.purchase_amount"
+        }
+      ]
     }
   ]
 }

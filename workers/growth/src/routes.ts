@@ -880,6 +880,9 @@ router.post('/v1/loyalty/points/assign', async (c) => {
    *              many units of `earn_rate` the amount bought.
    */
   let base: number;
+  // Only purchase programs carry a sale amount; visits and adjustments have
+  // none. Recorded so the profile timeline can show what was spent.
+  let purchaseAmount: number | null = null;
 
   if (earnBy === 'purchase') {
     const amount = parseEarnUnitAmount(body.amount_pesos);
@@ -915,6 +918,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     }
 
     base = amount / unit;
+    purchaseAmount = amount;
   } else {
     // A visit program has no money rule. If an amount arrived alongside, silently
     // dropping it would credit the count the caller happened to also send and
@@ -1004,7 +1008,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
   // -----------------------------------------------------------------------
   try {
     const result = await db.execute(sql`
-      INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
+      INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount)
       VALUES (
         ${businessId}::uuid,
         ${body.customer_id}::uuid,
@@ -1015,9 +1019,10 @@ router.post('/v1/loyalty/points/assign', async (c) => {
           0
         ) + ${effectivePoints}::integer,
         ${body.reference_id},
-        ${body.note ?? null}
+        ${body.note ?? null},
+        ${purchaseAmount}
       )
-      RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
+      RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount, created_at
     `);
 
     const tx = result.rows?.[0];
@@ -1123,6 +1128,7 @@ router.get('/v1/loyalty/points/transactions', async (c) => {
         balance_after: pointsTransactions.balanceAfter,
         reference_id: pointsTransactions.referenceId,
         note: pointsTransactions.note,
+        purchase_amount: pointsTransactions.purchaseAmount,
         created_at: pointsTransactions.createdAt,
       })
       .from(pointsTransactions)

@@ -122,6 +122,7 @@ export interface RecentTransaction {
   type: string;
   points: number;
   balanceAfter: number;
+  purchaseAmount?: number | null;
   note?: string | null;
   createdAt: string;
 }
@@ -202,6 +203,7 @@ export interface Transaction {
   type: 'earn' | 'redeem';
   points: number;
   balance_after: number;
+  purchase_amount?: number | null;
   reference_id?: string | null;
   note?: string | null;
   created_at: string;
