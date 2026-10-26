@@ -883,6 +883,27 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
       }));
     },
 
+    async countNotifyingDeliveries(input: {
+      tenantId: string;
+      objectId: string;
+      since: Date;
+    }): Promise<number> {
+      const result = await db.execute(sql`
+        SELECT count(*)::int AS n
+          FROM wallet_message_deliveries d
+          JOIN wallet_messages m ON m.id = d.message_id
+         WHERE m.business_id = ${input.tenantId}::uuid
+           AND d.object_id = ${input.objectId}
+           AND d.mode = 'notify'
+           AND d.delivered_at IS NOT NULL
+           AND d.delivered_at >= ${input.since}::timestamptz
+      `);
+
+      const rows = (result as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+      const n = rows[0]?.n;
+      return typeof n === 'number' ? n : Number(n ?? 0);
+    },
+
 
     async updateProgramReviewStatus(
       tenantId: string,

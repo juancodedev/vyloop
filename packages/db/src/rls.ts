@@ -58,6 +58,10 @@ export const BUSINESS_ID_TABLES = [
   // the isolation boundary, and a reconciliation check that could read another
   // merchant's sales would be a cross-tenant leak with a report attached.
   'settled_payments',
+  // Manual wallet messages composed by an operator, one row per message.
+  'wallet_messages',
+  // One row per (message, pass) — the delivery ledger for a manual send.
+  'wallet_message_deliveries',
 ] as const;
 
 /**

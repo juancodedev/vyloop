@@ -869,6 +869,22 @@ export interface WalletStore {
     limit: number;
   }): Promise<ConsentingPassRow[]>;
 
+  /**
+   * How many `TEXT_AND_NOTIFY` deliveries landed for this object inside the
+   * window, including the one that is in flight.
+   *
+   * The send route (Unit 4) calls this before deciding `notify` vs `text` for a
+   * message, because Google allows three notifying messages per object per 24h
+   * and silently throttles past that. Counting our own ledger rather than
+   * Google's quota is what keeps the two from disagreeing about a limit that is
+   * only visible after the fact.
+   */
+  countNotifyingDeliveries(input: {
+    tenantId: string;
+    objectId: string;
+    since: Date;
+  }): Promise<number>;
+
   /** Write a freshly observed review status and sync timestamp. */
   updateProgramReviewStatus(tenantId: string, reviewStatus: string, syncedAt: Date): Promise<void>;
 

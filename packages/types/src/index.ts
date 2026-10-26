@@ -212,7 +212,7 @@ export function requireOperatorRole(
 // sends a typo should be told, not left believing it recorded something.
 
 /** The consents this platform knows how to ask for and honour. */
-export const CONSENT_TYPES = ['whatsapp', 'nearby_notifications'] as const;
+export const CONSENT_TYPES = ['whatsapp', 'nearby_notifications', 'promotions'] as const;
 
 export type ConsentType = (typeof CONSENT_TYPES)[number];
 
@@ -220,6 +220,15 @@ export type ConsentType = (typeof CONSENT_TYPES)[number];
 export function isConsentType(value: unknown): value is ConsentType {
   return typeof value === 'string' && (CONSENT_TYPES as readonly string[]).includes(value);
 }
+
+/**
+ * The product limits for a manual wallet message, declared once so the form and
+ * the route cannot disagree (decided Q4: 40 / 300).
+ */
+export const WALLET_MESSAGE_LIMITS = {
+  header: { min: 1, max: 40 },
+  body: { min: 1, max: 300 },
+} as const;
 
 /** A consent the caller asked for, with whether they granted it. */
 export interface ParsedConsent {

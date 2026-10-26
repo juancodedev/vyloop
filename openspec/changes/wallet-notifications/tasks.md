@@ -54,9 +54,9 @@ Chained PRs recommended: Yes
 
 ## Unit 3: Storage
 
-- [ ] 3.1 Migration: `wallet_messages` (id, business_id, header, body, link, created_by, created_at) and `wallet_message_deliveries` (message_id, object_id, mode `notify|text`, status, delivered_at), PK `(message_id, object_id)`; both in `BUSINESS_ID_TABLES`.
-- [ ] 3.2 Add the consent type decided in Q2 to `CONSENT_TYPES` and the customer-web consent list.
-- [ ] 3.3 Budget query: notifying deliveries per object in the last 24h.
+- [x] 3.1 Migration: `wallet_messages` (id, business_id, header, body, link, created_by, created_at) and `wallet_message_deliveries` (message_id, object_id, mode `notify|text`, status, delivered_at), PK `(message_id, object_id)`; both in `BUSINESS_ID_TABLES`.
+- [x] 3.2 Add the consent type decided in Q2 to `CONSENT_TYPES` and the customer-web consent list.
+- [x] 3.3 Budget query: notifying deliveries per object in the last 24h.
 
 ## Unit 4: API and Delivery
 

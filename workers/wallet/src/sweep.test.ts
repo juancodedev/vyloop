@@ -508,6 +508,10 @@ class SweepStore implements WalletStore {
     throw new Error('listConsentingPasses is not reachable from the sweep.');
   }
 
+  async countNotifyingDeliveries(): Promise<never> {
+    throw new Error('countNotifyingDeliveries is not reachable from the sweep.');
+  }
+
   async setProgramDemoMode(tenant: string, demoMode: boolean): Promise<number> {
     this.record('setProgramDemoMode', tenant);
     const row = this.programs[tenant];
