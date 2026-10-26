@@ -478,6 +478,24 @@ These need an answer from the business before the phase that depends on them.
 
 > `workers/identity` has no `routes.ts` — its business routes are registered directly on the app in `index.ts` (`app.get('/v1/businesses/:id/branches', …)` at `index.ts:880`). Feature modules in that worker are separate files (`business-signup.ts`, `wallet-provision.ts`) that export a registration function, so a new branch-crud module follows that pattern rather than introducing a `routes.ts`.
 
+## 18. Google Wallet channel
+
+`workers/wallet` now carries two Google Wallet channels on top of the loyalty
+pass:
+
+- **Nearby notifications** — the pass object carries up to 10 `merchantLocations`
+  from the business's active, located venues, only for customers who granted
+  `nearby_notifications`. Consent is enforced per object, never on the class.
+- **Manual messages** — an operator composes a message in the dashboard
+  (`/dashboard/communication/wallet`) and the worker fans it out per object via
+  `addMessage`, with a per-object 24h budget (3 notifying messages) and a
+  per-business daily limit of one send. A `QuotaExceededException` is retried
+  once as `TEXT`.
+
+Endpoints: `POST /v1/wallet/messages` (operator, `202` with `messageId` and
+`eligible`), `GET /v1/wallet/messages` (operator, with delivery counts).
+Both are reached through the gateway under the `/v1/wallet` prefix.
+
 ## Appendix B — Glossary
 
 | Term           | Meaning here                                                                                                          |

@@ -64,11 +64,11 @@ Chained PRs recommended: Yes
 - [x] 4.2 `POST /v1/wallet/messages`: operator gate, validation, link allowlist, daily limit, `202` with `eligible`.
 - [x] 4.3 Queue fan-out, one idempotent job per object; budget decides `TEXT_AND_NOTIFY` vs `TEXT`; `QuotaExceededException` → `TEXT`, no retry.
 - [x] 4.4 `GET /v1/wallet/messages` with counts, tenant-scoped.
-- [ ] 4.5 Gateway route, `docs/08` entry.
+- [x] 4.5 Gateway route, `docs/08` entry.
 
 ## Unit 5: Wallet Section
 
-- [ ] 5.1 `dashboard/communication/wallet` page: form, preview, eligible count, budget notice, error codes.
-- [ ] 5.2 History list with counts.
+- [x] 5.1 `dashboard/communication/wallet` page: form, preview, eligible count, budget notice, error codes.
+- [x] 5.2 History list with counts.
 - [ ] 5.3 Venues section: nearby-notification status per venue.
-- [ ] 5.4 `docs/19` records the Google Wallet channel.
+- [x] 5.4 `docs/19` records the Google Wallet channel.

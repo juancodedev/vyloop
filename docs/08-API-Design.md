@@ -161,6 +161,8 @@ Worker `@vyloop/wallet`. Las tres rutas existen en `workers/wallet/src/routes.ts
 | GET | `/v1/wallet/status` | Si el cliente autenticado puede obtener un pase ahora, y por qué no cuando no puede |
 | GET | `/v1/wallet/pass` | Link de guardado del pase de lealtad del cliente autenticado |
 | POST | `/v1/wallet/program/sync` | Refresca `review_status` de la clase desde Google — acción de operador |
+| POST | `/v1/wallet/messages` | Envía un mensaje manual a los pases elegibles del negocio (operador) |
+| GET | `/v1/wallet/messages` | Lista los mensajes enviados con conteos de entrega (operador) |
 
 #### Autenticación
 
