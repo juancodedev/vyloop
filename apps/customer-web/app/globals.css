@@ -2587,3 +2587,28 @@ a {
 .support-form--unavailable .club-status__description {
   margin: 0;
 }
+
+/* Customer profile redesign (Phase 1) */
+.club-profile { display: grid; gap: 1.25rem; }
+.club-identity-card { display: flex; gap: 1rem; align-items: center; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; }
+.club-identity-card__avatar { width: 56px; height: 56px; border-radius: 50%; background: #f3f4f6; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 1.1rem; }
+.club-identity-card__name { margin: 0; font-size: 1.25rem; font-weight: 600; }
+.club-identity-card__tier { display: inline-block; font-size: 0.8rem; color: #6b7280; margin-top: 0.15rem; }
+.club-identity-card__balance { margin: 0.5rem 0 0; font-size: 1.5rem; font-weight: 700; }
+.club-identity-card__balance-unit { font-size: 0.9rem; font-weight: 400; color: #6b7280; }
+.club-identity-card__member-since { margin: 0.25rem 0 0; font-size: 0.8rem; color: #9ca3af; }
+.club-purchase-timeline__title, .club-personal-data__title { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.75rem; }
+.club-purchase-timeline__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.club-purchase-timeline__row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid #f3f4f6; }
+.club-purchase-timeline__sign { width: 1.25rem; text-align: center; font-weight: 600; }
+.club-purchase-timeline__info { flex: 1; display: flex; flex-direction: column; }
+.club-purchase-timeline__note { font-size: 0.95rem; }
+.club-purchase-timeline__date { font-size: 0.8rem; color: #9ca3af; }
+.club-purchase-timeline__points { font-weight: 600; }
+.club-purchase-timeline__balance { font-size: 0.85rem; color: #6b7280; }
+.club-purchase-timeline__empty { color: #9ca3af; font-size: 0.9rem; }
+.club-personal-data__list { display: grid; gap: 0.5rem; }
+.club-personal-data__row { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid #f3f4f6; }
+.club-personal-data__row dt { color: #6b7280; font-size: 0.9rem; }
+.club-personal-data__row dd { margin: 0; font-weight: 500; }
+.club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; cursor: pointer; }
