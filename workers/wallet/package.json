@@ -11,6 +11,7 @@
   "dependencies": {
     "@vyloop/db": "workspace:*",
     "@vyloop/request-context": "workspace:*",
+    "@vyloop/types": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "jose": "^6.2.12"
