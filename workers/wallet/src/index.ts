@@ -22,17 +22,20 @@ import {
   planInactivityDeactivation,
 } from './inactivity';
 import type { InactivityApplyReport, InactivityPlan } from './inactivity';
-import { provisionTenantClass } from './provision';
-import type { ProvisionOutcome } from './provision';
-import { reconcilePass } from './reconcile';
-import type { ReconcileOutcome } from './reconcile';
-import { syncBusinessLocations, syncCustomerLocations } from './locations-sync';
+import { createLocationsSource } from './locations-source';
+import {
+  syncBusinessLocations,
+  syncCustomerLocations,
+} from './locations-sync';
 import type {
   BusinessLocationsOutcome,
   CustomerLocationsOutcome,
   LocationsSyncDeps,
 } from './locations-sync';
-import { createLocationsSource } from './locations-source';
+import { provisionTenantClass } from './provision';
+import type { ProvisionOutcome } from './provision';
+import { reconcilePass } from './reconcile';
+import type { ReconcileOutcome } from './reconcile';
 import router, { WALLET_CALLBACK_PATH } from './routes';
 import { runScheduledSweep } from './sweep';
 

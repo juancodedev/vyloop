@@ -36,7 +36,6 @@
 import {
   createDb,
   customers,
-  consents,
   customerWalletPasses,
   loyaltyPrograms,
   membershipTiers,

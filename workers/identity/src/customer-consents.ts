@@ -13,6 +13,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
  */
 
 export async function resolveCustomerId(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
   globalId: string,
   businessId: string,
@@ -29,6 +30,7 @@ export async function resolveCustomerId(
 }
 
 export async function readCustomerConsents(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
   globalId: string,
   businessId: string,
@@ -51,6 +53,7 @@ export async function readCustomerConsents(
 }
 
 export async function recordCustomerConsent(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
   input: {
     globalId: string;

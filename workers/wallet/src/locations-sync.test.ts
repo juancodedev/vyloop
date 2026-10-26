@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { LocationsPatchNotAppliedError, syncBusinessLocations, syncCustomerLocations } from './locations-sync';
-import type { LocationsSyncDeps } from './locations-sync';
 import type { GoogleWalletClient } from './google-client';
 import type { LocationsSource } from './locations-source';
+import { LocationsPatchNotAppliedError, syncBusinessLocations, syncCustomerLocations } from './locations-sync';
+import type { LocationsSyncDeps } from './locations-sync';
 import type { WalletStore, WalletPassRow } from './store';
 
 function makePass(customerId: string, objectId: string): WalletPassRow {
@@ -106,7 +106,7 @@ describe('syncCustomerLocations', () => {
 describe('syncBusinessLocations', () => {
   it('patches every consenting pass and reports the count', async () => {
     const patched: string[] = [];
-    const deps = makeDeps({
+    const _deps = makeDeps({
       listConsentingPasses: async () => [
         makePass('cust-1', 'obj-1'),
         makePass('cust-2', 'obj-2'),
