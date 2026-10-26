@@ -1,5 +1,5 @@
-import { formatMovementDate, initials } from '../lib/format';
 import type { CustomerProfile } from '../lib/api';
+import { formatMovementDate, initials } from '../lib/format';
 
 interface IdentityCardProps {
   profile: CustomerProfile;

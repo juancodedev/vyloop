@@ -1,7 +1,5 @@
 'use client';
 
-import { Clock, Gift } from 'lucide-react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -15,18 +13,10 @@ import { PurchaseTimeline } from '../components/purchase-timeline';
 import { WalletCard } from '../components/wallet-card';
 import { api, type CustomerProfile } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { pushSupported, subscribeToPush } from '../lib/push';
 
 const ERROR_TITLE = 'No pudimos cargar tu pase';
 const ERROR_DESCRIPTION =
   'Hubo un problema al traer tus datos. Podés reintentar; no modificamos nada en tu cuenta.';
-
-const HIDDEN_TYPES = [
-  'customer.profile_viewed',
-  'profile_viewed',
-  'qr_displayed',
-  'customer.qr_displayed',
-];
 
 export default function ProfilePage() {
   const router = useRouter();

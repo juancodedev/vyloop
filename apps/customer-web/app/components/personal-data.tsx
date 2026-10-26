@@ -1,4 +1,3 @@
-import { formatMovementDate } from '../lib/format';
 import type { CustomerProfile } from '../lib/api';
 
 interface PersonalDataProps {

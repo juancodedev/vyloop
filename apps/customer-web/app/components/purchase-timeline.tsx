@@ -1,5 +1,5 @@
-import { formatClp, formatMovementDate } from '../lib/format';
 import type { CustomerProfile, RecentTransaction } from '../lib/api';
+import { formatClp, formatMovementDate } from '../lib/format';
 
 interface PurchaseTimelineProps {
   profile: CustomerProfile;
@@ -13,7 +13,6 @@ function signFor(type: string): '+' | '−' | '•' {
 
 export function PurchaseTimeline({ profile }: PurchaseTimelineProps) {
   const transactions = profile.recent_transactions ?? [];
-  const currency = profile.program?.pointsCurrency ?? null;
 
   return (
     <section className="club-purchase-timeline" aria-label="Actividad reciente">
