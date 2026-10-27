@@ -128,17 +128,48 @@ describe('the QR sheet', () => {
     expect(document.activeElement).toBe(dockButton());
   });
 
-  it('keeps Tab inside the sheet', async () => {
+  it('closes on Escape even when focus has left the panel', async () => {
     renderDock('K7F2QX');
-    const dialog = await openSheet();
+    await openSheet();
+
+    (document.activeElement as HTMLElement).blur();
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+    });
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(dockButton());
+  });
+
+  it('wraps Tab and Shift+Tab between the first and last controls', async () => {
+    // A failed QR puts two controls in the sheet, so wrapping is observable.
+    mocks.toDataURL.mockRejectedValueOnce(new Error('canvas unavailable'));
+    renderDock(null);
+    await openSheet();
+
+    const retry = await screen.findByRole('button', { name: 'Reintentar' });
     const done = screen.getByRole('button', { name: 'Listo' });
 
     done.focus();
-    fireEvent.keyDown(dialog, { key: 'Tab' });
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(done, { key: 'Tab' });
+    expect(document.activeElement).toBe(retry);
 
-    done.focus();
-    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    retry.focus();
+    fireEvent.keyDown(retry, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(done);
+
+    screen.getByRole('heading', { name: 'Mostrale esto en caja' }).focus();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(done);
+  });
+
+  it('pulls focus back into the sheet when Tab is pressed from outside it', async () => {
+    renderDock('K7F2QX');
+    const dialog = await openSheet();
+
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
@@ -154,6 +185,62 @@ describe('the QR sheet', () => {
     });
 
     await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it('asks for the wake lock again only after the browser released it', async () => {
+    const sentinel = { released: false, release };
+    const request = vi.fn().mockResolvedValue(sentinel);
+    setWakeLock({ request });
+    renderDock('K7F2QX');
+    await openSheet();
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    // Still held: coming back to the tab must not stack a second lock.
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Released by the browser while hidden: ask again.
+    sentinel.released = true;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  });
+
+  it('releases a wake lock that arrives after the sheet closed', async () => {
+    let grant: (value: unknown) => void = () => {};
+    setWakeLock({ request: vi.fn(() => new Promise((resolve) => { grant = resolve; })) });
+    renderDock('K7F2QX');
+    await openSheet();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Listo' }));
+    });
+    await act(async () => {
+      grant({ released: false, release });
+    });
+
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not show a QR that finishes generating after the sheet closed', async () => {
+    let finish: (value: string) => void = () => {};
+    mocks.toDataURL.mockImplementation(() => new Promise<string>((resolve) => { finish = resolve; }));
+    renderDock('K7F2QX');
+    await openSheet();
+    await waitFor(() => expect(mocks.toDataURL).toHaveBeenCalled());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Listo' }));
+    });
+    await act(async () => {
+      finish('data:image/png;base64,TEFURQ==');
+    });
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('img')).toBeNull();
   });
 
   it('shows the QR and no error when the wake lock is refused', async () => {

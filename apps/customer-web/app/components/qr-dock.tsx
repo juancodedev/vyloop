@@ -1,7 +1,7 @@
 'use client';
 
 import { QrCode } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { formatMemberCode } from '../lib/format';
 
@@ -27,14 +27,18 @@ type QrProps = {
  * A courtesy, never a requirement: an unsupported browser, a refusal or a
  * battery saver all leave the QR on screen with no error. The lock is dropped
  * by the browser when the tab is hidden, so it is asked for again when the
- * page comes back, and released on unmount even if it arrives after closing.
+ * page comes back — but only once the held one is actually released, so locks
+ * never stack — and released on unmount even if it arrives after closing.
  */
 function useScreenWakeLock() {
   useEffect(() => {
     let active = true;
     let sentinel: WakeLockSentinel | null = null;
+    let pending = false;
 
     const acquire = async () => {
+      if (pending || (sentinel && !sentinel.released)) return;
+      pending = true;
       try {
         const lock = await navigator.wakeLock?.request('screen');
         if (!lock) return;
@@ -45,6 +49,8 @@ function useScreenWakeLock() {
         sentinel = lock;
       } catch {
         // Refused or unsupported: the sheet works without it.
+      } finally {
+        pending = false;
       }
     };
 
@@ -80,33 +86,44 @@ export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & {
     headingRef.current?.focus();
   }, []);
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
+  /**
+   * Escape and the Tab trap listen on the document, not on the panel, so they
+   * still work when focus has left the sheet (a click on the scrim's edge, a
+   * browser control). Tab from outside pulls focus back to the first control.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
         onClose();
         return;
       }
 
-      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const dialog = dialogRef.current;
+      if (event.key !== 'Tab' || !dialog) return;
 
-      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
       if (focusable.length === 0) return;
 
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const current = document.activeElement;
 
-      if (event.shiftKey && (current === first || current === headingRef.current)) {
+      if (!dialog.contains(current)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && (current === first || current === headingRef.current)) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && current === last) {
         event.preventDefault();
         first.focus();
       }
-    },
-    [onClose],
-  );
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   return (
     <div className="club-qr-sheet" onClick={onClose}>
@@ -116,7 +133,6 @@ export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & {
         role="dialog"
         aria-modal="true"
         aria-labelledby="club-qr-sheet-title"
-        onKeyDown={handleKeyDown}
         onClick={(event) => event.stopPropagation()}
       >
         <span className="club-qr-sheet__grip" aria-hidden="true" />
