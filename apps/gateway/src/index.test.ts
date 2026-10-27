@@ -385,6 +385,28 @@ describe('API Gateway', () => {
       expect(seen[0]!.get('X-User-Role')).toBeNull();
     });
 
+    it('still forwards a public request that carries a stale token, with no identity', async () => {
+      // A client interceptor may attach an old token to the login call. The
+      // public route never verifies it, so it must neither be refused nor turned
+      // into an identity.
+      const { seen, service } = capturing();
+
+      const res = await app.fetch(
+        new Request('http://localhost/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer expired.or.forged' },
+          body: JSON.stringify({ email: 'a@b.cl', password: 'x' }),
+        }),
+        mockEnv({ identity: service }),
+      );
+
+      expect(res.status).toBe(200);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.get('X-User-Id')).toBeNull();
+      expect(seen[0]!.get('X-Business-Id')).toBeNull();
+      expect(seen[0]!.get('X-User-Role')).toBeNull();
+    });
+
     it('strips them from the public auth routes', async () => {
       const { seen, service } = capturing();
 
