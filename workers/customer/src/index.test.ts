@@ -2702,6 +2702,7 @@ describe('Staff-only customer routes refuse a customer token', () => {
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.insert).not.toHaveBeenCalled();
     expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.delete).not.toHaveBeenCalled();
   });
 
   it('keeps the public registration open, which carries no token at all', async () => {
@@ -2710,9 +2711,11 @@ describe('Staff-only customer routes refuse a customer token', () => {
       body: { fullName: 'Ada Lovelace', phone: '+56912345678', businessSlug: 'cafe-del-barrio' },
     });
 
-    expect(res.status).not.toBe(403);
-    // It went on to resolve the business from the slug.
-    expect(mockDb.select).toHaveBeenCalled();
+    // It took the public branch: the business is resolved from the slug, and
+    // this mock holds no tenant for it. A 403 would mean the token gate ran.
+    expect(res.status).toBe(404);
+    const payload = await res.json() as any;
+    expect(payload.error.message).toBe('Business "cafe-del-barrio" not found');
   });
 
   it('still lets a cashier list the customers', async () => {
