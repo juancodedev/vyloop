@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isCustomerRole, requireOperatorRole, requireCounterSubject, schedulePassReconcile } from './helpers';
+import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isDeletedCustomer, isCustomerRole, requireOperatorRole, requireCounterSubject, schedulePassReconcile } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -965,6 +965,13 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
     .limit(1);
 
+  // A deleted account keeps its row and its ledger, so the INSERT below would
+  // still land on it. It is answered as not found, the way every read of a
+  // deleted customer is: nobody owns that balance any more.
+  if (customer?.deletedAt) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
+  }
+
   if (customer?.currentTierId) {
     const [tier] = await db
       .select()
@@ -1729,6 +1736,14 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
 
     resolvedRewardId = reward.id;
     resolvedRewardName = reward.name;
+  }
+
+  // An operator names the customer by id and is honoured as sent, so a deleted
+  // account — whose row and ledger stay — would otherwise still be spendable from
+  // the POS. A customer token never reaches this: `resolveOwnCustomer` already
+  // excludes a deleted row and answered 403 above.
+  if (!isCustomerRole(auth) && (await isDeletedCustomer(db, businessId, customerId))) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
   }
 
   // -----------------------------------------------------------------------

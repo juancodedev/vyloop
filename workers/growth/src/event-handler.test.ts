@@ -1,3 +1,4 @@
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -28,16 +29,27 @@ const dbMock = {
   execute: vi.fn().mockResolvedValue({ rows: [{ balance: 1200 }] }),
 };
 
-vi.mock('@vyloop/db', () => ({
+vi.mock('@vyloop/db', async () => {
+  // A real table for `customers`, so a predicate on it compiles to the SQL the
+  // database would run and a missing `deleted_at` guard is observable.
+  const { pgTable, uuid, timestamp } = await import('drizzle-orm/pg-core');
+  return {
   createDb: vi.fn(() => dbMock),
   setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
-  customers: { id: 'customers.id', businessId: 'business_id', globalId: 'global_id', currentTierId: 'current_tier_id' },
+  customers: pgTable('customers', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    globalId: uuid('global_id').notNull(),
+    currentTierId: uuid('current_tier_id'),
+    deletedAt: timestamp('deleted_at'),
+  }),
   membershipTiers: { id: 'membership_tiers.id', businessId: 'business_id', minPoints: 'min_points', name: 'name' },
   loyaltyPrograms: { id: 'loyalty_programs.id', businessId: 'business_id' },
   rewards: { id: 'rewards.id', businessId: 'business_id', name: 'name', autoGrantThreshold: 'auto_grant_threshold' },
   rewardBranches: { rewardId: 'reward_id', branchId: 'branch_id' },
   rewardGrants: { id: 'reward_grants.id', customerId: 'customer_id', rewardId: 'reward_id' },
-}));
+  };
+});
 
 const publish = vi.hoisted(() => vi.fn(async (_queue: unknown, _event: unknown) => undefined));
 
@@ -183,5 +195,100 @@ describe('PointsAssigned auto-grant', () => {
     // produced it.
     expect(publish).toHaveBeenCalledTimes(1);
     expect((publish.mock.calls[0][1] as { type: string }).type).toBe('RewardAutoGranted');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A deleted customer
+// ---------------------------------------------------------------------------
+
+/**
+ * A customer lookup that answers the way Postgres would: a deleted row is only
+ * returned when the predicate does not exclude `deleted_at`.
+ */
+function customerLookup(row: Record<string, unknown>) {
+  let rows: unknown[] = [];
+  const c = {
+    from: () => c,
+    where: (clause: unknown) => {
+      const { sql: rendered } = new PgDialect().sqlToQuery(clause as never);
+      const excludesDeleted = rendered.includes('"customers"."deleted_at" is null');
+      rows = row.deletedAt != null && excludesDeleted ? [] : [row];
+      return c;
+    },
+    limit: () => c,
+    then: (fn: (v: unknown) => unknown) => Promise.resolve(rows).then(fn),
+  };
+  return c;
+}
+
+function customerRegisteredEvent() {
+  return {
+    id: 'evt-2',
+    type: 'CustomerRegistered',
+    source: 'test',
+    specversion: '1.0',
+    time: '2026-10-21T12:00:00Z',
+    header: { business_id: 'biz-1', timestamp: '2026-10-21T12:00:00Z' },
+    payload: { customer_id: 'global-1', full_name: 'Ana', business_id: 'biz-1' },
+  } as never;
+}
+
+describe('a deleted customer', () => {
+  const deleted = { id: 'cust-1', globalId: 'global-1', currentTierId: null, deletedAt: '2026-10-01T00:00:00Z' };
+  const active = { ...deleted, deletedAt: null };
+
+  beforeEach(() => {
+    dbMock.update.mockClear();
+    dbMock.execute.mockClear();
+  });
+
+  it('is never granted a reward or moved up a tier by PointsAssigned', async () => {
+    dbMock.select.mockReturnValueOnce(customerLookup(deleted) as never);
+    dbMock.select.mockReturnValueOnce(chain([{ id: 'tier-2', name: 'Gold', minPoints: 1000 }]));
+    dbMock.select.mockReturnValueOnce(chain([reward]));
+    dbMock.select.mockReturnValue(chain([]));
+
+    await handleEvent(pointsAssignedEvent(), {} as never, env());
+
+    expect(dbMock.insert).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('still grants an active customer on PointsAssigned', async () => {
+    dbMock.select.mockReturnValueOnce(customerLookup(active) as never);
+    dbMock.select.mockReturnValueOnce(chain([])); // no eligible tier
+    dbMock.select.mockReturnValueOnce(chain([reward]));
+    dbMock.select.mockReturnValueOnce(chain([])); // no existing grant
+    dbMock.select.mockReturnValueOnce(chain([])); // unscoped
+
+    await handleEvent(pointsAssignedEvent(), {} as never, env());
+
+    expect(dbMock.insert).toHaveBeenCalledOnce();
+    expect((publish.mock.calls[0][1] as { type: string }).type).toBe('RewardAutoGranted');
+  });
+
+  it('gets no wallet and no tier from a late CustomerRegistered', async () => {
+    dbMock.select.mockReturnValueOnce(customerLookup(deleted) as never);
+    dbMock.select.mockReturnValue(chain([{ id: 'tier-1' }]));
+
+    await handleEvent(customerRegisteredEvent(), {} as never, env());
+
+    // Only `withRls` reached `execute`: no wallet-init ledger row.
+    expect(dbMock.execute).toHaveBeenCalledOnce();
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it('still initialises an active customer on CustomerRegistered', async () => {
+    dbMock.select.mockReturnValueOnce(customerLookup(active) as never);
+    dbMock.select.mockReturnValueOnce(chain([{ id: 'tier-1' }])); // lowest tier
+
+    await handleEvent(customerRegisteredEvent(), {} as never, env());
+
+    // `withRls`, then the wallet-init INSERT.
+    expect(dbMock.execute).toHaveBeenCalledTimes(2);
+    expect(dbMock.update).toHaveBeenCalledOnce();
   });
 });
