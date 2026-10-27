@@ -2674,6 +2674,54 @@ function lookupCustomerWhere() {
   return scoped[0]!;
 }
 
+describe('Staff-only customer routes refuse a customer token', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  // Every route that reads or writes another customer is for the business
+  // staff. The customer app only ever reads its own row through /me.
+  const STAFF_ROUTES: Array<[string, string, Record<string, unknown> | undefined]> = [
+    ['PUT', '/v1/customers', { fullName: 'Intruso', phone: '+56900000000' }],
+    ['GET', '/v1/customers', undefined],
+    ['GET', '/v1/customers/by-global-id/3f2504e0-4f89-41d3-9a0c-0305e82c3301', undefined],
+    ['GET', '/v1/customers/existing-id', undefined],
+    ['PATCH', '/v1/customers/existing-id', { phone: '+56900000000' }],
+    ['DELETE', '/v1/customers/existing-id', undefined],
+  ];
+
+  it.each(STAFF_ROUTES)('%s %s answers 403 and touches no row', async (method, path, body) => {
+    const res = await request(method, path, {
+      ...(body ? { body } : {}),
+      headers: { 'X-User-Role': 'customer' },
+    });
+
+    expect(res.status).toBe(403);
+    const payload = await res.json() as any;
+    expect(payload.error.code).toBe('OPERATOR_ROLE_REQUIRED');
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps the public registration open, which carries no token at all', async () => {
+    const res = await request('PUT', '/v1/customers', {
+      auth: false,
+      body: { fullName: 'Ada Lovelace', phone: '+56912345678', businessSlug: 'cafe-del-barrio' },
+    });
+
+    expect(res.status).not.toBe(403);
+    // It went on to resolve the business from the slug.
+    expect(mockDb.select).toHaveBeenCalled();
+  });
+
+  it('still lets a cashier list the customers', async () => {
+    const res = await request('GET', '/v1/customers', { headers: { 'X-User-Role': 'cashier' } });
+
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('POS lookup (GET /v1/customers/lookup)', () => {
   // The suite-wide reset lives inside `describe('CRUD Routes')`, so without this
   // these tests inherit the previous one's `select` mock — which is how a lookup

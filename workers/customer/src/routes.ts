@@ -105,10 +105,22 @@ router.put('/v1/customers', async (c) => {
 
   // Resolve businessId: from auth headers (JWT flow) or businessSlug (public registration)
   let businessId: string;
+  let auth: ReturnType<typeof extractAuthHeaders> | null = null;
   try {
-    const auth = extractAuthHeaders(c);
-    businessId = auth.businessId;
+    auth = extractAuthHeaders(c);
   } catch {
+    auth = null;
+  }
+
+  if (auth) {
+    // With a token this is the staff creating a customer from the dashboard.
+    // The customer app registers without one, through the branch below.
+    const gate = requireOperatorRole(auth);
+    if (!gate.ok) {
+      return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+    }
+    businessId = auth.businessId;
+  } else {
     // No auth headers — must be public registration with businessSlug
     if (!body.businessSlug) {
       return c.json(
@@ -313,7 +325,12 @@ router.put('/v1/customers', async (c) => {
 // ---------------------------------------------------------------------------
 
 router.get('/v1/customers', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
   const q = c.req.query('q') || '';
@@ -710,7 +727,12 @@ router.get('/v1/customers/me', async (c) => {
 // ---------------------------------------------------------------------------
 
 router.get('/v1/customers/by-global-id/:globalId', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const globalId = c.req.param('globalId');
   const db = createDb(c.env.DATABASE_URL);
 
@@ -1050,7 +1072,12 @@ router.get('/v1/customers/lookup', async (c) => {
 // ---------------------------------------------------------------------------
 
 router.get('/v1/customers/:id', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const id = c.req.param('id');
   const db = createDb(c.env.DATABASE_URL);
 
@@ -1251,7 +1278,12 @@ function classifyUniqueViolation(
 }
 
 router.patch('/v1/customers/:id', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const id = c.req.param('id');
   const db = createDb(c.env.DATABASE_URL);
 
@@ -1410,7 +1442,12 @@ router.patch('/v1/customers/:id', async (c) => {
 // ---------------------------------------------------------------------------
 
 router.delete('/v1/customers/:id', async (c) => {
-  const { businessId } = extractAuthHeaders(c);
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
   const id = c.req.param('id');
   const db = createDb(c.env.DATABASE_URL);
 

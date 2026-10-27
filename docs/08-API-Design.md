@@ -100,6 +100,8 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 | GET | `/v1/customers/{id}/events` | Timeline de eventos del cliente (Customer360) |
 | POST | `/v1/customers/{id}/consents` | Registro de consentimiento |
 
+Las rutas que leen o escriben a otro cliente (`GET /v1/customers`, `GET /v1/customers/by-global-id/{globalId}`, `GET`, `PATCH` y `DELETE /v1/customers/{id}`, y `PUT /v1/customers` con token) son del personal del negocio: un token de rol `customer` recibe 403 `OPERATOR_ROLE_REQUIRED`. La app del cliente lee su propio perfil con `GET /v1/customers/me`, y se registra con `PUT /v1/customers` sin token.
+
 ### Growth Platform
 
 | Método | Endpoint | Descripción |
