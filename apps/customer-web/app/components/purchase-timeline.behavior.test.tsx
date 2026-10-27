@@ -6,7 +6,7 @@
  * amount falls back to its note, and "$0" is never shown.
  */
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CustomerEvent, CustomerProfile, RecentTransaction } from '../lib/api';
 
@@ -130,15 +130,31 @@ describe('recent purchase rows', () => {
   });
 
   it('shows an old movement with its short date', () => {
-    const now = new Date();
-    const old = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30, 12);
-    // Keep the case inside the current year so the year is not appended.
-    if (old.getFullYear() !== now.getFullYear()) return;
+    // A fixed clock: the case must run on every day of the year, January included.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 27, 12));
+    try {
+      const old = new Date(2026, 8, 27, 12).toISOString();
 
-    render(<PurchaseTimeline profile={makeProfile({ recent_transactions: [tx({ createdAt: old.toISOString() })] })} />);
+      render(<PurchaseTimeline profile={makeProfile({ recent_transactions: [tx({ createdAt: old })] })} />);
 
-    expect(screen.queryByText(/sem/)).toBeNull();
-    expect(screen.getByText(/^\d{1,2} \w{3}\.?$/)).toBeTruthy();
+      expect(screen.getByText('27 sep')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a movement of an unknown type without a direction', () => {
+    render(
+      <PurchaseTimeline
+        profile={makeProfile({ recent_transactions: [tx({ type: 'adjust', points: 15, balanceAfter: 45, note: null })] })}
+      />,
+    );
+
+    expect(screen.getByText('Ajuste de puntos')).toBeTruthy();
+    expect(screen.getByText('15 puntos')).toBeTruthy();
+    expect(screen.queryByText(/^[+−]/)).toBeNull();
+    expect(screen.getByText('saldo 45')).toBeTruthy();
   });
 
   it('says there are no movements yet when the list is empty', () => {
