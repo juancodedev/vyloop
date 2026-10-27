@@ -385,6 +385,27 @@ describe('API Gateway', () => {
       expect(body.service).toBe('customer');
     });
 
+    it.each([
+      ['a percent-encoded segment', '/v1/customers/%6De'],
+      ['a trailing slash', '/v1/customers/me/'],
+      ['a doubled slash', '/v1/customers//me'],
+    ])('applies the scope to %s', async (_label, path) => {
+      const res = await app.fetch(
+        new Request(`http://localhost${path}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${await customerToken(['rewards:read'])}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email: 'nuevo@example.com' }),
+        }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('AUTH_SCOPE_MISSING');
+    });
+
     it('leaves reading your own profile to the token alone', async () => {
       const res = await app.fetch(
         new Request('http://localhost/v1/customers/me', {

@@ -70,12 +70,23 @@ function changesBetween(before: Draft, after: Draft): ProfileUpdate {
 
 type FieldErrors = Partial<Record<keyof Draft, string>>;
 
+/** Today on this device as YYYY-MM-DD, the same shape a date input holds. */
+function todayIso(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 function validate(draft: Draft): FieldErrors {
   const errors: FieldErrors = {};
   if (draft.fullName.trim() === '') errors.fullName = 'Ingresá tu nombre.';
   const email = draft.email.trim();
   if (email !== '' && !EMAIL_PATTERN.test(email)) {
     errors.email = 'Ingresá un email válido, por ejemplo nombre@dominio.cl';
+  }
+  // The server refuses it too; caught here so the message lands on the field.
+  if (draft.birthDate !== '' && draft.birthDate > todayIso()) {
+    errors.birthDate = 'Ingresá una fecha de nacimiento que ya haya pasado.';
   }
   return errors;
 }
@@ -213,8 +224,10 @@ export function PersonalData({ profile, onSaved }: PersonalDataProps) {
             label="Fecha de nacimiento"
             type="date"
             autoComplete="bday"
+            max={todayIso()}
             value={draft.birthDate}
             onChange={(event) => update('birthDate', event.target.value)}
+            error={errors.birthDate}
           />
           <p className="club-personal-data__note">Para cambiar tu teléfono, pedilo en el local.</p>
           {formError ? (

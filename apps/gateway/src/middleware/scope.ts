@@ -18,8 +18,28 @@ export const REQUIRED_SCOPES: ReadonlyArray<{ method: string; path: string; scop
 
 export const SCOPE_MISSING = 'AUTH_SCOPE_MISSING';
 
+/**
+ * The path as the worker's router will match it.
+ *
+ * The worker decodes percent-escapes before routing, so `/v1/customers/%6De`
+ * reaches the `me` route there. Comparing the raw path here would let that
+ * spelling walk past the table. Repeated and trailing slashes are folded for
+ * the same reason: the table must not be the stricter reader of the two.
+ */
+export function normalizePath(path: string): string {
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    // A malformed escape is left as written; it cannot spell a table entry.
+  }
+  const collapsed = decoded.replace(/\/{2,}/g, '/');
+  return collapsed.length > 1 ? collapsed.replace(/\/+$/, '') : collapsed;
+}
+
 export function requiredScopeFor(method: string, path: string): string | null {
-  const rule = REQUIRED_SCOPES.find((r) => r.method === method && r.path === path);
+  const normalized = normalizePath(path);
+  const rule = REQUIRED_SCOPES.find((r) => r.method === method.toUpperCase() && r.path === normalized);
   return rule ? rule.scope : null;
 }
 

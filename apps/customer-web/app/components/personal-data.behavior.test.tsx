@@ -152,6 +152,17 @@ describe('editing personal data', () => {
     expect(mocks.updateProfile).not.toHaveBeenCalled();
   });
 
+  it('refuses a future birth date without sending anything', () => {
+    renderData();
+    openEditor();
+
+    type('Fecha de nacimiento', '2999-01-01');
+    save();
+
+    expect(screen.getByText('Ingresá una fecha de nacimiento que ya haya pasado.')).toBeTruthy();
+    expect(mocks.updateProfile).not.toHaveBeenCalled();
+  });
+
   it('clears the email when the field is emptied', async () => {
     mocks.updateProfile.mockResolvedValue({ fullName: 'Ada Lovelace', email: null, birthDate: '1981-07-27' });
     renderData();
