@@ -1,3 +1,4 @@
+import { decodeJwt } from 'jose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const SECRET = 'test-jwt-secret-key-for-customer-login-only';
@@ -136,6 +137,16 @@ describe('customer login across businesses', () => {
 
     const body = (await res.json()) as { customer: { globalId: string } };
     expect(body.customer.globalId).toBe(AT_B.globalId);
+  });
+
+  it('grants the customer app its read, redeem and profile edit scopes', async () => {
+    tenantLookup = [CAFE_B];
+    customerLookup = [AT_B];
+
+    const res = await login({ phone: AT_B.phone, businessSlug: CAFE_B.slug });
+    const body = (await res.json()) as { token: string };
+
+    expect(decodeJwt(body.token).scopes).toEqual(['rewards:read', 'rewards:redeem', 'profile:write']);
   });
 
   /** A business the customer never joined is a refusal, not another tenant's record. */

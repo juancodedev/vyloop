@@ -327,6 +327,7 @@ Para que servicios externos reaccionen en tiempo real a lo que ocurre en Vyloop:
 | Código | Status HTTP | Significado |
 |---|---|---|
 | `AUTH_TOKEN_INVALID` | 401 | Token expirado o malformado |
+| `AUTH_SCOPE_MISSING` | 403 | El token es válido pero no trae el scope que la ruta exige (hoy, `profile:write` para `PATCH /v1/customers/me`) |
 | `AUTH_BUSINESS_MISMATCH` | 403 | El `X-Business-ID` no coincide con el token |
 | `CUSTOMER_NOT_FOUND` | 404 | Cliente no existe en el tenant |
 | `POINTS_INSUFFICIENT` | 400 | Saldo insuficiente para el canje solicitado |

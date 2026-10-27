@@ -15,6 +15,7 @@ import {
   DEFAULT_LIMITS,
   DEFAULT_WINDOW,
 } from './middleware/rate-limit';
+import { scopeMiddleware } from './middleware/scope';
 import { ROBOTS_PATH, robotsRoute, WALLET_CALLBACK_PATH } from './robots';
 import { routerMiddleware, type GatewayEnv } from './router';
 import { SUPPORT_LIMIT_PER_WINDOW, SUPPORT_PATH, supportRoute } from './support';
@@ -315,6 +316,10 @@ app.use('/v1/*', async (c, next) => {
 // the client's own X-User-* headers are still stripped: skipping this used to
 // forward them to the worker as if the gateway had set them from a token.
 app.use('/v1/*', async (c, next) => authInjectMiddleware()(c, next));
+
+// Middleware 2b: route scopes — a few routes need a scope beyond a valid token.
+// After authentication, so the verified claims are what it reads.
+app.use('/v1/*', async (c, next) => scopeMiddleware()(c, next));
 
 // Middleware 3: Rewrite /v1/businesses/me/* → /v1/businesses/{business_id}/*
 // Must run after authInjectMiddleware (injects X-Business-ID) and before routerMiddleware.
