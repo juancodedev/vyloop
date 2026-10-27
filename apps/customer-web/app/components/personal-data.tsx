@@ -44,6 +44,20 @@ function formatBirthday(value: string): string | null {
   return `${Number(match[3])} de ${month}`;
 }
 
+/**
+ * The profile after a save, from the server's answer. A cleared email or birth
+ * date is removed rather than kept as null, which is how the profile has always
+ * said "not set".
+ */
+export function mergeSavedFields(profile: CustomerProfile, fields: ProfileFields): CustomerProfile {
+  const next: CustomerProfile = { ...profile, fullName: fields.fullName };
+  if (fields.email) next.email = fields.email;
+  else delete next.email;
+  if (fields.birthDate) next.birthDate = fields.birthDate;
+  else delete next.birthDate;
+  return next;
+}
+
 interface Draft {
   fullName: string;
   email: string;
