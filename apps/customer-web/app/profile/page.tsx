@@ -8,6 +8,7 @@ import { ClubError, ClubStatus } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
 import { IdentityCard } from '../components/identity-card';
 import { MemberPass } from '../components/member-pass';
+import { NextRedemptionCard } from '../components/next-redemption-card';
 import { PersonalData } from '../components/personal-data';
 import { PurchaseTimeline } from '../components/purchase-timeline';
 import { QrDock } from '../components/qr-dock';
@@ -85,6 +86,7 @@ export default function ProfilePage() {
     <ClubShell>
       <div className="club-profile">
         <IdentityCard profile={profile} />
+        <NextRedemptionCard profile={profile} />
         <MemberPass profile={profile} />
         <PurchaseTimeline profile={profile} />
         <PersonalData profile={profile} />

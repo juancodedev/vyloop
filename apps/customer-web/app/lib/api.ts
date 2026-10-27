@@ -151,6 +151,17 @@ export interface CustomerTier {
   displayOrder: number;
 }
 
+/**
+ * A reward as the profile reports it: its cost and how far the balance is from
+ * it. `pointsMissing` is 0 for an affordable reward.
+ */
+export interface RewardStep {
+  id: string;
+  name: string;
+  pointsCost: number;
+  pointsMissing: number;
+}
+
 export interface CustomerProfile {
   id: string;
   globalId: string;
@@ -178,6 +189,15 @@ export interface CustomerProfile {
    * source of truth, and the two would silently drift.
    */
   nextTier: CustomerTier | null;
+  /**
+   * The cheapest active reward the balance does not reach yet, and the
+   * cheapest one it does, both derived SERVER-SIDE like `nextTier`. Optional
+   * because an older API does not send them; absent means "render no card".
+   */
+  nextReward?: RewardStep | null;
+  affordableReward?: RewardStep | null;
+  affordableRewardsCount?: number;
+  activeRewardsCount?: number;
   createdAt: string;
 }
 

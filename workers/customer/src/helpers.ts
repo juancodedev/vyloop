@@ -139,3 +139,49 @@ export function buildCustomerRegisteredEvent(
 export async function withRls(db: any, businessId: string): Promise<void> {
   await db.execute(setCurrentBusinessId(businessId));
 }
+
+// ---------------------------------------------------------------------------
+// Reward progress
+// ---------------------------------------------------------------------------
+
+export interface ActiveReward {
+  id: string;
+  name: string;
+  pointsCost: number;
+}
+
+export interface RewardStep extends ActiveReward {
+  pointsMissing: number;
+}
+
+export interface RewardProgress {
+  nextReward: RewardStep | null;
+  affordableReward: RewardStep | null;
+  affordableRewardsCount: number;
+  activeRewardsCount: number;
+}
+
+/**
+ * The customer's position against the tenant's active rewards.
+ *
+ * Owned by the server, next to `nextTier`, so the client only renders: the
+ * next reward is the cheapest one the balance does not reach yet, the
+ * affordable reward is the cheapest one it does, and ties go to the name.
+ * `rewards` must already be the tenant's ACTIVE rewards; activeness is a SQL
+ * filter in the route, not something this function can see.
+ */
+export function deriveRewardProgress(rewards: ActiveReward[], balance: number): RewardProgress {
+  const ordered = [...rewards].sort(
+    (a, b) => a.pointsCost - b.pointsCost || a.name.localeCompare(b.name),
+  );
+  const affordable = ordered.filter((r) => r.pointsCost <= balance);
+  const next = ordered.find((r) => r.pointsCost > balance);
+  const cheapestAffordable = affordable[0];
+
+  return {
+    nextReward: next ? { ...next, pointsMissing: next.pointsCost - balance } : null,
+    affordableReward: cheapestAffordable ? { ...cheapestAffordable, pointsMissing: 0 } : null,
+    affordableRewardsCount: affordable.length,
+    activeRewardsCount: ordered.length,
+  };
+}
