@@ -17,7 +17,7 @@
  *      expected value the same way the component does, it would agree with a
  *      re-implementation of the rule and prove nothing.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ProfilePage from './page';
@@ -71,10 +71,8 @@ vi.mock('qrcode', () => ({
 const GLOBAL_ID = '3f8a1c2e-7b4d-4e91-a6c5-0d2b9e8f1a37';
 
 /** Copy shown when no milestone can honestly be claimed. */
-const UNRESOLVED_COPY = 'No vemos un nivel siguiente en tu programa por ahora.';
-
 /** The milestone copy, referenced negatively by the incoherence tests. */
-const TOP_COPY = /Llegaste al nivel m[áa]s alto/;
+const TOP_COPY = 'Estás en el nivel más alto';
 
 const TIERS = [
   { id: 'tier-bronce', name: 'Bronce', minPoints: 0, multiplier: 1, displayOrder: 1 },
@@ -112,18 +110,6 @@ function makeProfile(overrides: ProfileOverrides = {}) {
   };
 }
 
-function ladder(): HTMLElement {
-  return screen.getByRole('list', { name: 'Niveles del programa' });
-}
-
-/**
- * A pass as `GET /v1/wallet/pass` answers it.
- *
- * Stubbed on every test rather than per-test, so a test that is only about the
- * balance is not also the place where a missing stub turns into an unhandled
- * rejection. The behaviour of the card itself is asserted in
- * `wallet-card.behavior.test.tsx`.
- */
 function makeWalletPass(overrides: Record<string, unknown> = {}) {
   return {
     save_url: 'https://pay.google.com/gp/v/save/ABC123?jwt.encoded',
@@ -136,36 +122,14 @@ function makeWalletPass(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function rungNames(): (string | null | undefined)[] {
-  return within(ladder())
-    .getAllByRole('listitem')
-    .map((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent);
-}
-
-function rungNamed(name: string): HTMLElement {
-  const match = within(ladder())
-    .getAllByRole('listitem')
-    .find((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent === name);
-
-  if (!match) throw new Error(`No rung named "${name}" was rendered. Saw: ${rungNames().join(', ')}`);
-
-  return match;
-}
-
 function balanceText(): string {
-  return document.querySelector('.club-pass__balance-value')?.textContent?.trim() ?? '';
+  return document.querySelector('.club-identity-card__balance-value')?.textContent?.trim() ?? '';
 }
 
-/**
- * The gap sentence is composed across a few elements so the number and the
- * tier name can carry their own weight, which means no single node holds the
- * whole string. Reading the composed text is what the user actually sees, and
- * asserting the full sentence pins the number, the unit AND the target tier in
- * one go.
- */
-function gapText(): string | null {
-  const gap = document.querySelector('.club-ladder__gap');
-  return gap ? gap.textContent?.replace(/\s+/g, ' ').trim() ?? null : null;
+/** The identity card tier line: the gap to the next tier, or the top-tier claim. */
+function tierLineText(): string | null {
+  const line = document.querySelector('.club-identity-card__tierline-text');
+  return line ? line.textContent?.replace(/\s+/g, ' ').trim() ?? null : null;
 }
 
 describe('profile pass behavior', () => {
@@ -192,7 +156,7 @@ describe('profile pass behavior', () => {
 
   async function renderPage() {
     const result = render(<ProfilePage />);
-    await screen.findByRole('region', { name: 'Tu pase' });
+    await screen.findByRole('region', { name: 'Tu identidad' });
     return result;
   }
 
@@ -205,7 +169,7 @@ describe('profile pass behavior', () => {
 
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/login'));
     expect(mocks.getProfile).not.toHaveBeenCalled();
-    expect(screen.queryByRole('region', { name: 'Tu pase' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tu identidad' })).toBeNull();
     expect(screen.queryByText(GLOBAL_ID)).toBeNull();
   });
 
@@ -219,8 +183,43 @@ describe('profile pass behavior', () => {
     render(<ProfilePage />);
 
     expect(screen.getByRole('status').textContent).toContain('Cargando tu pase');
+    // A skeleton of the identity card, the redemption card and three rows; no spinner.
+    expect(document.querySelectorAll('.club-skeleton--identity')).toHaveLength(1);
+    expect(document.querySelectorAll('.club-skeleton--redemption')).toHaveLength(1);
+    expect(document.querySelectorAll('.club-skeleton--row')).toHaveLength(3);
+    expect(document.querySelector('.club-status__indicator, .club-qr__spinner')).toBeNull();
     expect(mocks.replace).not.toHaveBeenCalled();
     expect(mocks.getProfile).not.toHaveBeenCalled();
+  });
+
+  // ─── Page order ────────────────────────────────────────────────────────
+
+  it('renders the sections in the specified order', async () => {
+    mocks.getProfile.mockResolvedValue(
+      makeProfile({
+        nextReward: { id: 'r-1', name: 'Burger gratis', pointsCost: 2000, pointsMissing: 800 },
+        affordableReward: null,
+        affordableRewardsCount: 0,
+        activeRewardsCount: 2,
+      }),
+    );
+    await renderPage();
+
+    const order = [
+      screen.getByText('Café del Barrio'),
+      screen.getByRole('region', { name: 'Tu identidad' }),
+      screen.getByRole('region', { name: 'Tu próximo canje' }),
+      screen.getByRole('region', { name: 'Actividad reciente' }),
+      screen.getByRole('region', { name: 'Tu tarjeta en Google Wallet' }),
+      screen.getByRole('button', { name: 'Cerrar sesión' }),
+    ];
+
+    for (let i = 1; i < order.length; i += 1) {
+      const relation = order[i - 1].compareDocumentPosition(order[i]);
+      expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    // The tier ladder lives on the history page now.
+    expect(screen.queryByRole('list', { name: 'Niveles del programa' })).toBeNull();
   });
 
   // ─── Focal element: balance and real distance to the next tier ─────────
@@ -230,7 +229,8 @@ describe('profile pass behavior', () => {
     await renderPage();
 
     expect(balanceText()).toContain('1.200');
-    expect(gapText()).toBe('Te faltan 800 puntos para llegar a Oro');
+    expect(screen.getByText('Nivel Plata')).toBeTruthy();
+    expect(tierLineText()).toBe('Te faltan 800 puntos para el nivel Oro');
   });
 
   it('expresses the gap in the tenant own currency label, not a hardcoded unit', async () => {
@@ -240,122 +240,34 @@ describe('profile pass behavior', () => {
 
     await renderPage();
 
-    expect(gapText()).toBe('Te faltan 800 estampitas para llegar a Oro');
+    expect(tierLineText()).toBe('Te faltan 800 estampitas para el nivel Oro');
   });
 
-  it('keeps the top-of-programme copy for a customer genuinely on the last rung', async () => {
-    // 2500 points is above every threshold (Oro is 2000) AND the assigned tier
-    // is Oro, the last rung. Both halves agree, so the milestone is earned and
-    // must survive the guard that exists for merchants who mis-order tiers.
+  it('keeps the top-tier copy for a customer genuinely on the last rung', async () => {
     mocks.getProfile.mockResolvedValue(
       makeProfile({ points: 2500, currentTierId: 'tier-oro', currentTier: 'Oro', nextTier: null }),
     );
 
     await renderPage();
 
-    expect(gapText()).toBe('Llegaste al nivel más alto de Club del Barrio.');
-    expect(screen.queryByText(UNRESOLVED_COPY)).toBeNull();
+    expect(tierLineText()).toBe(TOP_COPY);
   });
 
   it('does not re-derive next tier: a null from the server produces no invented gap', async () => {
-    // Below the middle threshold and the server explicitly returned null. The
-    // component must report that answer and not scan `tiers` for a target of
-    // its own — a client-side re-derivation would find Plata here and print a
-    // distance the server never claimed.
+    // Below the middle threshold and the server explicitly returned null. A
+    // client-side re-derivation would find Plata here and print a distance the
+    // server never claimed.
     mocks.getProfile.mockResolvedValue(
       makeProfile({ points: 10, currentTierId: 'tier-bronce', currentTier: 'Bronce', nextTier: null }),
     );
 
     await renderPage();
 
-    expect(gapText()).not.toContain('Te faltan');
-    expect(gapText()).toBe(UNRESOLVED_COPY);
-  });
-
-  // ─── Signature element: the ladder of the tenant own tiers ─────────────
-
-  it('renders the tenant own tier names as named rungs', async () => {
-    await renderPage();
-
-    const rungs = within(ladder()).getAllByRole('listitem');
-    expect(rungs.map((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent)).toEqual([
-      'Bronce',
-      'Plata',
-      'Oro',
-    ]);
-  });
-
-  it('marks the assigned tier as the current rung and the next one as the target', async () => {
-    await renderPage();
-
-    const rungs = within(ladder()).getAllByRole('listitem');
-    expect(rungs[1].getAttribute('aria-current')).toBe('true');
-    expect(rungs[2].getAttribute('aria-current')).toBeNull();
-    expect(within(rungs[2]).getByText('Siguiente nivel')).toBeTruthy();
-  });
-
-  it('renders the ladder for a tenant whose tiers are not named Bronce/Plata/Oro', async () => {
-    const customTiers = [
-      { id: 't1', name: 'Vecino', minPoints: 0, multiplier: 1, displayOrder: 1 },
-      { id: 't2', name: 'Habitual', minPoints: 500, multiplier: 1.5, displayOrder: 2 },
-    ];
-    mocks.getProfile.mockResolvedValue(
-      makeProfile({ tiers: customTiers, nextTier: customTiers[1], currentTierId: 't1' }),
-    );
-
-    await renderPage();
-
-    const names = within(ladder())
-      .getAllByRole('listitem')
-      .map((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent);
-    expect(names).toEqual(['Vecino', 'Habitual']);
-    expect(screen.queryByText('Bronce')).toBeNull();
-  });
-
-  // ─── Coherence: never claim a milestone the ladder contradicts ─────────
-
-  it('refuses the top-of-programme claim when a rung sits above the current one', async () => {
-    // The state reported from the running app. The tenant has a junk tier:
-    // `barro` is ordered last (displayOrder 4) but its threshold is 1, below
-    // this customer's balance. The server correctly returned nextTier: null
-    // because no tier threshold sits above 96942 — and the customer is on Oro,
-    // which is NOT the last rung. The old code read the null alone and
-    // printed a milestone directly above a ladder that disproved it.
-    const incoherentTiers = [
-      { id: 'tier-bronce', name: 'Bronce', minPoints: 0, multiplier: 1, displayOrder: 1 },
-      { id: 'tier-plata', name: 'Plata', minPoints: 1000, multiplier: 1.5, displayOrder: 2 },
-      { id: 'tier-oro', name: 'Oro', minPoints: 3000, multiplier: 2, displayOrder: 3 },
-      { id: 'tier-barro', name: 'barro', minPoints: 1, multiplier: 1, displayOrder: 4 },
-    ];
-
-    mocks.getProfile.mockResolvedValue(
-      makeProfile({
-        points: 96942,
-        tiers: incoherentTiers,
-        currentTierId: 'tier-oro',
-        currentTier: 'Oro',
-        nextTier: null,
-      }),
-    );
-
-    await renderPage();
-
-    // No milestone. This is the whole point of the change.
+    expect(screen.queryByText(/Te faltan/)).toBeNull();
     expect(screen.queryByText(TOP_COPY)).toBeNull();
-    expect(gapText()).toBe(UNRESOLVED_COPY);
-
-    // The junk tier is still shown, so a merchant can see what is wrong.
-    expect(rungNames()).toEqual(['Bronce', 'Plata', 'Oro', 'barro']);
-    expect(within(rungNamed('barro')).getByText('Alcanzado')).toBeTruthy();
-    expect(rungNamed('Oro').getAttribute('aria-current')).toBe('true');
-    // And the reached marking stays truthful: 1 <= 96942.
-    expect(within(rungNamed('Bronce')).getByText('Alcanzado')).toBeTruthy();
   });
 
   it('withholds the milestone when the assigned tier is not the last rung but the balance is past the top', async () => {
-    // Also real: a stale assignment. 2500 points clears every threshold, but
-    // the stored tier is Plata, with Oro still listed above. Nothing on screen
-    // may say the customer is at the top while Oro sits above them.
     mocks.getProfile.mockResolvedValue(
       makeProfile({ points: 2500, currentTierId: 'tier-plata', currentTier: 'Plata', nextTier: null }),
     );
@@ -363,41 +275,28 @@ describe('profile pass behavior', () => {
     await renderPage();
 
     expect(screen.queryByText(TOP_COPY)).toBeNull();
-    expect(gapText()).toBe(UNRESOLVED_COPY);
-    expect(within(rungNamed('Oro')).getByText('Alcanzado')).toBeTruthy();
   });
 
   it('withholds the milestone when the customer has no assigned tier at all', async () => {
-    // No currentTierId and no nextTier: there is no position to celebrate, and
-    // the page must not imply a level the customer was never given.
     mocks.getProfile.mockResolvedValue(
-      makeProfile({
-        points: 5000,
-        currentTierId: undefined,
-        currentTier: null,
-        tier: null,
-        nextTier: null,
-      }),
+      makeProfile({ points: 5000, currentTierId: undefined, currentTier: null, tier: null, nextTier: null }),
     );
 
     await renderPage();
 
     expect(screen.queryByText(TOP_COPY)).toBeNull();
-    expect(gapText()).toBe(UNRESOLVED_COPY);
     expect(screen.queryByText(/^Nivel /)).toBeNull();
   });
 
   // ─── Honest empty states ──────────────────────────────────────────────
 
-  it('says the program is being set up and shows no ladder when program is null', async () => {
+  it('says the program is being set up and claims no tier when program is null', async () => {
     mocks.getProfile.mockResolvedValue(makeProfile({ program: null, nextTier: null }));
 
     await renderPage();
 
     expect(screen.getByText('Tu programa se está configurando')).toBeTruthy();
-    expect(screen.queryByRole('list', { name: 'Niveles del programa' })).toBeNull();
-    expect(screen.queryByText(/Llegaste al nivel más alto/)).toBeNull();
-    // No tier may be implied when there is no program to belong to.
+    expect(screen.queryByText(TOP_COPY)).toBeNull();
     expect(screen.queryByText('Nivel Plata')).toBeNull();
   });
 
@@ -409,7 +308,6 @@ describe('profile pass behavior', () => {
     await renderPage();
 
     expect(screen.getByText('Tu programa se está configurando')).toBeTruthy();
-    expect(screen.queryByRole('list', { name: 'Niveles del programa' })).toBeNull();
     expect(screen.queryByText('Nivel Plata')).toBeNull();
   });
 
@@ -428,13 +326,11 @@ describe('profile pass behavior', () => {
 
     await renderPage();
 
-    expect(balanceText()).toContain('0');
-    // No `currentTierId` means no tier may be asserted anywhere.
+    expect(balanceText()).toBe('0');
     expect(screen.queryByText('Nivel Plata')).toBeNull();
     expect(screen.queryByText('Nivel Bronce')).toBeNull();
-    expect(ladder().querySelector('[aria-current="true"]')).toBeNull();
     // The real distance is still shown, because the server supplied it.
-    expect(gapText()).toBe('Te faltan 500 puntos para llegar a Plata');
+    expect(tierLineText()).toBe('Te faltan 500 puntos para el nivel Plata');
   });
 
   // ─── Error ─────────────────────────────────────────────────────────────
@@ -450,7 +346,7 @@ describe('profile pass behavior', () => {
     expect(retry).toBeTruthy();
 
     // No invented fallback pass: no balance, no ladder, no member id.
-    expect(screen.queryByRole('region', { name: 'Tu pase' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tu identidad' })).toBeNull();
     expect(screen.queryByRole('list', { name: 'Niveles del programa' })).toBeNull();
     expect(balanceText()).toBe('');
     expect(screen.queryByText(GLOBAL_ID)).toBeNull();
@@ -463,7 +359,7 @@ describe('profile pass behavior', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reintentar' }));
 
-    expect(await screen.findByRole('region', { name: 'Tu pase' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Tu identidad' })).toBeTruthy();
     expect(mocks.getProfile).toHaveBeenCalledTimes(2);
   });
 
@@ -676,8 +572,8 @@ describe('profile pass behavior', () => {
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     // The pass area is the one thing that is gone; the pass itself is not.
-    expect(screen.getByRole('region', { name: 'Tu pase' })).toBeTruthy();
-    expect(screen.getByRole('list', { name: 'Niveles del programa' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Tu identidad' })).toBeTruthy();
+    expect(balanceText()).toContain('1.200');
     expect(screen.getByRole('button', { name: /c[oó]digo|qr/i })).toBeTruthy();
   });
 });

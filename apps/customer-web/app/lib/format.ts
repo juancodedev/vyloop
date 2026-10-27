@@ -75,3 +75,14 @@ export function formatMemberCode(value: string | null | undefined): string {
   if (!value) return '';
   return value.match(/.{1,3}/g)?.join(' ') ?? '';
 }
+
+/**
+ * The month and year a member joined, in Spanish ("diciembre de 2025").
+ * Returns an empty string for a missing or invalid date.
+ */
+export function formatMemberSince(value: string | null | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('es-CL', { month: 'long', year: 'numeric' });
+}
