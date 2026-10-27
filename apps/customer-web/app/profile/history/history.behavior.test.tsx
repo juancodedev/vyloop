@@ -436,3 +436,93 @@ describe('history, announcing the answer', () => {
     expect(announcer()?.getAttribute('aria-atomic')).toBe('true');
   });
 });
+
+const LADDER_TIERS = [
+  { id: 'tier-bronce', name: 'Bronce', minPoints: 0, multiplier: 1, displayOrder: 1 },
+  { id: 'tier-plata', name: 'Plata', minPoints: 500, multiplier: 1.25, displayOrder: 2 },
+  { id: 'tier-oro', name: 'Oro', minPoints: 2000, multiplier: 1.5, displayOrder: 3 },
+];
+
+const UNRESOLVED_COPY = 'No vemos un nivel siguiente en tu programa por ahora.';
+const TOP_COPY = /Llegaste al nivel m[áa]s alto/;
+
+async function renderWithLadder(overrides: Record<string, unknown> = {}) {
+  mocks.getProfile.mockResolvedValue(
+    makeProfile({ tiers: LADDER_TIERS, currentTierId: 'tier-plata', nextTier: LADDER_TIERS[2], ...overrides }),
+  );
+  render(<HistoryPage />);
+  await screen.findByRole('heading', { name: 'Historial' });
+}
+
+function ladder(): HTMLElement {
+  return screen.getByRole('list', { name: 'Niveles del programa' });
+}
+
+function rungNames(): (string | null | undefined)[] {
+  return within(ladder())
+    .getAllByRole('listitem')
+    .map((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent);
+}
+
+function rungNamed(name: string): HTMLElement {
+  const match = within(ladder())
+    .getAllByRole('listitem')
+    .find((rung) => rung.querySelector('.club-ladder__rung-name')?.textContent === name);
+  if (!match) throw new Error(`No rung named "${name}". Saw: ${rungNames().join(', ')}`);
+  return match;
+}
+
+function gapText(): string | null {
+  const gap = document.querySelector('.club-ladder__gap');
+  return gap ? gap.textContent?.replace(/\s+/g, ' ').trim() ?? null : null;
+}
+
+describe('history, tier ladder', () => {
+  it('renders the tenant own tier names as named rungs', async () => {
+    await renderWithLadder();
+
+    expect(rungNames()).toEqual(['Bronce', 'Plata', 'Oro']);
+    expect(gapText()).toBe('Te faltan 800 puntos para llegar a Oro');
+  });
+
+  it('marks the assigned tier as the current rung and the next one as the target', async () => {
+    await renderWithLadder();
+
+    const rungs = within(ladder()).getAllByRole('listitem');
+    expect(rungs[1].getAttribute('aria-current')).toBe('true');
+    expect(within(rungs[2]).getByText('Siguiente nivel')).toBeTruthy();
+  });
+
+  it('refuses the top-of-programme claim when a rung sits above the current one', async () => {
+    // A tenant's junk tier ordered last with a tiny threshold: the server
+    // returns nextTier null, but the customer's tier is not the last rung.
+    const incoherent = [
+      ...LADDER_TIERS,
+      { id: 'tier-barro', name: 'barro', minPoints: 1, multiplier: 1, displayOrder: 4 },
+    ];
+    await renderWithLadder({ points: 96942, tiers: incoherent, currentTierId: 'tier-oro', nextTier: null });
+
+    expect(screen.queryByText(TOP_COPY)).toBeNull();
+    expect(gapText()).toBe(UNRESOLVED_COPY);
+    expect(rungNames()).toEqual(['Bronce', 'Plata', 'Oro', 'barro']);
+    expect(rungNamed('Oro').getAttribute('aria-current')).toBe('true');
+  });
+
+  it('keeps the top-of-programme copy on the last rung', async () => {
+    await renderWithLadder({ points: 2500, currentTierId: 'tier-oro', nextTier: null });
+
+    expect(gapText()).toMatch(TOP_COPY);
+  });
+
+  it('shows no ladder when the program is not configured', async () => {
+    await renderWithLadder({ program: null, nextTier: null });
+
+    expect(screen.queryByRole('list', { name: 'Niveles del programa' })).toBeNull();
+  });
+
+  it('shows no ladder when the tenant defined no tiers', async () => {
+    await renderWithLadder({ tiers: [], nextTier: null });
+
+    expect(screen.queryByRole('list', { name: 'Niveles del programa' })).toBeNull();
+  });
+});

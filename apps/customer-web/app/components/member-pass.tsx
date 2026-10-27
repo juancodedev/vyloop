@@ -39,7 +39,7 @@ function memberSince(createdAt: string): string {
  * first; the denormalised `currentTier` string is only a fallback for the case
  * where the id resolves against no row in this response.
  */
-function currentTierName(profile: CustomerProfile): string | null {
+export function currentTierName(profile: CustomerProfile): string | null {
   if (!profile.currentTierId) return null;
   return profile.tiers.find((tier) => tier.id === profile.currentTierId)?.name ?? profile.currentTier;
 }

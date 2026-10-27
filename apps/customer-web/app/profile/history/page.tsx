@@ -7,6 +7,7 @@ import { Announcer } from '../../components/announcer';
 import { ClubShell } from '../../components/club-shell';
 import { ClubError, ClubStatus } from '../../components/club-status';
 import { MovementList } from '../../components/movement-list';
+import { TierLadder } from '../../components/tier-ladder';
 import { api, type CustomerProfile, type Transaction } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 
@@ -162,6 +163,17 @@ export default function HistoryPage() {
   return (
     <ClubShell backLink={{ href: '/profile', label: 'Volver a mi pase' }}>
       <h1 className="title title--sm">Historial</h1>
+
+      {/* The full tier ladder lives here; the profile shows only the next step. */}
+      {profile?.program && profile.tiers.length > 0 ? (
+        <TierLadder
+          points={profile.points}
+          currentTierId={profile.currentTierId}
+          program={profile.program}
+          tiers={profile.tiers}
+          nextTier={profile.nextTier}
+        />
+      ) : null}
 
       <div className="filter-tabs" role="group" aria-label="Filtrar movimientos">
         {FILTERS.map(({ key, label }) => (

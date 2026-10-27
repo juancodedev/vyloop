@@ -59,7 +59,7 @@ type LadderHeadline =
  * `nextTier`, rendered as given. This only decides whether a celebratory claim
  * is safe to make.
  */
-function resolveHeadline(
+export function resolveHeadline(
   tiers: CustomerTier[],
   currentTierId: string | undefined,
   nextTier: CustomerTier | null,

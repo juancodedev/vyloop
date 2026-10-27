@@ -7,9 +7,9 @@ import { ClubShell } from '../components/club-shell';
 import { ClubError, ClubStatus } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
 import { IdentityCard } from '../components/identity-card';
-import { MemberPass } from '../components/member-pass';
 import { NextRedemptionCard } from '../components/next-redemption-card';
 import { PersonalData } from '../components/personal-data';
+import { ProfileTopBar } from '../components/profile-top-bar';
 import { PurchaseTimeline } from '../components/purchase-timeline';
 import { QrDock } from '../components/qr-dock';
 import { WalletCard } from '../components/wallet-card';
@@ -19,6 +19,25 @@ import { useAuth } from '../lib/auth';
 const ERROR_TITLE = 'No pudimos cargar tu pase';
 const ERROR_DESCRIPTION =
   'Hubo un problema al traer tus datos. Podés reintentar; no modificamos nada en tu cuenta.';
+
+/**
+ * The shape of the page while it loads: the identity card, the redemption card
+ * and three purchase rows. No spinner; the status text is for screen readers.
+ */
+function ProfileSkeleton() {
+  return (
+    <ClubStatus variant="loading">
+      <span className="club-sr-only">Cargando tu pase</span>
+      <div className="club-profile club-profile--skeleton" aria-hidden="true">
+        <div className="club-skeleton club-skeleton--identity" />
+        <div className="club-skeleton club-skeleton--redemption" />
+        <div className="club-skeleton club-skeleton--row" />
+        <div className="club-skeleton club-skeleton--row" />
+        <div className="club-skeleton club-skeleton--row" />
+      </div>
+    </ClubStatus>
+  );
+}
 
 export default function ProfilePage() {
   const { push, replace } = useRouter();
@@ -63,9 +82,7 @@ export default function ProfilePage() {
   if (authLoading || (customer && loading)) {
     return (
       <ClubShell>
-        <ClubStatus variant="loading">
-          <span>Cargando tu pase</span>
-        </ClubStatus>
+        <ProfileSkeleton />
       </ClubShell>
     );
   }
@@ -85,12 +102,12 @@ export default function ProfilePage() {
   return (
     <ClubShell>
       <div className="club-profile">
+        <ProfileTopBar business={profile.business} />
         <IdentityCard profile={profile} />
         <NextRedemptionCard profile={profile} />
-        <MemberPass profile={profile} />
         <PurchaseTimeline profile={profile} />
-        <PersonalData profile={profile} />
         <WalletCard onPass={handlePass} />
+        <PersonalData profile={profile} />
         <ConsentList />
         <button
           type="button"
