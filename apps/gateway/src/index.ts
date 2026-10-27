@@ -310,18 +310,11 @@ app.use('/v1/*', async (c, next) => {
 // Middleware 2: Auth header injection — strip incoming X-* headers, inject from JWT
 // MUST run before business-id enforcement and router so injected headers
 // are available for validation and forwarding.
-app.use('/v1/*', async (c, next) => {
-  const path = new URL(c.req.url).pathname;
-  const method = c.req.method;
-
-  // Skip for public routes — no JWT to inject from
-  if (isPublicApiPath(path, method)) {
-    await next();
-    return;
-  }
-
-  return authInjectMiddleware()(c, next);
-});
+//
+// It runs on public routes too. They carry no JWT, so nothing is injected, but
+// the client's own X-User-* headers are still stripped: skipping this used to
+// forward them to the worker as if the gateway had set them from a token.
+app.use('/v1/*', async (c, next) => authInjectMiddleware()(c, next));
 
 // Middleware 3: Rewrite /v1/businesses/me/* → /v1/businesses/{business_id}/*
 // Must run after authInjectMiddleware (injects X-Business-ID) and before routerMiddleware.

@@ -346,6 +346,86 @@ describe('API Gateway', () => {
     });
   });
 
+  describe('identity headers on public routes', () => {
+    // A public route carries no token, so nothing the gateway forwards may claim
+    // an identity. A client-sent X-User-* header would otherwise reach the worker
+    // as if the gateway had injected it from a verified token.
+    function capturing() {
+      const seen: Headers[] = [];
+      const service = {
+        fetch: async (req: Request) => {
+          seen.push(req.headers);
+          return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+        },
+      };
+      return { seen, service };
+    }
+
+    const SPOOFED = {
+      'X-User-Id': 'attacker',
+      'X-Business-Id': 'someone-elses-business',
+      'X-User-Role': 'admin',
+    };
+
+    it('strips them from the public customer registration', async () => {
+      const { seen, service } = capturing();
+
+      await app.fetch(
+        new Request('http://localhost/v1/customers', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...SPOOFED },
+          body: JSON.stringify({ fullName: 'Ada', phone: '+56912345678', businessSlug: 'cafe' }),
+        }),
+        mockEnv({ customer: service }),
+      );
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.get('X-User-Id')).toBeNull();
+      expect(seen[0]!.get('X-Business-Id')).toBeNull();
+      expect(seen[0]!.get('X-User-Role')).toBeNull();
+    });
+
+    it('still forwards a public request that carries a stale token, with no identity', async () => {
+      // A client interceptor may attach an old token to the login call. The
+      // public route never verifies it, so it must neither be refused nor turned
+      // into an identity.
+      const { seen, service } = capturing();
+
+      const res = await app.fetch(
+        new Request('http://localhost/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer expired.or.forged' },
+          body: JSON.stringify({ email: 'a@b.cl', password: 'x' }),
+        }),
+        mockEnv({ identity: service }),
+      );
+
+      expect(res.status).toBe(200);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.get('X-User-Id')).toBeNull();
+      expect(seen[0]!.get('X-Business-Id')).toBeNull();
+      expect(seen[0]!.get('X-User-Role')).toBeNull();
+    });
+
+    it('strips them from the public auth routes', async () => {
+      const { seen, service } = capturing();
+
+      await app.fetch(
+        new Request('http://localhost/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...SPOOFED },
+          body: JSON.stringify({ email: 'a@b.cl', password: 'x' }),
+        }),
+        mockEnv({ identity: service }),
+      );
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.get('X-User-Id')).toBeNull();
+      expect(seen[0]!.get('X-Business-Id')).toBeNull();
+      expect(seen[0]!.get('X-User-Role')).toBeNull();
+    });
+  });
+
   describe('X-Business-ID enforcement', () => {
     it('forwards request when X-Business-ID is spoofed (auth-inject normalizes it)', async () => {
       // authInjectMiddleware runs BEFORE businessIdMiddleware and
