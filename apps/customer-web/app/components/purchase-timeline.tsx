@@ -7,7 +7,9 @@ const TIMELINE_LIMIT = 5;
 type TimelineItem =
   | {
       id: string;
-      kind: 'earn' | 'redeem';
+      kind: 'earn' | 'redeem' | 'other';
+      /** The direction shown before the points: from the kind, or from the value for `other`. */
+      sign: '+' | '−' | '';
       points: number;
       balanceAfter: number;
       purchaseAmount: number | null;
@@ -23,10 +25,27 @@ type TimelineItem =
  * registration is taken: the earn and redeem events duplicate transactions,
  * and the rest (profile views, QR displays) are internal.
  */
+function kindOf(type: string): 'earn' | 'redeem' | 'other' {
+  if (type === 'earn' || type === 'points.earned') return 'earn';
+  if (type === 'redeem' || type === 'points.redeemed') return 'redeem';
+  // An unknown type (an adjustment, say) is never presented as earned.
+  return 'other';
+}
+
+function signOf(kind: 'earn' | 'redeem' | 'other', points: number): '+' | '−' | '' {
+  if (kind === 'earn') return '+';
+  if (kind === 'redeem') return '−';
+  // An adjustment can go either way: only its own value tells.
+  if (points > 0) return '+';
+  if (points < 0) return '−';
+  return '';
+}
+
 export function buildTimeline(profile: CustomerProfile): TimelineItem[] {
   const fromTransactions: TimelineItem[] = (profile.recent_transactions ?? []).map((tx) => ({
     id: tx.id,
-    kind: tx.type === 'redeem' || tx.type === 'points.redeemed' ? 'redeem' : 'earn',
+    kind: kindOf(tx.type),
+    sign: signOf(kindOf(tx.type), tx.points),
     points: Math.abs(tx.points),
     balanceAfter: tx.balanceAfter,
     purchaseAmount: tx.purchaseAmount ?? null,
@@ -46,6 +65,10 @@ export function buildTimeline(profile: CustomerProfile): TimelineItem[] {
 function titleFor(item: TimelineItem): string {
   if (item.kind === 'joined') return 'Te uniste al club';
   if (item.kind === 'redeem') return `Canjeaste ${item.note ?? 'un premio'}`;
+  if (item.kind === 'other') {
+    if (item.note) return item.note;
+    return 'Ajuste de puntos';
+  }
   // A positive amount only: "$0" is never a purchase worth naming.
   if (item.purchaseAmount) return `Compra de ${formatClp(item.purchaseAmount)}`;
   if (item.note) return item.note;
@@ -81,7 +104,7 @@ export function PurchaseTimeline({ profile }: { profile: CustomerProfile }) {
               {item.kind === 'joined' ? null : (
                 <div className="club-purchase-timeline__figures">
                   <span className="club-purchase-timeline__points">
-                    {item.kind === 'earn' ? '+' : '−'}
+                    {item.sign}
                     {item.points.toLocaleString('es-CL')}
                     {unit ? ` ${unit}` : ''}
                   </span>

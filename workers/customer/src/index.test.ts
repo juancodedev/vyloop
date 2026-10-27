@@ -818,6 +818,14 @@ describe('Helpers', () => {
       expect(deriveRewardProgress([b, a], 100).affordableReward?.name).toBe('A');
     });
 
+    it('breaks a tie on cost and name by id, whatever the input order', () => {
+      const first = { id: 'r-1', name: 'Café', pointsCost: 50 };
+      const second = { id: 'r-2', name: 'Café', pointsCost: 50 };
+
+      expect(deriveRewardProgress([second, first], 0).nextReward?.id).toBe('r-1');
+      expect(deriveRewardProgress([first, second], 0).nextReward?.id).toBe('r-1');
+    });
+
     it('treats a reward costing exactly the balance as affordable', () => {
       const result = deriveRewardProgress([burger], 100);
 
@@ -2224,6 +2232,21 @@ expect(res.status).toBe(201);
       const body = await res.json() as any;
 
       expect(body.data.recent_transactions.map((t: any) => t.purchaseAmount)).toEqual([11400, null]);
+    });
+
+    it('reports a missing or unreadable purchaseAmount as null, never NaN', async () => {
+      seedMe({
+        balance: 30,
+        transactions: [
+          { id: 't1', type: 'earn', points: 20, balanceAfter: 30, note: null, createdAt: '2026-10-25T12:00:00.000Z' },
+          { id: 't2', type: 'earn', points: 10, balanceAfter: 10, note: null, purchaseAmount: 'abc', createdAt: '2026-10-20T12:00:00.000Z' },
+        ],
+      });
+
+      const res = await request('GET', '/v1/customers/me');
+      const body = await res.json() as any;
+
+      expect(body.data.recent_transactions.map((t: any) => t.purchaseAmount)).toEqual([null, null]);
     });
 
     it('returns the business name and slug', async () => {

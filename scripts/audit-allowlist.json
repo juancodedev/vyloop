@@ -6,13 +6,5 @@
     "reason": "Transitive dev/build dependency of @opennextjs/cloudflare (OpenNext build path). Not part of the production runtime. Awaiting upstream fix in @opennextjs/cloudflare.",
     "acceptedBy": "juancodedev",
     "expires": "2027-01-24"
-  },
-  {
-    "id": "GHSA-xjj6-f33q-929c",
-    "package": "undici",
-    "path": ". > wrangler@4.151.3 > miniflare@5.20261019.1-beta > undici@7.29.1",
-    "reason": "Transitive dev/build dependency of wrangler/miniflare (local dev and deploy tooling). Not part of the production runtime. Awaiting upstream fix in wrangler.",
-    "acceptedBy": "juancodedev",
-    "expires": "2027-01-24"
   }
 ]

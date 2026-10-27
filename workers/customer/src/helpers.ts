@@ -172,7 +172,11 @@ export interface RewardProgress {
  */
 export function deriveRewardProgress(rewards: ActiveReward[], balance: number): RewardProgress {
   const ordered = [...rewards].sort(
-    (a, b) => a.pointsCost - b.pointsCost || a.name.localeCompare(b.name),
+    // A fixed locale and the id as last resort: the order never depends on the runtime.
+    (a, b) =>
+      a.pointsCost - b.pointsCost ||
+      a.name.localeCompare(b.name, 'es-CL') ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
   const affordable = ordered.filter((r) => r.pointsCost <= balance);
   const next = ordered.find((r) => r.pointsCost > balance);
