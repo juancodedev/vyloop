@@ -15,6 +15,8 @@ export const REWARD_AUTO_GRANTED = 'RewardAutoGranted';
 // only exists when there is something to say about where the reward is good.
 export const REWARD_AVAILABLE_AT_BRANCH = 'RewardAvailableAtBranch';
 export const PROFILE_VIEWED = 'ProfileViewed';
+// A customer edited their own name, email or birth date from the customer app.
+export const CUSTOMER_PROFILE_UPDATED = 'CustomerProfileUpdated';
 export const QR_DISPLAYED = 'QRDisplayed';
 export const WHATSAPP_OUTBOUND_REQUESTED = 'WhatsAppOutboundRequested';
 export const PUSH_NOTIFICATION_REQUESTED = 'PushNotificationRequested';

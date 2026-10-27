@@ -378,6 +378,7 @@ vi.mock('@vyloop/event-bus', () => ({
   CUSTOMER_REGISTERED: 'CustomerRegistered',
   // GET /v1/customers/me publishes this from its waitUntil block.
   PROFILE_VIEWED: 'ProfileViewed',
+  CUSTOMER_PROFILE_UPDATED: 'CustomerProfileUpdated',
   createEnvelope: vi.fn((type: string, header: unknown, payload: unknown) => ({
     id: 'evt-1',
     type,
@@ -2673,6 +2674,162 @@ function lookupCustomerWhere() {
   expect(scoped).toHaveLength(1);
   return scoped[0]!;
 }
+
+describe('Self update (PATCH /v1/customers/me)', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  const AS_CUSTOMER = { 'X-User-Id': 'user-1', 'X-Business-Id': 'biz-1', 'X-User-Role': 'customer' };
+
+  function patchMe(body: Record<string, unknown>, headers: Record<string, string> = AS_CUSTOMER) {
+    return request('PATCH', '/v1/customers/me', { body, headers });
+  }
+
+  function expectNothingWritten() {
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+  }
+
+  it('updates the email and answers with the profile fields', async () => {
+    const res = await patchMe({ email: 'nuevo@example.com' });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    // The row the database returned, not the request echoed back.
+    expect(body.data).toEqual({ fullName: 'Alice Updated', email: 'alice@updated.com', birthDate: null });
+
+    expect(updateCalls).toHaveLength(1);
+    const { updatedAt, ...written } = updateCalls[0]!.set;
+    expect(written).toEqual({ email: 'nuevo@example.com' });
+    expect(updatedAt).toBeInstanceOf(Date);
+  });
+
+  it('publishes customer.profile_updated with the fields that changed', async () => {
+    await patchMe({ email: 'nuevo@example.com', fullName: 'Ada Lovelace' });
+
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    const event = mockPublish.mock.calls[0]![1];
+    expect(event.type).toBe('CustomerProfileUpdated');
+    expect(event.header.business_id).toBe('biz-1');
+    expect(event.payload).toEqual({ customer_id: 'existing-global-id', changed_fields: ['email', 'fullName'] });
+  });
+
+  it('resolves the customer from the token headers, inside the token business only', async () => {
+    await patchMe({ email: 'nuevo@example.com' });
+
+    const where = compile(updateCalls[0]!.where);
+    expect(where.sql).toMatch(/"customers"\."global_id" = \$\d+/);
+    expect(where.sql).toMatch(/"customers"\."business_id" = \$\d+/);
+    expect(where.sql).toMatch(/"customers"\."deleted_at" is null/);
+    expect(where.params).toEqual(expect.arrayContaining(['user-1', 'biz-1']));
+  });
+
+  it('ignores an id in the body and refuses it as an unknown field', async () => {
+    const res = await patchMe({ id: 'someone-else', email: 'nuevo@example.com' });
+
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error.code).toBe('VALIDATION_ERROR');
+    expectNothingWritten();
+  });
+
+  it('refuses a phone change and writes nothing', async () => {
+    const res = await patchMe({ phone: '+56900000000' });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('phone');
+    expectNothingWritten();
+  });
+
+  it.each([
+    ['an invalid email', { email: 'nuevo@' }, 'email'],
+    ['an empty name', { fullName: '   ' }, 'fullName'],
+    ['a cleared name', { fullName: null }, 'fullName'],
+    ['an impossible birth date', { birthDate: '1990-02-30' }, 'birthDate'],
+    ['a future birth date', { birthDate: '2999-01-01' }, 'birthDate'],
+    ['a number as email', { email: 42 }, 'email'],
+    ['an empty body', {}, 'fullName'],
+  ])('refuses %s', async (_label, body, field) => {
+    const res = await patchMe(body);
+
+    expect(res.status).toBe(400);
+    const payload = await res.json() as any;
+    expect(payload.error.code).toBe('VALIDATION_ERROR');
+    expect(payload.error.message).toContain(field);
+    expectNothingWritten();
+  });
+
+  it('clears the email and the birth date with null, and trims the name', async () => {
+    const res = await patchMe({ email: null, birthDate: null, fullName: '  Ada Lovelace  ' });
+
+    expect(res.status).toBe(200);
+    const { updatedAt: _ignored, ...written } = updateCalls[0]!.set;
+    expect(written).toEqual({ email: null, birthDate: null, fullName: 'Ada Lovelace' });
+  });
+
+  it('answers 404 when the token has no customer row in this business', async () => {
+    mockDb.update.mockImplementationOnce(() => {
+      const chain: any = {
+        set: vi.fn(() => chain),
+        where: vi.fn(() => chain),
+        returning: vi.fn(() => Promise.resolve([])),
+      };
+      return chain;
+    });
+
+    const res = await patchMe({ email: 'nuevo@example.com' });
+
+    expect(res.status).toBe(404);
+    expect((await res.json() as any).error.code).toBe('NOT_FOUND');
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 when another customer of the business holds the email', async () => {
+    mockDb.update.mockImplementationOnce(() => {
+      const chain: any = {
+        set: vi.fn(() => chain),
+        where: vi.fn(() => chain),
+        returning: vi.fn(() =>
+          Promise.reject(Object.assign(new Error('duplicate'), { code: '23505', constraint: 'uq_customers_business_email' })),
+        ),
+      };
+      return chain;
+    });
+
+    const res = await patchMe({ email: 'taken@example.com' });
+
+    expect(res.status).toBe(409);
+    expect((await res.json() as any).error.code).toBe('CUSTOMER_EMAIL_TAKEN');
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('still answers 200 when the event cannot be published', async () => {
+    mockPublish.mockRejectedValueOnce(new Error('queue unavailable'));
+
+    const res = await patchMe({ email: 'nuevo@example.com' });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('leaves the merchant edit by id untouched', async () => {
+    mockDb.select.mockImplementationOnce(() => {
+      const chain: any = {};
+      chain.from = vi.fn(() => chain);
+      chain.where = vi.fn(() => chain);
+      chain.limit = vi.fn(() => chain);
+      chain.then = (resolve: (v: any) => any) =>
+        Promise.resolve([{ id: 'existing-id', businessId: 'biz-1' }]).then(resolve);
+      return chain;
+    });
+
+    const res = await request('PATCH', '/v1/customers/existing-id', { body: { phone: '+56 9 1234 5678' } });
+
+    expect(res.status).toBe(200);
+    expect(updateCalls[0]!.set.phone).toBe('+56912345678');
+  });
+});
 
 describe('Staff-only customer routes refuse a customer token', () => {
   beforeEach(() => {

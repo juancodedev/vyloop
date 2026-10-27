@@ -96,6 +96,7 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 | POST | `/v1/customers` | Registro de nuevo perfil de cliente |
 | GET | `/v1/customers/{id}` | Perfil 360°: eventos, puntos, historial, score de churn |
 | PATCH | `/v1/customers/{id}` | Actualización de datos de perfil |
+| PATCH | `/v1/customers/me` | El cliente edita su nombre, email y fecha de nacimiento (scope `profile:write`). Rechaza `phone` y cualquier otro campo con 400 `VALIDATION_ERROR`; publica `CustomerProfileUpdated` |
 | DELETE | `/v1/customers/{id}` | Eliminación por solicitud del cliente (cumplimiento GDPR/LGPD) |
 | GET | `/v1/customers/{id}/events` | Timeline de eventos del cliente (Customer360) |
 | POST | `/v1/customers/{id}/consents` | Registro de consentimiento |
