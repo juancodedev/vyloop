@@ -35,7 +35,15 @@
         "queue": "vyloop-domain-events"
       }
     ]
-  }
+  },
+  // The wallet worker, called by RPC under `waitUntil` to expire a deleted
+  // customer's pass. See `scheduleWalletExpiry` in `src/account-deletion.ts`.
+  "services": [
+    {
+      "binding": "WALLET",
+      "service": "wallet"
+    }
+  ]
 ,
   "observability": { "enabled": true, "head_sampling_rate": 1 }
 }

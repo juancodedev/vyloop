@@ -31,6 +31,7 @@ import { eq, and, isNull, like, or, count, desc, asc, sum, gt, sql, type SQL } f
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
+import { deleteCustomerAccount } from './account-deletion';
 import type { Bindings } from './helpers';
 import {
   extractAuthHeaders,
@@ -888,6 +889,22 @@ router.patch('/v1/customers/me', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Self delete: DELETE /v1/customers/me
+// MUST be registered BEFORE /:id, like GET and PATCH /me.
+// ---------------------------------------------------------------------------
+
+router.delete('/v1/customers/me', async (c) => {
+  // The customer is the token's subject in the token's business, as in PATCH.
+  const userId = c.req.header('X-User-Id');
+  const businessId = c.req.header('X-Business-Id');
+  if (!userId || !businessId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Missing identity headers' } }, 401);
+  }
+
+  return deleteCustomerAccount(c, businessId, eq(customers.globalId, userId));
+});
+
+// ---------------------------------------------------------------------------
 // Lookup by globalId: GET /v1/customers/by-global-id/:globalId
 // Used by POS to resolve QR scan data. Must be registered BEFORE :id.
 // ---------------------------------------------------------------------------
@@ -1604,7 +1621,8 @@ router.patch('/v1/customers/:id', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Soft delete: DELETE /v1/customers/:id
+// Delete: DELETE /v1/customers/:id
+// Anonymises, the same way as DELETE /v1/customers/me.
 // ---------------------------------------------------------------------------
 
 router.delete('/v1/customers/:id', async (c) => {
@@ -1613,28 +1631,8 @@ router.delete('/v1/customers/:id', async (c) => {
   if (!gate.ok) {
     return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
   }
-  const { businessId } = auth;
-  const id = c.req.param('id');
-  const db = createDb(c.env.DATABASE_URL);
 
-  // Verify customer exists and belongs to this business
-  const existing = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.id, id), eq(customers.businessId, businessId)))
-    .limit(1);
-
-  if (existing.length === 0) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
-  }
-
-  // Soft delete: set deleted_at
-  await db
-    .update(customers)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(eq(customers.id, id));
-
-  return c.body(null, 204);
+  return deleteCustomerAccount(c, auth.businessId, eq(customers.id, c.req.param('id')));
 });
 
 export default router;

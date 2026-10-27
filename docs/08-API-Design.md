@@ -97,7 +97,8 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 | GET | `/v1/customers/{id}` | Perfil 360°: eventos, puntos, historial, score de churn |
 | PATCH | `/v1/customers/{id}` | Actualización de datos de perfil |
 | PATCH | `/v1/customers/me` | El cliente edita su nombre, email y fecha de nacimiento (scope `profile:write`). Rechaza `phone` y cualquier otro campo con 400 `VALIDATION_ERROR`; publica `CustomerProfileUpdated` |
-| DELETE | `/v1/customers/{id}` | Eliminación por solicitud del cliente (cumplimiento GDPR/LGPD) |
+| DELETE | `/v1/customers/me` | El cliente elimina su propia cuenta (scope `profile:write`). Misma anonimización que `DELETE /v1/customers/{id}`; responde 204, también si la cuenta ya estaba eliminada, y 404 si el token no tiene cliente en el negocio |
+| DELETE | `/v1/customers/{id}` | Eliminación por solicitud del cliente, inmediata y sin recuperación. Anonimiza en una transacción: `full_name`, `phone`, `email`, `birth_date`, `identity_doc`, `identity_type`, `member_code` y `metadata` quedan en null y se marca `deleted_at` (el teléfono puede registrarse de nuevo como cliente nuevo); se conservan las filas de puntos, check-ins, canjes, referidos, eventos, mensajes y consentimientos, sin `note`/`items`, `payload` (queda `{}`), `content`/`metadata` del mensaje ni `ip_address`; se borran las suscripciones push y la predicción de churn. Después pide a Wallet expirar el pase; si falla, no revierte el borrado. Responde 204; repetirlo responde 204 sin cambiar nada y solo reintenta la expiración del pase |
 | GET | `/v1/customers/{id}/events` | Timeline de eventos del cliente (Customer360) |
 | POST | `/v1/customers/{id}/consents` | Registro de consentimiento |
 
@@ -328,7 +329,7 @@ Para que servicios externos reaccionen en tiempo real a lo que ocurre en Vyloop:
 | Código | Status HTTP | Significado |
 |---|---|---|
 | `AUTH_TOKEN_INVALID` | 401 | Token expirado o malformado |
-| `AUTH_SCOPE_MISSING` | 403 | El token es válido pero no trae el scope que la ruta exige (hoy, `profile:write` para `PATCH /v1/customers/me`) |
+| `AUTH_SCOPE_MISSING` | 403 | El token es válido pero no trae el scope que la ruta exige (hoy, `profile:write` para `PATCH` y `DELETE /v1/customers/me`) |
 | `AUTH_BUSINESS_MISMATCH` | 403 | El `X-Business-ID` no coincide con el token |
 | `CUSTOMER_NOT_FOUND` | 404 | Cliente no existe en el tenant |
 | `POINTS_INSUFFICIENT` | 400 | Saldo insuficiente para el canje solicitado |

@@ -18,6 +18,14 @@ export interface Bindings {
   DATABASE_URL: string;
   DOMAIN_EVENTS_QUEUE: Queue;
   SCHEMA_REGISTRY: KVNamespace;
+  /**
+   * The wallet worker, reached by RPC to expire a deleted customer's pass.
+   * Optional because the runtime does not guarantee it: see
+   * `scheduleWalletExpiry`.
+   */
+  WALLET?: {
+    expireCustomerPass(input: { tenantId: string; customerId: string }): Promise<unknown>;
+  };
 }
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: AuthHeaders } };
