@@ -11,12 +11,19 @@ import {
   rewards,
   upsertConsent,
 } from '@vyloop/db';
-import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
+import {
+  CUSTOMER_PROFILE_UPDATED,
+  CUSTOMER_REGISTERED,
+  PROFILE_VIEWED,
+  createEnvelope,
+  publish,
+} from '@vyloop/event-bus';
 import { getRequestId } from '@vyloop/request-context';
 import { validate } from '@vyloop/schema-registry';
 import {
   CUSTOMER_PATCH_ERROR,
   CUSTOMER_PATCHABLE_FIELDS,
+  CUSTOMER_SELF_PATCHABLE_FIELDS,
   parseConsentTypes,
   type ParsedConsent,
 } from '@vyloop/types';
@@ -719,6 +726,160 @@ router.get('/v1/customers/me', async (c) => {
       createdAt: customer.createdAt,
     },
   });
+});
+
+// ---------------------------------------------------------------------------
+// Self update: PATCH /v1/customers/me
+// MUST be registered BEFORE /:id, like GET /me. The gateway requires the
+// `profile:write` scope before the request gets here.
+// ---------------------------------------------------------------------------
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** A real calendar date, not in the future. `1990-02-30` is refused, not rolled over. */
+function isPastCalendarDate(value: string): boolean {
+  const match = DATE_PATTERN.exec(value);
+  if (!match) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const real =
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  return real && date.getTime() <= Date.now();
+}
+
+const SELF_EMAIL_TAKEN = {
+  code: CUSTOMER_PATCH_ERROR.EMAIL_TAKEN,
+  message: 'Another customer of this business already uses this email address. Use a different one.',
+};
+
+function selfValidationError(message: string) {
+  return { error: { code: 'VALIDATION_ERROR', message } };
+}
+
+router.patch('/v1/customers/me', async (c) => {
+  // The customer is the token's subject in the token's business. No id in the
+  // path or the body can name anyone else.
+  const userId = c.req.header('X-User-Id');
+  const businessId = c.req.header('X-Business-Id');
+  if (!userId || !businessId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Missing identity headers' } }, 401);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = await c.req.json();
+  } catch {
+    return c.json(selfValidationError('The request body is not valid JSON.'), 400);
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return c.json(selfValidationError('The request body must be a JSON object of fields to change.'), 400);
+  }
+  const body = parsed as Record<string, unknown>;
+
+  // Refused, never filtered: a silently dropped `phone` reads as "saved".
+  const editable = new Set<string>(CUSTOMER_SELF_PATCHABLE_FIELDS);
+  const rejected = Object.keys(body).filter((field) => !editable.has(field));
+  if (rejected.length > 0) {
+    return c.json(
+      selfValidationError(
+        `These fields cannot be changed here: ${rejected.join(', ')}. ` +
+          `You can change ${CUSTOMER_SELF_PATCHABLE_FIELDS.join(', ')}. Nothing was saved.`,
+      ),
+      400,
+    );
+  }
+  if (Object.keys(body).length === 0) {
+    return c.json(
+      selfValidationError(`Send at least one of ${CUSTOMER_SELF_PATCHABLE_FIELDS.join(', ')}.`),
+      400,
+    );
+  }
+
+  // Same rule as the staff edit: absent means untouched, null means clear.
+  const updateData: Record<string, string | null> = {};
+
+  if ('fullName' in body) {
+    const name = typeof body.fullName === 'string' ? body.fullName.trim() : '';
+    if (name === '') return c.json(selfValidationError('fullName must be a non-empty text value.'), 400);
+    updateData.fullName = name;
+  }
+
+  if ('email' in body) {
+    if (body.email === null) {
+      updateData.email = null;
+    } else if (typeof body.email === 'string' && EMAIL_PATTERN.test(body.email.trim())) {
+      updateData.email = body.email.trim();
+    } else {
+      return c.json(selfValidationError('email must be a valid address, like name@domain.cl, or null to clear it.'), 400);
+    }
+  }
+
+  if ('birthDate' in body) {
+    if (body.birthDate === null) {
+      updateData.birthDate = null;
+    } else if (typeof body.birthDate === 'string' && isPastCalendarDate(body.birthDate)) {
+      updateData.birthDate = body.birthDate;
+    } else {
+      return c.json(selfValidationError('birthDate must be a past date as YYYY-MM-DD, or null to clear it.'), 400);
+    }
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+
+  let updated: typeof customers.$inferSelect | undefined;
+  try {
+    [updated] = await db
+      .update(customers)
+      .set({ ...updateData, updatedAt: new Date() })
+      .where(
+        and(
+          eq(customers.globalId, userId),
+          eq(customers.businessId, businessId),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .returning();
+  } catch (err) {
+    const conflict = classifyUniqueViolation(
+      err,
+      { uq_customers_business_email: SELF_EMAIL_TAKEN },
+      GENERIC_CONFLICT,
+    );
+    if (conflict) {
+      return c.json({ error: { code: conflict.code, message: conflict.message } }, 409);
+    }
+    throw err;
+  }
+
+  if (!updated) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
+  }
+
+  // The save already happened; a queue hiccup must not turn it into an error.
+  try {
+    await publish(
+      c.env.DOMAIN_EVENTS_QUEUE,
+      createEnvelope(
+        CUSTOMER_PROFILE_UPDATED,
+        { business_id: businessId, timestamp: new Date().toISOString(), request_id: getRequestId(c) },
+        { customer_id: updated.globalId, changed_fields: Object.keys(updateData).sort() },
+      ),
+    );
+  } catch (err) {
+    console.error('[customer] Failed to publish customer.profile_updated:', err);
+  }
+
+  return c.json(
+    {
+      data: {
+        fullName: updated.fullName,
+        email: updated.email ?? null,
+        birthDate: updated.birthDate ?? null,
+      },
+    },
+    200,
+  );
 });
 
 // ---------------------------------------------------------------------------

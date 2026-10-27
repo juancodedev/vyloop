@@ -350,7 +350,7 @@ app.post('/v1/auth/customer/token', async (c) => {
       customer.globalId,
       customer.businessId,
       'customer',
-      ['rewards:read', 'rewards:redeem'],
+      ['rewards:read', 'rewards:redeem', 'profile:write'],
       tenant.plan,
     );
 

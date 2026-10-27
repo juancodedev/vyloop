@@ -13,7 +13,7 @@ import { ProfileTopBar } from '../components/profile-top-bar';
 import { PurchaseTimeline } from '../components/purchase-timeline';
 import { QrDock } from '../components/qr-dock';
 import { WalletCard } from '../components/wallet-card';
-import { api, type CustomerProfile } from '../lib/api';
+import { api, type CustomerProfile, type ProfileFields } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
 const ERROR_TITLE = 'No pudimos cargar tu pase';
@@ -48,6 +48,18 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [memberCode, setMemberCode] = useState<string | null>(null);
   const handlePass = useCallback((pass: { member_code: string }) => setMemberCode(pass.member_code), []);
+  // The server's answer to a save, merged into the profile the page shows.
+  const handleSaved = useCallback((fields: ProfileFields) => {
+    setProfile((current) => {
+      if (!current) return current;
+      const next: CustomerProfile = { ...current, fullName: fields.fullName };
+      if (fields.email) next.email = fields.email;
+      else delete next.email;
+      if (fields.birthDate) next.birthDate = fields.birthDate;
+      else delete next.birthDate;
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -107,7 +119,7 @@ export default function ProfilePage() {
         <NextRedemptionCard profile={profile} />
         <PurchaseTimeline profile={profile} />
         <WalletCard onPass={handlePass} />
-        <PersonalData profile={profile} />
+        <PersonalData profile={profile} onSaved={handleSaved} />
         <ConsentList />
         <button
           type="button"

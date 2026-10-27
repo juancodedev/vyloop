@@ -53,6 +53,17 @@ export const CUSTOMER_PATCHABLE_FIELDS = ['fullName', 'phone', 'email', 'birthDa
 export type CustomerPatchableField = (typeof CUSTOMER_PATCHABLE_FIELDS)[number];
 
 /**
+ * What a customer may change about themselves from the customer app.
+ *
+ * The staff list minus `phone`: the phone is how the counter finds the
+ * customer and how they sign in, so changing it is a staff decision made with
+ * the person in front of them.
+ */
+export const CUSTOMER_SELF_PATCHABLE_FIELDS = ['fullName', 'email', 'birthDate'] as const;
+
+export type CustomerSelfPatchableField = (typeof CUSTOMER_SELF_PATCHABLE_FIELDS)[number];
+
+/**
  * A partial edit.
  *
  * `undefined` means "the caller did not mention this column" and is never

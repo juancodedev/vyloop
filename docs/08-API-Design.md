@@ -96,6 +96,7 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 | POST | `/v1/customers` | Registro de nuevo perfil de cliente |
 | GET | `/v1/customers/{id}` | Perfil 360°: eventos, puntos, historial, score de churn |
 | PATCH | `/v1/customers/{id}` | Actualización de datos de perfil |
+| PATCH | `/v1/customers/me` | El cliente edita su nombre, email y fecha de nacimiento (scope `profile:write`). Rechaza `phone` y cualquier otro campo con 400 `VALIDATION_ERROR`; publica `CustomerProfileUpdated` |
 | DELETE | `/v1/customers/{id}` | Eliminación por solicitud del cliente (cumplimiento GDPR/LGPD) |
 | GET | `/v1/customers/{id}/events` | Timeline de eventos del cliente (Customer360) |
 | POST | `/v1/customers/{id}/consents` | Registro de consentimiento |
@@ -327,6 +328,7 @@ Para que servicios externos reaccionen en tiempo real a lo que ocurre en Vyloop:
 | Código | Status HTTP | Significado |
 |---|---|---|
 | `AUTH_TOKEN_INVALID` | 401 | Token expirado o malformado |
+| `AUTH_SCOPE_MISSING` | 403 | El token es válido pero no trae el scope que la ruta exige (hoy, `profile:write` para `PATCH /v1/customers/me`) |
 | `AUTH_BUSINESS_MISMATCH` | 403 | El `X-Business-ID` no coincide con el token |
 | `CUSTOMER_NOT_FOUND` | 404 | Cliente no existe en el tenant |
 | `POINTS_INSUFFICIENT` | 400 | Saldo insuficiente para el canje solicitado |

@@ -28,9 +28,9 @@ and `pnpm -r lint` before closing a phase.
 
 ## Phase 4: Self-service edit
 
-- [ ] 4.1 Issue `profile:write` in the customer token and enforce it in the gateway for `PATCH /v1/customers/me`.
-- [ ] 4.2 `PATCH /v1/customers/me` in the customer worker, reusing the merchant update validation, rejecting `phone` and unknown fields, publishing `customer.profile_updated`. Tests for all scenarios.
-- [ ] 4.3 `api.updateProfile` and the edit form in `PersonalData` ("Guardar cambios", toast "Cambios guardados", inline validation).
+- [x] 4.1 Issue `profile:write` in the customer token and enforce it in the gateway for `PATCH /v1/customers/me`.
+- [x] 4.2 `PATCH /v1/customers/me` in the customer worker, reusing the merchant update validation, rejecting `phone` and unknown fields, publishing `customer.profile_updated`. Tests for all scenarios.
+- [x] 4.3 `api.updateProfile` and the edit form in `PersonalData` ("Guardar cambios", toast "Cambios guardados", inline validation).
 
 ## Phase 5: Delete account (blocked)
 

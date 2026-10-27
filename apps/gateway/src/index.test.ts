@@ -346,6 +346,78 @@ describe('API Gateway', () => {
     });
   });
 
+  describe('route scopes', () => {
+    async function customerToken(scopes: string[]): Promise<string> {
+      return new SignJWT({ sub: 'global-1', business_id: TEST_BUSINESS_ID, role: 'customer', scopes })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt()
+        .setExpirationTime('1h')
+        .setIssuer('vyloop')
+        .setSubject('global-1')
+        .sign(new TextEncoder().encode(TEST_SECRET));
+    }
+
+    function patchMe(token: string) {
+      return app.fetch(
+        new Request('http://localhost/v1/customers/me', {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: 'nuevo@example.com' }),
+        }),
+        mockEnv(),
+      );
+    }
+
+    it('refuses PATCH /v1/customers/me without profile:write, before the worker', async () => {
+      const res = await patchMe(await customerToken(['rewards:read', 'rewards:redeem']));
+
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string }; service?: string };
+      expect(body.error.code).toBe('AUTH_SCOPE_MISSING');
+      expect(body.service).toBeUndefined();
+    });
+
+    it('forwards PATCH /v1/customers/me with profile:write', async () => {
+      const res = await patchMe(await customerToken(['rewards:read', 'rewards:redeem', 'profile:write']));
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { service?: string };
+      expect(body.service).toBe('customer');
+    });
+
+    it.each([
+      ['a percent-encoded segment', '/v1/customers/%6De'],
+      ['a trailing slash', '/v1/customers/me/'],
+      ['a doubled slash', '/v1/customers//me'],
+    ])('applies the scope to %s', async (_label, path) => {
+      const res = await app.fetch(
+        new Request(`http://localhost${path}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${await customerToken(['rewards:read'])}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email: 'nuevo@example.com' }),
+        }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('AUTH_SCOPE_MISSING');
+    });
+
+    it('leaves reading your own profile to the token alone', async () => {
+      const res = await app.fetch(
+        new Request('http://localhost/v1/customers/me', {
+          headers: { Authorization: `Bearer ${await customerToken(['rewards:read'])}` },
+        }),
+        mockEnv(),
+      );
+
+      expect(res.status).toBe(200);
+    });
+  });
+
   describe('identity headers on public routes', () => {
     // A public route carries no token, so nothing the gateway forwards may claim
     // an identity. A client-sent X-User-* header would otherwise reach the worker

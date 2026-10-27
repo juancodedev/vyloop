@@ -162,6 +162,15 @@ export interface RewardStep {
   pointsMissing: number;
 }
 
+/** The fields a customer can edit about themselves. */
+export interface ProfileFields {
+  fullName: string;
+  email: string | null;
+  birthDate: string | null;
+}
+
+export type ProfileUpdate = Partial<ProfileFields>;
+
 export interface CustomerProfile {
   id: string;
   globalId: string;
@@ -267,7 +276,7 @@ export interface RedeemResult {
 export const api = {
   /**
    * Login or verify a customer by phone (demo mode — no OTP required).
-   * Returns a JWT token scoped to rewards:read and rewards:redeem.
+   * Returns a JWT token scoped to rewards:read, rewards:redeem and profile:write.
    */
   async loginCustomer(
     phone: string,
@@ -325,6 +334,21 @@ export const api = {
 
   async getProfile(): Promise<CustomerProfile> {
     const result = (await apiFetch('/v1/customers/me')) as { data: CustomerProfile };
+    return result.data;
+  },
+
+  /**
+   * The customer edits their own name, email or birth date.
+   *
+   * Send only the fields that changed: absent means untouched, `null` clears
+   * the email or the birth date. Needs the `profile:write` scope; a session
+   * started before that scope existed gets 403 `AUTH_SCOPE_MISSING`.
+   */
+  async updateProfile(patch: ProfileUpdate): Promise<ProfileFields> {
+    const result = (await apiFetch('/v1/customers/me', {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })) as { data: ProfileFields };
     return result.data;
   },
 
