@@ -2,7 +2,7 @@ import { setCurrentBusinessId } from '@vyloop/db';
 import { CUSTOMER_PATCH_ERROR, CUSTOMER_PATCHABLE_FIELDS } from '@vyloop/types';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { HTTPException } from 'hono/http-exception';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { extractAuthHeaders, buildCustomerRegisteredEvent, deriveRewardProgress, withRls } from './helpers';
 
@@ -2759,6 +2759,29 @@ describe('Self update (PATCH /v1/customers/me)', () => {
     expect(payload.error.code).toBe('VALIDATION_ERROR');
     expect(payload.error.message).toContain(field);
     expectNothingWritten();
+  });
+
+  describe('a birth date of today, wherever the customer is', () => {
+    // 11:00 UTC on 27 October: already the 28th in Auckland (UTC+13).
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-27T11:00:00Z'));
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it('accepts the local date of a customer ahead of UTC', async () => {
+      const res = await patchMe({ birthDate: '2026-10-28' });
+
+      expect(res.status).toBe(200);
+      expect(updateCalls[0]!.set.birthDate).toBe('2026-10-28');
+    });
+
+    it('still refuses a date that has not begun anywhere', async () => {
+      const res = await patchMe({ birthDate: '2026-10-29' });
+
+      expect(res.status).toBe(400);
+      expectNothingWritten();
+    });
   });
 
   it('clears the email and the birth date with null, and trims the name', async () => {

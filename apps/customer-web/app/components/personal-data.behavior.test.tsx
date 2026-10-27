@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError, type CustomerProfile } from '../lib/api';
 
-import { PersonalData } from './personal-data';
+import { mergeSavedFields, PersonalData } from './personal-data';
 
 const mocks = vi.hoisted(() => ({ updateProfile: vi.fn() }));
 
@@ -92,6 +92,29 @@ describe('the personal data list', () => {
 
     expect(screen.queryByText('Correo')).toBeNull();
     expect(screen.queryByText('-')).toBeNull();
+  });
+});
+
+describe('merging a save into the profile', () => {
+  it('takes the server values and keeps everything else', () => {
+    const before = makeProfile();
+    const after = mergeSavedFields(before, {
+      fullName: 'Ada King',
+      email: 'nuevo@example.com',
+      birthDate: '1981-07-28',
+    });
+
+    expect(after).toEqual({ ...before, fullName: 'Ada King', email: 'nuevo@example.com', birthDate: '1981-07-28' });
+  });
+
+  it('drops a cleared email and birth date, so their rows disappear', () => {
+    const after = mergeSavedFields(makeProfile(), { fullName: 'Ada Lovelace', email: null, birthDate: null });
+
+    expect('email' in after).toBe(false);
+    expect('birthDate' in after).toBe(false);
+    renderData(after);
+    expect(rowValue('Correo')).toBeNull();
+    expect(rowValue('Cumpleaños')).toBeNull();
   });
 });
 
