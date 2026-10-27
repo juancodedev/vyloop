@@ -32,8 +32,8 @@ and `pnpm -r lint` before closing a phase.
 - [x] 4.2 `PATCH /v1/customers/me` in the customer worker, reusing the merchant update validation, rejecting `phone` and unknown fields, publishing `customer.profile_updated`. Tests for all scenarios.
 - [x] 4.3 `api.updateProfile` and the edit form in `PersonalData` ("Guardar cambios", toast "Cambios guardados", inline validation).
 
-## Phase 5: Delete account (blocked)
+## Phase 5: Delete account
 
-- [ ] 5.1 Decide retention and anonymisation rules (product/legal). Blocks 5.2-5.3.
-- [ ] 5.2 `DELETE /v1/customers/me` per that decision, with session revocation.
+- [x] 5.1 Decide retention and anonymisation rules (product/legal). See design.md, "Account deletion".
+- [ ] 5.2 `DELETE /v1/customers/me` anonymising per design.md, shared with the merchant `DELETE /v1/customers/:id`, plus the Wallet pass expiry.
 - [ ] 5.3 "Eliminar mi cuenta" with an in-page confirm step.
