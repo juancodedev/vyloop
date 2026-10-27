@@ -37,6 +37,12 @@ export function PurchaseTimeline({ profile }: PurchaseTimelineProps) {
           ))}
         </ul>
       )}
+      {profile.nextReward && profile.program ? (
+        <p className="club-purchase-timeline__nudge">
+          Con {profile.nextReward.pointsMissing} {profile.program.pointsCurrency} más, tu canje{' '}
+          {profile.nextReward.name} es tuyo
+        </p>
+      ) : null}
     </section>
   );
 }

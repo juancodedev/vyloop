@@ -514,6 +514,32 @@ describe('profile pass behavior', () => {
     });
   });
 
+  // ─── Next redemption ───────────────────────────────────────────────────
+
+  it('renders the next redemption card from the server fields', async () => {
+    mocks.getProfile.mockResolvedValue(
+      makeProfile({
+        points: 30,
+        nextReward: { id: 'r-burger', name: 'Burger gratis', pointsCost: 100, pointsMissing: 70 },
+        affordableReward: null,
+        affordableRewardsCount: 0,
+        activeRewardsCount: 4,
+      }),
+    );
+    await renderPage();
+
+    const card = screen.getByRole('region', { name: 'Tu próximo canje' });
+    expect(card.textContent).toContain('Te faltan 70 puntos');
+    expect(screen.getByText('Con 70 puntos más, tu canje Burger gratis es tuyo')).toBeTruthy();
+  });
+
+  it('renders no redemption card and no error when the API sends no reward fields', async () => {
+    await renderPage();
+
+    expect(screen.queryByRole('region', { name: 'Tu próximo canje' })).toBeNull();
+    expect(screen.queryByText('No pudimos cargar tu pase')).toBeNull();
+  });
+
   // ─── QR ────────────────────────────────────────────────────────────────
 
   it('opens a QR sheet that encodes exactly /c/<globalId>, with a descriptive alt', async () => {

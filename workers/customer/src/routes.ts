@@ -8,6 +8,7 @@ import {
   pointsTransactions,
   membershipTiers,
   customerWalletPasses,
+  rewards,
   upsertConsent,
 } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, PROFILE_VIEWED, createEnvelope, publish } from '@vyloop/event-bus';
@@ -19,12 +20,17 @@ import {
   parseConsentTypes,
   type ParsedConsent,
 } from '@vyloop/types';
-import { eq, and, isNull, like, or, count, desc, asc, sum, sql, type SQL } from 'drizzle-orm';
+import { eq, and, isNull, like, or, count, desc, asc, sum, gt, sql, type SQL } from 'drizzle-orm';
 import { Hono } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildCustomerRegisteredEvent, requireOperatorRole } from './helpers';
+import {
+  extractAuthHeaders,
+  buildCustomerRegisteredEvent,
+  deriveRewardProgress,
+  requireOperatorRole,
+} from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -446,7 +452,7 @@ router.get('/v1/customers/me', async (c) => {
   }
 
   // Fetch balance, total earned, events, recent transactions, last-30-days
-  // points, and the loyalty "pass" context (business, program, tiers).
+  // points, and the loyalty "pass" context (business, program, tiers, rewards).
   const [
     balanceResult,
     earnedResult,
@@ -456,6 +462,7 @@ router.get('/v1/customers/me', async (c) => {
     businessResult,
     programResult,
     tiersResult,
+    rewardsResult,
   ] = await Promise.all([
     // Latest balance (uses customer.id PK — matches FK on points_transactions)
     db
@@ -489,6 +496,7 @@ router.get('/v1/customers/me', async (c) => {
         points: pointsTransactions.points,
         balanceAfter: pointsTransactions.balanceAfter,
         note: pointsTransactions.note,
+        purchaseAmount: pointsTransactions.purchaseAmount,
         createdAt: pointsTransactions.createdAt,
       })
       .from(pointsTransactions)
@@ -550,6 +558,22 @@ router.get('/v1/customers/me', async (c) => {
       .from(membershipTiers)
       .where(eq(membershipTiers.businessId, businessId))
       .orderBy(asc(membershipTiers.displayOrder), asc(membershipTiers.minPoints)),
+
+    // Active rewards for this business. Activeness lives in SQL: not deleted,
+    // inside its validity window, and not sold out. The business filter is the
+    // tenant guarantee, as above.
+    db
+      .select({ id: rewards.id, name: rewards.name, pointsCost: rewards.pointsCost })
+      .from(rewards)
+      .where(
+        and(
+          eq(rewards.businessId, businessId),
+          isNull(rewards.deletedAt),
+          or(isNull(rewards.validFrom), sql`${rewards.validFrom} <= now()`),
+          or(isNull(rewards.validUntil), sql`${rewards.validUntil} > now()`),
+          or(isNull(rewards.stock), gt(rewards.stock, 0)),
+        ),
+      ),
   ]);
 
   const points = balanceResult[0]?.balance_after ?? 0;
@@ -614,6 +638,15 @@ router.get('/v1/customers/me', async (c) => {
   // balance; null when the customer is at or above the top tier.
   const nextTier = tiers.find((t) => t.minPoints > points) ?? null;
 
+  // Same ownership for the reward rule: see deriveRewardProgress.
+  const rewardProgress = deriveRewardProgress(rewardsResult, points);
+
+  // numeric(12,2) arrives as a string; the contract is number or null.
+  const recentTransactions = txResult.map((tx) => ({
+    ...tx,
+    purchaseAmount: tx.purchaseAmount === null ? null : Number(tx.purchaseAmount),
+  }));
+
   // Fire-and-forget: record profile_viewed event for dashboards
   c.executionCtx.waitUntil(
     (async () => {
@@ -662,8 +695,9 @@ router.get('/v1/customers/me', async (c) => {
       program,
       tiers,
       nextTier,
+      ...rewardProgress,
       customer_events: eventsResult,
-      recent_transactions: txResult,
+      recent_transactions: recentTransactions,
       createdAt: customer.createdAt,
     },
   });

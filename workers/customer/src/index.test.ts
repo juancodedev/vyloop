@@ -4,7 +4,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { HTTPException } from 'hono/http-exception';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { extractAuthHeaders, buildCustomerRegisteredEvent, withRls } from './helpers';
+import { extractAuthHeaders, buildCustomerRegisteredEvent, deriveRewardProgress, withRls } from './helpers';
 
 import app from './index';
 
@@ -318,7 +318,19 @@ vi.mock('@vyloop/db', async () => {
     points: integer('points').notNull(),
     balanceAfter: integer('balance_after').notNull(),
     note: text('note'),
+    purchaseAmount: numeric('purchase_amount', { precision: 12, scale: 2 }),
     createdAt: timestamp('created_at', { withTimezone: true }),
+  });
+
+  const rewards = pgTable('rewards', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    name: text('name').notNull(),
+    pointsCost: integer('points_cost').notNull(),
+    stock: integer('stock'),
+    validFrom: timestamp('valid_from', { withTimezone: true }),
+    validUntil: timestamp('valid_until', { withTimezone: true }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   });
 
   // Read by the POS lookup to answer "does this customer have the pass, and do
@@ -341,6 +353,7 @@ vi.mock('@vyloop/db', async () => {
     consents,
     pointsTransactions,
     customerWalletPasses,
+    rewards,
   });
 
   return {
@@ -357,6 +370,7 @@ vi.mock('@vyloop/db', async () => {
     consents,
     pointsTransactions,
     customerWalletPasses,
+    rewards,
   };
 });
 
@@ -662,6 +676,7 @@ function seedMe(opts: {
   customer?: Record<string, unknown>;
   events?: unknown[];
   transactions?: unknown[];
+  rewards?: unknown[];
 }) {
   const balance = opts.balance ?? 0;
   // Projections mirror exactly what workers/customer/src/routes.ts selects.
@@ -676,8 +691,10 @@ function seedMe(opts: {
       points: 1,
       balanceAfter: 1,
       note: 1,
+      purchaseAmount: 1,
       createdAt: 1,
     })]: opts.transactions ?? [],
+    [key('rewards', { id: 1, name: 1, pointsCost: 1 })]: opts.rewards ?? [],
     [key('customerEvents')]: opts.events ?? [],
     [key('tenants', { id: 1, name: 1, slug: 1 })]:
       opts.business === null ? [] : [opts.business ?? ME_BUSINESS],
@@ -775,6 +792,46 @@ describe('Helpers', () => {
         customer_id: 'gid-2',
         full_name: '',
         business_id: 'biz-2',
+      });
+    });
+  });
+
+  describe('deriveRewardProgress', () => {
+    const burger = { id: 'r-burger', name: 'Burger gratis', pointsCost: 100 };
+    const combo = { id: 'r-combo', name: 'Combo', pointsCost: 250 };
+    const papas = { id: 'r-papas', name: 'Papas medianas', pointsCost: 20 };
+
+    it('picks the cheapest unaffordable reward as next, and the cheapest affordable one', () => {
+      expect(deriveRewardProgress([combo, burger, papas], 30)).toEqual({
+        nextReward: { id: 'r-burger', name: 'Burger gratis', pointsCost: 100, pointsMissing: 70 },
+        affordableReward: { id: 'r-papas', name: 'Papas medianas', pointsCost: 20, pointsMissing: 0 },
+        affordableRewardsCount: 1,
+        activeRewardsCount: 3,
+      });
+    });
+
+    it('breaks ties by name', () => {
+      const b = { id: 'r-b', name: 'B', pointsCost: 100 };
+      const a = { id: 'r-a', name: 'A', pointsCost: 100 };
+
+      expect(deriveRewardProgress([b, a], 0).nextReward?.name).toBe('A');
+      expect(deriveRewardProgress([b, a], 100).affordableReward?.name).toBe('A');
+    });
+
+    it('treats a reward costing exactly the balance as affordable', () => {
+      const result = deriveRewardProgress([burger], 100);
+
+      expect(result.nextReward).toBeNull();
+      expect(result.affordableReward?.id).toBe('r-burger');
+      expect(result.affordableRewardsCount).toBe(1);
+    });
+
+    it('returns nulls and zero counts when there are no rewards', () => {
+      expect(deriveRewardProgress([], 30)).toEqual({
+        nextReward: null,
+        affordableReward: null,
+        affordableRewardsCount: 0,
+        activeRewardsCount: 0,
       });
     });
   });
@@ -2099,6 +2156,74 @@ expect(res.status).toBe(201);
   describe('Self-profile (GET /me)', () => {
     beforeEach(() => {
       resetMocks();
+    });
+
+    it('returns the reward progress derived from the active rewards', async () => {
+      seedMe({
+        balance: 30,
+        rewards: [
+          { id: 'r-combo', name: 'Combo', pointsCost: 250 },
+          { id: 'r-burger', name: 'Burger gratis', pointsCost: 100 },
+          { id: 'r-papas', name: 'Papas medianas', pointsCost: 20 },
+        ],
+      });
+
+      const res = await request('GET', '/v1/customers/me');
+      const body = await res.json() as any;
+
+      expect(body.data.nextReward).toEqual({
+        id: 'r-burger',
+        name: 'Burger gratis',
+        pointsCost: 100,
+        pointsMissing: 70,
+      });
+      expect(body.data.affordableReward.name).toBe('Papas medianas');
+      expect(body.data.affordableRewardsCount).toBe(1);
+      expect(body.data.activeRewardsCount).toBe(3);
+    });
+
+    it('returns null rewards and zero counts when the tenant has no active rewards', async () => {
+      seedMe({ balance: 30 });
+
+      const res = await request('GET', '/v1/customers/me');
+      const body = await res.json() as any;
+
+      expect(body.data.nextReward).toBeNull();
+      expect(body.data.affordableReward).toBeNull();
+      expect(body.data.affordableRewardsCount).toBe(0);
+      expect(body.data.activeRewardsCount).toBe(0);
+    });
+
+    it('reads only active rewards of the caller business', async () => {
+      // Sold out, expired, not yet valid and deleted rewards are filtered in
+      // SQL, and so is every other tenant: the WHERE is the whole guarantee.
+      seedMe({ balance: 30 });
+
+      await request('GET', '/v1/customers/me');
+
+      const [where] = wheresFor('rewards');
+      expect(where).toBeDefined();
+      expect(where!.sql).toContain('"rewards"."business_id" = $');
+      expect(where!.params).toContain('biz-1');
+      expect(where!.sql).toContain('"rewards"."deleted_at" is null');
+      expect(where!.sql).toMatch(/"rewards"\."valid_from" is null or "rewards"\."valid_from" <= now\(\)/);
+      expect(where!.sql).toMatch(/"rewards"\."valid_until" is null or "rewards"\."valid_until" > now\(\)/);
+      expect(where!.sql).toMatch(/"rewards"\."stock" is null or "rewards"\."stock" > \$\d+/);
+    });
+
+    it('includes purchaseAmount as a number or null in recent_transactions', async () => {
+      seedMe({
+        balance: 30,
+        transactions: [
+          { id: 't1', type: 'earn', points: 20, balanceAfter: 30, note: null, purchaseAmount: '11400.00', createdAt: '2026-10-25T12:00:00.000Z' },
+          { id: 't2', type: 'earn', points: 10, balanceAfter: 10, note: 'Bono', purchaseAmount: null, createdAt: '2026-10-20T12:00:00.000Z' },
+        ],
+      });
+
+      const res = await request('GET', '/v1/customers/me');
+      const body = await res.json() as any;
+
+      expect(body.data.recent_transactions.map((t: any) => t.purchaseAmount)).toEqual([11400, null]);
     });
 
     it('returns the business name and slug', async () => {

@@ -2671,3 +2671,109 @@ a {
   font-weight: var(--font-semibold);
   cursor: pointer;
 }
+
+/* Next redemption card (Phase 3). A paper ticket: the price sits on a stub
+   behind a perforated edge, drawn with a dashed border. */
+.club-redemption { display: grid; gap: var(--space-3); }
+
+.club-redemption__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.club-redemption__heading {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--font-bold);
+}
+
+.club-redemption__all {
+  color: var(--club-cherry-dark);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.club-redemption__ticket {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  color: var(--club-ink);
+  background: var(--club-surface);
+  border: 1px solid var(--club-line);
+  border-radius: var(--club-radius);
+  box-shadow: var(--club-shadow-quiet);
+}
+
+.club-redemption__body {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-5);
+}
+
+.club-redemption__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  text-wrap: balance;
+}
+
+.club-redemption__missing {
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+}
+
+.club-redemption__bar {
+  width: 100%;
+  height: 10px;
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--club-line-soft);
+  overflow: hidden;
+}
+
+.club-redemption__bar::-webkit-progress-bar {
+  background: var(--club-line-soft);
+  border-radius: var(--radius-full);
+}
+
+.club-redemption__bar::-webkit-progress-value {
+  background: var(--club-cherry);
+  border-radius: var(--radius-full);
+}
+
+.club-redemption__bar::-moz-progress-bar {
+  background: var(--club-cherry);
+  border-radius: var(--radius-full);
+}
+
+.club-redemption__redeem {
+  justify-self: start;
+  min-height: 44px;
+}
+
+.club-redemption__stub {
+  display: grid;
+  place-items: center;
+  min-width: 5.5rem;
+  margin: 0;
+  padding: var(--space-4) var(--space-3);
+  color: var(--club-cherry-dark);
+  font-size: var(--text-base);
+  font-weight: var(--font-bold);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  border-left: 2px dashed var(--club-line);
+}
+
+.club-purchase-timeline__nudge {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--club-cherry-dark);
+  font-size: var(--text-sm);
+  background: color-mix(in srgb, var(--club-cherry) 8%, transparent);
+  border-radius: calc(var(--club-radius) - 8px);
+}

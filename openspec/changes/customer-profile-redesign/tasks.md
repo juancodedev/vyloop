@@ -22,9 +22,9 @@ and `pnpm -r lint` before closing a phase.
 
 ## Phase 3: Next reward
 
-- [ ] 3.1 Customer worker: query active rewards for the tenant alongside the other profile reads; derive `nextReward`, `affordableReward`, `affordableRewardsCount`, `activeRewardsCount` next to `nextTier`. Tests for every customer-crud scenario, including cross-tenant.
-- [ ] 3.2 `NextRedemptionCard` with its three states and the closing line in `PurchaseTimeline`. Add the fields to `CustomerProfile` as optional.
-- [ ] 3.3 Behavior tests for the redemption-card scenarios, including "fields absent".
+- [x] 3.1 Customer worker: query active rewards for the tenant alongside the other profile reads; derive `nextReward`, `affordableReward`, `affordableRewardsCount`, `activeRewardsCount` next to `nextTier`. Tests for every customer-crud scenario, including cross-tenant.
+- [x] 3.2 `NextRedemptionCard` with its three states and the closing line in `PurchaseTimeline`. Add the fields to `CustomerProfile` as optional.
+- [x] 3.3 Behavior tests for the redemption-card scenarios, including "fields absent".
 
 ## Phase 4: Self-service edit
 
