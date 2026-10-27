@@ -7,6 +7,7 @@ import { classIdFor, objectIdFor } from './ids';
 import type { LoyaltyObject } from './object';
 import type {
   PassLifecycleUpdate,
+  PassExpiryUpdate,
   PassObservationUpdate,
   PassReconciliationUpdate,
   ProgramInsert,
@@ -17,6 +18,7 @@ import type {
   WalletTenantBrandingRow,
 } from './store';
 import {
+  MAX_EXPIRIES_PER_RUN,
   MAX_PAGES_PER_TENANT,
   MAX_PROVISION_PER_RUN,
   MAX_RECONCILES_PER_TENANT,
@@ -156,6 +158,18 @@ class SweepStore implements WalletStore {
   readonly reconciliations: PassReconciliationUpdate[] = [];
   readonly lifecycles: PassLifecycleUpdate[] = [];
   readonly observations: PassObservationUpdate[] = [];
+  readonly expiries: PassExpiryUpdate[] = [];
+  /** The page sizes the pending-expiry enumeration was asked for. */
+  readonly expiryPageRequests: number[] = [];
+
+  /**
+   * `tenantId:customerId` of every customer whose `customers.deleted_at` is set.
+   *
+   * Modelled separately from the pass rows because that is where the fact lives:
+   * a deleted customer's pass row is untouched by the anonymisation, and only the
+   * join to `customers` can tell the two apart.
+   */
+  readonly deletedCustomers = new Set<string>();
   readonly tenantPageRequests: Array<{ limit: number; afterTenantId: string | null }> = [];
   readonly resolveRequests: Array<{ objectIds: string[]; tenantId: string }> = [];
   /** The page requests the unprovisioned enumeration was asked for. */
@@ -431,6 +445,43 @@ class SweepStore implements WalletStore {
     return 0;
   }
 
+  /** The deleted-customer join, with the same saved-state predicate as the SQL. */
+  async findDeletedCustomerPass(customer: string, tenant: string): Promise<WalletPassRow | null> {
+    this.record('findDeletedCustomerPass', tenant);
+    if (!this.deletedCustomers.has(`${tenant}:${customer}`)) return null;
+    for (const row of this.passes.get(tenant)?.values() ?? []) {
+      if (row.customerId === customer && row.tenantId === tenant) return { ...row };
+    }
+    return null;
+  }
+
+  async listPassesPendingExpiry(options: { limit: number }): Promise<WalletPassRow[]> {
+    this.record('listPassesPendingExpiry', '');
+    this.expiryPageRequests.push(options.limit);
+    const pending: WalletPassRow[] = [];
+    for (const rows of this.passes.values()) {
+      for (const row of rows.values()) {
+        if (!this.deletedCustomers.has(`${row.tenantId}:${row.customerId}`)) continue;
+        if (!['issued', 'inactive', 'completed'].includes(row.state)) continue;
+        pending.push({ ...row });
+      }
+    }
+    return pending.slice(0, options.limit);
+  }
+
+  async recordPassExpired(update: PassExpiryUpdate): Promise<number> {
+    this.record('recordPassExpired', update.tenantId);
+    this.expiries.push(update);
+    for (const row of this.passes.get(update.tenantId)?.values() ?? []) {
+      if (row.customerId !== update.customerId) continue;
+      if (!['issued', 'inactive', 'completed'].includes(row.state)) return 0;
+      row.state = 'expired';
+      row.lastSyncedAt = update.observedAt;
+      return 1;
+    }
+    return 0;
+  }
+
   async listProgramTenants(options: {
     limit: number;
     afterTenantId: string | null;
@@ -556,6 +607,8 @@ type FakeClient = {
   addMessage: Mock;
   /** The class ids `insertClass` was asked to create, in call order. */
   classesCreated: string[];
+  /** Google's objects, by id, as the last write left them. */
+  remote: Map<string, LoyaltyObject>;
 };
 
 interface PageSpec {
@@ -588,6 +641,8 @@ function fakeGoogle(opts: {
   failListFor?: Set<string> | null;
   /** Refuse to create this class, by class id. */
   failInsertClassFor?: Set<string> | null;
+  /** Fail `patchObject` for these object ids with this error. */
+  failPatchFor?: Map<string, Error> | null;
 }): FakeClient {
   const remote = new Map<string, LoyaltyObject>();
   const classesCreated: string[] = [];
@@ -646,13 +701,23 @@ function fakeGoogle(opts: {
       throw new Error('not used');
     }),
     getObject: vi.fn(async (id: string) => remote.get(id) ?? null),
-    patchObject: vi.fn(async (id: string, patch: { loyaltyPoints?: LoyaltyObject['loyaltyPoints'] }) => {
+    // Google's patch semantics: a field sent replaces, a field sent as `null` is
+    // cleared, a field not sent is left alone. Applying `state` and `accountName`
+    // too is what lets a test see the balance path put back what an expiry took.
+    patchObject: vi.fn(async (id: string, patch: Record<string, unknown>) => {
+      const failure = opts.failPatchFor?.get(id);
+      if (failure) throw failure;
       const current = remote.get(id);
       if (!current) throw new Error(`no such object ${id}`);
-      const next: LoyaltyObject = { ...current, ...(patch.loyaltyPoints ? { loyaltyPoints: patch.loyaltyPoints } : {}) };
-      remote.set(id, next);
-      return next;
+      const next: Record<string, unknown> = { ...current };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete next[key];
+        else next[key] = value;
+      }
+      remote.set(id, next as unknown as LoyaltyObject);
+      return next as unknown as LoyaltyObject;
     }),
+    remote,
     classesCreated,
   };
 
@@ -2067,5 +2132,151 @@ describe('the provisioning budget is not the reconciliation budget', () => {
     expect(report.demoMode).toBe(true);
     expect(client.insertClass).not.toHaveBeenCalled();
     expect(store.methodsCalled()).toEqual([]);
+  });
+});
+
+// ============================================================================
+// Expiring the passes of deleted customers
+//
+// Deleting an account expires the pass straight away, under the customer
+// worker's `waitUntil`, and a failure there is logged and left for this sweep.
+// So the sweep is the retry, and these tests are the guarantee that a transient
+// Google error does not leave a deleted customer's name on a phone for ever.
+// ============================================================================
+
+describe('the sweep expires the passes of deleted customers', () => {
+  function namedObject(id: string, balance: number): LoyaltyObject {
+    return { ...remoteObject(id, balance), accountName: 'Ana Pérez' };
+  }
+
+  it('expires a deleted customer\'s pass that is not expired yet, and counts it', async () => {
+    const tenant = tenantId(1);
+    const store = new SweepStore({ [tenant]: program(tenant) });
+    store.seedPass({ tenant, customer: 'gone', objectId: OBJECT_ID, balance: 500 });
+    store.deletedCustomers.add(`${tenant}:gone`);
+    const client = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 500)]) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(client.patchObject).toHaveBeenCalledWith(OBJECT_ID, { state: 'EXPIRED', accountName: null });
+    expect(store.expiries).toEqual([{ customerId: 'gone', tenantId: tenant, observedAt: RUN_ONE }]);
+    expect(store.passes.get(tenant)?.get(OBJECT_ID)?.state).toBe('expired');
+    expect(report.expiries.expired).toBe(1);
+    expect(store.expiryPageRequests).toEqual([MAX_EXPIRIES_PER_RUN]);
+    expect(client.remote.get(OBJECT_ID)?.state).toBe('EXPIRED');
+    expect(client.remote.get(OBJECT_ID)).not.toHaveProperty('accountName');
+  });
+
+  it('reports a failed expiry and leaves the pass pending, so the next run retries it', async () => {
+    const tenant = tenantId(1);
+    const store = new SweepStore({ [tenant]: program(tenant) });
+    store.seedPass({ tenant, customer: 'gone', objectId: OBJECT_ID, balance: 500 });
+    store.deletedCustomers.add(`${tenant}:gone`);
+    const failing = fakeGoogle({
+      pages: onePage([namedObject(OBJECT_ID, 500)]),
+      failPatchFor: new Map([[OBJECT_ID, new GoogleWalletApiError(503, 'backendError', [])]]),
+    });
+
+    const first = await sweepPasses(
+      { store, client: failing, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(first.expiries.failed).toBe(1);
+    expect(first.failures).toContainEqual(
+      expect.objectContaining({ tenantId: tenant, stage: 'expire' }),
+    );
+    expect(store.passes.get(tenant)?.get(OBJECT_ID)?.state).toBe('issued');
+
+    const healthy = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 500)]) });
+    const second = await sweepPasses(
+      { store, client: healthy, now: RUN_TWO, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(second.expiries.expired).toBe(1);
+    expect(store.passes.get(tenant)?.get(OBJECT_ID)?.state).toBe('expired');
+  });
+
+  it('does not touch the lifecycle of an active customer\'s pass', async () => {
+    const tenant = tenantId(1);
+    const store = new SweepStore({ [tenant]: program(tenant) });
+    store.seedPass({ tenant, customer: 'cust-1', objectId: OBJECT_ID, balance: 500 });
+    const client = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 500)]) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(store.expiries).toEqual([]);
+    expect(client.patchObject).not.toHaveBeenCalled();
+    expect(report.expiries.expired).toBe(0);
+    expect(store.passes.get(tenant)?.get(OBJECT_ID)?.state).toBe('issued');
+    expect(client.remote.get(OBJECT_ID)).toMatchObject({ state: 'ACTIVE', accountName: 'Ana Pérez' });
+  });
+
+  it('never lets the balance path reactivate a deleted customer\'s pass or put the name back', async () => {
+    // Google's list page is stale on purpose: it still says ACTIVE with the name,
+    // as a page fetched before the expiry would. The balance projection then runs
+    // over the same pass, and a ledger that disagrees with the pass (500 vs 120)
+    // is exactly the case in which it would patch.
+    const tenant = tenantId(1);
+    const store = new SweepStore({ [tenant]: program(tenant) });
+    store.seedPass({ tenant, customer: 'gone', objectId: OBJECT_ID, balance: 500 });
+    store.deletedCustomers.add(`${tenant}:gone`);
+    const client = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 120)]) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(report.expiries.expired).toBe(1);
+    expect(report.outcomes.patched).toBe(0);
+    // One patch only, and it is the expiry.
+    expect(client.patchObject).toHaveBeenCalledTimes(1);
+    expect(client.remote.get(OBJECT_ID)?.state).toBe('EXPIRED');
+    expect(client.remote.get(OBJECT_ID)).not.toHaveProperty('accountName');
+  });
+
+  it('when the expiry fails, the balance path still sends neither a state nor a name', async () => {
+    const tenant = tenantId(1);
+    const store = new SweepStore({ [tenant]: program(tenant) });
+    store.seedPass({ tenant, customer: 'gone', objectId: OBJECT_ID, balance: 500 });
+    store.deletedCustomers.add(`${tenant}:gone`);
+    const failExpiryOnly = new GoogleWalletApiError(503, 'backendError', []);
+    const client = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 120)]) });
+    client.patchObject.mockRejectedValueOnce(failExpiryOnly);
+
+    await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    for (const [, patch] of client.patchObject.mock.calls.slice(1) as Array<[string, Record<string, unknown>]>) {
+      expect(patch).not.toHaveProperty('state');
+      expect(patch).not.toHaveProperty('accountName');
+    }
+  });
+
+  it('expires nothing in Demo Mode, because the sweep refuses before it reads anything', async () => {
+    const tenant = tenantId(1);
+    const store = new SweepStore({ [tenant]: program(tenant) });
+    store.seedPass({ tenant, customer: 'gone', objectId: OBJECT_ID, balance: 500 });
+    store.deletedCustomers.add(`${tenant}:gone`);
+    const client = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 500)]) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: true, provisioning: PROVISIONING },
+      { demoMode: true },
+    );
+
+    expect(report.expiries.expired).toBe(0);
+    expect(store.methodsCalled()).toEqual([]);
+    expect(client.patchObject).not.toHaveBeenCalled();
   });
 });

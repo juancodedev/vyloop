@@ -331,6 +331,21 @@ export interface PassObservationUpdate {
   observedAt: Date;
 }
 
+/**
+ * The tracking write behind a deleted customer's pass being expired.
+ *
+ * Carries no `state` for the same reason `PassObservationUpdate` carries none:
+ * there is exactly one state this write may produce, `expired`, and a parameter
+ * that could name another would be one argument away from a deletion path that
+ * marks a pass `issued`. See `expire.ts`.
+ */
+export interface PassExpiryUpdate {
+  customerId: string;
+  tenantId: string;
+  /** The moment Google answered the patch, or answered that the object is gone. */
+  observedAt: Date;
+}
+
 // ---------------------------------------------------------------------------
 // Google Wallet callbacks
 // ---------------------------------------------------------------------------
@@ -700,6 +715,67 @@ export interface WalletStore {
    * not "is this state allowed" but "may this write cross a tenant boundary".
    */
   recordPassObservation(update: PassObservationUpdate): Promise<number>;
+
+  // -------------------------------------------------------------------------
+  // Account deletion
+  // -------------------------------------------------------------------------
+
+  /**
+   * This customer's pass row, **only if the customer is deleted**.
+   *
+   * ## Why this is not `findPass`
+   *
+   * `findPass` does not look at `customers` at all, so it would find the row;
+   * what it cannot do is refuse it. The expiry is the one write in this worker
+   * whose whole meaning is "this person has left", and a caller that passed the
+   * wrong id — or called it before the anonymisation committed — would expire a
+   * live member's card at the till. Joining `customers` and requiring
+   * `deleted_at IS NOT NULL` makes the expiry unable to reach a customer who has
+   * not been deleted, whatever the caller does.
+   *
+   * It is also deliberately not built on `findCustomer` or `findCustomerById`:
+   * both filter `deleted_at IS NULL`, which is the opposite question, and both
+   * select `full_name` and `member_code`, which the anonymisation has already
+   * nulled.
+   */
+  findDeletedCustomerPass(customerId: string, tenantId: string): Promise<WalletPassRow | null>;
+
+  /**
+   * One bounded page of passes whose customer is deleted and whose pass is saved
+   * at Google but not yet recorded `expired` — across every tenant.
+   *
+   * ## Why only the saved states
+   *
+   * `issued`, `inactive` and `completed` are the states that assert a Google
+   * object exists, so they are the passes that can still show a name on a phone.
+   * `not_issued` and `not_saved` have no object to expire: `expirePass` answers
+   * `nothing_to_expire` for them and records nothing, so including them here
+   * would return the same rows on every run and, at the page bound, starve the
+   * passes that do need the retry.
+   *
+   * ## Why cross-tenant, and what that costs
+   *
+   * Same reason, and the same named gap, as `listProgramTenants`: the sweep has
+   * no tenant to open a session for, and setting one would hide every other
+   * tenant's rows. Every row carries its own `tenant_id`, and every write the
+   * caller makes from it is tenant-scoped in its own `WHERE`.
+   *
+   * Oldest deletion first, so a retry backlog drains in the order it built up.
+   */
+  listPassesPendingExpiry(options: { limit: number }): Promise<WalletPassRow[]>;
+
+  /**
+   * Record that a deleted customer's pass is expired at Google.
+   *
+   * Guarded on the **source** state, as `recordPassLifecycle` is: only a row
+   * that asserts a saved object (`issued`, `inactive`, `completed`) may become
+   * `expired`. `completed` is in the set here although it is terminal for the
+   * lifecycle write, because a completed pass still carries the holder's name,
+   * and expiring it is what removes it. `not_issued` and `not_saved` are absent,
+   * so this cannot make a row claim an object Google was never confirmed to hold.
+   * Returns the number of rows it changed.
+   */
+  recordPassExpired(update: PassExpiryUpdate): Promise<number>;
 
   // -------------------------------------------------------------------------
   // Enumeration, for the scheduled sweep

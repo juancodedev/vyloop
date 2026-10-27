@@ -2033,3 +2033,103 @@ describe('findInactivePassCandidates', () => {
     expect(rows[0]!.lastActivityAt!.toISOString()).toBe('2026-06-27T06:00:00.000Z');
   });
 });
+
+// ============================================================================
+// Account deletion
+//
+// The three statements behind expiring a deleted customer's pass. The predicates
+// are the whole contract: the read must refuse a customer who is not deleted,
+// the enumeration must leave out passes with no Google object, and the write
+// must never mark a pass `expired` that never asserted an object existed.
+// ============================================================================
+
+describe('findDeletedCustomerPass', () => {
+  it('only finds the pass of a deleted customer, scoped to one tenant', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.findDeletedCustomerPass(CUSTOMER, OTHER_TENANT);
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('c.deleted_at IS NOT NULL');
+    expect(statement.sql).toContain('c.business_id = p.tenant_id');
+    expect(statement.sql).toContain('p.tenant_id =');
+    expect(statement.params).toEqual([CUSTOMER, OTHER_TENANT]);
+    // Not the active-customer filter every other read here carries.
+    expect(statement.sql).not.toContain('deleted_at IS NULL');
+  });
+
+  it('maps the row and its timestamp, and answers null for no row', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.findDeletedCustomerPass(CUSTOMER, TENANT)).toBeNull();
+
+    fake.executeRows.push({
+      customer_id: CUSTOMER,
+      tenant_id: TENANT,
+      object_id: 'obj-1',
+      state: 'issued',
+      last_synced_at: '2026-09-01T00:00:00.000Z',
+    });
+    expect(await store.findDeletedCustomerPass(CUSTOMER, TENANT)).toEqual({
+      customerId: CUSTOMER,
+      tenantId: TENANT,
+      objectId: 'obj-1',
+      state: 'issued',
+      lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
+    });
+  });
+});
+
+describe('listPassesPendingExpiry', () => {
+  it('lists only saved passes of deleted customers, oldest deletion first, bounded', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listPassesPendingExpiry({ limit: 100 });
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('c.deleted_at IS NOT NULL');
+    expect(statement.sql).toContain('c.business_id = p.tenant_id');
+    expect(statement.sql).toContain("p.state IN ('issued', 'inactive', 'completed')");
+    for (const absent of ['not_issued', 'not_saved', 'expired']) {
+      expect(statement.sql).not.toContain(`'${absent}'`);
+    }
+    expect(statement.sql).toContain('ORDER BY c.deleted_at ASC');
+    expect(statement.sql).toContain('LIMIT');
+    expect(statement.params).toContain(100);
+  });
+
+  it('clamps the page, so no caller can make the read unbounded', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listPassesPendingExpiry({ limit: 1_000_000 });
+
+    expect(fake.executed[0]!.params).toContain(500);
+  });
+});
+
+describe('recordPassExpired', () => {
+  it('moves only a saved pass to expired, scoped to one tenant, and reports the rows changed', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+    const observedAt = new Date('2026-10-27T12:00:00.000Z');
+
+    const refused = await store.recordPassExpired({ customerId: CUSTOMER, tenantId: OTHER_TENANT, observedAt });
+    fake.executeRows.push({ customer_id: CUSTOMER });
+    const accepted = await store.recordPassExpired({ customerId: CUSTOMER, tenantId: TENANT, observedAt });
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain("SET state = 'expired'");
+    expect(statement.sql).toContain("state IN ('issued', 'inactive', 'completed')");
+    expect(statement.sql).not.toContain("'not_issued'");
+    expect(statement.sql).not.toContain("'not_saved'");
+    expect(statement.sql).toContain('tenant_id =');
+    expect(statement.params).toContain(OTHER_TENANT);
+    expect(statement.params).toContain(observedAt);
+    expect(refused).toBe(0);
+    expect(accepted).toBe(1);
+  });
+});

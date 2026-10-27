@@ -7,6 +7,8 @@ import { jwtVerify } from 'jose';
 import type { JWTPayload } from 'jose';
 
 import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import { expirePass } from './expire';
+import type { ExpireOutcome } from './expire';
 import type { AuthHeaders, WalletBindings } from './helpers';
 import {
   extractAuthHeaders,
@@ -496,6 +498,77 @@ export async function reconcileCustomer(
 }
 
 // ---------------------------------------------------------------------------
+// Account-deletion trigger
+// ---------------------------------------------------------------------------
+
+/** The two ids `expirePass` needs. The same pair `reconcileCustomer` takes. */
+export interface ExpireCustomerPassInput {
+  /** The tenant the deleted customer belonged to. The only tenant this call may touch. */
+  tenantId: string;
+  /** `customers.id` of the deleted customer, not the token subject. */
+  customerId: string;
+}
+
+/**
+ * Expire a deleted customer's pass at Google, now.
+ *
+ * ## Why a service binding, like `reconcileCustomer`
+ *
+ * The deletion happens in the customer worker, and the patch needs this worker's
+ * Google service account. A route would need a forwarding `fetch` carrying those
+ * credentials across a boundary that takes customer input; the binding runs the
+ * method here, with these bindings, exactly as growth's push trigger does.
+ *
+ * ## Why it never throws
+ *
+ * The caller runs it under `waitUntil` after answering 204, and its contract is
+ * that the deletion is never rolled back for a pass. A rejection there would be a
+ * stack trace attached to a request that already succeeded, so every failure —
+ * Google's or the database's — comes back as a `failed` outcome the caller logs,
+ * and the row is left as it was for the daily sweep to retry. This is the
+ * opposite choice from `reconcileCustomer`, which throws `PassPatchNotAppliedError`
+ * because a wrong balance is worth failing loudly for; an expiry that did not
+ * happen yet has a retry path that does not need the caller's help.
+ *
+ * ## Why the tenant session is opened here
+ *
+ * The same reason `reconcileCustomer` gives: this call knows its tenant, and
+ * reading one tenant's rows without the session variables would return nothing
+ * the day the RLS policies are enabled. The read goes through
+ * `findDeletedCustomerPass` rather than any customer read, because every customer
+ * read in this worker filters `deleted_at IS NULL` and this customer is, by the
+ * time this runs, deleted.
+ */
+export async function expireCustomerPass(
+  input: ExpireCustomerPassInput,
+  env: WalletBindings,
+): Promise<ExpireOutcome> {
+  let outcome: ExpireOutcome;
+  try {
+    const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
+    outcome = await expirePass(
+      {
+        store: createDrizzleWalletStore(db),
+        client: googleWalletClientFor(env),
+        demoMode: parseDemoMode(env.WALLET_DEMO_MODE),
+      },
+      { tenantId: input.tenantId, customerId: input.customerId },
+    );
+  } catch (err: unknown) {
+    outcome = { kind: 'failed', objectId: null, reason: err instanceof Error ? err.message : String(err) };
+  }
+
+  if (outcome.kind === 'expired' || outcome.kind === 'already_gone') {
+    console.log(
+      `[wallet] Expired pass ${outcome.objectId} of deleted customer ${input.customerId} ` +
+        `in tenant ${input.tenantId} (${outcome.kind}).`,
+    );
+  }
+
+  return outcome;
+}
+
+// ---------------------------------------------------------------------------
 // Nearby-locations sync trigger
 // ---------------------------------------------------------------------------
 
@@ -658,6 +731,7 @@ export default {
   fetch: app.fetch.bind(app),
   scheduled,
   reconcileCustomer,
+  expireCustomerPass,
   syncLocations,
   provisionClass,
   deactivateInactivePasses,

@@ -32,8 +32,20 @@ import type { LoyaltyObject, LoyaltyObjectMessage } from './object';
 /** Fields Google accepts in a class `patch`. */
 export type LoyaltyClassPatch = Partial<Omit<LoyaltyClass, 'id'>>;
 
-/** Fields Google accepts in an object `patch`. */
-export type LoyaltyObjectPatch = Partial<Omit<LoyaltyObject, 'id' | 'classId'>>;
+/**
+ * Fields Google accepts in an object `patch`.
+ *
+ * `accountName` alone also admits `null`, because Google's patch semantics
+ * distinguish three things a field can be: absent (left alone), a value
+ * (replaced), and JSON `null` (cleared). Expiring a deleted customer's pass is
+ * the one caller that needs the third, and an empty string would not do: it is a
+ * value, so Google would store and render a blank name rather than remove it.
+ * See `EXPIRED_PASS_PATCH` in `expire.ts`. `JSON.stringify` keeps a `null`
+ * property, so the client sends it as written.
+ */
+export type LoyaltyObjectPatch = Partial<Omit<LoyaltyObject, 'id' | 'classId' | 'accountName'>> & {
+  accountName?: string | null;
+};
 
 /**
  * An error carrying Google's HTTP status and its structured error body.

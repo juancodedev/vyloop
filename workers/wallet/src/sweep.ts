@@ -74,6 +74,8 @@
 import { createDb } from '@vyloop/db';
 
 import { createDrizzleWalletStore } from './drizzle-store';
+import { expirePass } from './expire';
+import type { ExpireOutcome } from './expire';
 import { storedReviewStatusFor, type GoogleWalletClient } from './google-client';
 import type { WalletBindings } from './helpers';
 import {
@@ -249,6 +251,22 @@ export const MAX_PAGES_PER_TENANT = 5;
  */
 export const MAX_RECONCILES_PER_TENANT = 200;
 
+/**
+ * How many deleted customers' passes one run tries to expire.
+ *
+ * Bounded like every other enumeration here, for the same reason: an unbounded
+ * read in a scheduled job is an outage with a delay before it. The set only holds
+ * passes whose expiry under the deletion's `waitUntil` failed, so in steady state
+ * it is empty; a hundred covers an afternoon-long Google outage of deletions in
+ * one run, and anything beyond is picked up by the next one, oldest deletion
+ * first.
+ *
+ * Its own budget, not a share of `MAX_RECONCILES_PER_TENANT`, because the two
+ * protect different things: a balance a day late is a support question, a name
+ * still on the phone of someone who deleted their account is a privacy one.
+ */
+export const MAX_EXPIRIES_PER_RUN = 100;
+
 // ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
@@ -278,7 +296,11 @@ export interface SweepFailure {
     // rather than about a pass.
     | 'list_review_status'
     | 'sync_review_status'
-    | 'write_review_status';
+    | 'write_review_status'
+    // Expiring deleted customers' passes. `list_pending_expiries` is the
+    // database; `expire` is one pass, carrying the tenant it belongs to.
+    | 'list_pending_expiries'
+    | 'expire';
   reason: string;
 }
 
@@ -363,6 +385,13 @@ export interface SweepReport {
   /** Every `reconcilePass` outcome, tallied. The balance path's whole story. */
   outcomes: Record<ReconcileOutcome['kind'], number>;
   /**
+   * Every `expirePass` outcome for deleted customers' passes, tallied.
+   *
+   * `failed` is also in `failures` with stage `expire`, so a reader scanning
+   * failures sees it; the tally is what says how many passes still carry a name.
+   */
+  expiries: Record<ExpireOutcome['kind'], number>;
+  /**
    * Tenants this run found with no `tenant_wallet_programs` row.
    *
    * Not the same as `classesProvisioned`, and the difference is the interesting
@@ -398,6 +427,17 @@ function emptyOutcomeCounts(): Record<ReconcileOutcome['kind'], number> {
   };
 }
 
+function emptyExpiryCounts(): Record<ExpireOutcome['kind'], number> {
+  return {
+    skipped: 0,
+    nothing_to_expire: 0,
+    already_expired: 0,
+    expired: 0,
+    already_gone: 0,
+    failed: 0,
+  };
+}
+
 function emptyReport(demoMode: boolean): SweepReport {
   return {
     demoMode,
@@ -417,6 +457,7 @@ function emptyReport(demoMode: boolean): SweepReport {
     lifecycleWritesSkipped: 0,
     observationsNotRecorded: 0,
     outcomes: emptyOutcomeCounts(),
+    expiries: emptyExpiryCounts(),
     tenantsWithoutProgram: 0,
     classesProvisioned: 0,
     tenantsProvisioningFailed: 0,
@@ -650,6 +691,14 @@ export async function sweepPasses(deps: SweepDeps, input: SweepInput): Promise<S
 
   const observedAt = deps.now ?? new Date();
 
+  // Before the balance loop, on purpose. A pass expired here is stamped with
+  // `observedAt`, so the due filter below skips it for the rest of this run and
+  // the balance projection never reads a deleted customer's pass after its
+  // expiry. The projection could not put the name back or reactivate it anyway —
+  // its patch carries `loyaltyPoints` and nothing else, and it refuses any object
+  // that is not `ACTIVE` — but there is no reason to spend a Google read on it.
+  await expirePendingPasses(deps, report, observedAt);
+
   let tenants;
   try {
     tenants = await deps.store.listProgramTenants({
@@ -707,6 +756,72 @@ await provisionMissingClasses(deps, report);
 
     return report;
   }
+
+/**
+ * Retry the expiry of every deleted customer's pass that is not expired yet.
+ *
+ * ## Why the sweep, and why here
+ *
+ * Deleting an account expires the pass under the customer worker's `waitUntil`,
+ * and a failure there is logged and never rolled back: the anonymisation already
+ * committed, and a deletion that failed because Google was down would be worse
+ * than a name that lingers for a day. This is the "for a day" — the daily job
+ * that already holds this worker's Google credentials and already runs every
+ * tenant, given one more bounded page of work.
+ *
+ * ## Isolation is per pass
+ *
+ * `expirePass` returns Google failures as outcomes and throws only for the
+ * database. Either way one pass's failure is caught here, attributed to its
+ * tenant, and the next pass is tried, for the reason the balance loop catches per
+ * pass: Google is a shared dependency, and a loop that stopped at the first
+ * failure would report one instead of the whole backlog.
+ *
+ * ## Why `classReadinessFor` is not checked here
+ *
+ * `expirePass` checks it, in the same position `reconcilePass` does. A second
+ * check here would be a second answer to the question.
+ */
+async function expirePendingPasses(
+  deps: SweepDeps,
+  report: SweepReport,
+  observedAt: Date,
+): Promise<void> {
+  let pending: WalletPassRow[];
+  try {
+    pending = await deps.store.listPassesPendingExpiry({ limit: MAX_EXPIRIES_PER_RUN });
+  } catch (err: unknown) {
+    report.failures.push({ tenantId: '', stage: 'list_pending_expiries', reason: describe(err) });
+    return;
+  }
+
+  for (const row of pending) {
+    let outcome: ExpireOutcome;
+    try {
+      outcome = await expirePass(
+        { store: deps.store, client: deps.client, now: observedAt, demoMode: deps.demoMode },
+        { tenantId: row.tenantId, customerId: row.customerId },
+      );
+    } catch (err: unknown) {
+      outcome = { kind: 'failed', objectId: row.objectId, reason: describe(err) };
+    }
+
+    report.expiries[outcome.kind] += 1;
+
+    if (outcome.kind === 'failed') {
+      report.failures.push({
+        tenantId: row.tenantId,
+        stage: 'expire',
+        reason: `customer ${row.customerId}: ${outcome.reason}`,
+      });
+    } else if (outcome.kind === 'expired' || outcome.kind === 'already_gone') {
+      console.log(
+        `[wallet] Sweep expired pass ${outcome.objectId} of deleted customer ${row.customerId} ` +
+          `in tenant ${row.tenantId} (${outcome.kind}).`,
+      );
+    }
+  }
+}
 
 /**
  * Give a Google class to the tenants that never got one.
@@ -1051,7 +1166,8 @@ export async function runScheduledSweep(env: WalletBindings): Promise<SweepRepor
     `[wallet] Sweep complete: ${report.tenantsSwept} swept, ${report.tenantsDeferred} deferred, ` +
       `${report.tenantsSkipped} skipped, ${report.tenantsFailed} failed, ${report.listCalls} list ` +
       `calls, ${report.passesActedOn} passes acted on (${report.outcomes.patched} patched, ` +
-      `${report.outcomes.in_sync} already in sync), ${report.classesProvisioned} classes ` +
+      `${report.outcomes.in_sync} already in sync), ${report.expiries.expired + report.expiries.already_gone} ` +
+      `deleted customers' passes expired (${report.expiries.failed} failed), ${report.classesProvisioned} classes ` +
       `provisioned of ${report.tenantsWithoutProgram} tenants without one, ` +
       `${report.tenantsProvisioningFailed} provisioning failures, ` +
       `${report.failures.length} failures.`,
