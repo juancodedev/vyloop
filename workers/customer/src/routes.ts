@@ -642,10 +642,11 @@ router.get('/v1/customers/me', async (c) => {
   const rewardProgress = deriveRewardProgress(rewardsResult, points);
 
   // numeric(12,2) arrives as a string; the contract is number or null.
-  const recentTransactions = txResult.map((tx) => ({
-    ...tx,
-    purchaseAmount: tx.purchaseAmount === null ? null : Number(tx.purchaseAmount),
-  }));
+  // A missing or unreadable amount is null, never NaN.
+  const recentTransactions = txResult.map((tx) => {
+    const amount = tx.purchaseAmount == null ? Number.NaN : Number(tx.purchaseAmount);
+    return { ...tx, purchaseAmount: Number.isFinite(amount) ? amount : null };
+  });
 
   // Fire-and-forget: record profile_viewed event for dashboards
   c.executionCtx.waitUntil(
