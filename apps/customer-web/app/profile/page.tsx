@@ -8,7 +8,7 @@ import { ClubError, ClubStatus } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
 import { IdentityCard } from '../components/identity-card';
 import { NextRedemptionCard } from '../components/next-redemption-card';
-import { PersonalData } from '../components/personal-data';
+import { mergeSavedFields, PersonalData } from '../components/personal-data';
 import { ProfileTopBar } from '../components/profile-top-bar';
 import { PurchaseTimeline } from '../components/purchase-timeline';
 import { QrDock } from '../components/qr-dock';
@@ -50,15 +50,7 @@ export default function ProfilePage() {
   const handlePass = useCallback((pass: { member_code: string }) => setMemberCode(pass.member_code), []);
   // The server's answer to a save, merged into the profile the page shows.
   const handleSaved = useCallback((fields: ProfileFields) => {
-    setProfile((current) => {
-      if (!current) return current;
-      const next: CustomerProfile = { ...current, fullName: fields.fullName };
-      if (fields.email) next.email = fields.email;
-      else delete next.email;
-      if (fields.birthDate) next.birthDate = fields.birthDate;
-      else delete next.birthDate;
-      return next;
-    });
+    setProfile((current) => (current ? mergeSavedFields(current, fields) : current));
   }, []);
 
   const load = useCallback(async () => {

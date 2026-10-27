@@ -736,6 +736,11 @@ router.get('/v1/customers/me', async (c) => {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+/**
+ * The furthest any time zone runs ahead of UTC (UTC+14). A date counts as begun
+ * once it has begun somewhere, so a customer east of UTC can enter today's date.
+ */
+const MAX_UTC_OFFSET_MS = 14 * 60 * 60 * 1000;
 
 /** A real calendar date, not in the future. `1990-02-30` is refused, not rolled over. */
 function isPastCalendarDate(value: string): boolean {
@@ -745,7 +750,7 @@ function isPastCalendarDate(value: string): boolean {
   const date = new Date(Date.UTC(year, month - 1, day));
   const real =
     date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-  return real && date.getTime() <= Date.now();
+  return real && date.getTime() <= Date.now() + MAX_UTC_OFFSET_MS;
 }
 
 const SELF_EMAIL_TAKEN = {
