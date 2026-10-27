@@ -35,5 +35,5 @@ and `pnpm -r lint` before closing a phase.
 ## Phase 5: Delete account
 
 - [x] 5.1 Decide retention and anonymisation rules (product/legal). See design.md, "Account deletion".
-- [ ] 5.2 `DELETE /v1/customers/me` anonymising per design.md, shared with the merchant `DELETE /v1/customers/:id`, plus the Wallet pass expiry.
+- [ ] 5.2 `DELETE /v1/customers/me` anonymising per design.md, shared with the merchant `DELETE /v1/customers/:id`, plus the Wallet pass expiry and its retry sweep. Tests assert, per table, the nulled or cleared fields and the deleted rows; that the phone can register again; that a repeated delete is a 204 no-op; that a live token for the deleted customer gets 404 on reads and on `PATCH /v1/customers/me`; and that check-ins, points and referrals refuse a deleted customer.
 - [ ] 5.3 "Eliminar mi cuenta" with an in-page confirm step.

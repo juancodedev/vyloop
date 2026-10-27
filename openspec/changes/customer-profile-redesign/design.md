@@ -139,12 +139,19 @@ merchant's sales history, and `referrals` and `workflow_executions` reference
 | `push_subscriptions`, `churn_predictions` | Deleted. |
 | Google Wallet pass | Expired through the Wallet API, so the name stops showing on the phone. |
 | Points balance | Lost. The confirm step says so before the customer accepts. |
-| Session | The web signs out. A token still alive (at most one hour) reads nothing, because customer reads filter on `deleted_at`. |
+| Session | The web signs out. A token still alive (at most one hour) can neither read nor write: every customer route, read or write, resolves the customer with `deleted_at IS NULL` and answers 404 otherwise. Writes that reach the row by `customers.id` from elsewhere (check-ins, points, referrals) must refuse a deleted customer too; 5.2 verifies each one. |
 
-The anonymisation runs in one database transaction; the wallet expiry runs
-after it and its failure is logged, not rolled back. The merchant's
-`DELETE /v1/customers/:id` uses the same anonymisation, so what
-`docs/08-API-Design.md` promises is true for both.
+The anonymisation runs in one database transaction. The wallet expiry runs
+after it: a failure is logged and the pass stays marked as not expired, and a
+scheduled sweep retries every pass of a deleted customer that is not expired
+yet, so a transient Wallet API error does not leave the name on the phone.
+
+Deleting a customer that is already deleted answers 204 and changes nothing
+in the database; it only retries a pending wallet expiry. Two concurrent
+deletes converge on the same anonymised row.
+
+The merchant's `DELETE /v1/customers/:id` uses the same anonymisation, so
+what `docs/08-API-Design.md` promises is true for both.
 
 Open, outside this change: confirm against Ley 21.719 with legal counsel.
 
