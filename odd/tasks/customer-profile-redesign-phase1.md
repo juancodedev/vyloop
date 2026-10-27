@@ -28,7 +28,7 @@ S5. Date helpers: `formatMovementDate` (relative up to 6 days, then "28 sep", ye
 - [ ] 1.2 `ProfileTopBar` and `IdentityCard`. Behavior tests.
 - [ ] 1.3 `PurchaseTimeline` (replaces `Activity`, keeps `buildTimeline`). Behavior tests.
 - [ ] 1.4 `PersonalData` read-only list.
-- [ ] 1.5 `QrDock` + `QrSheet` (dialog, focus trap, Esc, wake lock, member code). Remove inline `MemberQr`.
+- [x] 1.5 `QrDock` + `QrSheet` (dialog, focus trap, Esc, wake lock, member code). Remove inline `MemberQr`.
 - [ ] 1.6 `WalletCard` compact variant.
 - [ ] 1.7 Recompose `app/profile/page.tsx`. Update `profile.behavior.test.tsx` and `profile.contract.test.ts`.
 - [ ] 1.8 Styles in `globals.css` with design-system tokens. Check 360px + reduced motion.

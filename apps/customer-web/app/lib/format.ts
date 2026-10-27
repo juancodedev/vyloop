@@ -66,3 +66,12 @@ export function initials(value: string | null | undefined): string {
   const letters = parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase());
   return letters.join('');
 }
+
+/**
+ * A member code in groups of three ("K7F2QX" -> "K7F 2QX"), the way it is
+ * dictated at the counter. Returns an empty string for an absent code.
+ */
+export function formatMemberCode(value: string | null | undefined): string {
+  if (!value) return '';
+  return value.match(/.{1,3}/g)?.join(' ') ?? '';
+}

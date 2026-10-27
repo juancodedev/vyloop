@@ -2038,65 +2038,11 @@ a {
   overflow-wrap: anywhere;
 }
 
-.club-qr__toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  min-height: 44px;
-  padding: var(--space-3) var(--space-4);
-  color: var(--club-cherry-dark);
-  background: transparent;
-  border: 2px solid var(--club-cherry);
-  border-radius: calc(var(--club-radius) - 4px);
-  font-family: inherit;
-  font-size: var(--text-base);
-  font-weight: var(--font-semibold);
-  cursor: pointer;
-  transition: background-color var(--club-transition-fast) var(--club-ease-out);
-}
-
-.club-qr__toggle:hover {
-  background: color-mix(in srgb, var(--club-cherry) 8%, transparent);
-}
-
-.club-qr__toggle svg {
-  /* The two chevrons and the QR glyph are fixed-size UI, not prose: they must
-     not be the flex items that give way when the label wraps. */
-  flex: 0 0 auto;
-}
-
-.club-qr__toggle svg:last-child {
-  margin-left: auto;
-}
-
-.club-qr__panel {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--club-line-soft);
-  animation: club-pass-reveal 200ms var(--club-ease-out) both;
-}
-
-@keyframes club-pass-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 /* Fixed box so a decoded or slow image cannot reflow the page. */
 .club-qr__image {
   display: block;
-  width: 200px;
-  height: 200px;
+  width: 210px;
+  height: 210px;
   border: 1px solid var(--club-line);
   border-radius: calc(var(--club-radius) - 6px);
   background: #ffffff;
@@ -2614,3 +2560,114 @@ a {
 .club-personal-data__row dt { color: #6b7280; font-size: 0.9rem; }
 .club-personal-data__row dd { margin: 0; font-weight: 500; }
 .club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; cursor: pointer; }
+
+/* QR dock and sheet (Phase 1.5).
+   The dock stays on screen at any scroll position; the profile reserves room
+   for it so the last section is never hidden underneath. */
+.club-profile { padding-bottom: calc(var(--space-6) * 3); }
+
+.club-qr-dock {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 20;
+  padding: var(--space-3) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--club-paper) 70%, transparent);
+}
+
+.club-qr-dock__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: var(--club-reading-width);
+  min-height: 48px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4);
+  color: var(--club-surface);
+  background: var(--club-ink);
+  border: 0;
+  border-radius: var(--club-radius);
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--font-bold);
+  cursor: pointer;
+}
+
+.club-qr-dock__button:focus-visible,
+.club-qr-sheet__close:focus-visible {
+  outline: 3px solid var(--club-focus);
+  outline-offset: 2px;
+}
+
+.club-qr-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  align-content: end;
+  background: color-mix(in srgb, var(--club-ink) 72%, transparent);
+}
+
+.club-qr-sheet__panel {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: var(--club-reading-width);
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-5) calc(var(--space-6) + env(safe-area-inset-bottom));
+  color: var(--club-ink);
+  text-align: center;
+  background: #ffffff;
+  border-radius: calc(var(--club-radius) + 8px) calc(var(--club-radius) + 8px) 0 0;
+  animation: club-qr-sheet-rise 220ms var(--club-ease-out) both;
+}
+
+@keyframes club-qr-sheet-rise {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.club-qr-sheet__grip {
+  width: 40px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--club-line);
+}
+
+.club-qr-sheet__title {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+}
+
+.club-qr-sheet__code {
+  margin: 0;
+  font-size: var(--text-3xl);
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+}
+
+.club-qr-sheet__note {
+  max-width: 30ch;
+  margin: 0;
+  color: var(--club-ink-soft);
+  font-size: var(--text-sm);
+  text-wrap: pretty;
+}
+
+.club-qr-sheet__close {
+  width: 100%;
+  min-height: 44px;
+  margin-top: var(--space-2);
+  color: var(--club-ink);
+  background: transparent;
+  border: 1px solid var(--club-line);
+  border-radius: calc(var(--club-radius) - 6px);
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+}

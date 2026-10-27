@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '../lib/api';
 import {
@@ -103,9 +103,19 @@ function describeFailure(error: unknown): WalletFailure {
   return walletFailureFor(code, status);
 }
 
-export function WalletCard() {
+/**
+ * `onPass` hands the answered pass to the page, so the QR sheet can show the
+ * member code without a second `GET /v1/wallet/pass` — each one is a Google API
+ * request. Kept in a ref so a new callback identity never re-runs the request.
+ */
+export function WalletCard({ onPass }: { onPass?: (pass: WalletPass) => void } = {}) {
   const [state, setState] = useState<WalletState>({ kind: 'asking' });
   const [attempt, setAttempt] = useState(0);
+  const onPassRef = useRef(onPass);
+
+  useEffect(() => {
+    onPassRef.current = onPass;
+  }, [onPass]);
 
   useEffect(() => {
     // A first profile view that unmounts before the answer arrives must not set
@@ -117,7 +127,9 @@ export function WalletCard() {
       .then((pass) => {
         // Total, so there is no path here that answers without a sentence to
         // render. Which sentence is the decision `lib/wallet.ts` owns.
-        if (live) setState({ kind: 'answered', pass, copy: walletPassCopyFor(pass) });
+        if (!live) return;
+        setState({ kind: 'answered', pass, copy: walletPassCopyFor(pass) });
+        onPassRef.current?.(pass);
       })
       .catch((error: unknown) => {
         if (live) setState({ kind: 'refused', failure: describeFailure(error) });

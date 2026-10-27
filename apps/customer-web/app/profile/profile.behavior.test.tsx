@@ -516,33 +516,41 @@ describe('profile pass behavior', () => {
 
   // ─── QR ────────────────────────────────────────────────────────────────
 
-  it('reveals a QR that encodes exactly /c/<globalId>, with a descriptive alt', async () => {
+  it('opens a QR sheet that encodes exactly /c/<globalId>, with a descriptive alt', async () => {
     await renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: 'Mostrar mi código' }));
 
+    expect(screen.getByRole('dialog', { name: 'Mostrale esto en caja' })).toBeTruthy();
     await waitFor(() => expect(mocks.toDataURL).toHaveBeenCalledTimes(1));
     expect(mocks.toDataURL.mock.calls[0][0]).toBe(`/c/${GLOBAL_ID}`);
 
     const image = await screen.findByRole('img');
     expect(image.getAttribute('src')).toBe('data:image/png;base64,SEVMTE8=');
-    expect((image.getAttribute('alt') ?? '').length).toBeGreaterThan(0);
     expect(image.getAttribute('alt')).toContain(GLOBAL_ID);
-    // Fixed dimensions so the image cannot reflow the page.
-    expect(image.getAttribute('width')).toBe('200');
-    expect(image.getAttribute('height')).toBe('200');
+    // Fixed dimensions so the image cannot reflow the sheet.
+    expect(image.getAttribute('width')).toBe('210');
+    expect(image.getAttribute('height')).toBe('210');
   });
 
-  it('keeps the readable member id and offers a retry when QR generation fails', async () => {
+  it('shows the member code from the wallet pass in the QR sheet, grouped in threes', async () => {
+    await renderPage();
+    await waitFor(() => expect(mocks.getWalletPass).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mostrar mi código' }));
+
+    expect(await screen.findByText('K7M 2QX')).toBeTruthy();
+    // The sheet reuses the answer the wallet card already has.
+    expect(mocks.getWalletPass).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a retry when QR generation fails, with no placeholder image', async () => {
     mocks.toDataURL.mockRejectedValue(new Error('canvas unavailable'));
     await renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: 'Mostrar mi código' }));
 
     expect(await screen.findByText(/No pudimos generar el código QR/)).toBeTruthy();
-    // The id is still readable, because it is a real fallback at the counter.
-    expect(screen.getByText(GLOBAL_ID)).toBeTruthy();
-    // No placeholder that would look like a working code.
     expect(screen.queryByRole('img')).toBeNull();
     expect(screen.getByRole('button', { name: 'Reintentar' })).toBeTruthy();
   });
@@ -559,11 +567,11 @@ describe('profile pass behavior', () => {
     expect(mocks.toDataURL.mock.calls[1][0]).toBe(`/c/${GLOBAL_ID}`);
   });
 
-  it('keeps the member id visible before the QR is revealed', async () => {
+  it('does not render the QR inline before the customer asks for it', async () => {
     await renderPage();
 
-    expect(screen.getByText('Tu código en el local')).toBeTruthy();
-    expect(screen.getByText(GLOBAL_ID)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Mostrar mi código' })).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(mocks.toDataURL).not.toHaveBeenCalled();
   });
 
