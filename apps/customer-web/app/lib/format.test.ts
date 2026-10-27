@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { formatClp, formatMovementDate, initials } from './format';
+import { formatClp, formatMemberCode, formatMovementDate, initials } from './format';
 
 describe('formatMovementDate', () => {
   const now = new Date('2026-10-26T12:00:00');
@@ -63,5 +63,20 @@ describe('initials', () => {
   it('returns an empty string for empty input', () => {
     expect(initials(null)).toBe('');
     expect(initials('')).toBe('');
+  });
+});
+
+describe('formatMemberCode', () => {
+  it('groups the code in threes for dictation', () => {
+    expect(formatMemberCode('K7F2QX')).toBe('K7F 2QX');
+  });
+
+  it('leaves a trailing short group as it is', () => {
+    expect(formatMemberCode('K7F2Q')).toBe('K7F 2Q');
+  });
+
+  it('returns an empty string for an absent code', () => {
+    expect(formatMemberCode(undefined)).toBe('');
+    expect(formatMemberCode('')).toBe('');
   });
 });

@@ -83,8 +83,9 @@ describe('keyboard reach', () => {
   it('never takes an element out of the natural tab order', () => {
     // A positive `tabindex` reorders the whole page relative to what is on
     // screen, which is the one way a visually correct layout becomes
-    // unusable with a keyboard. The single `-1` below is a focus *target*, not
-    // a stop: the redeem outcome is focused programmatically once it exists.
+    // unusable with a keyboard. The `-1`s below are focus *targets*, not
+    // stops: the redeem outcome is focused programmatically once it exists,
+    // and the QR sheet heading receives focus when the sheet opens.
     const offenders = sources
       .filter(({ source }) => /tabIndex=\{(?!-1)/.test(source) || /tabindex="[1-9]/.test(source))
       .map(({ file }) => file);
@@ -93,8 +94,10 @@ describe('keyboard reach', () => {
 
     const target = sources.filter(({ source }) => /tabIndex=\{-1\}/.test(source));
 
-    // Exactly one, and it is the redeem outcome.
-    expect(target.map(({ file }) => file)).toEqual(['profile/rewards/confirm/page.tsx']);
+    // Exactly these two: the redeem outcome and the QR sheet heading.
+    expect(target.map(({ file }) => file).sort()).toEqual(
+      ['components/qr-dock.tsx', 'profile/rewards/confirm/page.tsx'].sort(),
+    );
   });
 
   it('never hides a focusable element from assistive technology', () => {
@@ -115,8 +118,6 @@ describe('keyboard reach', () => {
 
     expect(hidden.has('ArrowRight')).toBe(true);
     expect(hidden.has('QrCode')).toBe(true);
-    expect(hidden.has('ChevronUp')).toBe(true);
-    expect(hidden.has('ChevronDown')).toBe(true);
   });
 
   it('never focuses on load', () => {

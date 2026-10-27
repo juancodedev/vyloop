@@ -8,9 +8,9 @@ import { ClubError, ClubStatus } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
 import { IdentityCard } from '../components/identity-card';
 import { MemberPass } from '../components/member-pass';
-import { MemberQr } from '../components/member-qr';
 import { PersonalData } from '../components/personal-data';
 import { PurchaseTimeline } from '../components/purchase-timeline';
+import { QrDock } from '../components/qr-dock';
 import { WalletCard } from '../components/wallet-card';
 import { api, type CustomerProfile } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -26,6 +26,8 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [memberCode, setMemberCode] = useState<string | null>(null);
+  const handlePass = useCallback((pass: { member_code: string }) => setMemberCode(pass.member_code), []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,10 +86,9 @@ export default function ProfilePage() {
       <div className="club-profile">
         <IdentityCard profile={profile} />
         <MemberPass profile={profile} />
-        <MemberQr globalId={profile.globalId} fullName={profile.fullName} />
         <PurchaseTimeline profile={profile} />
         <PersonalData profile={profile} />
-        <WalletCard />
+        <WalletCard onPass={handlePass} />
         <ConsentList />
         <button
           type="button"
@@ -101,6 +102,7 @@ export default function ProfilePage() {
           Cerrar sesión
         </button>
       </div>
+      <QrDock globalId={profile.globalId} fullName={profile.fullName} memberCode={memberCode} />
     </ClubShell>
   );
 }
