@@ -144,17 +144,23 @@ describe('recent purchase rows', () => {
     }
   });
 
-  it('shows a movement of an unknown type without a direction', () => {
+  it('signs a movement of an unknown type by its own value', () => {
     render(
       <PurchaseTimeline
-        profile={makeProfile({ recent_transactions: [tx({ type: 'adjust', points: 15, balanceAfter: 45, note: null })] })}
+        profile={makeProfile({
+          recent_transactions: [
+            tx({ id: 'a1', type: 'adjust', points: 15, balanceAfter: 45, note: null, createdAt: '2026-10-25T12:00:00.000Z' }),
+            tx({ id: 'a2', type: 'adjust', points: -15, balanceAfter: 30, note: null, createdAt: '2026-10-24T12:00:00.000Z' }),
+          ],
+        })}
       />,
     );
 
-    expect(screen.getByText('Ajuste de puntos')).toBeTruthy();
-    expect(screen.getByText('15 puntos')).toBeTruthy();
-    expect(screen.queryByText(/^[+−]/)).toBeNull();
+    expect(screen.getAllByText('Ajuste de puntos')).toHaveLength(2);
+    expect(screen.getByText('+15 puntos')).toBeTruthy();
+    expect(screen.getByText('−15 puntos')).toBeTruthy();
     expect(screen.getByText('saldo 45')).toBeTruthy();
+    expect(screen.getByText('saldo 30')).toBeTruthy();
   });
 
   it('says there are no movements yet when the list is empty', () => {

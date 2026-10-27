@@ -8,6 +8,8 @@ type TimelineItem =
   | {
       id: string;
       kind: 'earn' | 'redeem' | 'other';
+      /** The direction shown before the points: from the kind, or from the value for `other`. */
+      sign: '+' | '−' | '';
       points: number;
       balanceAfter: number;
       purchaseAmount: number | null;
@@ -30,10 +32,20 @@ function kindOf(type: string): 'earn' | 'redeem' | 'other' {
   return 'other';
 }
 
+function signOf(kind: 'earn' | 'redeem' | 'other', points: number): '+' | '−' | '' {
+  if (kind === 'earn') return '+';
+  if (kind === 'redeem') return '−';
+  // An adjustment can go either way: only its own value tells.
+  if (points > 0) return '+';
+  if (points < 0) return '−';
+  return '';
+}
+
 export function buildTimeline(profile: CustomerProfile): TimelineItem[] {
   const fromTransactions: TimelineItem[] = (profile.recent_transactions ?? []).map((tx) => ({
     id: tx.id,
     kind: kindOf(tx.type),
+    sign: signOf(kindOf(tx.type), tx.points),
     points: Math.abs(tx.points),
     balanceAfter: tx.balanceAfter,
     purchaseAmount: tx.purchaseAmount ?? null,
@@ -92,7 +104,7 @@ export function PurchaseTimeline({ profile }: { profile: CustomerProfile }) {
               {item.kind === 'joined' ? null : (
                 <div className="club-purchase-timeline__figures">
                   <span className="club-purchase-timeline__points">
-                    {item.kind === 'earn' ? '+' : item.kind === 'redeem' ? '−' : ''}
+                    {item.sign}
                     {item.points.toLocaleString('es-CL')}
                     {unit ? ` ${unit}` : ''}
                   </span>
