@@ -2559,6 +2559,15 @@ a {
 .club-personal-data__row { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid #f3f4f6; }
 .club-personal-data__row dt { color: #6b7280; font-size: 0.9rem; }
 .club-personal-data__row dd { margin: 0; font-weight: 500; }
+.club-personal-data__header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
+.club-personal-data__header .club-personal-data__title { margin: 0; }
+.club-personal-data__edit { width: auto; padding-inline: 1rem; }
+.club-personal-data__form { display: grid; gap: 0.75rem; }
+.club-personal-data__note { margin: 0; color: var(--text-muted); font-size: 0.9rem; }
+.club-personal-data__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.club-personal-data__actions .btn { width: auto; flex: 1 1 10rem; }
+.club-personal-data__toast { margin: 0.5rem 0 0; color: var(--success); font-weight: 600; }
+.club-personal-data__toast:empty { display: none; }
 .club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; cursor: pointer; }
 
 /* QR dock and sheet (Phase 1.5).
