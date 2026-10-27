@@ -1,5 +1,6 @@
 'use client';
 
+import { CUSTOMER_PATCH_ERROR } from '@vyloop/types';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { api, ApiError, type CustomerProfile, type ProfileFields, type ProfileUpdate } from '../lib/api';
@@ -93,7 +94,7 @@ function validate(draft: Draft): FieldErrors {
 
 /** Where a refused save belongs on screen. */
 function failureFor(err: unknown): { field?: keyof Draft; message: string } {
-  if (err instanceof ApiError && err.code === 'CUSTOMER_EMAIL_TAKEN') {
+  if (err instanceof ApiError && err.code === CUSTOMER_PATCH_ERROR.EMAIL_TAKEN) {
     return { field: 'email', message: 'Ese email ya lo usa otra persona en este club.' };
   }
   if (err instanceof ApiError && err.code === 'AUTH_SCOPE_MISSING') {

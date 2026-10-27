@@ -2801,7 +2801,7 @@ describe('Self update (PATCH /v1/customers/me)', () => {
     const res = await patchMe({ email: 'taken@example.com' });
 
     expect(res.status).toBe(409);
-    expect((await res.json() as any).error.code).toBe('CUSTOMER_EMAIL_TAKEN');
+    expect((await res.json() as any).error.code).toBe(CUSTOMER_PATCH_ERROR.EMAIL_TAKEN);
     expect(mockPublish).not.toHaveBeenCalled();
   });
 

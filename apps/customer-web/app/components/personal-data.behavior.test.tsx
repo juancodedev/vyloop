@@ -11,6 +11,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { CUSTOMER_PATCH_ERROR } from '@vyloop/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError, type CustomerProfile } from '../lib/api';
@@ -185,7 +186,7 @@ describe('editing personal data', () => {
   });
 
   it('puts a taken email next to the email field and keeps the draft', async () => {
-    mocks.updateProfile.mockRejectedValue(new ApiError(409, 'CUSTOMER_EMAIL_TAKEN', 'taken'));
+    mocks.updateProfile.mockRejectedValue(new ApiError(409, CUSTOMER_PATCH_ERROR.EMAIL_TAKEN, 'taken'));
     const onSaved = renderData();
     openEditor();
 
