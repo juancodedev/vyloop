@@ -99,6 +99,13 @@ describe('deleting the account', () => {
     expect(onDeleted).not.toHaveBeenCalled();
   });
 
+  it('still warns about the balance when the program names no currency', () => {
+    renderDelete(80, null);
+    openConfirm();
+
+    expect(screen.getByText(/Vas a perder tu saldo de 80\./)).toBeTruthy();
+  });
+
   it('does not name a balance it does not have', () => {
     renderDelete(0, null);
     openConfirm();

@@ -68,7 +68,12 @@ export function DeleteAccount({ points, pointsCurrency, onDeleted }: DeleteAccou
     );
   }
 
-  const balance = points > 0 && pointsCurrency ? `Vas a perder tus ${points} ${pointsCurrency}. ` : '';
+  // A balance is always named when there is one; the currency only when the
+  // program has one, never a made-up unit.
+  let balance = '';
+  if (points > 0) {
+    balance = pointsCurrency ? `Vas a perder tus ${points} ${pointsCurrency}. ` : `Vas a perder tu saldo de ${points}. `;
+  }
 
   return (
     <section className="club-delete-account" aria-labelledby="club-delete-account-title">
