@@ -154,6 +154,11 @@ a {
   border: 2px solid var(--brand-500);
 }
 
+.btn--danger {
+  background: var(--error);
+  color: #fff;
+}
+
 /* --- Inputs --- */
 .field {
   margin-bottom: var(--space-4);
@@ -2569,6 +2574,12 @@ a {
 .club-personal-data__toast { margin: 0.5rem 0 0; color: var(--success); font-weight: 600; }
 .club-personal-data__toast:empty { display: none; }
 .club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; cursor: pointer; }
+.club-delete-account__open { margin-top: 0.5rem; min-height: 44px; padding: 0.5rem 0; border: 0; background: none; color: var(--error); font-weight: 600; text-decoration: underline; cursor: pointer; }
+.club-delete-account { margin-top: 1rem; padding: 1rem; border: 1px solid var(--error-border); border-radius: 12px; background: var(--error-bg); }
+.club-delete-account__title { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.club-delete-account__body { margin: 0 0 0.75rem; }
+.club-delete-account__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.club-delete-account__actions .btn { width: auto; flex: 1 1 10rem; }
 
 /* QR dock and sheet (Phase 1.5).
    The dock stays on screen at any scroll position; the profile reserves room

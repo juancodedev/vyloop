@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ClubShell } from '../components/club-shell';
 import { ClubError, ClubStatus } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
+import { DeleteAccount } from '../components/delete-account';
 import { IdentityCard } from '../components/identity-card';
 import { NextRedemptionCard } from '../components/next-redemption-card';
 import { mergeSavedFields, PersonalData } from '../components/personal-data';
@@ -124,6 +125,15 @@ export default function ProfilePage() {
         >
           Cerrar sesión
         </button>
+        <DeleteAccount
+          points={profile.points}
+          pointsCurrency={profile.program?.pointsCurrency ?? null}
+          onDeleted={() => {
+            signingOut.current = true;
+            logout();
+            push('/');
+          }}
+        />
       </div>
       <QrDock globalId={profile.globalId} fullName={profile.fullName} memberCode={memberCode} />
     </ClubShell>

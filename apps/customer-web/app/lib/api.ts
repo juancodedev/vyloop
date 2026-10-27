@@ -352,6 +352,15 @@ export const api = {
     return result.data;
   },
 
+  /**
+   * The customer deletes their own account. The server anonymises it at once:
+   * there is no recovery, and the points balance is lost. Needs the
+   * `profile:write` scope, like `updateProfile`.
+   */
+  async deleteAccount(): Promise<void> {
+    await apiFetch('/v1/customers/me', { method: 'DELETE' });
+  },
+
   async getCustomerConsents(): Promise<{ consents: Record<string, boolean> }> {
     const result = (await apiFetch('/v1/customers/me/consents')) as { consents: Record<string, boolean> };
     return result;
