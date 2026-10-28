@@ -1896,6 +1896,23 @@ describe('findInactivePassCandidates', () => {
     expect(fake.executed[0]!.sql).toContain('tx.customer_id =');
   });
 
+  it('never considers the pass of a deleted customer', async () => {
+    // A deleted customer's pass row survives the anonymisation, and a pass whose
+    // expiry failed is still `issued` — so without this predicate the rule would
+    // patch it `INACTIVE` and record it `inactive`, a write about a person who
+    // has left, on the one pass the expiry retry is still trying to reach.
+    const { fake, store } = candidatesWith();
+
+    await store.findInactivePassCandidates({ tenantId: TENANT, cutoff: CUTOFF, limit: 10 });
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).toContain('c.deleted_at IS NULL');
+    expect(statement).toContain('c.business_id = p.tenant_id');
+    // Still the `issued` passes of everyone else: the predicate narrows, it does
+    // not replace the rule.
+    expect(statement).toContain("p.state = 'issued'");
+  });
+
   it('only considers passes we believe Google holds and that are not already done', async () => {
     // `not_issued` and `not_saved` have no object to patch. `inactive` is this
     // rule's own output, so including it would re-deactivate on every run.
@@ -2043,6 +2060,28 @@ describe('findInactivePassCandidates', () => {
 // must never mark a pass `expired` that never asserted an object existed.
 // ============================================================================
 
+describe('listConsentingPasses', () => {
+  it('lists the consenting holders of issued passes, and never a deleted customer', async () => {
+    // The consent rows survive a deletion — only their address is cleared — and a
+    // pass whose expiry failed is still `issued`, so the join to `customers` is
+    // the only thing between a deleted customer and the next wallet message.
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listConsentingPasses({ tenantId: TENANT, consentType: 'promotions', after: null, limit: 50 });
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('cu.deleted_at IS NULL');
+    expect(statement.sql).toContain('cu.business_id = p.tenant_id');
+    // Everyone else who consented is still reached.
+    expect(statement.sql).toContain('c.granted = true');
+    expect(statement.sql).toContain("p.state = 'issued'");
+    expect(statement.sql).toContain('p.tenant_id =');
+    expect(statement.params).toContain(TENANT);
+    expect(statement.params).toContain('promotions');
+  });
+});
+
 describe('findDeletedCustomerPass', () => {
   it('only finds the pass of a deleted customer, scoped to one tenant', async () => {
     const fake = createFakeDb([], 'tenantId');
@@ -2087,7 +2126,7 @@ describe('listPassesPendingExpiry', () => {
     const fake = createFakeDb([], 'tenantId');
     const store = createDrizzleWalletStore(fake.db);
 
-    await store.listPassesPendingExpiry({ limit: 100 });
+    await store.listPassesPendingExpiry({ limit: 100, rotation: 0 });
 
     const statement = fake.executed[0]!;
     expect(statement.sql).toContain('c.deleted_at IS NOT NULL');
@@ -2101,11 +2140,30 @@ describe('listPassesPendingExpiry', () => {
     expect(statement.params).toContain(100);
   });
 
+  it('enters the set at a page that moves with the rotation, and wraps round its end', async () => {
+    // Oldest-first alone starves: a page's worth of passes that keep failing
+    // would hold every slot for ever. The window is the deletion order entered at
+    // `rotation * limit`, modulo the size of the set, so consecutive rotations
+    // walk consecutive pages and every pending pass is attempted within
+    // `ceil(pending / limit)` of them, whatever the ones before it do.
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listPassesPendingExpiry({ limit: 100, rotation: 3 });
+
+    const statement = fake.executed[0]!;
+    expect(statement.sql).toContain('row_number() OVER (ORDER BY c.deleted_at ASC, p.customer_id ASC)');
+    expect(statement.sql).toContain('count(*) OVER ()');
+    expect(statement.sql).toContain('% pending.total');
+    expect(statement.params).toContain(300);
+    expect(statement.params).toContain(100);
+  });
+
   it('clamps the page, so no caller can make the read unbounded', async () => {
     const fake = createFakeDb([], 'tenantId');
     const store = createDrizzleWalletStore(fake.db);
 
-    await store.listPassesPendingExpiry({ limit: 1_000_000 });
+    await store.listPassesPendingExpiry({ limit: 1_000_000, rotation: 0 });
 
     expect(fake.executed[0]!.params).toContain(500);
   });

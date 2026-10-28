@@ -665,23 +665,47 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
     },
 
     /**
-     * The retry set for deleted customers' passes, oldest deletion first.
+     * The retry set for deleted customers' passes: one page of it, in deletion
+     * order, entered at a point that moves with `rotation`.
+     *
+     * The inner select numbers the whole pending set oldest deletion first
+     * (`position`, from zero) and counts it (`total`). The outer one orders by
+     * the distance from `offset` going forwards round the set, so the page is
+     * `position` `offset mod total` onwards, wrapping past the newest deletion
+     * back to the oldest. `rotation` advances by one a day, which moves the entry
+     * point by exactly one page, so consecutive runs read consecutive pages and
+     * each pending pass is in some page within `ceil(total / limit)` runs. The
+     * double `%` is because Postgres's `%` keeps the sign of the dividend, and
+     * `position - offset` is negative for every row before the entry point.
+     *
+     * Both windows run over the pending set only, which in steady state is
+     * empty and after an outage is the backlog the outage made — never the
+     * passes table.
      *
      * The `limit` is clamped for the same reason `listProgramTenants` clamps its
      * own: a caller passing anything else must not produce an unbounded read.
+     * The offset is computed from the clamped value, so the pages a caller walks
+     * are the pages it is actually given.
      */
-    async listPassesPendingExpiry(options: { limit: number }): Promise<WalletPassRow[]> {
+    async listPassesPendingExpiry(options: { limit: number; rotation: number }): Promise<WalletPassRow[]> {
       const limit = Math.min(500, Math.max(1, Math.trunc(options.limit)));
+      const rotation = Number.isFinite(options.rotation) ? Math.max(0, Math.trunc(options.rotation)) : 0;
+      const offset = rotation * limit;
 
       const result = await db.execute(sql`
-        SELECT p.customer_id, p.tenant_id, p.object_id, p.state, p.last_synced_at
-          FROM customer_wallet_passes p
-          JOIN customers c
-            ON c.id = p.customer_id
-           AND c.business_id = p.tenant_id
-         WHERE c.deleted_at IS NOT NULL
-           AND p.state IN ('issued', 'inactive', 'completed')
-         ORDER BY c.deleted_at ASC, p.customer_id ASC
+        SELECT pending.customer_id, pending.tenant_id, pending.object_id, pending.state, pending.last_synced_at
+          FROM (
+            SELECT p.customer_id, p.tenant_id, p.object_id, p.state, p.last_synced_at,
+                   row_number() OVER (ORDER BY c.deleted_at ASC, p.customer_id ASC) - 1 AS position,
+                   count(*) OVER () AS total
+              FROM customer_wallet_passes p
+              JOIN customers c
+                ON c.id = p.customer_id
+               AND c.business_id = p.tenant_id
+             WHERE c.deleted_at IS NOT NULL
+               AND p.state IN ('issued', 'inactive', 'completed')
+          ) pending
+         ORDER BY (((pending.position - ${offset}::bigint) % pending.total) + pending.total) % pending.total ASC
          LIMIT ${limit}
       `);
 
@@ -893,6 +917,7 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
           FROM customer_wallet_passes p
           JOIN customers c
             ON c.id = p.customer_id
+           AND c.business_id = p.tenant_id
           LEFT JOIN LATERAL (
             SELECT max(tx.created_at) AS last_activity_at
               FROM points_transactions tx
@@ -901,6 +926,9 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
           ) last_activity ON true
          WHERE p.tenant_id = ${input.tenantId}::uuid
            AND p.state = 'issued'
+           -- A deleted customer's pass is the expiry's to finish, never this
+           -- rule's to deactivate. See the interface.
+           AND c.deleted_at IS NULL
            AND COALESCE(last_activity.last_activity_at, c.created_at) < ${input.cutoff}::timestamptz
          ORDER BY p.customer_id
          LIMIT ${limit}
@@ -963,8 +991,14 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
            AND c.customer_id = p.customer_id
            AND c.consent_type = ${input.consentType}
            AND c.granted = true
+          JOIN customers cu
+            ON cu.id = p.customer_id
+           AND cu.business_id = p.tenant_id
          WHERE p.tenant_id = ${input.tenantId}::uuid
            AND p.state = 'issued'
+           -- The consent survives a deletion, so it cannot be what excludes a
+           -- deleted customer. See the interface.
+           AND cu.deleted_at IS NULL
            AND (${input.after}::uuid IS NULL OR p.customer_id > ${input.after}::uuid)
          ORDER BY p.customer_id
          LIMIT ${limit}

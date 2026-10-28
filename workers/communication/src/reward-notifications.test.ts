@@ -191,6 +191,25 @@ describe('handleRewardAvailableAtBranch', () => {
     expect(deliverPushNotification).not.toHaveBeenCalled();
   });
 
+  it('never resolves a deleted customer, so the announcement reaches no one', async () => {
+    // Pinned rather than assumed: deleting an account is an `UPDATE` of
+    // `deleted_at`, so the row is still there to be found by its global id. The
+    // fake tables are plain strings, so the predicate renders the column name as
+    // a bound value; what is asserted is that `deleted_at` is tested for null.
+    const { PgDialect } = await import('drizzle-orm/pg-core');
+    const lookup = chain([]);
+    const where = vi.fn((_predicate: unknown) => lookup);
+    dbMock.select.mockReturnValueOnce({ ...lookup, from: () => ({ ...lookup, where }) } as never);
+
+    const outcome = await handleRewardAvailableAtBranch(payload, 'biz-1', env);
+
+    const rendered = new PgDialect().sqlToQuery(where.mock.calls[0]![0] as never);
+    expect(rendered.params).toContain('deleted_at');
+    expect(rendered.sql).toMatch(/\$\d+ is null/);
+    expect(outcome).toEqual({ result: 'no_customer', delivered: 0 });
+    expect(deliverPushNotification).not.toHaveBeenCalled();
+  });
+
   it('acknowledges when the customer is unknown', async () => {
     dbMock.select.mockReturnValueOnce(chain([]));
 
