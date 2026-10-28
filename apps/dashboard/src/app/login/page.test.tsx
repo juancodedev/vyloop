@@ -153,3 +153,19 @@ describe('business signup', () => {
     expect(mocks.push).not.toHaveBeenCalled();
   });
 });
+describe('the login form', () => {
+  it('links a first-time merchant to the signup form', () => {
+    renderPage(false);
+
+    expect(screen.getByRole('link', { name: 'Crea tu comercio' }).getAttribute('href')).toBe(
+      '/login?signup=true',
+    );
+  });
+
+  // The owner's own test account, kept on screen on purpose for now.
+  it('keeps the test account hint visible', () => {
+    renderPage(false);
+
+    expect(screen.getByText('Demo: demo@cafecentral.com / demo123')).toBeTruthy();
+  });
+});

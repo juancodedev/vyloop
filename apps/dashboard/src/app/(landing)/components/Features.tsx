@@ -1,73 +1,46 @@
-import {
-  BarChart3,
-  Gift,
-  Smartphone,
-  QrCode,
-  MessageSquare,
-  Unlink,
-} from 'lucide-react';
+import styles from '../landing.module.css';
 
-import styles from './Features.module.css';
-
+/** Only what the product does today. */
 const FEATURES = [
   {
-    icon: Gift,
-    title: 'Puntos automáticos',
-    description:
-      'Olvídate de tarjetas de papel. Los puntos se asignan solos.',
+    name: 'Tarjeta en Google Wallet',
+    text: 'Con tu nombre y tu logo. Se actualiza sola con cada compra.',
   },
   {
-    icon: Smartphone,
-    title: 'Programa tu lealtad',
-    description:
-      'Define niveles, recompensas y reglas desde un panel simple.',
+    name: 'Puntos por monto de compra',
+    text: 'Tú decides cuántos pesos vale un punto.',
   },
   {
-    icon: QrCode,
-    title: 'QR para tu local',
-    description:
-      'Tus clientes escanean y ven sus puntos al instante.',
+    name: 'Niveles y premios',
+    text: 'Bronce, Plata y Oro, o los nombres que quieras. Premios que se canjean en caja.',
   },
   {
-    icon: BarChart3,
-    title: 'Dashboard en vivo',
-    description:
-      'Mira quién compra más, quién canjea y cómo crece tu negocio.',
+    name: 'Varias sucursales',
+    text: 'Un solo programa; el cliente suma en cualquiera de tus locales.',
   },
   {
-    icon: MessageSquare,
-    title: 'Segmenta y comunica',
-    description:
-      'Envía ofertas por WhatsApp a tus mejores clientes.',
+    name: 'Avisos al celular',
+    text: 'Campañas que llegan a quienes aceptaron recibirlas.',
   },
   {
-    icon: Unlink,
-    title: 'Sin contratos',
-    description:
-      'Cancela cuando quieras. Sin multas ni permanencia.',
+    name: 'Tus clientes, a la vista',
+    text: 'Quién vino, cuánto compró y quién hace rato que no aparece.',
   },
 ];
 
 export function Features() {
   return (
-    <section className={styles.section} id="features">
-      <h2 className={styles.title}>Todo lo que necesitas</h2>
-      <p className={styles.subtitle}>
-        Tu programa de lealtad completo, sin complicaciones
-      </p>
-      <div className={styles.grid}>
-        {FEATURES.map((feature) => {
-          const Icon = feature.icon;
-          return (
-            <div key={feature.title} className={styles.card}>
-              <div className={styles.iconWrap}>
-                <Icon size={22} aria-hidden="true" />
-              </div>
-              <h3 className={styles.cardTitle}>{feature.title}</h3>
-              <p className={styles.cardDesc}>{feature.description}</p>
+    <section id="que-incluye" className={styles.features}>
+      <div className={`${styles.wrap} ${styles.featuresInner}`}>
+        <h2 className={`${styles.display} ${styles.cashierTitle}`}>Qué incluye</h2>
+        <dl className={styles.featureList}>
+          {FEATURES.map((feature) => (
+            <div key={feature.name}>
+              <dt className={styles.featureName}>{feature.name}</dt>
+              <dd className={styles.featureText}>{feature.text}</dd>
             </div>
-          );
-        })}
+          ))}
+        </dl>
       </div>
     </section>
   );

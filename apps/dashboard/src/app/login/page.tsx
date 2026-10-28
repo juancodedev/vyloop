@@ -1,27 +1,84 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useState, useCallback, type FormEvent } from 'react';
+import { Suspense, useState, useCallback, type FormEvent, type ReactNode } from 'react';
 
 import { signupBusiness } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { registrationPath } from '@/lib/merchant-qr';
 
 const EyeIcon = (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
     <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
     <circle cx="12" cy="12" r="3" />
   </svg>
 );
 
 const EyeOffIcon = (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
     <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
     <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
     <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
     <line x1="2" x2="22" y1="2" y2="22" />
   </svg>
 );
+
+/**
+ * The page around every form here: the form on one side, the sign on the other.
+ * The sign is decoration and repeats nothing the form needs, so it is hidden from
+ * assistive technology and drops below the form on a phone.
+ */
+function LoginShell({
+  title,
+  intro,
+  children,
+}: {
+  title: string;
+  intro?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="login-page">
+      <main className="login-main">
+        <Link href="/" className="login-logo">
+          vyloop
+        </Link>
+        <div className="login-card">
+          <h1 className="login-title">{title}</h1>
+          {intro ? <p className="login-intro">{intro}</p> : null}
+          {children}
+        </div>
+      </main>
+      <aside className="login-aside" aria-hidden="true">
+        <p className="login-sign">Hoy, en caja, cada boleta suma.</p>
+        <p className="login-aside-text">
+          Abre la caja, escanea la tarjeta del cliente y escribe el monto. El resto lo hace vyloop.
+        </p>
+      </aside>
+    </div>
+  );
+}
 
 /**
  * Self-service signup, at `/login?signup=true`.
@@ -80,124 +137,109 @@ function SignupCard({ onDone }: { onDone: () => void }) {
 
   if (created) {
     return (
-      <div className="login-page">
-        <div className="login-card">
-          <div className="login-brand">
-            <h1>
-              <span className="brand-accent">V</span>yloop
-            </h1>
-            <p>Comercio creado</p>
-          </div>
+      <LoginShell title="Comercio creado">
+        <div className="login-error">
+          No pudimos iniciar tu sesión automáticamente. Entra con el correo y la contraseña que
+          acabas de elegir.
+        </div>
 
-          <div className="login-error">
-            No pudimos iniciar tu sesión automáticamente. Entrá con el correo y la
-            contraseña que acabás de elegir.
-          </div>
-
-          {/*
+        {/*
             The slug is the whole point of showing this at all: it is the customer
             URL and the QR the merchant prints. A merchant who cannot read it here
             cannot onboard anyone.
           */}
-          <div className="form-group">
-            <label htmlFor="created-slug">Tu enlace de registro</label>
-            <input
-              id="created-slug"
-              className="form-control"
-              readOnly
-              value={registrationPath(created.slug)}
-            />
-            <small>
-              Compartilo con tus clientes, o imprimilo como código QR. También es{' '}
-              <code>{created.slug}</code>.
-            </small>
-          </div>
-
-          <button type="button" className="btn btn-primary" onClick={onDone}>
-            Ir a iniciar sesión
-          </button>
+        <div className="form-group">
+          <label htmlFor="created-slug">Tu enlace de registro</label>
+          <input
+            id="created-slug"
+            className="form-control"
+            readOnly
+            value={registrationPath(created.slug)}
+          />
+          <small>
+            Compártelo con tus clientes, o imprímelo como código QR. También es{' '}
+            <code>{created.slug}</code>.
+          </small>
         </div>
-      </div>
+
+        <button type="button" className="btn btn-primary" onClick={onDone}>
+          Ir a iniciar sesión
+        </button>
+      </LoginShell>
     );
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-brand">
-          <h1>
-            <span className="brand-accent">V</span>yloop
-          </h1>
-          <p>Crear tu comercio</p>
+    <LoginShell
+      title="Crea tu comercio"
+      intro="Arma tu programa de puntos y obtén el enlace para tus clientes."
+    >
+      {error && <div className="login-error">{error}</div>}
+
+      <form onSubmit={handleSubmit}>
+        <div className="form-group">
+          <label htmlFor="s-name">Nombre del comercio</label>
+          <input
+            id="s-name"
+            className="form-control"
+            placeholder="Ej. Panadería del Barrio"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+          />
+          <small>De este nombre sale el enlace de tus clientes.</small>
         </div>
 
-        {error && <div className="login-error">{error}</div>}
-
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="s-name">Nombre del comercio</label>
-            <input
-              id="s-name"
-              className="form-control"
-              placeholder="Ej. Panadería del Barrio"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              autoFocus
-            />
-            <small>De este nombre sale el enlace de tus clientes.</small>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="s-email">Correo electrónico</label>
-            <input
-              id="s-email"
-              type="email"
-              className="form-control"
-              placeholder="hola@tucomercio.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="s-password">Contraseña</label>
-            <input
-              id="s-password"
-              type="password"
-              className="form-control"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={8}
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="s-fullname">Tu nombre (opcional)</label>
-            <input
-              id="s-fullname"
-              className="form-control"
-              placeholder="Juan Muñoz"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-            />
-          </div>
-
-          <button type="submit" className="btn btn-primary" disabled={busy}>
-            {busy ? 'Creando…' : 'Crear comercio'}
-          </button>
-        </form>
-
-        <div className="login-footer">
-          <button type="button" className="btn btn-link" onClick={onDone}>
-            Ya tengo un comercio
-          </button>
+        <div className="form-group">
+          <label htmlFor="s-email">Correo electrónico</label>
+          <input
+            id="s-email"
+            type="email"
+            className="form-control"
+            placeholder="hola@tucomercio.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
         </div>
+
+        <div className="form-group">
+          <label htmlFor="s-password">Contraseña</label>
+          <input
+            id="s-password"
+            type="password"
+            className="form-control"
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={8}
+          />
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="s-fullname">Tu nombre (opcional)</label>
+          <input
+            id="s-fullname"
+            className="form-control"
+            placeholder="Juan Muñoz"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+          />
+        </div>
+
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? 'Creando…' : 'Crear comercio'}
+        </button>
+      </form>
+
+      <div className="login-footer">
+        <button type="button" className="btn btn-link" onClick={onDone}>
+          Ya tengo un comercio
+        </button>
       </div>
-    </div>
+    </LoginShell>
   );
 }
 
@@ -244,18 +286,7 @@ export default function LoginPage() {
  * reads as a broken page rather than a loading one.
  */
 function LoginFallback() {
-  return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-brand">
-          <h1>
-            <span className="brand-accent">V</span>yloop
-          </h1>
-          <p>Panel de administración</p>
-        </div>
-      </div>
-    </div>
-  );
+  return <LoginShell title="Entra a tu comercio" />;
 }
 
 function LoginCard() {
@@ -278,68 +309,60 @@ function LoginCard() {
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-brand">
-          <h1>
-            <span className="brand-accent">V</span>yloop
-          </h1>
-          <p>Panel de administración</p>
+    <LoginShell
+      title="Entra a tu comercio"
+      intro={
+        <>
+          ¿Primera vez? <Link href="/login?signup=true">Crea tu comercio</Link> en dos minutos.
+        </>
+      }
+    >
+      {error && <div className="login-error">{error}</div>}
+
+      <form onSubmit={handleSubmit}>
+        <div className="form-group">
+          <label htmlFor="email">Correo electrónico</label>
+          <input
+            id="email"
+            type="email"
+            className="form-control"
+            placeholder="demo@cafecentral.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoFocus
+          />
         </div>
 
-        {error && <div className="login-error">{error}</div>}
-
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="email">Correo electrónico</label>
+        <div className="form-group">
+          <label htmlFor="password">Contraseña</label>
+          <div className="password-wrapper">
             <input
-              id="email"
-              type="email"
+              id="password"
+              type={showPassword ? 'text' : 'password'}
               className="form-control"
-              placeholder="demo@cafecentral.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               required
-              autoFocus
             />
+            <button
+              type="button"
+              className="password-toggle"
+              onClick={() => setShowPassword(!showPassword)}
+              aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+            >
+              {showPassword ? EyeOffIcon : EyeIcon}
+            </button>
           </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Contraseña</label>
-            <div className="password-wrapper">
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                className="form-control"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword(!showPassword)}
-                aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-              >
-                {showPassword ? EyeOffIcon : EyeIcon}
-              </button>
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={isLoading}
-          >
-            {isLoading ? 'Iniciando sesión…' : 'Iniciar Sesión'}
-          </button>
-        </form>
-
-        <div className="login-footer">
-          Demo: demo@cafecentral.com / demo123
         </div>
-      </div>
-    </div>
+
+        <button type="submit" className="btn btn-primary" disabled={isLoading}>
+          {isLoading ? 'Iniciando sesión…' : 'Iniciar sesión'}
+        </button>
+      </form>
+
+      <p className="login-demo">Demo: demo@cafecentral.com / demo123</p>
+    </LoginShell>
   );
 }

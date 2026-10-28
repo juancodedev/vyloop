@@ -1,0 +1,517 @@
+/* The landing page. Colours and fonts come from the tokens in globals.css. */
+
+.page {
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+.display {
+  font-family: var(--font-display);
+  letter-spacing: -0.025em;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 0 1.75rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 1.125rem;
+  background: var(--green);
+  color: var(--paper);
+  transition: background 0.12s ease;
+}
+
+.pill:hover {
+  background: var(--green-hover);
+}
+
+.pillInk {
+  background: var(--ink);
+}
+
+.pillInk:hover {
+  background: #000;
+}
+
+/* Header */
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  padding-top: 1.5rem;
+  padding-bottom: 1.5rem;
+}
+
+.logo {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+  color: var(--green);
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.75rem;
+  font-weight: 500;
+}
+
+.navLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ink);
+}
+
+.navLink:hover {
+  color: var(--green);
+}
+
+.navCta {
+  min-height: 44px;
+  padding: 0 1.25rem;
+  font-size: 1rem;
+}
+
+.menuToggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .menuToggle {
+    display: inline-flex;
+  }
+
+  .nav {
+    display: none;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .navOpen {
+    display: flex;
+  }
+}
+
+/* Hero */
+
+.hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3.5rem;
+  padding-top: 2rem;
+  padding-bottom: 6rem;
+}
+
+.heroText {
+  flex: 999 1 520px;
+  min-width: 0;
+}
+
+.sign {
+  padding: 2.5rem 2.5rem 2.75rem;
+  border-radius: 20px;
+  background: var(--yellow);
+  box-shadow: inset 0 0 0 4px var(--ink);
+}
+
+.headline {
+  font-weight: 800;
+  font-size: clamp(2.75rem, 6vw, 5rem);
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+}
+
+.lead {
+  max-width: 34em;
+  margin-top: 2rem;
+  font-size: 1.25rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.ctas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.5rem;
+  margin-top: 2rem;
+}
+
+.textLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+  font-size: 1.125rem;
+  color: var(--green);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.heroPass {
+  flex: 1 1 340px;
+  display: flex;
+  justify-content: center;
+}
+
+/* The pass */
+
+.pass {
+  width: 340px;
+  max-width: 100%;
+  padding: 1.5rem;
+  border-radius: 24px;
+  background: var(--green);
+  color: var(--paper);
+  box-shadow: 0 30px 60px -20px rgba(21, 25, 27, 0.45);
+  transform: rotate(-3deg);
+}
+
+.passShop {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 600;
+  font-size: 1.0625rem;
+}
+
+.passMark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--yellow);
+  color: var(--green);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.25rem;
+}
+
+.passLabel {
+  font-size: 0.8125rem;
+  color: #bfd3c8;
+}
+
+.passBalance {
+  margin-top: 1.75rem;
+}
+
+.passPoints {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 3.5rem;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.passUnit {
+  font-size: 1.375rem;
+  font-weight: 600;
+}
+
+.passMeta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 1.25rem;
+  font-weight: 600;
+}
+
+.passCode {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 132px;
+  height: 132px;
+  margin: 1.5rem auto 0;
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* How it works */
+
+.steps {
+  background: var(--green);
+  color: var(--paper);
+}
+
+.stepsInner {
+  padding-top: 6rem;
+  padding-bottom: 6rem;
+}
+
+.sectionTitle {
+  max-width: 18em;
+  font-weight: 700;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  line-height: 1.05;
+}
+
+.stepList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 2.5rem;
+  margin-top: 3.5rem;
+  list-style: none;
+  counter-reset: step;
+}
+
+.step {
+  padding-top: 1.5rem;
+  border-top: 2px solid var(--yellow);
+  counter-increment: step;
+}
+
+.step::before {
+  content: counter(step);
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 2.5rem;
+  color: var(--yellow);
+}
+
+.stepTitle {
+  margin-top: 0.5rem;
+  font-size: 1.375rem;
+  font-weight: 600;
+}
+
+.stepText {
+  margin-top: 0.625rem;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--sidebar-text);
+}
+
+/* Cashier preview */
+
+.cashier {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3.5rem;
+  padding-top: 6rem;
+  padding-bottom: 6rem;
+}
+
+.cashierText {
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.cashierTitle {
+  font-weight: 700;
+  font-size: clamp(1.875rem, 3.6vw, 2.875rem);
+  line-height: 1.05;
+}
+
+.cashierLead {
+  max-width: 32em;
+  margin-top: 1.25rem;
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.till {
+  flex: 1 1 460px;
+  min-width: 0;
+  padding: 1.75rem;
+  border: 2px solid var(--ink);
+  border-radius: 20px;
+  background: var(--bg-white);
+}
+
+.tillHead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.tillName {
+  font-weight: 600;
+  font-size: 1.125rem;
+}
+
+.tillMuted {
+  color: var(--text-secondary);
+}
+
+.tillLabel {
+  display: block;
+  margin-top: 1.5rem;
+  font-weight: 500;
+}
+
+.tillAmount {
+  margin-top: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--green);
+  border-radius: 12px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2.25rem;
+}
+
+.tillFoot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  font-size: 1.0625rem;
+}
+
+.tillButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 1.5rem;
+  border-radius: 999px;
+  background: var(--green);
+  color: var(--paper);
+  font-weight: 600;
+}
+
+/* Features */
+
+.features {
+  border-top: 2px solid var(--ink);
+}
+
+.featuresInner {
+  padding-top: 6rem;
+  padding-bottom: 6rem;
+}
+
+.featureList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2.5rem 3.5rem;
+  margin-top: 3rem;
+}
+
+.featureName {
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+.featureText {
+  margin-top: 0.5rem;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* Closing call to action */
+
+.closing {
+  padding-bottom: 6rem;
+}
+
+.closingSign {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 3.5rem 2.5rem;
+  border-radius: 20px;
+  background: var(--yellow);
+  box-shadow: inset 0 0 0 4px var(--ink);
+}
+
+.closingTitle {
+  max-width: 16em;
+  font-weight: 800;
+  font-size: clamp(1.875rem, 3.6vw, 3rem);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+/* Footer */
+
+.footer {
+  border-top: 1px solid var(--border-strong);
+}
+
+.footerInner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  padding-top: 2rem;
+  padding-bottom: 2rem;
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+}
+
+.footerBrand {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.125rem;
+  color: var(--green);
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.footerLinks a {
+  color: var(--green);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .wrap {
+    padding: 0 1rem;
+  }
+
+  .sign,
+  .closingSign {
+    padding: 2rem 1.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pass {
+    transform: none;
+  }
+}
