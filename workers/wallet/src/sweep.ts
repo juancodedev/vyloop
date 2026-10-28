@@ -1130,10 +1130,10 @@ async function sweepOnePass(
  * for a job it has already decided not to do is a dependency with no upside.
  * One boolean, checked twice, at two different boundaries.
  *
- * ## Why no tenant RLS session is opened
+ * ## Why no tenant RLS transaction is opened
  *
- * `openTenantSession` sets `app.current_tenant_id`, which is correct for the
- * request path and wrong for the enumeration: there is no tenant yet when
+ * `createTenantWalletStore` sets `app.current_tenant_id`, which is correct for
+ * the request path and wrong for the enumeration: there is no tenant yet when
  * `listProgramTenants` runs, and setting one would hide every row from every
  * other tenant. So this opens a bare session and lets the cross-tenant query be
  * the cross-tenant query. See the RLS note on `listProgramTenants`: this returns

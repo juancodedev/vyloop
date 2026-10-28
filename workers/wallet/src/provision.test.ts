@@ -9,7 +9,7 @@
 
 vi.mock('./drizzle-store', async (importOriginal) => {
   const original = await importOriginal<typeof import('./drizzle-store')>();
-  return { ...original, createDrizzleWalletStore: vi.fn(), openTenantSession: vi.fn() };
+  return { ...original, createDrizzleWalletStore: vi.fn(), openTenantWalletStore: vi.fn() };
 });
 
 // The real helpers, with the one function that can reach the network replaced.
@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
-import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import { createDrizzleWalletStore, openTenantWalletStore } from './drizzle-store';
 import type { GoogleWalletClient, GoogleWalletErrorDetail } from './google-client';
 import { GoogleWalletApiError } from './google-client';
 import { googleWalletClientFor } from './helpers';
@@ -309,7 +309,7 @@ function install(store: FakeStore, client: FakeClient, overrides: Record<string,
     else env[key] = value;
   }
   vi.mocked(createDrizzleWalletStore).mockReturnValue(store.store);
-  vi.mocked(openTenantSession).mockResolvedValue({} as never);
+  vi.mocked(openTenantWalletStore).mockReturnValue(store.store);
   vi.mocked(googleWalletClientFor).mockReturnValue(client);
 
   return provisionClass({ tenantId: TENANT }, env as never);
@@ -410,7 +410,7 @@ describe('provisionClass: a tenant with no Google class', () => {
 
     await install(store, client);
 
-    expect(openTenantSession).toHaveBeenCalledWith('postgres://mock', TENANT);
+    expect(openTenantWalletStore).toHaveBeenCalledWith('postgres://mock', TENANT);
   });
 
   it('records the row in draft, in demo mode, keyed to the class it just created', async () => {
