@@ -2741,8 +2741,9 @@ describe('Growth Worker', () => {
       const raw = await res.text();
       const json = JSON.parse(raw) as { data: { id: string } };
       expect(json.data.id).toBe('tx-pos');
-      // No subject lookup: the operator id is honoured as sent.
-      expect(mockDb.select).toHaveBeenCalledOnce();
+      // No subject lookup: the operator id is honoured as sent. The two reads are
+      // the reward and the deleted-customer check on that same id.
+      expect(mockDb.select).toHaveBeenCalledTimes(2);
       const posStatements = txExec.mock.calls
         .map((call) => dialect.sqlToQuery(call[0] as never).params)
         .flat();
@@ -2756,6 +2757,214 @@ describe('Growth Worker', () => {
       const raw = await res.text();
       const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       expect(json.error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  // ==========================================================================
+  // A deleted customer is refused on every write
+  //
+  // Deleting an account anonymises the row and sets `deleted_at`, but the row
+  // and its ledger stay. A write that only checks "does the id exist" would
+  // therefore keep crediting or spending a balance nobody owns any more. Each
+  // write path is pinned here: nothing is written, and an active customer
+  // still goes through.
+  // ==========================================================================
+
+  describe('a deleted customer is refused on every write', () => {
+    const DELETED_AT = '2026-10-01T00:00:00.000Z';
+
+    /** The customer lookup by `customers.id`, scoped by exactly the columns it filters on. */
+    function idLookup(rows: Array<Record<string, unknown>>) {
+      return filteredBuilder((clause) => {
+        const scope = predicateScope(clause, { id: 'id', business_id: 'businessId' });
+        return rows.filter(
+          (row) =>
+            scope.entries.every(({ key, value }) => row[key] === value) &&
+            (!scope.isNull('deleted_at') || row.deletedAt == null),
+        );
+      });
+    }
+
+    /** The raw statements that wrote or read the ledger. `withRls` carries none. */
+    function ledgerStatements(): string[] {
+      return executedStatements().filter((s) => /points_transactions/.test(s));
+    }
+
+    describe('POST /v1/loyalty/points/assign', () => {
+      function stubVisitProgram() {
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([{ id: 'prog-1', earnRate: '1.0', earnBy: 'visit' }]),
+        );
+      }
+
+      it('refuses a deleted customer with 404 and writes nothing', async () => {
+        stubVisitProgram();
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([{ id: 'cust-withdrawn', businessId: DEV_TENANT, currentTierId: null, deletedAt: DELETED_AT }]),
+        );
+        mockDb.execute.mockResolvedValue({ rows: [{ id: 'tx-ghost', balance_after: 10 }] });
+
+        const res = await POST('/v1/loyalty/points/assign', {
+          customer_id: 'cust-withdrawn',
+          points: 10,
+          reference_id: 'ref-deleted',
+        });
+
+        expect(res.status).toBe(404);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('NOT_FOUND');
+        // Only `withRls` reached `execute`: no ledger INSERT ran.
+        expect(mockDb.execute).toHaveBeenCalledOnce();
+        expect(ledgerStatements()).toEqual([]);
+        expect(mockDb.insert).not.toHaveBeenCalled();
+        expect(mockDb.update).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+      });
+
+      it('still credits an active customer (201)', async () => {
+        stubVisitProgram();
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([{ id: 'cust-bob', businessId: DEV_TENANT, currentTierId: null, deletedAt: null }]),
+        );
+        mockDb.execute.mockResolvedValueOnce({ rows: [] });
+        mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-bob', balance_after: 910 }] });
+
+        const res = await POST('/v1/loyalty/points/assign', {
+          customer_id: 'cust-bob',
+          points: 10,
+          reference_id: 'ref-active',
+        });
+
+        expect(res.status).toBe(201);
+        const json = (await res.json()) as { data: { id: string } };
+        expect(json.data.id).toBe('tx-bob');
+        expect(ledgerStatements().some((s) => s.includes('"cust-bob"'))).toBe(true);
+        expect(publish).toHaveBeenCalledOnce();
+      });
+    });
+
+    describe('POST /v1/loyalty/rewards/redeem', () => {
+      it('refuses a deleted customer\'s own token (403) and writes nothing', async () => {
+        mockDb.select.mockReturnValueOnce(subjectLookup(CUSTOMER_ROWS) as never);
+        mockDb.execute.mockResolvedValue({ rows: [{ balance: 500 }] });
+
+        const res = await reqAs('POST', '/v1/loyalty/rewards/redeem', {
+          ...CUSTOMER,
+          userId: 'gid-dana',
+        }, {
+          points: 100,
+          reference_id: 'ref-deleted-self',
+        });
+
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('CUSTOMER_SELF_NOT_FOUND');
+        expect(mockDb.execute).toHaveBeenCalledOnce();
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+      });
+
+      it('refuses an operator naming a deleted customer with 404 and writes nothing', async () => {
+        // The deleted row keeps its ledger, so its balance is still readable: the
+        // refusal has to come from the row's state, not from an empty balance.
+        mockDb.select.mockReturnValueOnce(idLookup(CUSTOMER_ROWS) as never);
+        mockDb.execute.mockResolvedValue({ rows: [{ balance: 500 }] });
+
+        const res = await POST('/v1/loyalty/rewards/redeem', {
+          customer_id: 'cust-withdrawn',
+          points: 100,
+          reference_id: 'ref-deleted-pos',
+        });
+
+        expect(res.status).toBe(404);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('NOT_FOUND');
+        // Only `withRls`: no balance read, no INSERT, no event.
+        expect(mockDb.execute).toHaveBeenCalledOnce();
+        expect(ledgerStatements()).toEqual([]);
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+      });
+
+      it('still lets an operator redeem for an active customer (201)', async () => {
+        mockDb.select.mockReturnValueOnce(idLookup(CUSTOMER_ROWS) as never);
+        mockDb.execute.mockResolvedValueOnce({ rows: [] });
+        mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 900 }] });
+        mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-bob-redeem', balance_after: 800 }] });
+
+        const res = await POST('/v1/loyalty/rewards/redeem', {
+          customer_id: 'cust-bob',
+          points: 100,
+          reference_id: 'ref-active-pos',
+        });
+
+        expect(res.status).toBe(201);
+        const json = (await res.json()) as { data: { id: string } };
+        expect(json.data.id).toBe('tx-bob-redeem');
+        expect(ledgerStatements().some((s) => s.includes('"cust-bob"'))).toBe(true);
+        expect(publish).toHaveBeenCalledOnce();
+      });
+    });
+
+    describe('POST /v1/loyalty/checkins', () => {
+      /** The member-code lookup, scoped by exactly the columns it filters on. */
+      function memberCodeLookup(rows: Array<Record<string, unknown>>) {
+        return filteredBuilder((clause) => {
+          const scope = predicateScope(clause, { business_id: 'businessId', member_code: 'memberCode' });
+          return rows.filter(
+            (row) =>
+              scope.entries.every(({ key, value }) => row[key] === value) &&
+              (!scope.isNull('deleted_at') || row.deletedAt == null),
+          );
+        });
+      }
+
+      const MEMBERS = [
+        // A stale code still on a deleted row: the `deleted_at` guard alone must
+        // refuse it, without relying on the anonymisation having nulled the code.
+        { id: 'cust-withdrawn', globalId: 'gid-dana', businessId: DEV_TENANT, memberCode: 'DANA-0001', currentTierId: null, deletedAt: DELETED_AT },
+        { id: 'cust-bob', globalId: 'gid-bob', businessId: DEV_TENANT, memberCode: 'BOB-0001', currentTierId: null, deletedAt: null },
+      ];
+
+      it('refuses a deleted customer\'s code with 404 and writes nothing', async () => {
+        mockDb.select.mockReturnValueOnce(memberCodeLookup(MEMBERS) as never);
+
+        const res = await COUNTER_POST('/v1/loyalty/checkins', {
+          payment_id: 'pay-deleted',
+          member_code: 'DANA-0001',
+          amount_cents: 5000,
+        });
+
+        expect(res.status).toBe(404);
+        const json = (await res.json()) as Record<string, Record<string, unknown>>;
+        expect(json.error.code).toBe('MEMBER_CODE_NOT_FOUND');
+        // No checkin, no venue interaction, no ledger row, no event.
+        expect(mockDb.insert).not.toHaveBeenCalled();
+        expect(mockDb.update).not.toHaveBeenCalled();
+        expect(ledgerStatements()).toEqual([]);
+        expect(publish).not.toHaveBeenCalled();
+      });
+
+      it('still records an active customer\'s sale (201)', async () => {
+        mockDb.select.mockReturnValueOnce(memberCodeLookup(MEMBERS) as never);
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([{ id: 'prog-1', earnRate: '1.0000', earnBy: 'visit', earnUnitAmount: '1000.00' }]),
+        );
+        mockDb.execute.mockResolvedValueOnce({ rows: [] });
+        mockDb.insert.mockReturnValueOnce(
+          createBuilder([{ id: 'chk-bob', customerId: 'cust-bob', memberCode: 'BOB-0001', amountCents: 5000, points: null }]),
+        );
+        mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-bob', balance_after: 1 }] });
+
+        const res = await COUNTER_POST('/v1/loyalty/checkins', {
+          payment_id: 'pay-active',
+          member_code: 'BOB-0001',
+          amount_cents: 5000,
+        });
+
+        expect(res.status).toBe(201);
+        expect(ledgerStatements().some((s) => s.includes('"cust-bob"'))).toBe(true);
+      });
     });
   });
 

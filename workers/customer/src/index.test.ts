@@ -35,6 +35,9 @@ const {
   recordingChain,
   setDialect,
   consentWrites,
+  deleteCalls,
+  recordingUpdate,
+  recordingDelete,
 } = vi.hoisted(() => {
   // NOTE: this factory must stay SYNCHRONOUS. Vitest does not await an async
   // vi.hoisted before running vi.mock factories, so the `tables` object below
@@ -60,8 +63,79 @@ const {
     limit: number | undefined;
   }> = [];
 
-  /** The same, for writes: the SET payload and the WHERE they were issued under. */
-  const updateCalls: Array<{ set: any; where: any }> = [];
+  /**
+   * The same, for writes: the table, the SET payload and the WHERE they were
+   * issued under. Recorded whether the chain ends in `.returning()` or is
+   * awaited directly, so a write without a RETURNING clause is not invisible.
+   */
+  const updateCalls: Array<{ table: any; set: any; where: any }> = [];
+
+  /** Every DELETE, with the table and the WHERE it was issued under. */
+  const deleteCalls: Array<{ table: any; where: any }> = [];
+
+  const UPDATED_CUSTOMER_ROW = {
+    id: 'existing-id',
+    globalId: 'existing-global-id',
+    businessId: 'biz-1',
+    phone: '+56912345678',
+    fullName: 'Alice Updated',
+    email: 'alice@updated.com',
+    birthDate: null,
+    identityDoc: null,
+    identityType: null,
+    language: 'es',
+    optedInAt: null,
+    lastVisitAt: null,
+    metadata: {},
+    deletedAt: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+  };
+
+  /** Default update chain: records the write; `.returning()` yields one row. */
+  function recordingUpdate(table?: any, returned: any[] = [UPDATED_CUSTOMER_ROW]) {
+    const call: { table: any; set: any; where: any } = { table, set: undefined, where: undefined };
+    let recorded = false;
+    const record = () => {
+      if (!recorded) updateCalls.push(call);
+      recorded = true;
+    };
+    const chain: any = {
+      set: vi.fn((payload: any) => {
+        call.set = payload;
+        return chain;
+      }),
+      where: vi.fn((cond: any) => {
+        call.where = cond;
+        return chain;
+      }),
+      returning: vi.fn(() => {
+        record();
+        return Promise.resolve(returned);
+      }),
+      then: (resolve: (v: any) => any, reject?: (e: any) => any) => {
+        record();
+        return Promise.resolve([]).then(resolve, reject);
+      },
+    };
+    return chain;
+  }
+
+  /** Default delete chain: records the table and the WHERE. */
+  function recordingDelete(table?: any) {
+    const call: { table: any; where: any } = { table, where: undefined };
+    const chain: any = {
+      where: vi.fn((cond: any) => {
+        call.where = cond;
+        return chain;
+      }),
+      then: (resolve: (v: any) => any, reject?: (e: any) => any) => {
+        deleteCalls.push(call);
+        return Promise.resolve([]).then(resolve, reject);
+      },
+    };
+    return chain;
+  }
 
   /**
    * Result store, keyed by `<table>|<projection>`.
@@ -184,48 +258,10 @@ const {
         ),
       })),
     })),
-    update: vi.fn(() => {
-      // The write is recorded the way the read is: a WHERE nobody inspects is a
-      // tenant filter that can be deleted without a test noticing.
-      const call: { set: any; where: any } = { set: undefined, where: undefined };
-      const chain: any = {
-        set: vi.fn((payload: any) => {
-          call.set = payload;
-          return chain;
-        }),
-        where: vi.fn((cond: any) => {
-          call.where = cond;
-          return chain;
-        }),
-        returning: vi.fn(() => {
-          updateCalls.push(call);
-          return Promise.resolve([
-            {
-              id: 'existing-id',
-              globalId: 'existing-global-id',
-              businessId: 'biz-1',
-              phone: '+56912345678',
-              fullName: 'Alice Updated',
-              email: 'alice@updated.com',
-              birthDate: null,
-              identityDoc: null,
-              identityType: null,
-              language: 'es',
-              optedInAt: null,
-              lastVisitAt: null,
-              metadata: {},
-              deletedAt: null,
-              createdAt: new Date('2026-01-01T00:00:00.000Z'),
-              updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-            },
-          ]);
-        }),
-      };
-      return chain;
-    }),
-    delete: vi.fn(() => ({
-      where: vi.fn(() => Promise.resolve()),
-    })),
+    // The write is recorded the way the read is: a WHERE nobody inspects is a
+    // tenant filter that can be deleted without a test noticing.
+    update: vi.fn((table?: any) => recordingUpdate(table)),
+    delete: vi.fn((table?: any) => recordingDelete(table)),
     execute: vi.fn(() => Promise.resolve({ rows: [] })),
   };
 
@@ -234,7 +270,10 @@ const {
     mockValidate,
     mockDb,
     consentWrites,
+    deleteCalls,
     recordingChain,
+    recordingUpdate,
+    recordingDelete,
     tables,
     selectCalls,
     updateCalls,
@@ -257,7 +296,7 @@ const {
 // The tables are REAL drizzle definitions so that eq()/asc() build genuine SQL
 // objects the isolation tests can compile with PgDialect.
 vi.mock('@vyloop/db', async () => {
-  const { pgTable, uuid, text, numeric, integer, timestamp, date } = await import(
+  const { pgTable, uuid, text, numeric, integer, timestamp, date, jsonb } = await import(
     'drizzle-orm/pg-core'
   );
 
@@ -291,9 +330,14 @@ vi.mock('@vyloop/db', async () => {
     email: text('email'),
     fullName: text('full_name'),
     birthDate: date('birth_date'),
+    identityDoc: text('identity_doc'),
+    identityType: text('identity_type'),
+    memberCode: text('member_code'),
+    metadata: jsonb('metadata'),
     currentTierId: uuid('current_tier_id'),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }),
   });
 
   const customerEvents = pgTable('customer_events', {
@@ -301,10 +345,41 @@ vi.mock('@vyloop/db', async () => {
     businessId: uuid('business_id').notNull(),
     customerId: uuid('customer_id').notNull(),
     eventType: text('event_type').notNull(),
+    payload: jsonb('payload').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }),
   });
 
   const consents = pgTable('consents', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    ipAddress: text('ip_address'),
+  });
+
+  // Written only by the account deletion, which strips their free text.
+  const checkins = pgTable('checkins', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    items: jsonb('items'),
+    note: text('note'),
+  });
+
+  const messageLog = pgTable('message_log', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    content: jsonb('content'),
+    metadata: jsonb('metadata'),
+  });
+
+  const pushSubscriptions = pgTable('push_subscriptions', {
+    id: uuid('id').primaryKey(),
+    businessId: uuid('business_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+  });
+
+  const churnPredictions = pgTable('churn_predictions', {
     id: uuid('id').primaryKey(),
     businessId: uuid('business_id').notNull(),
     customerId: uuid('customer_id').notNull(),
@@ -354,6 +429,10 @@ vi.mock('@vyloop/db', async () => {
     pointsTransactions,
     customerWalletPasses,
     rewards,
+    checkins,
+    messageLog,
+    pushSubscriptions,
+    churnPredictions,
   });
 
   return {
@@ -371,6 +450,10 @@ vi.mock('@vyloop/db', async () => {
     pointsTransactions,
     customerWalletPasses,
     rewards,
+    checkins,
+    messageLog,
+    pushSubscriptions,
+    churnPredictions,
   };
 });
 
@@ -517,45 +600,11 @@ function resetMocks() {
   // The default implementation lives in the hoisted block, where it can push to
   // `updateCalls`. Resetting the mock is not enough: the recorder would carry the
   // previous test's writes into the next one.
-  mockDb.update.mockImplementation(() => {
-    const call: { set: any; where: any } = { set: undefined, where: undefined };
-    const chain: any = {
-      set: vi.fn((payload: any) => {
-        call.set = payload;
-        return chain;
-      }),
-      where: vi.fn((cond: any) => {
-        call.where = cond;
-        return chain;
-      }),
-      returning: vi.fn(() => {
-        updateCalls.push(call);
-        return Promise.resolve([{
-          id: 'existing-id',
-          globalId: 'existing-global-id',
-          businessId: 'biz-1',
-          phone: '+56912345678',
-          fullName: 'Alice Updated',
-          email: 'alice@updated.com',
-          birthDate: null,
-          identityDoc: null,
-          identityType: null,
-          language: 'es',
-          optedInAt: null,
-          lastVisitAt: null,
-          metadata: {},
-          deletedAt: null,
-          createdAt: new Date('2026-01-01T00:00:00.000Z'),
-          updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-        }]);
-      }),
-    };
-    return chain;
-  });
+  mockDb.update.mockImplementation((table?: any) => recordingUpdate(table));
+  deleteCalls.length = 0;
   mockDb.delete.mockReset();
-  mockDb.delete.mockImplementation(() => ({
-    where: vi.fn(() => Promise.resolve()),
-  }));
+  mockDb.delete.mockImplementation((table?: any) => recordingDelete(table));
+  mockDb.transaction.mockClear();
   mockDb.execute.mockReset();
 }
 
@@ -2776,6 +2825,18 @@ describe('Self update (PATCH /v1/customers/me)', () => {
       expect(updateCalls[0]!.set.birthDate).toBe('2026-10-28');
     });
 
+    it.each([
+      // 28 October begins in UTC+14 at 10:00 UTC on the 27th, and not a moment before.
+      ['at the moment it begins in UTC+14', '2026-10-27T10:00:00.000Z', 200],
+      ['one millisecond earlier', '2026-10-27T09:59:59.999Z', 400],
+    ])('draws the line %s', async (_label, now, status) => {
+      vi.setSystemTime(new Date(now));
+
+      const res = await patchMe({ birthDate: '2026-10-28' });
+
+      expect(res.status).toBe(status);
+    });
+
     it('still refuses a date that has not begun anywhere', async () => {
       const res = await patchMe({ birthDate: '2026-10-29' });
 
@@ -3373,5 +3434,306 @@ describe('POS lookup (GET /v1/customers/lookup)', () => {
 
       expect(body.data.memberCode).toBeUndefined();
     });
+  });
+});
+
+describe('Account deletion (DELETE /v1/customers/me and /:id)', () => {
+  const AS_CUSTOMER = { 'X-User-Id': 'user-1', 'X-Business-Id': 'biz-1', 'X-User-Role': 'customer' };
+
+  const LIVE_CUSTOMER = {
+    id: 'cust-1',
+    globalId: 'user-1',
+    businessId: 'biz-1',
+    phone: '+56911111111',
+    email: 'alice@test.com',
+    fullName: 'Alice Smith',
+    birthDate: '1990-05-04',
+    deletedAt: null,
+  };
+
+  /** Every column the anonymisation strips from `customers`, and its value after it. */
+  const ANONYMISED_CUSTOMER = {
+    fullName: null,
+    phone: null,
+    email: null,
+    birthDate: null,
+    identityDoc: null,
+    identityType: null,
+    memberCode: null,
+    metadata: null,
+  };
+
+  /** What each kept table loses. Rows stay; only these columns change. */
+  const CLEARED_CHILDREN: Record<string, Record<string, unknown>> = {
+    pointsTransactions: { note: null },
+    checkins: { note: null, items: null },
+    // `payload` is NOT NULL, so an empty object is the emptiest value it holds.
+    customerEvents: { payload: {} },
+    messageLog: { content: null, metadata: null },
+    consents: { ipAddress: null },
+  };
+
+  const env = TEST_ENV as Record<string, unknown>;
+  const expireCustomerPass = vi.fn();
+
+  beforeEach(() => {
+    resetMocks();
+    pendingBackground.length = 0;
+    expireCustomerPass.mockReset();
+    expireCustomerPass.mockResolvedValue({ outcome: 'expired' });
+    env.WALLET = { expireCustomerPass };
+  });
+
+  afterEach(() => {
+    delete env.WALLET;
+  });
+
+  function tableName(table: unknown) {
+    return Object.keys(tables).find((k) => tables[k] === table);
+  }
+
+  function updatesTo(table: string) {
+    return updateCalls.filter((call) => call.table === tables[table]);
+  }
+
+  function deletesFrom(table: string) {
+    return deleteCalls.filter((call) => call.table === tables[table]);
+  }
+
+  /** The WHERE of a write names this customer in this business, and nobody else. */
+  function expectScopedToCustomer(where: unknown, column: 'customer_id' | 'id', customerId: string) {
+    const compiled = compile(where);
+    expect(compiled.sql).toMatch(new RegExp(`"${column}" = \\$\\d+`));
+    expect(compiled.sql).toMatch(/"business_id" = \$\d+/);
+    expect(compiled.params).toEqual(expect.arrayContaining([customerId, 'biz-1']));
+  }
+
+  function expectAnonymised(customerId: string) {
+    // The customer row: every personal column null, the deletion stamped, and
+    // only while it is still live, so a concurrent delete cannot stamp it twice.
+    const customerUpdates = updatesTo('customers');
+    expect(customerUpdates).toHaveLength(1);
+    const { deletedAt, updatedAt, ...stripped } = customerUpdates[0]!.set;
+    expect(stripped).toEqual(ANONYMISED_CUSTOMER);
+    expect(deletedAt).toBeInstanceOf(Date);
+    expect(updatedAt).toBeInstanceOf(Date);
+    expectScopedToCustomer(customerUpdates[0]!.where, 'id', customerId);
+    expect(compile(customerUpdates[0]!.where).sql).toMatch(/"customers"\."deleted_at" is null/);
+
+    for (const [table, cleared] of Object.entries(CLEARED_CHILDREN)) {
+      const writes = updatesTo(table);
+      expect(writes, table).toHaveLength(1);
+      expect(writes[0]!.set, table).toEqual(cleared);
+      expectScopedToCustomer(writes[0]!.where, 'customer_id', customerId);
+    }
+
+    for (const table of ['pushSubscriptions', 'churnPredictions']) {
+      const deletes = deletesFrom(table);
+      expect(deletes, table).toHaveLength(1);
+      expectScopedToCustomer(deletes[0]!.where, 'customer_id', customerId);
+    }
+
+    // Nothing else is written: referrals, reward grants and the ledger rows stay.
+    const touched = new Set(updateCalls.map((call) => tableName(call.table)));
+    expect([...touched].sort()).toEqual(['customers', ...Object.keys(CLEARED_CHILDREN)].sort());
+    expect(deleteCalls).toHaveLength(2);
+  }
+
+  function expectNothingWritten() {
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  }
+
+  function deleteMe(headers: Record<string, string> = AS_CUSTOMER) {
+    return request('DELETE', '/v1/customers/me', { headers });
+  }
+
+  describe('DELETE /v1/customers/me', () => {
+    it('anonymises the customer and every kept row in one transaction, and answers 204', async () => {
+      setTableResults({ 'customers|*': [LIVE_CUSTOMER] });
+
+      // Count the writes issued from inside the transaction callback.
+      let writesInside = 0;
+      mockDb.transaction.mockImplementationOnce(async (work: (tx: unknown) => Promise<unknown>) => {
+        const before = updateCalls.length + deleteCalls.length;
+        const result = await work(mockDb);
+        writesInside = updateCalls.length + deleteCalls.length - before;
+        return result;
+      });
+
+      const res = await deleteMe();
+      await flushBackground();
+
+      expect(res.status).toBe(204);
+      expect(await res.text()).toBe('');
+      expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+      expectAnonymised('cust-1');
+      expect(writesInside).toBe(updateCalls.length + deleteCalls.length);
+    });
+
+    it('resolves the customer from the token headers, inside the token business only', async () => {
+      setTableResults({ 'customers|*': [LIVE_CUSTOMER] });
+
+      await deleteMe();
+
+      const [lookup] = wheresFor('customers');
+      expect(lookup!.sql).toMatch(/"customers"\."global_id" = \$\d+/);
+      expect(lookup!.sql).toMatch(/"customers"\."business_id" = \$\d+/);
+      expect(lookup!.params).toEqual(expect.arrayContaining(['user-1', 'biz-1']));
+    });
+
+    it('asks the wallet to expire the pass with the tenant and the internal customer id', async () => {
+      setTableResults({ 'customers|*': [LIVE_CUSTOMER] });
+
+      await deleteMe();
+      await flushBackground();
+
+      expect(expireCustomerPass).toHaveBeenCalledTimes(1);
+      expect(expireCustomerPass).toHaveBeenCalledWith({ tenantId: 'biz-1', customerId: 'cust-1' });
+    });
+
+    it('answers 204 for an already deleted customer, writes nothing, and retries the wallet expiry', async () => {
+      setTableResults({
+        'customers|*': [{ ...LIVE_CUSTOMER, ...ANONYMISED_CUSTOMER, deletedAt: new Date('2026-10-27T10:00:00Z') }],
+      });
+
+      const res = await deleteMe();
+      await flushBackground();
+
+      expect(res.status).toBe(204);
+      expectNothingWritten();
+      expect(expireCustomerPass).toHaveBeenCalledTimes(1);
+      expect(expireCustomerPass).toHaveBeenCalledWith({ tenantId: 'biz-1', customerId: 'cust-1' });
+    });
+
+    it('converges when a concurrent delete stamped the row first: no second anonymisation', async () => {
+      setTableResults({ 'customers|*': [LIVE_CUSTOMER] });
+      // The guarded UPDATE matched nothing: the other delete already committed.
+      mockDb.update.mockImplementationOnce((table?: any) => recordingUpdate(table, []));
+
+      const res = await deleteMe();
+      await flushBackground();
+
+      expect(res.status).toBe(204);
+      expect(updatesTo('customers')).toHaveLength(1);
+      expect(updateCalls).toHaveLength(1);
+      expect(deleteCalls).toHaveLength(0);
+      expect(expireCustomerPass).toHaveBeenCalledWith({ tenantId: 'biz-1', customerId: 'cust-1' });
+    });
+
+    it('answers 404 for a token with no customer in this business, and writes nothing', async () => {
+      const res = await deleteMe();
+      await flushBackground();
+
+      expect(res.status).toBe(404);
+      expect((await res.json() as any).error.code).toBe('NOT_FOUND');
+      expectNothingWritten();
+      expect(expireCustomerPass).not.toHaveBeenCalled();
+    });
+
+    describe('a wallet that cannot expire the pass never fails the delete', () => {
+      it.each([
+        ['the binding is missing', () => { delete env.WALLET; }],
+        ['the RPC throws synchronously', () => {
+          expireCustomerPass.mockImplementation(() => { throw new Error('not a worker'); });
+        }],
+        ['the RPC rejects', () => {
+          expireCustomerPass.mockRejectedValue(new Error('Wallet API 503'));
+        }],
+      ])('when %s', async (_label, breakWallet) => {
+        const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+        setTableResults({ 'customers|*': [LIVE_CUSTOMER] });
+        breakWallet();
+
+        const res = await deleteMe();
+        await flushBackground();
+
+        expect(res.status).toBe(204);
+        expectAnonymised('cust-1');
+        expect(logged).toHaveBeenCalled();
+        logged.mockRestore();
+      });
+    });
+  });
+
+  describe('DELETE /v1/customers/:id (staff)', () => {
+    it('runs the same anonymisation for the staff, scoped to the token business', async () => {
+      setTableResults({ 'customers|*': [{ ...LIVE_CUSTOMER, id: 'c-1' }] });
+
+      const res = await request('DELETE', '/v1/customers/c-1');
+      await flushBackground();
+
+      expect(res.status).toBe(204);
+      expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+      expectAnonymised('c-1');
+      const [lookup] = wheresFor('customers');
+      expect(lookup!.sql).toMatch(/"customers"\."id" = \$\d+/);
+      expect(lookup!.params).toEqual(expect.arrayContaining(['c-1', 'biz-1']));
+      expect(expireCustomerPass).toHaveBeenCalledWith({ tenantId: 'biz-1', customerId: 'c-1' });
+    });
+
+    it('answers 204 for an already deleted customer, writes nothing, and retries the wallet expiry', async () => {
+      setTableResults({ 'customers|*': [{ ...LIVE_CUSTOMER, id: 'c-1', deletedAt: new Date() }] });
+
+      const res = await request('DELETE', '/v1/customers/c-1');
+      await flushBackground();
+
+      expect(res.status).toBe(204);
+      expectNothingWritten();
+      expect(expireCustomerPass).toHaveBeenCalledWith({ tenantId: 'biz-1', customerId: 'c-1' });
+    });
+
+    it('still refuses a customer token with 403 OPERATOR_ROLE_REQUIRED', async () => {
+      const res = await request('DELETE', '/v1/customers/c-1', { headers: { 'X-User-Role': 'customer' } });
+
+      expect(res.status).toBe(403);
+      expect((await res.json() as any).error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expectNothingWritten();
+      expect(expireCustomerPass).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a deleted customer whose token is still alive', () => {
+    it('gets 404 on GET /v1/customers/me', async () => {
+      // The row is still there; the `deleted_at IS NULL` filter is what hides it.
+      const res = await request('GET', '/v1/customers/me', { headers: AS_CUSTOMER });
+
+      expect(res.status).toBe(404);
+      expect(wheresFor('customers')[0]!.sql).toMatch(/"customers"\."deleted_at" is null/);
+    });
+
+    it('gets 404 on PATCH /v1/customers/me and nothing is published', async () => {
+      mockDb.update.mockImplementationOnce((table?: any) => recordingUpdate(table, []));
+
+      const res = await request('PATCH', '/v1/customers/me', {
+        headers: AS_CUSTOMER,
+        body: { fullName: 'Back Again' },
+      });
+
+      expect(res.status).toBe(404);
+      expect(compile(updateCalls[0]!.where).sql).toMatch(/"customers"\."deleted_at" is null/);
+      expect(mockPublish).not.toHaveBeenCalled();
+    });
+  });
+
+  it('frees the phone: a registration with the deleted customer\'s number creates a new customer', async () => {
+    setTableResults({ 'customers|*': [LIVE_CUSTOMER] });
+    await deleteMe();
+    expect(updatesTo('customers')[0]!.set.phone).toBeNull();
+
+    // The anonymised row now holds no phone, so neither the lookup nor
+    // `uq_customers_business_phone` sees it.
+    resetMocks();
+    mockValidate.mockResolvedValue({ valid: true });
+    const res = await request('PUT', '/v1/customers', {
+      body: { fullName: 'New Owner', phone: LIVE_CUSTOMER.phone },
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
+    expect(updateCalls).toHaveLength(0);
+    const [lookup] = wheresFor('customers');
+    expect(lookup!.params).toEqual(expect.arrayContaining([LIVE_CUSTOMER.phone, 'biz-1']));
   });
 });

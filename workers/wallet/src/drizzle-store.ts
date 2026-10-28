@@ -52,6 +52,7 @@ import type {
   InactivityCandidateRow,
   PassCallbackClaim,
   PassCallbackWrite,
+  PassExpiryUpdate,
   PassLifecycleUpdate,
   PassObservationUpdate,
   PassReconciliationUpdate,
@@ -81,6 +82,28 @@ type Db = any;
  */
 function countRows(result: unknown): number {
   return (result as { rows?: unknown[] }).rows?.length ?? 0;
+}
+
+/**
+ * Map raw `customer_wallet_passes` rows from a `db.execute` into `WalletPassRow`.
+ *
+ * Only the two account-deletion reads use raw SQL for a pass row, because both
+ * join `customers` on a predicate the query builder elsewhere in this file never
+ * needs. `last_synced_at` comes back as a string from the driver and is turned
+ * into a `Date` here, so the due filter compares instants and not text.
+ */
+function passRowsOf(result: unknown): WalletPassRow[] {
+  const rows = (result as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+  return rows.map((row) => ({
+    customerId: String(row.customer_id),
+    tenantId: String(row.tenant_id),
+    objectId: String(row.object_id),
+    state: String(row.state),
+    lastSyncedAt:
+      row.last_synced_at === null || row.last_synced_at === undefined
+        ? null
+        : new Date(row.last_synced_at as string),
+  }));
 }
 
 /**
@@ -607,6 +630,77 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
                updated_at = now()
          WHERE customer_id = ${update.customerId}::uuid
            AND tenant_id = ${update.tenantId}::uuid
+        RETURNING customer_id
+      `);
+
+      return countRows(result);
+    },
+
+    /**
+     * The pass row, through the deleted-customer join.
+     *
+     * Three predicates on `customers` and two on the pass, and each is
+     * load-bearing: `c.deleted_at IS NOT NULL` is the whole point (see the
+     * interface), `c.business_id = p.tenant_id` stops the join matching a
+     * customer row of another business, and the two tenant filters are the
+     * crossing defence every statement in this file carries. No column of
+     * `customers` is selected — the anonymisation has nulled the ones that
+     * would be worth reading.
+     */
+    async findDeletedCustomerPass(customerId: string, tenantId: string): Promise<WalletPassRow | null> {
+      const result = await db.execute(sql`
+        SELECT p.customer_id, p.tenant_id, p.object_id, p.state, p.last_synced_at
+          FROM customer_wallet_passes p
+          JOIN customers c
+            ON c.id = p.customer_id
+           AND c.business_id = p.tenant_id
+         WHERE p.customer_id = ${customerId}::uuid
+           AND p.tenant_id = ${tenantId}::uuid
+           AND c.deleted_at IS NOT NULL
+         LIMIT 1
+      `);
+
+      const [row] = passRowsOf(result);
+      return row ?? null;
+    },
+
+    /**
+     * The retry set for deleted customers' passes, oldest deletion first.
+     *
+     * The `limit` is clamped for the same reason `listProgramTenants` clamps its
+     * own: a caller passing anything else must not produce an unbounded read.
+     */
+    async listPassesPendingExpiry(options: { limit: number }): Promise<WalletPassRow[]> {
+      const limit = Math.min(500, Math.max(1, Math.trunc(options.limit)));
+
+      const result = await db.execute(sql`
+        SELECT p.customer_id, p.tenant_id, p.object_id, p.state, p.last_synced_at
+          FROM customer_wallet_passes p
+          JOIN customers c
+            ON c.id = p.customer_id
+           AND c.business_id = p.tenant_id
+         WHERE c.deleted_at IS NOT NULL
+           AND p.state IN ('issued', 'inactive', 'completed')
+         ORDER BY c.deleted_at ASC, p.customer_id ASC
+         LIMIT ${limit}
+      `);
+
+      return passRowsOf(result);
+    },
+
+    /**
+     * The expiry write, guarded on the source state. See the interface for why
+     * `completed` is in the set and the existence states are not.
+     */
+    async recordPassExpired(update: PassExpiryUpdate): Promise<number> {
+      const result = await db.execute(sql`
+        UPDATE customer_wallet_passes
+           SET state = 'expired',
+               last_synced_at = ${update.observedAt}::timestamptz,
+               updated_at = now()
+         WHERE customer_id = ${update.customerId}::uuid
+           AND tenant_id = ${update.tenantId}::uuid
+           AND state IN ('issued', 'inactive', 'completed')
         RETURNING customer_id
       `);
 

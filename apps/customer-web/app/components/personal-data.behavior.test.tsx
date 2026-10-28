@@ -108,7 +108,11 @@ describe('merging a save into the profile', () => {
   });
 
   it('drops a cleared email and birth date, so their rows disappear', () => {
-    const after = mergeSavedFields(makeProfile(), { fullName: 'Ada Lovelace', email: null, birthDate: null });
+    const before = makeProfile();
+    // Both are set to begin with, or a missing key would prove nothing.
+    expect(before.email).toBe('ada@example.com');
+    expect(before.birthDate).toBe('1981-07-27');
+    const after = mergeSavedFields(before, { fullName: 'Ada Lovelace', email: null, birthDate: null });
 
     expect('email' in after).toBe(false);
     expect('birthDate' in after).toBe(false);

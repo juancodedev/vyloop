@@ -385,6 +385,32 @@ describe('API Gateway', () => {
       expect(body.service).toBe('customer');
     });
 
+    async function deleteMe(token: string): Promise<Response> {
+      return app.fetch(
+        new Request('http://localhost/v1/customers/me', {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        mockEnv(),
+      );
+    }
+
+    it('refuses DELETE /v1/customers/me without profile:write, before the worker', async () => {
+      const res = await deleteMe(await customerToken(['rewards:read', 'rewards:redeem']));
+
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string }; service?: string };
+      expect(body.error.code).toBe('AUTH_SCOPE_MISSING');
+      expect(body.service).toBeUndefined();
+    });
+
+    it('forwards DELETE /v1/customers/me with profile:write', async () => {
+      const res = await deleteMe(await customerToken(['rewards:read', 'rewards:redeem', 'profile:write']));
+
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { service?: string }).service).toBe('customer');
+    });
+
     it.each([
       ['a percent-encoded segment', '/v1/customers/%6De'],
       ['a trailing slash', '/v1/customers/me/'],

@@ -14,6 +14,8 @@ import type { JwtClaims } from './auth';
 export const REQUIRED_SCOPES: ReadonlyArray<{ method: string; path: string; scope: string }> = Object.freeze([
   // The customer edits their own name, email and birth date.
   { method: 'PATCH', path: '/v1/customers/me', scope: 'profile:write' },
+  // The customer deletes their own account; the same consent as editing it.
+  { method: 'DELETE', path: '/v1/customers/me', scope: 'profile:write' },
 ]);
 
 export const SCOPE_MISSING = 'AUTH_SCOPE_MISSING';

@@ -317,6 +317,17 @@ class CountingStore implements WalletStore {
     this.writes.push({ method: 'recordPassObservation', value: update });
     return 1;
   }
+  // Account deletion: not reachable from this path, so a call is a failure.
+  async findDeletedCustomerPass(): Promise<never> {
+    throw new Error('findDeletedCustomerPass is not part of this path');
+  }
+  async listPassesPendingExpiry(): Promise<never> {
+    throw new Error('listPassesPendingExpiry is not part of this path');
+  }
+  async recordPassExpired(): Promise<never> {
+    throw new Error('recordPassExpired is not part of this path');
+  }
+
   async listTenantsWithoutProgram(): Promise<string[]> {
     this.calls.push('listTenantsWithoutProgram');
     return [];

@@ -123,6 +123,38 @@ sequenceDiagram
   `PATCH /v1/customers/:id`. Unknown fields are rejected, `phone` included.
 - Emits `customer.profile_updated` on `DOMAIN_EVENTS_QUEUE`.
 
+## Account deletion (Phase 5)
+
+Decided 2026-10-27. Deleting an account **anonymises the customer at once**;
+there is no grace period and no recovery. Rows are kept and stripped of
+personal data, never hard-deleted: a hard delete cascades through the
+merchant's sales history, and `referrals` and `workflow_executions` reference
+`customers.id` with no `ON DELETE` action, so it would fail anyway.
+
+| Data | Outcome |
+| --- | --- |
+| `customers`: `full_name`, `phone`, `email`, `birth_date`, `identity_doc`, `identity_type`, `metadata`, `member_code` | Set to null; `deleted_at` set. A null phone frees `uq_customers_business_phone`, so the number can register again as a new customer. |
+| `points_transactions`, `checkins`, `reward_grants`, `referrals` | Kept for the merchant's totals; free-text `note` and `items` cleared. |
+| `customer_events.payload`, `message_log.content` and `metadata`, `consents.ip_address` | Cleared. |
+| `push_subscriptions`, `churn_predictions` | Deleted. |
+| Google Wallet pass | Expired through the Wallet API, so the name stops showing on the phone. |
+| Points balance | Lost. The confirm step says so before the customer accepts. |
+| Session | The web signs out. A token still alive (at most one hour) can neither read nor write: every customer route, read or write, resolves the customer with `deleted_at IS NULL` and answers 404 otherwise. Writes that reach the row by `customers.id` from elsewhere (check-ins, points, referrals) must refuse a deleted customer too; 5.2 verifies each one. |
+
+The anonymisation runs in one database transaction. The wallet expiry runs
+after it: a failure is logged and the pass stays marked as not expired, and a
+scheduled sweep retries every pass of a deleted customer that is not expired
+yet, so a transient Wallet API error does not leave the name on the phone.
+
+Deleting a customer that is already deleted answers 204 and changes nothing
+in the database; it only retries a pending wallet expiry. Two concurrent
+deletes converge on the same anonymised row.
+
+The merchant's `DELETE /v1/customers/:id` uses the same anonymisation, so
+what `docs/08-API-Design.md` promises is true for both.
+
+Open, outside this change: confirm against Ley 21.719 with legal counsel.
+
 ## Decisions
 
 | Decision | Rationale |

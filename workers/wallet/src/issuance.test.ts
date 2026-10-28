@@ -267,6 +267,17 @@ class FakeStore implements WalletStore {
     return 0;
   }
 
+  // Account deletion: not reachable from this path, so a call is a failure.
+  async findDeletedCustomerPass(): Promise<never> {
+    throw new Error('findDeletedCustomerPass is not part of this path');
+  }
+  async listPassesPendingExpiry(): Promise<never> {
+    throw new Error('listPassesPendingExpiry is not part of this path');
+  }
+  async recordPassExpired(): Promise<never> {
+    throw new Error('recordPassExpired is not part of this path');
+  }
+
   async listProgramTenants(): Promise<WalletProgramRow[]> {
     this.record('listProgramTenants', '');
     return [];

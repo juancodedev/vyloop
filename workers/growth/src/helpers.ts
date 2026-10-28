@@ -342,6 +342,34 @@ export async function resolveOwnCustomer(
 }
 
 /**
+ * Whether `customerId` names a deleted customer of this tenant.
+ *
+ * Deleting an account anonymises the row and sets `deleted_at`, but the row and
+ * its ledger stay — so an operator write that only trusts the id it was handed
+ * would keep spending or crediting a balance nobody owns any more. This answers
+ * that one question for the operator paths, which name a customer by
+ * `customers.id` and never go through `resolveOwnCustomer`.
+ *
+ * An id with no row here is *not* deleted: it answers `false`, so a caller keeps
+ * whatever it already did for an unknown id. Only an existing, deleted row is
+ * refused.
+ */
+export async function isDeletedCustomer(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  businessId: string,
+  customerId: string,
+): Promise<boolean> {
+  const [customer] = await db
+    .select({ deletedAt: customers.deletedAt })
+    .from(customers)
+    .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
+    .limit(1);
+
+  return customer?.deletedAt != null;
+}
+
+/**
  * Decide which customer a loyalty request is allowed to act on.
  *
  * Both `GET /v1/loyalty/points/transactions` and `POST

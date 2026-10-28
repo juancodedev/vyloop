@@ -192,6 +192,16 @@ class FakeStore implements WalletStore {
   async recordPassObservation(): Promise<number> {
     throw new Error('not used by the callback path');
   }
+  // Account deletion: not reachable from this path, so a call is a failure.
+  async findDeletedCustomerPass(): Promise<never> {
+    throw new Error('findDeletedCustomerPass is not part of this path');
+  }
+  async listPassesPendingExpiry(): Promise<never> {
+    throw new Error('listPassesPendingExpiry is not part of this path');
+  }
+  async recordPassExpired(): Promise<never> {
+    throw new Error('recordPassExpired is not part of this path');
+  }
   async listProgramTenants(): Promise<never[]> {
     throw new Error('not used by the callback path');
   }

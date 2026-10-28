@@ -430,6 +430,7 @@ describe('Stage 6 club-barrio responsive floor', () => {
       '.club-qr-sheet__close',
       '.club-qr__retry',
       '.logout-btn',
+      '.club-delete-account__open',
       '.club-register__optional-summary',
       '.club-consent__row',
     ];

@@ -3,7 +3,7 @@ import { createDb, customers, membershipTiers, loyaltyPrograms, rewards, rewardB
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { publish } from '@vyloop/event-bus';
 import { logPrefix } from '@vyloop/request-context';
-import { eq, and, lte, desc, sql, isNotNull } from 'drizzle-orm';
+import { eq, and, lte, desc, sql, isNotNull, isNull } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
 import { withRls, buildRewardAutoGrantedEvent, buildRewardAvailableAtBranchEvent } from './helpers';
@@ -85,7 +85,13 @@ async function handleCustomerRegistered(
     .select({ id: customers.id })
     .from(customers)
     .where(
-      and(eq(customers.businessId, businessId), eq(customers.globalId, customerGlobalId)),
+      and(
+        eq(customers.businessId, businessId),
+        eq(customers.globalId, customerGlobalId),
+        // A late event for an account deleted since must not open a wallet or
+        // assign a tier on the anonymised row: skipped like an unknown one.
+        isNull(customers.deletedAt),
+      ),
     )
     .limit(1);
 
@@ -244,7 +250,15 @@ async function handlePointsAssigned(
       currentTierId: customers.currentTierId,
     })
     .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
+    .where(
+      and(
+        eq(customers.businessId, businessId),
+        eq(customers.id, customerId),
+        // An event published just before the account was deleted must not move a
+        // tier or grant a reward on the anonymised row: skipped like an unknown one.
+        isNull(customers.deletedAt),
+      ),
+    )
     .limit(1);
 
   if (!customer) {
