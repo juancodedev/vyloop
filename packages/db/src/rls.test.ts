@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   BUSINESS_ID_SETTING,
   BUSINESS_ID_TABLES,
+  RLS_EXEMPT_TABLES,
   RLS_POLICY_NAME,
   TENANT_ID_SETTING,
   TENANT_ID_TABLES,
@@ -18,8 +19,11 @@ import {
   setCurrentBusinessId,
   setCurrentTenantId,
   withTenantRls,
+  withTenantTransaction,
 } from './rls';
 import * as schema from './schema';
+
+import type { createDb } from './index';
 
 // ---------------------------------------------------------------------------
 // Why these tests parse SQL at all.
@@ -211,6 +215,7 @@ describe('policy columns match the real schema', () => {
     expect([...TENANT_ID_TABLES]).toEqual([
       'tenant_wallet_programs',
       'customer_wallet_passes',
+      'wallet_callback_deliveries',
     ]);
     expect(TENANT_ID_TABLES as readonly string[]).not.toContain('pos_terminals');
   });
@@ -299,5 +304,154 @@ describe('withTenantRls', () => {
   it('propagates a database failure instead of swallowing it', async () => {
     const execute = vi.fn().mockRejectedValue(new Error('connection reset'));
     await expect(withTenantRls({ execute }, 'tenant-7')).rejects.toThrow('connection reset');
+  });
+});
+
+describe('the table lists cover the schema', () => {
+  // A tenant table missing from every list gets no policy when RLS is rolled
+  // out, and nothing fails: its rows simply stay readable across tenants. So
+  // every schema table that carries a tenant column has to be placed somewhere,
+  // including the deliberate exemptions.
+  const placed = [
+    ...BUSINESS_ID_TABLES,
+    ...TENANT_ID_TABLES,
+    ...RLS_EXEMPT_TABLES.map((entry) => entry.table),
+  ];
+
+  it('places every table with a business_id or tenant_id column in exactly one list', () => {
+    const tenantTables = [...tableByName.keys()].filter((name) => {
+      const columns = Object.values(columnsOf(name)).map((column) => column.name);
+      return columns.includes('business_id') || columns.includes('tenant_id');
+    });
+
+    for (const table of tenantTables) {
+      expect(
+        placed.filter((name) => name === table),
+        `"${table}" must be in exactly one of BUSINESS_ID_TABLES, TENANT_ID_TABLES or RLS_EXEMPT_TABLES`,
+      ).toHaveLength(1);
+    }
+  });
+
+  it('scopes push_subscriptions by business and wallet callbacks by tenant', () => {
+    expect(BUSINESS_ID_TABLES as readonly string[]).toContain('push_subscriptions');
+    expect(TENANT_ID_TABLES as readonly string[]).toContain('wallet_callback_deliveries');
+  });
+
+  it('gives a reason for every exemption', () => {
+    expect(RLS_EXEMPT_TABLES.map((entry) => entry.table)).toEqual([
+      'tenants',
+      'cross_loyalty_alliances',
+    ]);
+    for (const entry of RLS_EXEMPT_TABLES) {
+      expect(entry.reason.length, entry.table).toBeGreaterThan(20);
+    }
+  });
+});
+
+describe('the policy predicate fails loud', () => {
+  it('reads the setting without missing_ok, so a request with no tenant errors', () => {
+    // `current_setting(name, true)` would return NULL and match no rows; a
+    // query that forgot its tenant would then look like an empty result.
+    for (const statement of [
+      ...renderAll(createRlsPolicies()),
+      ...renderAll(createTenantRlsPolicies()),
+    ]) {
+      expect(statement).toMatch(/current_setting\('app\.current_(business|tenant)_id'\)::UUID/);
+    }
+  });
+});
+
+describe('withTenantTransaction', () => {
+  function fakeDb() {
+    const calls: string[] = [];
+    const tx = {
+      execute: vi.fn(async (statement: unknown) => {
+        calls.push(`tx:${renderStatement(statement as never)}`);
+        return { rows: [] };
+      }),
+    };
+    const opened = vi.fn();
+    const db = {
+      execute: vi.fn(async () => {
+        calls.push('db:execute');
+        return { rows: [] };
+      }),
+      async transaction<T>(fn: (handle: typeof tx) => Promise<T>): Promise<T> {
+        opened();
+        return fn(tx);
+      },
+    };
+    return { db, tx, calls, opened };
+  }
+
+  it('accepts the workers’ database and hands fn its transaction', () => {
+    // A type check, not a run: the real Drizzle database must fit the helper's
+    // parameter, and `fn` must receive a handle it can query with.
+    const scoped = (db: ReturnType<typeof createDb>) =>
+      withTenantTransaction(db, { businessId: 'biz-1' }, async (tx) =>
+        tx.select().from(schema.customers).limit(1),
+      );
+    expect(typeof scoped).toBe('function');
+  });
+
+  it('sets the business on the transaction handle before running fn, and never on db', async () => {
+    const { db, tx, calls, opened } = fakeDb();
+
+    const result = await withTenantTransaction(db, { businessId: 'biz-1' }, async (handle) => {
+      calls.push('fn');
+      expect(handle).toBe(tx);
+      return 'done';
+    });
+
+    expect(result).toBe('done');
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(db.execute).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      `tx:SELECT set_config('${BUSINESS_ID_SETTING}', $1, true);`,
+      'fn',
+    ]);
+    expect(tx.execute.mock.calls[0]![0]).toEqual(setCurrentBusinessId('biz-1'));
+  });
+
+  it('sets both settings when both ids are given', async () => {
+    const { db, calls } = fakeDb();
+
+    await withTenantTransaction(db, { businessId: 'biz-1', tenantId: 'biz-1' }, async () => {
+      calls.push('fn');
+    });
+
+    expect(calls).toEqual([
+      `tx:SELECT set_config('${BUSINESS_ID_SETTING}', $1, true);`,
+      `tx:SELECT set_config('${TENANT_ID_SETTING}', $1, true);`,
+      'fn',
+    ]);
+  });
+
+  it('sets only the tenant when only the tenant is given', async () => {
+    const { db, tx } = fakeDb();
+
+    await withTenantTransaction(db, { tenantId: 'tenant-7' }, async () => undefined);
+
+    expect(tx.execute).toHaveBeenCalledTimes(1);
+    expect(tx.execute.mock.calls[0]![0]).toEqual(setCurrentTenantId('tenant-7'));
+  });
+
+  it('refuses to open a transaction with no tenant at all', async () => {
+    const { db, opened } = fakeDb();
+
+    await expect(withTenantTransaction(db, {}, async () => undefined)).rejects.toThrow(
+      /businessId or tenantId/,
+    );
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failure from fn, so the transaction rolls back', async () => {
+    const { db } = fakeDb();
+
+    await expect(
+      withTenantTransaction(db, { businessId: 'biz-1' }, async () => {
+        throw new Error('insert failed');
+      }),
+    ).rejects.toThrow('insert failed');
   });
 });
