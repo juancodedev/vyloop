@@ -21,7 +21,7 @@ import type { Bindings } from './helpers';
 // Shared by `DELETE /v1/customers/me` (the customer) and
 // `DELETE /v1/customers/:id` (the staff), so what `docs/08-API-Design.md`
 // promises is true for both. The design is in
-// `openspec/changes/customer-profile-redesign/design.md`, "Account deletion".
+// `openspec/changes/archive/2026-10-27-customer-profile-redesign/design.md`, "Account deletion".
 // ---------------------------------------------------------------------------
 
 type Db = ReturnType<typeof createDb>;

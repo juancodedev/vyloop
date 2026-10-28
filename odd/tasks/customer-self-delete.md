@@ -1,6 +1,6 @@
 Objective: a customer deletes their own account; deletion anonymises immediately (customer-profile-redesign 5.2-5.3).
 Branch: feat/customer-self-delete. Delivery: single-pr (user approves PR per phase). Runner: vitest per package (`npx vitest run`, Node 22).
-Design source: openspec/changes/customer-profile-redesign/design.md, "Account deletion (Phase 5)".
+Design source: openspec/changes/archive/2026-10-27-customer-profile-redesign/design.md, "Account deletion (Phase 5)".
 
 ## Specs
 

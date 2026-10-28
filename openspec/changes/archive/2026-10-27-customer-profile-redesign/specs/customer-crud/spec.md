@@ -75,3 +75,41 @@ require the customer-token scope `profile:write`.
 - GIVEN the same `globalId` exists in two businesses
 - WHEN the customer updates their profile through business A
 - THEN the row in business B is unchanged
+
+### Requirement: Customer Account Deletion
+
+The customer worker MUST expose `DELETE /v1/customers/me`, resolving the
+customer from `X-User-Id` and `X-Business-Id`; the gateway MUST require
+`profile:write`. Deletion MUST anonymise immediately in one transaction: the
+customer's name, phone, email, birth date, identity document, member code and
+metadata are nulled and `deleted_at` is set; kept history loses its free text;
+push subscriptions and churn predictions are deleted. The merchant
+`DELETE /v1/customers/:id` MUST use the same anonymisation. After the
+transaction the Google Wallet pass MUST be expired without the name, and a
+failed expiry MUST be retried by the wallet's daily sweep.
+
+#### Scenario: Self delete
+
+- GIVEN a customer token with `profile:write`
+- WHEN it calls `DELETE /v1/customers/me`
+- THEN the response is 204
+- AND the customer row has no personal data left
+- AND the phone can register again as a new customer
+
+#### Scenario: Repeated delete
+
+- GIVEN the customer is already deleted
+- WHEN `DELETE /v1/customers/me` arrives again
+- THEN the response is 204 and nothing is written
+- AND only a pending wallet expiry is retried
+
+#### Scenario: A deleted customer's live token
+
+- GIVEN a token issued before the deletion
+- WHEN it calls `GET /v1/customers/me` or `PATCH /v1/customers/me`
+- THEN the response is 404
+
+#### Scenario: No new activity for a deleted customer
+
+- WHEN an operator assigns points or redeems for a deleted customer
+- THEN the response is 404 and nothing is written
