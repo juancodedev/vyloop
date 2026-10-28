@@ -574,9 +574,27 @@ table.data-table td.actions {
   color: var(--warning);
 }
 
-.badge-default {
+.badge-default,
+.badge-primary {
   background: var(--primary-light);
   color: var(--primary);
+}
+
+.badge-success {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.badge-warning {
+  background: var(--yellow-soft);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--yellow-border);
+}
+
+.badge-muted,
+.badge-secondary {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
 }
 
 /* ========================================
