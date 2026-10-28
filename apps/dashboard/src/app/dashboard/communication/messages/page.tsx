@@ -21,11 +21,11 @@ interface MessageLogEntry {
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  queued:    { label: 'En cola',     color: '#6b7280', bg: '#f3f4f6' },
+  queued:    { label: 'En cola',     color: 'var(--text-muted)', bg: 'var(--bg-subtle)' },
   sent:      { label: 'Enviado',     color: '#2563eb', bg: '#dbeafe' },
-  delivered: { label: 'Entregado',   color: '#16a34a', bg: '#dcfce7' },
+  delivered: { label: 'Entregado',   color: 'var(--success)', bg: '#dcfce7' },
   read:      { label: 'Leído',       color: '#059669', bg: '#d1fae5' },
-  failed:    { label: 'Fallido',     color: '#dc2626', bg: '#fef2f2' },
+  failed:    { label: 'Fallido',     color: 'var(--error)', bg: '#fef2f2' },
   received:  { label: 'Recibido',    color: '#7c3aed', bg: '#f5f3ff' },
 };
 
@@ -195,7 +195,7 @@ export default function MessagesPage() {
               </thead>
               <tbody>
                 {messages.map((msg) => {
-                  const statusCfg = STATUS_CONFIG[msg.status] ?? { label: msg.status, color: '#6b7280', bg: '#f3f4f6' };
+                  const statusCfg = STATUS_CONFIG[msg.status] ?? { label: msg.status, color: 'var(--text-muted)', bg: 'var(--bg-subtle)' };
                   const contentText = msg.content?.template_name
                     ? String(msg.content.template_name)
                     : msg.content?.text

@@ -232,7 +232,7 @@ function clearAuthAndRedirect(): void {
   }
 }
 
-// Types (aligned with mock-data shapes so pages don't break)
+// Types
 export interface Customer {
   id: string;
   fullName: string;

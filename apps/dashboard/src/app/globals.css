@@ -4,47 +4,80 @@
    ======================================== */
 
 :root {
+  /* Base palette. The dashboard's own: `@vyloop/design-system` tokens are
+     shared with the customer app, so they are overridden here, not there. */
+  --green: #1f4d3a;
+  --green-hover: #163a2b;
+  --green-soft: #e3ece6;
+  --yellow: #f2c230;
+  --yellow-soft: #fdf4d3;
+  --yellow-border: #e8cf72;
+  --ink: #15191b;
+  --paper: #fafaf7;
+  --red: #c8412e;
+
   --sidebar-width: 260px;
-  --sidebar-bg: #0f172a;
-  --sidebar-hover: #1e293b;
-  --sidebar-active: #334155;
-  --sidebar-text: #94a3b8;
-  --sidebar-text-active: #f8fafc;
-  --sidebar-divider: #1e293b;
+  --sidebar-bg: var(--green);
+  --sidebar-hover: rgba(250, 250, 247, 0.08);
+  --sidebar-active: rgba(250, 250, 247, 0.14);
+  --sidebar-text: #d6e3db;
+  --sidebar-text-active: var(--paper);
+  --sidebar-divider: rgba(250, 250, 247, 0.12);
 
-  --bg: #f1f5f9;
+  --bg: var(--paper);
   --bg-white: #ffffff;
+  --bg-subtle: #f3f4ef;
 
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-light: #dbeafe;
-  --primary-text: #ffffff;
+  --primary: var(--green);
+  --primary-hover: var(--green-hover);
+  --primary-light: var(--green-soft);
+  --primary-text: var(--paper);
 
-  --text: #0f172a;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
+  --text: var(--ink);
+  --text-secondary: #3d4744;
+  --text-muted: #5e6a66;
 
-  --border: #e2e8f0;
-  --border-light: #f1f5f9;
+  --border: #dce0d8;
+  --border-light: #eef1ec;
+  --border-strong: #c9cfc6;
 
-  --success: #16a34a;
-  --success-light: #dcfce7;
-  --error: #dc2626;
-  --error-light: #fef2f2;
-  --warning: #d97706;
-  --warning-light: #fffbeb;
+  --success: #2e7d4f;
+  --success-light: #e4f1e8;
+  --success-border: #b7d9c3;
+  --error: var(--red);
+  --error-hover: #a8341f;
+  --error-light: #fbeae6;
+  --error-border: #f0c2b8;
+  --warning: #8a5a00;
+  --warning-light: var(--yellow-soft);
 
-  --radius: 8px;
-  --radius-sm: 6px;
-  --radius-xs: 4px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.05);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.08), 0 4px 6px rgba(0, 0, 0, 0.04);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-xs: 6px;
+  --shadow-sm: 0 1px 2px rgba(21, 25, 27, 0.05);
+  --shadow: 0 1px 3px rgba(21, 25, 27, 0.08), 0 1px 2px rgba(21, 25, 27, 0.04);
+  --shadow-md: 0 4px 6px rgba(21, 25, 27, 0.06), 0 2px 4px rgba(21, 25, 27, 0.05);
+  --shadow-lg: 0 10px 15px rgba(21, 25, 27, 0.08), 0 4px 6px rgba(21, 25, 27, 0.04);
 
-  --font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    'Helvetica Neue', Arial, sans-serif;
-  --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  --font: var(--font-body);
+  --font-mono: ui-monospace, 'SF Mono', monospace;
+
+  /* The shared design-system names, pointed at the same palette. */
+  --brand-50: #eef4f0;
+  --brand-100: var(--green-soft);
+  --brand-500: var(--green);
+  --brand-600: var(--green-hover);
+  --brand-700: #10291f;
+  --brand-800: var(--green);
+  --surface-page: var(--paper);
+  --surface-sidebar: var(--green);
+  --text-primary: var(--ink);
+  --text-body: #2b3431;
+  --border-focus: var(--yellow);
+  --success-bg: var(--success-light);
+  --error-bg: var(--error-light);
+  --warning-bg: var(--yellow-soft);
+  --warning-border: var(--yellow-border);
 }
 
 /* Reset */
@@ -74,6 +107,17 @@ a {
   text-decoration: none;
 }
 
+h1,
+h2 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+:focus-visible {
+  outline: 3px solid var(--yellow);
+  outline-offset: 2px;
+}
+
 /* ========================================
    Login Page
    ======================================== */
@@ -83,7 +127,7 @@ a {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  background: linear-gradient(135deg, var(--ink) 0%, var(--ink) 100%);
   padding: 1rem;
 }
 
@@ -125,7 +169,7 @@ a {
   border-radius: var(--radius-sm);
   font-size: 0.875rem;
   margin-bottom: 1rem;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--error-border);
 }
 
 .login-card .form-group {
@@ -337,7 +381,7 @@ a {
 
 .main-topbar .btn-logout:hover {
   color: var(--error);
-  border-color: #fecaca;
+  border-color: var(--error-border);
 }
 
 .main-content {
@@ -388,7 +432,7 @@ table.data-table {
 }
 
 table.data-table thead {
-  background: #f8fafc;
+  background: var(--bg-subtle);
 }
 
 table.data-table th {
@@ -415,7 +459,7 @@ table.data-table tbody tr {
 }
 
 table.data-table tbody tr:nth-child(even) {
-  background: #fafbfc;
+  background: var(--bg-subtle);
 }
 
 table.data-table tbody tr:hover {
@@ -442,18 +486,18 @@ table.data-table td.actions {
 }
 
 .badge-bronce {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--yellow-soft);
+  color: var(--warning);
 }
 
 .badge-plata {
-  background: #e5e7eb;
-  color: #374151;
+  background: var(--border);
+  color: var(--ink);
 }
 
 .badge-oro {
-  background: #fef9c3;
-  color: #854d0e;
+  background: var(--yellow-soft);
+  color: var(--warning);
 }
 
 .badge-default {
@@ -471,11 +515,12 @@ table.data-table td.actions {
   justify-content: center;
   gap: 0.375rem;
   padding: 0.5rem 1rem;
-  font-size: 0.875rem;
-  font-weight: 500;
+  min-height: 40px;
+  font-size: 0.9375rem;
+  font-weight: 600;
   font-family: var(--font);
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
+  border-radius: 999px;
+  border: 2px solid transparent;
   cursor: pointer;
   transition: all 0.12s ease;
   line-height: 1.4;
@@ -504,8 +549,8 @@ table.data-table td.actions {
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
 }
 
 .btn-danger {
@@ -515,7 +560,7 @@ table.data-table td.actions {
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: #b91c1c;
+  background: var(--error-hover);
 }
 
 .btn-ghost {
@@ -525,7 +570,7 @@ table.data-table td.actions {
 }
 
 .btn-ghost:hover:not(:disabled) {
-  background: #f1f5f9;
+  background: var(--bg-subtle);
   color: var(--text);
 }
 
@@ -757,20 +802,20 @@ table.data-table td.actions {
 
 .toast-success {
   background: var(--success-light);
-  color: #15803d;
-  border: 1px solid #bbf7d0;
+  color: var(--success);
+  border: 1px solid var(--success-border);
 }
 
 .toast-error {
   background: var(--error-light);
   color: var(--error);
-  border: 1px solid #fecaca;
+  border: 1px solid var(--error-border);
 }
 
 .toast-info {
   background: var(--primary-light);
   color: var(--primary);
-  border: 1px solid #bfdbfe;
+  border: 1px solid var(--border);
 }
 
 @keyframes toast-in {
@@ -1001,7 +1046,7 @@ tr.clickable-row {
 }
 
 tr.clickable-row:hover {
-  background-color: #f3f7f9;
+  background-color: var(--bg-subtle);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1011,7 +1056,7 @@ tr.clickable-row:hover {
 .btn-back {
   background: none;
   border: none;
-  color: #2c7f8f;
+  color: var(--primary);
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 500;
@@ -1020,7 +1065,7 @@ tr.clickable-row:hover {
 }
 
 .btn-back:hover {
-  color: #1b5e6b;
+  color: var(--primary-hover);
 }
 
 .customer-hero-card {
@@ -1035,24 +1080,24 @@ tr.clickable-row:hover {
   font-size: 1.5rem;
   font-weight: 700;
   margin: 0 0 0.25rem;
-  color: #1e293b;
+  color: var(--ink);
 }
 
 .customer-hero-email {
-  color: #4b5c6b;
+  color: var(--text-secondary);
   margin: 0 0 0.15rem;
   font-size: 0.9rem;
 }
 
 .customer-hero-phone {
-  color: #4b5c6b;
+  color: var(--text-secondary);
   margin: 0 0 0.15rem;
   font-size: 0.9rem;
 }
 
 .customer-hero-birth,
 .customer-hero-since {
-  color: #7c8d9d;
+  color: var(--text-muted);
   margin: 0.15rem 0 0;
   font-size: 0.8rem;
 }
@@ -1074,13 +1119,13 @@ tr.clickable-row:hover {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #6d7f8f;
+  color: var(--text-secondary);
 }
 
 .hero-stat-value {
   font-size: 1.25rem;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--ink);
 }
 
 .hero-tier-badge {
@@ -1109,7 +1154,7 @@ tr.clickable-row:hover {
   align-items: flex-start;
   gap: 0.75rem;
   padding: 0.6rem 0;
-  border-bottom: 1px solid #e9edf0;
+  border-bottom: 1px solid var(--border);
 }
 
 .event-row:last-child {
@@ -1120,7 +1165,7 @@ tr.clickable-row:hover {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #cbd5e0;
+  background: var(--border-strong);
   margin-top: 0.4rem;
   flex-shrink: 0;
 }
@@ -1135,7 +1180,7 @@ tr.clickable-row:hover {
 .event-type {
   font-weight: 500;
   font-size: 0.875rem;
-  color: #1e293b;
+  color: var(--ink);
 }
 
 .event-points {
@@ -1145,7 +1190,7 @@ tr.clickable-row:hover {
 
 .event-date {
   font-size: 0.75rem;
-  color: #7c8d9d;
+  color: var(--text-muted);
   margin-left: auto;
 }
 
@@ -1189,7 +1234,7 @@ tr.clickable-row:hover {
 .qr-card-header h3 {
   font-size: 1.25rem;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--ink);
   margin: 0 0 0.25rem;
 }
 
@@ -1200,10 +1245,10 @@ tr.clickable-row:hover {
 }
 
 .qr-code-wrapper {
-  background: #ffffff;
+  background: var(--bg-white);
   padding: 1rem;
   border-radius: 12px;
-  border: 2px solid #e9edf0;
+  border: 2px solid var(--border);
   line-height: 0;
 }
 
@@ -1243,7 +1288,7 @@ tr.clickable-row:hover {
   font-size: 1rem;
   font-weight: 600;
   margin: 0 0 1rem;
-  color: #0f172a;
+  color: var(--ink);
 }
 
 .qr-info ol {
@@ -1261,7 +1306,7 @@ tr.clickable-row:hover {
 }
 
 .qr-info ol li strong {
-  color: #1e293b;
+  color: var(--ink);
 }
 
 .qr-tip {
@@ -1270,20 +1315,20 @@ tr.clickable-row:hover {
   gap: 0.6rem;
   margin-top: 1.25rem;
   padding: 0.75rem 1rem;
-  background: #fef9e7;
+  background: var(--yellow-soft);
   border-radius: 8px;
-  border: 1px solid #fde68a;
+  border: 1px solid var(--yellow-border);
 }
 
 .qr-tip svg {
   flex-shrink: 0;
   margin-top: 1px;
-  color: #d97706;
+  color: var(--warning);
 }
 
 .qr-tip span {
   font-size: 0.85rem;
-  color: #92400e;
+  color: var(--warning);
   line-height: 1.5;
 }
 
@@ -1560,7 +1605,7 @@ tr.clickable-row:hover {
 }
 
 .timeline-item:hover {
-  background: #fafbfc;
+  background: var(--bg-subtle);
 }
 
 .timeline-dot {
@@ -1575,7 +1620,7 @@ tr.clickable-row:hover {
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  background: #f1f5f9;
+  background: var(--bg-subtle);
   display: flex;
   align-items: center;
   justify-content: center;

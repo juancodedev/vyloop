@@ -212,7 +212,7 @@ export default function CampaignComposerPage() {
                 disabled={sending}
                 required
               />
-              {fieldErrors.title && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.title}</p>}
+              {fieldErrors.title && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.title}</p>}
               <p className="text-sm text-muted">{title.length}/40 caracteres</p>
             </div>
 
@@ -228,7 +228,7 @@ export default function CampaignComposerPage() {
                 disabled={sending}
                 required
               />
-              {fieldErrors.body && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.body}</p>}
+              {fieldErrors.body && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.body}</p>}
               <p className="text-sm text-muted">{body.length}/300 caracteres</p>
             </div>
 
@@ -243,7 +243,7 @@ export default function CampaignComposerPage() {
                 onChange={(e) => { setUrl(e.target.value); if (fieldErrors.url) setFieldErrors(prev => ({ ...prev, url: '' })); }}
                 disabled={sending}
               />
-              {fieldErrors.url && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.url}</p>}
+              {fieldErrors.url && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.url}</p>}
               <p className="text-sm text-muted">Debe ser una URL permitida (mismo origen que la app)</p>
             </div>
 
@@ -284,7 +284,7 @@ export default function CampaignComposerPage() {
                     ))}
                   </select>
                   {loadingVenues && <p className="text-sm text-muted">Cargando sedes…</p>}
-                  {fieldErrors.branchId && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.branchId}</p>}
+                  {fieldErrors.branchId && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.branchId}</p>}
                 </div>
               )}
 
@@ -317,7 +317,7 @@ export default function CampaignComposerPage() {
                         </button>
                       )}
                     </div>
-                    {fieldErrors.latitude && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.latitude}</p>}
+                    {fieldErrors.latitude && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.latitude}</p>}
                   </div>
                   <div className="form-group">
                     <label htmlFor="longitude">Longitud <span className="text-muted">*</span></label>
@@ -333,7 +333,7 @@ export default function CampaignComposerPage() {
                       onChange={(e) => { setLongitude(e.target.value.replace(',', '.')); if (fieldErrors.longitude) setFieldErrors(prev => ({ ...prev, longitude: '' })); }}
                       disabled={sending}
                     />
-                    {fieldErrors.longitude && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.longitude}</p>}
+                    {fieldErrors.longitude && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.longitude}</p>}
                   </div>
                   <div className="form-group">
                     <label htmlFor="radius_m">Radio (metros) <span className="text-muted">*</span></label>
@@ -350,7 +350,7 @@ export default function CampaignComposerPage() {
                       disabled={sending}
                     />
                     <p className="text-sm text-muted">Máximo 50 000 metros (50 km)</p>
-                    {fieldErrors.radiusMeters && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.radiusMeters}</p>}
+                    {fieldErrors.radiusMeters && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.radiusMeters}</p>}
                   </div>
                 </>
               )}
