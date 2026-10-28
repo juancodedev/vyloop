@@ -16,7 +16,7 @@ Branch: one per unit (`feat/rls-unit<N>-…`). Delivery: one PR per unit, stacke
 | ID | Specs | Route | Status | Commit |
 | --- | --- | --- | --- | --- |
 | T1 | S1 | inline | done: RED (missing exports), then packages/db 281 tests, tsc, eslint green | PR #317 |
-| T2 | S2 | delegated (parallel writers: growth, customer, communication, wallet) + inline (automation, identity, analytics, gateway, contract test) | done: RED per worker, then 2271 tests + tsc + eslint green in 9 packages; independent verifier (risk item 4) | 3d3c7e0..1f7a0fe |
+| T2 | S2 | delegated (parallel writers: growth, customer, communication, wallet) + inline (automation, identity, analytics, gateway, contract test) | done: RED per worker, then 2271 tests + tsc + eslint green in 9 packages; independent verifier (risk item 4) | 3d3c7e0..203293e, PR #318 |
 | T3 | S3 | inline | pending | |
 | T4 | S4 | inline | pending | |
 | T5 | S5 | inline | pending | |
