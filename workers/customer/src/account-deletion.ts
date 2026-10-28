@@ -8,6 +8,7 @@ import {
   messageLog,
   pointsTransactions,
   pushSubscriptions,
+  withTenantTransaction,
 } from '@vyloop/db';
 import { and, eq, isNull, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
@@ -25,9 +26,11 @@ import type { Bindings } from './helpers';
 // ---------------------------------------------------------------------------
 
 type Db = ReturnType<typeof createDb>;
+/** The transaction handle `withTenantTransaction` passes to its callback. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
- * Strip a customer of personal data, in one transaction.
+ * Strip a customer of personal data, inside the caller's tenant transaction.
  *
  * Rows are kept, never hard-deleted: the merchant's ledger and visit history
  * hang off `customers.id`, and `referrals` and `workflow_executions` reference
@@ -40,54 +43,52 @@ type Db = ReturnType<typeof createDb>;
  * one that won. Returns whether this call did the anonymisation.
  */
 export async function anonymiseCustomer(
-  db: Db,
+  tx: Tx,
   customer: { id: string; businessId: string },
 ): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    const now = new Date();
-    const stamped = await tx
-      .update(customers)
-      .set({
-        fullName: null,
-        // A null phone and email free `uq_customers_business_phone` and
-        // `uq_customers_business_email`: the number can register again as a
-        // new customer.
-        phone: null,
-        email: null,
-        birthDate: null,
-        identityDoc: null,
-        identityType: null,
-        memberCode: null,
-        metadata: null,
-        deletedAt: now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(customers.id, customer.id),
-          eq(customers.businessId, customer.businessId),
-          isNull(customers.deletedAt),
-        ),
-      )
-      .returning({ id: customers.id });
+  const now = new Date();
+  const stamped = await tx
+    .update(customers)
+    .set({
+      fullName: null,
+      // A null phone and email free `uq_customers_business_phone` and
+      // `uq_customers_business_email`: the number can register again as a
+      // new customer.
+      phone: null,
+      email: null,
+      birthDate: null,
+      identityDoc: null,
+      identityType: null,
+      memberCode: null,
+      metadata: null,
+      deletedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(customers.id, customer.id),
+        eq(customers.businessId, customer.businessId),
+        isNull(customers.deletedAt),
+      ),
+    )
+    .returning({ id: customers.id });
 
-    if (stamped.length === 0) return false;
+  if (stamped.length === 0) return false;
 
-    // Every kept row of this customer, in this business only.
-    const own = (table: { customerId: AnyPgColumn; businessId: AnyPgColumn }) =>
-      and(eq(table.customerId, customer.id), eq(table.businessId, customer.businessId));
+  // Every kept row of this customer, in this business only.
+  const own = (table: { customerId: AnyPgColumn; businessId: AnyPgColumn }) =>
+    and(eq(table.customerId, customer.id), eq(table.businessId, customer.businessId));
 
-    await tx.update(pointsTransactions).set({ note: null }).where(own(pointsTransactions));
-    await tx.update(checkins).set({ note: null, items: null }).where(own(checkins));
-    // `payload` is NOT NULL; an empty object is the emptiest value it accepts.
-    await tx.update(customerEvents).set({ payload: {} }).where(own(customerEvents));
-    await tx.update(messageLog).set({ content: null, metadata: null }).where(own(messageLog));
-    await tx.update(consents).set({ ipAddress: null }).where(own(consents));
-    await tx.delete(pushSubscriptions).where(own(pushSubscriptions));
-    await tx.delete(churnPredictions).where(own(churnPredictions));
+  await tx.update(pointsTransactions).set({ note: null }).where(own(pointsTransactions));
+  await tx.update(checkins).set({ note: null, items: null }).where(own(checkins));
+  // `payload` is NOT NULL; an empty object is the emptiest value it accepts.
+  await tx.update(customerEvents).set({ payload: {} }).where(own(customerEvents));
+  await tx.update(messageLog).set({ content: null, metadata: null }).where(own(messageLog));
+  await tx.update(consents).set({ ipAddress: null }).where(own(consents));
+  await tx.delete(pushSubscriptions).where(own(pushSubscriptions));
+  await tx.delete(churnPredictions).where(own(churnPredictions));
 
-    return true;
-  });
+  return true;
 }
 
 /**
@@ -105,20 +106,26 @@ export async function deleteCustomerAccount(
 ): Promise<Response> {
   const db = createDb(c.env.DATABASE_URL);
 
-  // No `deleted_at` filter here, unlike every read: a deleted customer is the
-  // idempotent 204, not a 404.
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(and(match, eq(customers.businessId, businessId)))
-    .limit(1);
+  // The lookup and the anonymisation share one tenant transaction; the wallet
+  // expiry below is scheduled only after it has committed.
+  const customer = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // No `deleted_at` filter here, unlike every read: a deleted customer is the
+    // idempotent 204, not a 404.
+    const [found] = await tx
+      .select()
+      .from(customers)
+      .where(and(match, eq(customers.businessId, businessId)))
+      .limit(1);
+
+    if (found && !found.deletedAt) {
+      await anonymiseCustomer(tx, { id: found.id, businessId });
+    }
+
+    return found;
+  });
 
   if (!customer) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
-  }
-
-  if (!customer.deletedAt) {
-    await anonymiseCustomer(db, { id: customer.id, businessId });
   }
 
   scheduleWalletExpiry(c, { tenantId: businessId, customerId: customer.id });

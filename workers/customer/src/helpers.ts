@@ -1,5 +1,4 @@
 import type { Queue, KVNamespace } from '@cloudflare/workers-types';
-import { setCurrentBusinessId } from '@vyloop/db';
 import { CUSTOMER_REGISTERED, createEnvelope } from '@vyloop/event-bus';
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -130,22 +129,6 @@ export function buildCustomerRegisteredEvent(
     { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
-}
-
-// ---------------------------------------------------------------------------
-// RLS helper
-// ---------------------------------------------------------------------------
-
-/**
- * Set the `app.current_business_id` session variable for RLS isolation.
- *
- * Call this at the start of every request that touches tenant-scoped tables.
- * With the Neon HTTP driver this sends a `SET LOCAL` statement to the
- * database — effective for the current transaction.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function withRls(db: any, businessId: string): Promise<void> {
-  await db.execute(setCurrentBusinessId(businessId));
 }
 
 // ---------------------------------------------------------------------------

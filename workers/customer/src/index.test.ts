@@ -1,10 +1,9 @@
-import { setCurrentBusinessId } from '@vyloop/db';
 import { CUSTOMER_PATCH_ERROR, CUSTOMER_PATCHABLE_FIELDS } from '@vyloop/types';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { HTTPException } from 'hono/http-exception';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { extractAuthHeaders, buildCustomerRegisteredEvent, deriveRewardProgress, withRls } from './helpers';
+import { extractAuthHeaders, buildCustomerRegisteredEvent, deriveRewardProgress } from './helpers';
 
 import app from './index';
 
@@ -435,9 +434,14 @@ vi.mock('@vyloop/db', async () => {
     churnPredictions,
   });
 
+  // The real tenant-transaction helper, so a route test proves the statement it
+  // issues and the handle it issues it on, not a stand-in's idea of either.
+  const actual = await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db');
+
   return {
     createDb: vi.fn(() => mockDb),
-    setCurrentBusinessId: vi.fn(() => ({})),
+    setCurrentBusinessId: actual.setCurrentBusinessId,
+    withTenantTransaction: actual.withTenantTransaction,
     upsertConsent: vi.fn(async (_db: unknown, input: Record<string, unknown>) => {
       consentWrites.push(input);
     }),
@@ -894,14 +898,6 @@ describe('Helpers', () => {
     });
   });
 
-  describe('withRls', () => {
-    it('calls setCurrentBusinessId with the business ID', async () => {
-      const mockDbExec = { execute: vi.fn() };
-      await withRls(mockDbExec, 'biz-1');
-      expect(setCurrentBusinessId).toHaveBeenCalledWith('biz-1');
-      expect(mockDbExec.execute).toHaveBeenCalled();
-    });
-  });
 });
 
 // ===========================================================================
@@ -3540,7 +3536,8 @@ describe('Account deletion (DELETE /v1/customers/me and /:id)', () => {
   }
 
   function expectNothingWritten() {
-    expect(mockDb.transaction).not.toHaveBeenCalled();
+    // The lookup itself runs in the tenant transaction, so "nothing written" is
+    // about the writes, not about whether a transaction was opened.
     expect(mockDb.update).not.toHaveBeenCalled();
     expect(mockDb.delete).not.toHaveBeenCalled();
   }
@@ -3735,5 +3732,84 @@ describe('Account deletion (DELETE /v1/customers/me and /:id)', () => {
     expect(updateCalls).toHaveLength(0);
     const [lookup] = wheresFor('customers');
     expect(lookup!.params).toEqual(expect.arrayContaining([LIVE_CUSTOMER.phone, 'biz-1']));
+  });
+});
+
+// ===========================================================================
+// Tenant context — every tenant query runs on a transaction that set it first
+// ===========================================================================
+
+describe('Tenant context (set_config on the transaction handle)', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  /**
+   * Hand the route's first transaction a handle of its own and log, in order,
+   * what reaches it and what reaches the outer `db` instead. Reads issued on
+   * the handle still go through the recording chain, so the registry seeds and
+   * `wheresFor` keep working.
+   */
+  function recordTenantScope() {
+    const log: string[] = [];
+    const settings: Array<{ sql: string; params: unknown[] }> = [];
+
+    mockDb.select.mockImplementation((projection?: Record<string, unknown>) => {
+      log.push('db.select');
+      return recordingChain(projection);
+    });
+
+    mockDb.transaction.mockImplementationOnce(async (work: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        ...mockDb,
+        execute: vi.fn(async (query: any) => {
+          log.push('tx.execute');
+          settings.push(compile(query));
+          return { rows: [] };
+        }),
+        select: vi.fn((projection?: Record<string, unknown>) => {
+          log.push('tx.select');
+          return recordingChain(projection);
+        }),
+      };
+      return work(tx);
+    });
+
+    return { log, settings };
+  }
+
+  function expectScopedBeforeQueries(
+    scope: { log: string[]; settings: Array<{ sql: string; params: unknown[] }> },
+    businessId: string,
+  ) {
+    expect(scope.log[0]).toBe('tx.execute');
+    expect(scope.settings[0]!.sql).toContain("set_config('app.current_business_id'");
+    expect(scope.settings[0]!.params).toEqual([businessId]);
+    expect(scope.log.slice(1).length).toBeGreaterThan(0);
+    expect(scope.log.slice(1).every((entry) => entry === 'tx.select')).toBe(true);
+  }
+
+  it('GET /v1/customers/:id sets the token business before reading', async () => {
+    seedOneCustomer();
+    const scope = recordTenantScope();
+
+    const res = await request('GET', '/v1/customers/existing-id');
+
+    expect(res.status).toBe(200);
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expectScopedBeforeQueries(scope, 'biz-1');
+  });
+
+  it('GET /v1/customers/me sets the header business before reading', async () => {
+    seedMe({});
+    const scope = recordTenantScope();
+
+    const res = await request('GET', '/v1/customers/me', {
+      headers: { 'X-User-Id': 'user-1', 'X-Business-Id': 'biz-1', 'X-User-Role': 'customer' },
+    });
+    await flushBackground();
+
+    expect(res.status).toBe(200);
+    expectScopedBeforeQueries(scope, 'biz-1');
   });
 });
