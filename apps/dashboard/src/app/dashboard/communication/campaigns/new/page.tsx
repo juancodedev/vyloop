@@ -3,7 +3,12 @@
 import { useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback } from 'react';
 
-import { api, type PushCampaignPayload, type PushCampaignPreview, type BranchView } from '@/lib/api';
+import {
+  api,
+  type PushCampaignPayload,
+  type PushCampaignPreview,
+  type BranchView,
+} from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Composer Page
@@ -42,7 +47,9 @@ export default function CampaignComposerPage() {
     try {
       const { branches } = await api.getVenues({ includeInactive: false });
       // Filter for active + located venues
-      const located = branches.filter(v => v.latitude !== null && v.longitude !== null && v.is_active);
+      const located = branches.filter(
+        (v) => v.latitude !== null && v.longitude !== null && v.is_active,
+      );
       setVenues(located);
     } catch {
       showToast('error', 'Error al cargar sedes');
@@ -51,7 +58,6 @@ export default function CampaignComposerPage() {
     }
   }, []);
 
-   
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadVenues();
@@ -78,8 +84,10 @@ export default function CampaignComposerPage() {
       const radius = Number(radiusMeters);
 
       if (isNaN(lat) || lat < -90 || lat > 90) errors.latitude = 'Latitud inválida (-90 a 90)';
-      if (isNaN(lng) || lng < -180 || lng > 180) errors.longitude = 'Longitud inválida (-180 a 180)';
-      if (isNaN(radius) || radius < 1 || radius > 50000) errors.radiusMeters = 'Radio entre 1 y 50 000 metros';
+      if (isNaN(lng) || lng < -180 || lng > 180)
+        errors.longitude = 'Longitud inválida (-180 a 180)';
+      if (isNaN(radius) || radius < 1 || radius > 50000)
+        errors.radiusMeters = 'Radio entre 1 y 50 000 metros';
     }
 
     setFieldErrors(errors);
@@ -90,9 +98,14 @@ export default function CampaignComposerPage() {
     const payload: PushCampaignPayload = {
       title: title.trim(),
       body: body.trim(),
-      target: targetType === 'branch'
-        ? { branch_id: branchId }
-        : { latitude: Number(latitude), longitude: Number(longitude), radius_m: Number(radiusMeters) },
+      target:
+        targetType === 'branch'
+          ? { branch_id: branchId }
+          : {
+              latitude: Number(latitude),
+              longitude: Number(longitude),
+              radius_m: Number(radiusMeters),
+            },
     };
     if (url.trim()) payload.url = url.trim();
     if (referenceId.trim()) payload.reference_id = referenceId.trim();
@@ -104,10 +117,20 @@ export default function CampaignComposerPage() {
     if (title.length > 40 || body.length > 300) return false;
     if (url.trim() && !isValidUrl(url)) return false;
     if (targetType === 'branch') return !!branchId;
-    const lat = Number(latitude), lng = Number(longitude), r = Number(radiusMeters);
-    return !isNaN(lat) && lat >= -90 && lat <= 90 &&
-           !isNaN(lng) && lng >= -180 && lng <= 180 &&
-           !isNaN(r) && r >= 1 && r <= 50000;
+    const lat = Number(latitude),
+      lng = Number(longitude),
+      r = Number(radiusMeters);
+    return (
+      !isNaN(lat) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      !isNaN(lng) &&
+      lng >= -180 &&
+      lng <= 180 &&
+      !isNaN(r) &&
+      r >= 1 &&
+      r <= 50000
+    );
   };
 
   const isValidUrl = (string: string) => {
@@ -175,11 +198,13 @@ export default function CampaignComposerPage() {
         showToast('success', 'Ubicación capturada');
       },
       (err) => showToast('error', 'No se pudo obtener la ubicación: ' + err.message),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
     );
   };
 
-  const isSecureContext = typeof window !== 'undefined' && (window.location.protocol === 'https:' || window.location.hostname === 'localhost');
+  const isSecureContext =
+    typeof window !== 'undefined' &&
+    (window.location.protocol === 'https:' || window.location.hostname === 'localhost');
 
   return (
     <div className="page fade-in">
@@ -189,7 +214,11 @@ export default function CampaignComposerPage() {
           <p className="dash-subtitle">Escribe un mensaje para clientes cercanos</p>
         </div>
         <div className="dash-actions">
-          <button className="btn btn-secondary" onClick={() => router.push('/dashboard/communication/campaigns')} disabled={sending}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => router.push('/dashboard/communication/campaigns')}
+            disabled={sending}
+          >
             ← Volver
           </button>
         </div>
@@ -198,37 +227,59 @@ export default function CampaignComposerPage() {
       <div className="card" style={{ maxWidth: 800 }}>
         <div className="card-body">
           <form onSubmit={handleSubmit}>
-            {error && <div className="toast toast-error" style={{ marginBottom: '1rem' }}>{error}</div>}
+            {error && (
+              <div className="toast toast-error" style={{ marginBottom: '1rem' }}>
+                {error}
+              </div>
+            )}
 
             <div className="form-group">
-              <label htmlFor="title">Título <span className="text-muted">*</span></label>
+              <label htmlFor="title">
+                Título <span className="text-muted">*</span>
+              </label>
               <input
                 id="title"
                 type="text"
                 className="form-control"
                 maxLength={40}
                 value={title}
-                onChange={(e) => { setTitle(e.target.value); if (fieldErrors.title) setFieldErrors(prev => ({ ...prev, title: '' })); }}
+                onChange={(e) => {
+                  setTitle(e.target.value);
+                  if (fieldErrors.title) setFieldErrors((prev) => ({ ...prev, title: '' }));
+                }}
                 disabled={sending}
                 required
               />
-              {fieldErrors.title && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.title}</p>}
+              {fieldErrors.title && (
+                <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                  {fieldErrors.title}
+                </p>
+              )}
               <p className="text-sm text-muted">{title.length}/40 caracteres</p>
             </div>
 
             <div className="form-group">
-              <label htmlFor="body">Cuerpo <span className="text-muted">*</span></label>
+              <label htmlFor="body">
+                Cuerpo <span className="text-muted">*</span>
+              </label>
               <textarea
                 id="body"
                 className="form-control"
                 maxLength={300}
                 rows={4}
                 value={body}
-                onChange={(e) => { setBody(e.target.value); if (fieldErrors.body) setFieldErrors(prev => ({ ...prev, body: '' })); }}
+                onChange={(e) => {
+                  setBody(e.target.value);
+                  if (fieldErrors.body) setFieldErrors((prev) => ({ ...prev, body: '' }));
+                }}
                 disabled={sending}
                 required
               />
-              {fieldErrors.body && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.body}</p>}
+              {fieldErrors.body && (
+                <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                  {fieldErrors.body}
+                </p>
+              )}
               <p className="text-sm text-muted">{body.length}/300 caracteres</p>
             </div>
 
@@ -240,58 +291,129 @@ export default function CampaignComposerPage() {
                 className="form-control"
                 placeholder="https://..."
                 value={url}
-                onChange={(e) => { setUrl(e.target.value); if (fieldErrors.url) setFieldErrors(prev => ({ ...prev, url: '' })); }}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  if (fieldErrors.url) setFieldErrors((prev) => ({ ...prev, url: '' }));
+                }}
                 disabled={sending}
               />
-              {fieldErrors.url && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.url}</p>}
-              <p className="text-sm text-muted">Debe ser una URL permitida (mismo origen que la app)</p>
+              {fieldErrors.url && (
+                <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                  {fieldErrors.url}
+                </p>
+              )}
+              <p className="text-sm text-muted">
+                Debe ser una URL permitida (mismo origen que la app)
+              </p>
             </div>
 
-            <fieldset className="form-group" style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--color-border)' }}>
-              <legend className="form-label" style={{ fontWeight: 600, marginBottom: '1rem' }}>Objetivo</legend>
+            <fieldset
+              className="form-group"
+              style={{
+                marginTop: '1.5rem',
+                paddingTop: '1rem',
+                borderTop: '1px solid var(--color-border)',
+              }}
+            >
+              <legend className="form-label" style={{ fontWeight: 600, marginBottom: '1rem' }}>
+                Objetivo
+              </legend>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer' }}>
-                  <input type="radio" name="target" value="branch" checked={targetType === 'branch'} onChange={() => { setTargetType('branch'); setPreview(null); }} />
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.75rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="target"
+                    value="branch"
+                    checked={targetType === 'branch'}
+                    onChange={() => {
+                      setTargetType('branch');
+                      setPreview(null);
+                    }}
+                  />
                   <div>
                     <div style={{ fontWeight: 500 }}>Una sede</div>
-                    <div className="text-sm text-muted">Selecciona una sede con coordenadas registradas</div>
+                    <div className="text-sm text-muted">
+                      Selecciona una sede con coordenadas registradas
+                    </div>
                   </div>
                 </label>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer' }}>
-                  <input type="radio" name="target" value="radius" checked={targetType === 'radius'} onChange={() => { setTargetType('radius'); setPreview(null); }} />
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.75rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="target"
+                    value="radius"
+                    checked={targetType === 'radius'}
+                    onChange={() => {
+                      setTargetType('radius');
+                      setPreview(null);
+                    }}
+                  />
                   <div>
                     <div style={{ fontWeight: 500 }}>Radio alrededor de un punto</div>
-                    <div className="text-sm text-muted">Coordenadas + radio en metros (máx 50 km)</div>
+                    <div className="text-sm text-muted">
+                      Coordenadas + radio en metros (máx 50 km)
+                    </div>
                   </div>
                 </label>
               </div>
 
               {targetType === 'branch' && (
                 <div className="form-group">
-                  <label htmlFor="branch_id">Sede <span className="text-muted">*</span></label>
+                  <label htmlFor="branch_id">
+                    Sede <span className="text-muted">*</span>
+                  </label>
                   <select
                     id="branch_id"
                     className="form-control"
                     value={branchId}
-                    onChange={(e) => { setBranchId(e.target.value); if (fieldErrors.branchId) setFieldErrors(prev => ({ ...prev, branchId: '' })); }}
+                    onChange={(e) => {
+                      setBranchId(e.target.value);
+                      if (fieldErrors.branchId)
+                        setFieldErrors((prev) => ({ ...prev, branchId: '' }));
+                    }}
                     disabled={loadingVenues || sending}
                   >
                     <option value="">Selecciona una sede</option>
                     {venues.map((v) => (
                       <option key={v.id} value={v.id}>
-                        {v.name} {v.latitude !== null && v.longitude !== null && `(${v.latitude.toFixed(4)}, ${v.longitude.toFixed(4)})`}
+                        {v.name}{' '}
+                        {v.latitude !== null &&
+                          v.longitude !== null &&
+                          `(${v.latitude.toFixed(4)}, ${v.longitude.toFixed(4)})`}
                       </option>
                     ))}
                   </select>
                   {loadingVenues && <p className="text-sm text-muted">Cargando sedes…</p>}
-                  {fieldErrors.branchId && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.branchId}</p>}
+                  {fieldErrors.branchId && (
+                    <p
+                      style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}
+                    >
+                      {fieldErrors.branchId}
+                    </p>
+                  )}
                 </div>
               )}
 
               {targetType === 'radius' && (
                 <>
                   <div className="form-group">
-                    <label htmlFor="latitude">Latitud <span className="text-muted">*</span></label>
+                    <label htmlFor="latitude">
+                      Latitud <span className="text-muted">*</span>
+                    </label>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <input
                         id="latitude"
@@ -302,7 +424,11 @@ export default function CampaignComposerPage() {
                         className="form-control"
                         placeholder="-34.6037"
                         value={latitude}
-                        onChange={(e) => { setLatitude(e.target.value.replace(',', '.')); if (fieldErrors.latitude) setFieldErrors(prev => ({ ...prev, latitude: '' })); }}
+                        onChange={(e) => {
+                          setLatitude(e.target.value.replace(',', '.'));
+                          if (fieldErrors.latitude)
+                            setFieldErrors((prev) => ({ ...prev, latitude: '' }));
+                        }}
                         disabled={sending}
                       />
                       {isSecureContext && (
@@ -317,10 +443,22 @@ export default function CampaignComposerPage() {
                         </button>
                       )}
                     </div>
-                    {fieldErrors.latitude && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.latitude}</p>}
+                    {fieldErrors.latitude && (
+                      <p
+                        style={{
+                          color: 'var(--error)',
+                          fontSize: '0.875rem',
+                          marginTop: '0.25rem',
+                        }}
+                      >
+                        {fieldErrors.latitude}
+                      </p>
+                    )}
                   </div>
                   <div className="form-group">
-                    <label htmlFor="longitude">Longitud <span className="text-muted">*</span></label>
+                    <label htmlFor="longitude">
+                      Longitud <span className="text-muted">*</span>
+                    </label>
                     <input
                       id="longitude"
                       type="number"
@@ -330,13 +468,29 @@ export default function CampaignComposerPage() {
                       className="form-control"
                       placeholder="-58.3816"
                       value={longitude}
-                      onChange={(e) => { setLongitude(e.target.value.replace(',', '.')); if (fieldErrors.longitude) setFieldErrors(prev => ({ ...prev, longitude: '' })); }}
+                      onChange={(e) => {
+                        setLongitude(e.target.value.replace(',', '.'));
+                        if (fieldErrors.longitude)
+                          setFieldErrors((prev) => ({ ...prev, longitude: '' }));
+                      }}
                       disabled={sending}
                     />
-                    {fieldErrors.longitude && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.longitude}</p>}
+                    {fieldErrors.longitude && (
+                      <p
+                        style={{
+                          color: 'var(--error)',
+                          fontSize: '0.875rem',
+                          marginTop: '0.25rem',
+                        }}
+                      >
+                        {fieldErrors.longitude}
+                      </p>
+                    )}
                   </div>
                   <div className="form-group">
-                    <label htmlFor="radius_m">Radio (metros) <span className="text-muted">*</span></label>
+                    <label htmlFor="radius_m">
+                      Radio (metros) <span className="text-muted">*</span>
+                    </label>
                     <input
                       id="radius_m"
                       type="number"
@@ -346,11 +500,25 @@ export default function CampaignComposerPage() {
                       className="form-control"
                       placeholder="1000"
                       value={radiusMeters}
-                      onChange={(e) => { setRadiusMeters(Number(e.target.value)); if (fieldErrors.radiusMeters) setFieldErrors(prev => ({ ...prev, radiusMeters: '' })); }}
+                      onChange={(e) => {
+                        setRadiusMeters(Number(e.target.value));
+                        if (fieldErrors.radiusMeters)
+                          setFieldErrors((prev) => ({ ...prev, radiusMeters: '' }));
+                      }}
                       disabled={sending}
                     />
                     <p className="text-sm text-muted">Máximo 50 000 metros (50 km)</p>
-                    {fieldErrors.radiusMeters && <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{fieldErrors.radiusMeters}</p>}
+                    {fieldErrors.radiusMeters && (
+                      <p
+                        style={{
+                          color: 'var(--error)',
+                          fontSize: '0.875rem',
+                          marginTop: '0.25rem',
+                        }}
+                      >
+                        {fieldErrors.radiusMeters}
+                      </p>
+                    )}
                   </div>
                 </>
               )}
@@ -366,7 +534,9 @@ export default function CampaignComposerPage() {
                   onChange={(e) => setReferenceId(e.target.value)}
                   disabled={sending}
                 />
-                <p className="text-sm text-muted">Clave de idempotencia: la misma referencia evita duplicados</p>
+                <p className="text-sm text-muted">
+                  Clave de idempotencia: la misma referencia evita duplicados
+                </p>
               </div>
             </fieldset>
 
@@ -378,7 +548,9 @@ export default function CampaignComposerPage() {
                     <summary>Desglose por sede ({preview.per_branch.length})</summary>
                     <ul style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
                       {preview.per_branch.map((b) => (
-                        <li key={b.branch_id}>{b.name} — {Math.round(b.distance_m)} m</li>
+                        <li key={b.branch_id}>
+                          {b.name} — {Math.round(b.distance_m)} m
+                        </li>
                       ))}
                     </ul>
                   </details>
@@ -386,7 +558,14 @@ export default function CampaignComposerPage() {
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1.5rem', justifyContent: 'flex-end' }}>
+            <div
+              style={{
+                display: 'flex',
+                gap: '0.5rem',
+                marginTop: '1.5rem',
+                justifyContent: 'flex-end',
+              }}
+            >
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -410,8 +589,6 @@ export default function CampaignComposerPage() {
   );
 }
 
-
-
 function showToast(type: 'success' | 'error' | 'info', message: string) {
   const event = new CustomEvent('dashboard-toast', { detail: { type, message } });
   window.dispatchEvent(event);
@@ -419,7 +596,16 @@ function showToast(type: 'success' | 'error' | 'info', message: string) {
 
 function LocationIcon({ className = 'w-4 h-4' }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
       <circle cx="12" cy="10" r="3" />
     </svg>
@@ -428,7 +614,16 @@ function LocationIcon({ className = 'w-4 h-4' }: { className?: string }) {
 
 function EyeIcon({ className = 'w-4 h-4' }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -437,7 +632,16 @@ function EyeIcon({ className = 'w-4 h-4' }: { className?: string }) {
 
 function SendIcon({ className = 'w-4 h-4' }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <line x1="22" y1="2" x2="11" y2="13" />
       <polygon points="22 2 15 22 11 13 2 9 22 2" />
     </svg>
@@ -446,7 +650,16 @@ function SendIcon({ className = 'w-4 h-4' }: { className?: string }) {
 
 function LoaderIcon({ className = 'w-4 h-4 animate-spin' }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
       <path d="M12 2a10 10 0 0 1 10 10" strokeOpacity="1" />
     </svg>

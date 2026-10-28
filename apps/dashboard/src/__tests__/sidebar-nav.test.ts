@@ -33,7 +33,6 @@ describe('the sidebar', () => {
         '/dashboard/loyalty/customers',
         '/dashboard/communication/campaigns',
         '/dashboard/communication/messages',
-        '/dashboard/communication/templates',
         '/dashboard/communication/workflows',
         '/dashboard/qr',
         '/dashboard/settings/venues',

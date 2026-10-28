@@ -1,6 +1,6 @@
 import { createDb, messageLog, whatsappTemplates, customers, readConsentMap } from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
-import { eq, and, desc, count, sql } from 'drizzle-orm';
+import { eq, and, desc, count, sql, getTableColumns } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import type { Bindings } from './helpers';
@@ -306,9 +306,16 @@ router.get('/v1/communication/history', async (c) => {
 
   const total = Number(totalResult?.total ?? 0);
 
+  // Each row carries its customer's name, so the history can say who it was
+  // for. Joined on the business as well as the id: a customer row of another
+  // tenant must never lend its name, whatever RLS is doing.
   const items = await db
-    .select()
+    .select({ ...getTableColumns(messageLog), customerName: customers.fullName })
     .from(messageLog)
+    .leftJoin(
+      customers,
+      and(eq(customers.id, messageLog.customerId), eq(customers.businessId, messageLog.businessId)),
+    )
     .where(where)
     .orderBy(desc(messageLog.createdAt))
     .limit(perPage)

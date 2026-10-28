@@ -1,6 +1,5 @@
 import {
   BellRing,
-  FileText,
   Gift,
   Inbox,
   LayoutDashboard,
@@ -28,6 +27,8 @@ export interface NavItem {
   isBottom?: boolean;
   /** Action item, not a route link */
   isAction?: boolean;
+  /** Listed so merchants know it is coming, but not reachable yet. */
+  comingSoon?: boolean;
 }
 
 export interface NavSection {
@@ -66,8 +67,14 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { label: 'Campañas', href: '/dashboard/communication/campaigns', icon: BellRing },
       { label: 'Mensajes', href: '/dashboard/communication/messages', icon: Inbox },
-      { label: 'Plantillas', href: '/dashboard/communication/templates', icon: FileText },
-      { label: 'Flujos', href: '/dashboard/communication/workflows', icon: Workflow },
+      // Plantillas is WhatsApp-only, and WhatsApp is hidden for now.
+      // Not built yet: see openspec/changes/workflow-builder.
+      {
+        label: 'Flujos',
+        href: '/dashboard/communication/workflows',
+        icon: Workflow,
+        comingSoon: true,
+      },
     ],
   },
   {
@@ -101,11 +108,9 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard/loyalty/customers': 'Saldos de clientes',
   '/dashboard/qr': 'QR para el mesón',
   '/dashboard/settings': 'Ajustes',
-  '/dashboard/communication/templates': 'Plantillas',
   '/dashboard/communication/messages': 'Mensajes',
   '/dashboard/communication/workflows': 'Flujos',
   '/dashboard/communication/campaigns': 'Campañas',
-  '/dashboard/communication/send': 'Enviar mensaje',
 };
 
 /** Resolve a human-readable page title from the current pathname */
