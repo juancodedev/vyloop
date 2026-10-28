@@ -32,6 +32,9 @@ const dbMock = {
   select: vi.fn(() => chain()),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
   insert: vi.fn(() => chain()),
+  // The transaction handle is the same recording mock, so a query issued on it
+  // is asserted exactly like one issued on the database.
+  transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(dbMock)),
 };
 
 const mockPublish = vi.fn();
@@ -50,8 +53,12 @@ const { readConsentMap } = (await import('@vyloop/db')) as unknown as {
   readConsentMap: ReturnType<typeof vi.fn>;
 };
 
-vi.mock('@vyloop/db', () => ({
+vi.mock('@vyloop/db', async () => ({
   createDb: vi.fn(() => dbMock),
+  // The real helper, so the test sees the statements it issues and the handle
+  // it issues them on.
+  withTenantTransaction: (await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db'))
+    .withTenantTransaction,
   setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
   // The authoritative consent store. The gate reads the customer's consents from
   // here, so the mock is what decides whether a workflow may dispatch.
@@ -427,4 +434,34 @@ describe('Unknown event type', () => {
 
     expect(mockPublish).not.toHaveBeenCalled();
   });
+});
+
+describe('tenant scope', () => {
+  it.each(['CustomerRegistered', 'PointsAssigned', 'RewardRedeemed'])(
+    '%s reads the tenant data inside a transaction scoped to the business',
+    async (type) => {
+      const { handleEvent } = await import('./event-handler');
+
+      await handleEvent(
+        {
+          id: 'evt-scope',
+          type,
+          source: 'test',
+          specversion: '1.0',
+          time: new Date().toISOString(),
+          header: { business_id: 'biz-1', timestamp: new Date().toISOString() },
+          payload: { customer_id: 'cust-1', business_id: 'biz-1', total_points: 10 },
+        } as never,
+        { ack: vi.fn(), retry: vi.fn() } as never,
+        { DATABASE_URL: 'postgres://test', DOMAIN_EVENTS_QUEUE: {}, DELIVERY_QUEUE: {} } as never,
+      );
+
+      expect(dbMock.transaction).toHaveBeenCalledTimes(1);
+      const firstStatement = dbMock.execute.mock.calls[0]?.[0] as { queryChunks?: unknown[] };
+      expect(JSON.stringify(firstStatement)).toContain("set_config('app.current_business_id'");
+      expect(dbMock.select.mock.invocationCallOrder[0]).toBeGreaterThan(
+        dbMock.execute.mock.invocationCallOrder[0]!,
+      );
+    },
+  );
 });
