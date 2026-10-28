@@ -913,7 +913,6 @@ export const api = {
   async getPushCampaigns(params: {
     page?: number;
     per_page?: number;
-    status?: 'all' | 'sent' | 'failed';
   } = {}): Promise<{
     campaigns: PushCampaignSummary[];
     total: number;
@@ -921,7 +920,6 @@ export const api = {
     const search = new URLSearchParams();
     if (params.page) search.set('page', String(params.page));
     if (params.per_page) search.set('per_page', String(params.per_page));
-    if (params.status && params.status !== 'all') search.set('status', params.status);
 
     const raw = await apiFetch(`/v1/communication/push/campaigns?${search}`) as {
       campaigns: PushCampaignSummary[];
@@ -1091,37 +1089,46 @@ export interface PushCampaignPreview {
   }>;
 }
 
+/**
+ * What became of a campaign's browser notifications, counted by the worker
+ * from `message_log`. Customers skipped for lack of consent or of a browser
+ * leave no row, so there is no "skipped" figure to report.
+ */
+export interface PushCampaignOutcome {
+  delivered: number;
+  failed: number;
+  pending: number;
+}
+
 /** Summary of a campaign for list views. */
-export interface PushCampaignSummary {
+export interface PushCampaignSummary extends PushCampaignOutcome {
   reference_id: string;
   title: string;
   target_type: 'branch' | 'radius';
   audience_size: number;
-  delivered: number;
-  failed: number;
-  skipped: number;
+  created_at: string;
+}
+
+/** A delivery that failed for good, with the reason the worker stored. */
+export interface PushCampaignFailure {
+  customer_name: string | null;
+  error: string | null;
   created_at: string;
 }
 
 /** Detailed campaign information. */
-export interface PushCampaignDetail {
+export interface PushCampaignDetail extends PushCampaignOutcome {
   reference_id: string;
   title: string;
   body: string;
   url?: string;
   target: PushCampaignTarget;
   target_type: 'branch' | 'radius';
+  /** The target branch's name, for a branch campaign. */
+  branch_name: string | null;
   audience_size: number;
-  delivered: number;
-  failed: number;
-  skipped: number;
-  per_branch?: Array<{
-    branch_id: string;
-    name: string;
-    distance_m: number;
-    delivered: number;
-    failed: number;
-  }>;
+  /** The latest failed deliveries, newest first (at most 50). */
+  failures: PushCampaignFailure[];
   created_at: string;
 }
 

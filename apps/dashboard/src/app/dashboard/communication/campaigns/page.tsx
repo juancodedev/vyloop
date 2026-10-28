@@ -64,7 +64,6 @@ export default function CampaignsPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [perPage] = useState(20);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'sent' | 'failed'>('all');
   const [loading, setLoading] = useState(true);
 
   const loadCampaigns = useCallback(async () => {
@@ -73,7 +72,6 @@ export default function CampaignsPage() {
       const { campaigns, total } = await api.getPushCampaigns({
         page,
         per_page: perPage,
-        status: statusFilter,
       });
       setCampaigns(campaigns);
       setTotal(total);
@@ -84,7 +82,7 @@ export default function CampaignsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, statusFilter]);
+  }, [page, perPage]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -123,59 +121,6 @@ export default function CampaignsPage() {
           </div>
         </div>
 
-        {/* Toolbar */}
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
-          <div className="search-input-wrapper" style={{ flex: 1, minWidth: '280px' }}>
-            <svg
-              className="w-4 h-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Buscar por título…"
-              value=""
-              onChange={() => {}}
-              disabled={loading}
-            />
-          </div>
-          <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-sm text-muted">
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-              </svg>
-              <select
-                className="form-control"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'sent' | 'failed')}
-                disabled={loading}
-              >
-                <option value="all">Todos</option>
-                <option value="sent">Enviadas</option>
-                <option value="failed">Fallidas</option>
-              </select>
-            </label>
-          </div>
-        </div>
-
         <div className="card">
           <div className="table-container">
             <table className="data-table">
@@ -183,11 +128,11 @@ export default function CampaignsPage() {
                 <tr>
                   <th>Fecha</th>
                   <th>Título</th>
-                  <th>Tipo objetivo</th>
+                  <th>Para</th>
                   <th>Audiencia</th>
-                  <th>Entregados</th>
-                  <th>Fallidos</th>
-                  <th>Omitidos</th>
+                  <th>Enviadas</th>
+                  <th>Fallidas</th>
+                  <th>En cola</th>
                   <th style={{ width: '80px' }}></th>
                 </tr>
               </thead>
@@ -223,7 +168,7 @@ export default function CampaignsPage() {
                       }
                     >
                       <td className="text-sm text-muted">
-                        {new Date(c.created_at).toLocaleDateString('es-ES', {
+                        {new Date(c.created_at).toLocaleString('es-CL', {
                           day: '2-digit',
                           month: '2-digit',
                           year: 'numeric',
@@ -234,15 +179,15 @@ export default function CampaignsPage() {
                       <td style={{ fontWeight: 500 }}>{c.title}</td>
                       <td>
                         {c.target_type === 'branch' ? (
-                          <span className="badge badge-primary">Sede única</span>
+                          <span className="badge badge-primary">Sucursal</span>
                         ) : (
-                          <span className="badge badge-secondary">Radio</span>
+                          <span className="badge badge-secondary">Cerca de un punto</span>
                         )}
                       </td>
-                      <td>{c.audience_size.toLocaleString()}</td>
-                      <td style={{ color: '#16a34a' }}>{c.delivered.toLocaleString()}</td>
-                      <td style={{ color: '#dc2626' }}>{c.failed.toLocaleString()}</td>
-                      <td className="text-muted">{c.skipped.toLocaleString()}</td>
+                      <td>{c.audience_size.toLocaleString('es-CL')}</td>
+                      <td>{c.delivered.toLocaleString('es-CL')}</td>
+                      <td>{c.failed.toLocaleString('es-CL')}</td>
+                      <td className="text-muted">{c.pending.toLocaleString('es-CL')}</td>
                       <td>
                         <svg
                           className="w-4 h-4 text-muted"

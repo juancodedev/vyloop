@@ -27,6 +27,7 @@ vi.mock('@vyloop/db', async () => {
 
   const branchesTable = pgTable('branches', {
     id: uuid('id').primaryKey(),
+    businessId: uuid('business_id'),
     name: text('name'),
   });
 
@@ -35,7 +36,11 @@ vi.mock('@vyloop/db', async () => {
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
     messageLog: messageLogTable,
     branches: branchesTable,
-    pushCampaigns: pgTable('push_campaigns', { referenceId: text('reference_id').primaryKey() }),
+    pushCampaigns: pgTable('push_campaigns', {
+      referenceId: text('reference_id').primaryKey(),
+      businessId: uuid('business_id'),
+      createdAt: text('created_at'),
+    }),
   };
 });
 
@@ -115,6 +120,8 @@ function createQueryChain(rows: unknown[] = []) {
   chain.from = vi.fn(() => chain);
   chain.where = vi.fn(() => chain);
   chain.limit = vi.fn(() => chain);
+  chain.orderBy = vi.fn(() => chain);
+  chain.offset = vi.fn(() => chain);
   chain.then = (onfulfilled: (value: unknown) => unknown) =>
     Promise.resolve(rows).then(onfulfilled);
   return chain;
@@ -339,5 +346,113 @@ describe('POST /v1/communication/push/campaigns', () => {
     const body: any = await res.json();
     expect(typeof body.reference_id).toBe('string');
     expect(body.reference_id.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET list and detail: what became of each campaign
+// ---------------------------------------------------------------------------
+
+const CAMPAIGN_ROW = {
+  referenceId: 'promo-1',
+  businessId: 'biz-1',
+  title: 'Café al 2x1',
+  body: 'Solo hoy',
+  url: null,
+  target: { branch_id: '11111111-1111-4111-8111-111111111111' },
+  targetType: 'branch',
+  audienceSize: 12,
+  createdAt: '2026-10-28T12:00:00.000Z',
+};
+
+/** The SQL of the `n`-th raw query the route ran, and the values it bound. */
+function renderedExecute(n: number): { sql: string; params: unknown[] } {
+  const query = dbMock.execute.mock.calls[n]?.[0];
+  return new PgDialect().sqlToQuery(query as SQL);
+}
+
+describe('GET /v1/communication/push/campaigns', () => {
+  it('counts each campaign’s deliveries from the message log, and the real total', async () => {
+    dbMock.select
+      .mockImplementationOnce(() => createQueryChain([CAMPAIGN_ROW]))
+      .mockImplementationOnce(() => createQueryChain([{ total: 37 }]));
+    dbMock.execute.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({
+      rows: [{ reference_id: 'promo-1', delivered: 9, failed: 2, pending: 1 }],
+    });
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/campaigns',
+      headers: operatorHeaders(),
+    });
+
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.total).toBe(37);
+    expect(body.campaigns[0]).toMatchObject({ delivered: 9, failed: 2, pending: 1 });
+    expect(body.campaigns[0]).not.toHaveProperty('skipped');
+
+    const { sql, params } = renderedExecute(1);
+    expect(sql).toContain('starts_with');
+    expect(sql).toContain("m.channel = 'push'");
+    expect(params).toContain('biz-1');
+    expect(params).toContain('promo-1');
+  });
+});
+
+describe('GET /v1/communication/push/campaigns/:referenceId', () => {
+  it('reports the counts, the branch by name and why deliveries failed', async () => {
+    dbMock.select
+      .mockImplementationOnce(() => createQueryChain([CAMPAIGN_ROW]))
+      .mockImplementationOnce(() => createQueryChain([{ name: 'Providencia' }]));
+    dbMock.execute
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ reference_id: 'promo-1', delivered: 9, failed: 1, pending: 0 }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            customer_name: 'Pedro Soto',
+            error: 'The browser is no longer registered for push.',
+            created_at: '2026-10-28T12:01:00.000Z',
+          },
+        ],
+      });
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/campaigns/promo-1',
+      headers: operatorHeaders(),
+    });
+
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body).toMatchObject({ delivered: 9, failed: 1, pending: 0, branch_name: 'Providencia' });
+    expect(body).not.toHaveProperty('skipped');
+    expect(body).not.toHaveProperty('per_branch');
+    expect(body.failures).toEqual([
+      {
+        customer_name: 'Pedro Soto',
+        error: 'The browser is no longer registered for push.',
+        created_at: '2026-10-28T12:01:00.000Z',
+      },
+    ]);
+
+    const failures = renderedExecute(2);
+    expect(failures.sql).toContain('c.business_id = m.business_id');
+    expect(failures.params).toContain('biz-1');
+    expect(failures.params).toContain('promo-1:');
+  });
+
+  it('is not found for another business’s campaign', async () => {
+    dbMock.select.mockImplementationOnce(() =>
+      createQueryChain([{ ...CAMPAIGN_ROW, businessId: 'biz-2' }]),
+    );
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/campaigns/promo-1',
+      headers: operatorHeaders(),
+    });
+
+    expect(res.status).toBe(404);
   });
 });

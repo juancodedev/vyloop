@@ -2,11 +2,12 @@ import { createDb, messageLog, branches, pushCampaigns } from '@vyloop/db';
 import { PUSH_CAMPAIGN_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { getRequestId } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
-import { and, eq, sql, desc } from 'drizzle-orm';
+import { and, eq, sql, desc, count } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import { findBranchesInRadius } from '../../../packages/db/src/proximity';
 
+import { readCampaignFailures, readCampaignOutcomes } from './campaign-outcomes';
 import type { Bindings } from './helpers';
 import { extractAuthHeaders, withRls } from './helpers';
 import type { PushCampaignPayload, PushCampaignTarget } from './push-campaigns';
@@ -382,18 +383,29 @@ router.get('/v1/communication/push/campaigns', async (c) => {
     .limit(perPage)
     .offset((page - 1) * perPage);
 
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(pushCampaigns)
+    .where(eq(pushCampaigns.businessId, businessId));
+
+  const outcomes = await readCampaignOutcomes(
+    db,
+    businessId,
+    rows.map((r) => r.referenceId),
+  );
+
   const list = rows.map((r) => ({
     reference_id: r.referenceId,
     title: r.title,
     target_type: r.targetType,
     audience_size: r.audienceSize,
-    delivered: 0,
-    failed: 0,
-    skipped: 0,
+    ...outcomes.get(r.referenceId)!,
     created_at: r.createdAt,
   }));
 
-  return c.json({ campaigns: list, total: list.length });
+  // The business's campaign count, not this page's length: the dashboard
+  // paginates on it.
+  return c.json({ campaigns: list, total: Number(totalRow?.total ?? list.length) });
 });
 
 // ---------------------------------------------------------------------------
@@ -419,18 +431,32 @@ router.get('/v1/communication/push/campaigns/:referenceId', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Campaign not found.' } }, 404);
   }
 
+  const outcomes = await readCampaignOutcomes(db, businessId, [r.referenceId]);
+  const failures = await readCampaignFailures(db, businessId, r.referenceId);
+
+  // The branch a branch campaign went to, by name: the target only holds its id.
+  const target = (r.target ?? {}) as Record<string, unknown>;
+  let branchName: string | null = null;
+  if (typeof target.branch_id === 'string') {
+    const [branch] = await db
+      .select({ name: branches.name })
+      .from(branches)
+      .where(and(eq(branches.id, target.branch_id), eq(branches.businessId, businessId)))
+      .limit(1);
+    branchName = branch?.name ?? null;
+  }
+
   return c.json({
     reference_id: r.referenceId,
     title: r.title,
     body: r.body,
     url: r.url && r.url !== '/' ? r.url : undefined,
-    target: (r.target ?? {}) as Record<string, unknown>,
+    target,
     target_type: r.targetType,
+    branch_name: branchName,
     audience_size: r.audienceSize,
-    delivered: 0,
-    failed: 0,
-    skipped: 0,
-    per_branch: [],
+    ...outcomes.get(r.referenceId)!,
+    failures,
     created_at: r.createdAt,
   });
 });
