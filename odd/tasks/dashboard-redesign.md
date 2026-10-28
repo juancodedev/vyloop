@@ -15,8 +15,8 @@ Branch: feat/dashboard-redesign (one branch per phase). Delivery: one PR per pha
 
 | ID | Specs | Route | Status | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | S1, S2, S7 (foundation: tokens, fonts, globals, dead code, page titles) | inline | in progress | |
-| T2 | S3, S4 (landing + login) | inline | pending | |
+| T1 | S1, S2, S7 (foundation: tokens, fonts, globals, dead code, page titles) | inline | done: 287 tests, tsc, eslint, next build green; no visual check (no browser here) | 2775ad8 (#298, merged) |
+| T2 | S3, S4 (landing + login) | inline | done: RED 4/4 on the old landing, then 293 tests, tsc, eslint, next build green; no visual check | c83a0fd |
 | T3 | S5 (sidebar + Hoy) | inline | pending | |
 | T4 | S6 (POS) | inline | pending | |
 
