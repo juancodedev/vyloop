@@ -101,12 +101,14 @@ function nearbyStatus(venue: BranchView, all: BranchView[]) {
   return <span className="badge badge-warning">Fuera del límite</span>;
 }
 
+/** Lowercased and without accents, so "nunoa" finds "Ñuñoa". */
+function normalize(text: string): string {
+  return text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+}
+
 export default function VenuesPage() {
   const [venues, setVenues] = useState<BranchView[]>([]);
   const [askConfirm, confirmDialog] = useConfirm();
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [perPage] = useState(20);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -117,13 +119,10 @@ export default function VenuesPage() {
   const loadVenues = useCallback(async () => {
     setLoading(true);
     try {
-      const { branches, total } = await api.getVenues({
-        page,
-        per_page: perPage,
-        includeInactive,
-      });
+      // Every branch, active or not: the identity worker returns them all in one
+      // list, so the inactive filter and the search run on it here.
+      const { branches } = await api.getVenues({ includeInactive: true });
       setVenues(branches);
-      setTotal(total);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error al cargar sedes';
       const event = new CustomEvent('dashboard-toast', { detail: { type: 'error', message: msg } });
@@ -131,12 +130,20 @@ export default function VenuesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, includeInactive]);
+  }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadVenues();
   }, [loadVenues]);
+
+  const query = normalize(search.trim());
+  const shown = venues.filter(
+    (v) =>
+      (includeInactive || v.is_active) &&
+      (query === '' ||
+        [v.name, v.address, v.city].some((field) => field && normalize(field).includes(query))),
+  );
 
   const openCreateModal = () => {
     setEditingVenue(null);
@@ -254,18 +261,22 @@ export default function VenuesPage() {
                     </td>
                   </tr>
                 )}
-                {!loading && venues.length > 0 && venues.map((v) => (
+                {!loading && venues.length > 0 && shown.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="text-center text-muted" style={{ padding: '2rem' }}>
+                      {query === ''
+                        ? 'Todas tus sedes están inactivas.'
+                        : 'Ninguna sede coincide con la búsqueda.'}
+                    </td>
+                  </tr>
+                )}
+                {!loading && shown.map((v) => (
                   <tr key={v.id}>
                     <td>
                       <div style={{ fontWeight: 500 }}>{v.name}</div>
-                      {v.address && (
-                        <div className="text-xs text-muted">
-                          {v.address}{v.city ? `, ${v.city}` : ''}{v.country ? `, ${v.country}` : ''}
-                        </div>
-                      )}
                     </td>
                     <td>
-                      {v.city && v.country ? `${v.city}, ${v.country}` : v.country ?? '—'}
+                      {[v.address, v.city].filter(Boolean).join(', ') || '—'}
                     </td>
                     <td>
                       {v.latitude !== null && v.longitude !== null ? (
@@ -317,27 +328,6 @@ export default function VenuesPage() {
               </tbody>
             </table>
           </div>
-          {total > perPage && (
-            <div className="flex items-center justify-between mt-4 text-sm text-muted">
-              <span>Página {page} de {Math.ceil(total / perPage)}</span>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1 || loading}
-                >
-                  Anterior
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setPage(p => Math.min(Math.ceil(total / perPage), p + 1))}
-                  disabled={page >= Math.ceil(total / perPage) || loading}
-                >
-                  Siguiente
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {modalOpen && (

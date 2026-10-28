@@ -134,14 +134,17 @@ export function patchErrorFor(error: unknown): PatchFailure {
 }
 
 /**
- * A stored birth date (`YYYY-MM-DD`) as Chile writes it: `05-03-1990`.
+ * A stored calendar date (`YYYY-MM-DD`, or the date part of an ISO timestamp)
+ * as Chile writes it: `05-03-1990`. Returns `—` for anything else.
  *
  * Read as a calendar day, not an instant. `new Date('1990-03-05')` is midnight
  * UTC, which is still the 4th in Santiago, so formatting it in local time shows
  * the day before.
  */
-export function formatBirthDate(isoDate: string): string {
-  const [year, month, day] = isoDate.slice(0, 10).split('-').map(Number);
+export function formatCalendarDate(isoDate: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(isoDate);
+  if (!match) return '—';
+  const [, year, month, day] = match.map(Number);
   return new Date(Date.UTC(year!, month! - 1, day!)).toLocaleDateString('es-CL', {
     timeZone: 'UTC',
     day: '2-digit',
@@ -149,3 +152,6 @@ export function formatBirthDate(isoDate: string): string {
     year: 'numeric',
   });
 }
+
+/** A stored birth date, the way {@link formatCalendarDate} prints any day. */
+export const formatBirthDate = formatCalendarDate;

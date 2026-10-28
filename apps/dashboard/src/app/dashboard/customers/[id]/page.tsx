@@ -9,6 +9,7 @@ import {
   buildCustomerPatch,
   draftFromCustomer,
   formatBirthDate,
+  formatCalendarDate,
   patchErrorFor,
   type CustomerDraft,
 } from '@/lib/customer-edit';
@@ -209,7 +210,7 @@ export default function CustomerDetailPage() {
       setCustomer(cust);
       if (cust.currentTierId) {
         const match = tiers.find((t) => t.id === cust.currentTierId);
-        setTierName(match?.name || cust.currentTier || '—');
+        setTierName(match?.name ?? '—');
         setTierMultiplier(match?.multiplier || 1);
       } else {
         setTierName(cust.currentTier || 'Bronce');
@@ -270,7 +271,7 @@ export default function CustomerDetailPage() {
         // Map tier ID to name + multiplier
         if (cust.currentTierId) {
           const match = tiers.find((t) => t.id === cust.currentTierId);
-          setTierName(match?.name || cust.currentTier || '—');
+          setTierName(match?.name ?? '—');
           setTierMultiplier(match?.multiplier || 1);
         } else {
           setTierName(cust.currentTier || 'Bronce');
@@ -312,6 +313,12 @@ export default function CustomerDetailPage() {
   const earn = resolveEarn(earnRule, { pesos: amount, visits: amount }, tierMultiplier);
   const earnRate = earnRule.earnRate;
   const saleAmountLabel = earnRule.earnBy === 'purchase' ? 'Monto de venta ($)' : 'Visitas / conteos';
+  // What one unit of the base is. Under `purchase` the base is the sale over the
+  // tenant's unit, not the sale itself, so the input's label would misname it.
+  const baseUnitLabel =
+    earnRule.earnBy === 'purchase'
+      ? `× $${earnRule.earnUnitAmount.toLocaleString('es-CL')} de compra`
+      : 'visitas';
   const saleAmountStep = earnRule.earnBy === 'purchase' ? '0.01' : '1';
   const saleAmountPlaceholder = earnRule.earnBy === 'purchase' ? 'Ej: 1500' : 'Ej: 1';
 
@@ -349,7 +356,7 @@ export default function CustomerDetailPage() {
     id: t.id,
     kind: 'tx' as const,
     eventType: t.type === 'earn' || t.type === 'earned' ? 'points.earned'
-              : t.type === 'redeem' ? 'points.redeemed' : t.type,
+              : t.type === 'redeem' ? 'points.redeemed' : 'points.adjusted',
     points: t.points,
     note: t.note ?? null,
     createdAt: t.createdAt,
@@ -364,7 +371,9 @@ export default function CustomerDetailPage() {
     const labels: Record<string, string> = {
       'points.earned': 'Puntos ganados',
       'points.redeemed': 'Puntos canjeados',
+      'points.adjusted': 'Ajuste de puntos',
       'customer.registered': 'Registro',
+      'customer.checked_in': 'Visitó el local',
       'visit': 'Visita al local',
       'CUSTOMER_REGISTERED': 'Registro',
       'POINTS_EARNED': 'Puntos ganados',
@@ -372,7 +381,9 @@ export default function CustomerDetailPage() {
       'TIER_CHANGED': 'Cambio de nivel',
       'VISIT_RECORDED': 'Visita registrada',
     };
-    return labels[item.eventType] || item.eventType;
+    // An event this page does not know yet is still activity; its code is not
+    // something to show a merchant.
+    return labels[item.eventType] ?? 'Actividad';
   }
 
   function timelineColor(type: string): string {
@@ -411,7 +422,7 @@ export default function CustomerDetailPage() {
             </p>
           )}
           <p className="customer-hero-since">
-            Cliente desde {customer.createdAt}
+            Cliente desde {formatCalendarDate(customer.createdAt)}
           </p>
         </div>
 
@@ -519,7 +530,7 @@ export default function CustomerDetailPage() {
             <dt>Puntos</dt>
             <dd style={{ margin: 0 }}>{customer.points.toLocaleString()}</dd>
             <dt>Miembro desde</dt>
-            <dd style={{ margin: 0 }}>{customer.createdAt}</dd>
+            <dd style={{ margin: 0 }}>{formatCalendarDate(customer.createdAt)}</dd>
           </dl>
 
           <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -611,7 +622,7 @@ export default function CustomerDetailPage() {
                       call a visit count "pts". The total is `earn.preview`, the same
                       derivation the charge uses, rather than a second floor here. */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
-                    <span>Base: {earn.base} {saleAmountLabel}</span>
+                    <span>Base: {earn.base} {baseUnitLabel}</span>
                     <span>&times; Tasa ({earnRate}x)</span>
                     <span>&times; Multiplicador ({tierMultiplier}x)</span>
                     <span><strong>= {earn.preview} pts</strong></span>

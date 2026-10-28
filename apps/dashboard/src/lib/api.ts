@@ -472,7 +472,9 @@ export const api = {
         phone: raw.phone as string,
         points: Number(raw.points ?? 0),
         totalPointsEarned: Number(raw.totalPointsEarned ?? 0),
-        currentTier: raw.currentTierId as string || '—',
+        // This route returns the tier's id only; the page resolves the name
+        // against the tier list, so the id is never offered as one.
+        currentTier: '—',
         currentTierId: raw.currentTierId as string | undefined,
         createdAt: raw.createdAt ? (raw.createdAt as string).split('T')[0] : '—',
         customer_events: events,

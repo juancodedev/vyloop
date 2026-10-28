@@ -423,9 +423,11 @@ describe('the customer page points breakdown', () => {
   });
 
   it('labels the base in the mechanic’s own unit', () => {
-    // `pts` next to a visit count told the operator the field was money. The unit
-    // comes from the same label the input uses, so the field and the equation agree.
-    expect(block).toMatch(/<span>[^<]*Base:[^<]*\{\s*earn\.base\s*\}[^<]*\{\s*saleAmountLabel\s*\}/);
+    // `pts` next to a visit count told the operator the field was money, and the
+    // input's own label ("Monto de venta") called the base the sale when it is the
+    // sale over the tenant's unit. The unit is derived from the earn mechanic.
+    expect(block).toMatch(/<span>[^<]*Base:[^<]*\{\s*earn\.base\s*\}[^<]*\{\s*baseUnitLabel\s*\}/);
+    expect(customerSource).toMatch(/const baseUnitLabel\s*=\s*earnRule\.earnBy === 'purchase'/);
   });
 
   it('shows every factor the total multiplies', () => {
@@ -458,7 +460,7 @@ describe('the customer page points breakdown', () => {
     //
     // Only `{interpolations}` count. The surrounding prose — "Base", "Multiplicador",
     // "pts" — is wording, not an operand, and reading it as one made this test
-    // report the fix as the defect. `saleAmountLabel` is wording too: it names the
+    // report the fix as the defect. `baseUnitLabel` is wording too: it names the
     // unit of a factor already displayed, it is not an operand of its own.
     const displayed = [...block.matchAll(/<span>([^<]*)<\/span>/g)].flatMap((match) =>
       [...match[1]!.matchAll(/\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\}/g)].map(
@@ -466,10 +468,10 @@ describe('the customer page points breakdown', () => {
       ),
     );
 
-    expect(displayed.filter((name) => name !== 'saleAmountLabel')).not.toEqual([]);
+    expect(displayed.filter((name) => name !== 'baseUnitLabel')).not.toEqual([]);
 
     for (const factor of displayed) {
-      if (factor === 'saleAmountLabel') continue;
+      if (factor === 'baseUnitLabel') continue;
       expect(SHOWN_FACTORS, `"${factor}" is displayed but never multiplied`).toContain(factor);
     }
   });
