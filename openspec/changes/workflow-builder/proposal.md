@@ -25,13 +25,13 @@ either.
 `trigger_event text`, `conditions jsonb`, `actions jsonb`, `is_active`) are
 executed today:
 
-| trigger_event         | Fires on                                   | Extra data for conditions |
-| --------------------- | ------------------------------------------ | ------------------------- |
-| `customer_registered` | `CustomerRegistered` event                 | none                      |
-| `points_milestone`    | every `PointsAssigned` event               | `total_points`            |
-| `reward_redeemed`     | `RewardRedeemed` event                     | `reward_name` (optional)  |
-| `birthday`            | daily cron, today's month and day          | none                      |
-| `inactivity`          | daily cron, `last_visit_at` older than N days | none                   |
+| trigger_event         | Fires on                                      | Extra data for conditions |
+| --------------------- | --------------------------------------------- | ------------------------- |
+| `customer_registered` | `CustomerRegistered` event                    | none                      |
+| `points_milestone`    | every `PointsAssigned` event                  | `total_points`            |
+| `reward_redeemed`     | `RewardRedeemed` event                        | `reward_name` (optional)  |
+| `birthday`            | daily cron, today's month and day             | none                      |
+| `inactivity`          | daily cron, `last_visit_at` older than N days | none                      |
 
 Conditions are AND-combined `{ field, operator, value }` with dot paths
 (`workers/automation/src/helpers.ts:166-241`), evaluated against `id`,

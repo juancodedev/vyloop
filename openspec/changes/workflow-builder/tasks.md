@@ -4,13 +4,13 @@
 
 ## Review Workload Forecast
 
-| Field                   | Value                                                                    |
-| ----------------------- | ------------------------------------------------------------------------ |
-| Estimated changed lines | ~1,300 (additions + deletions)                                           |
-| 400-line budget risk    | High                                                                     |
-| Chained PRs recommended | Yes                                                                      |
+| Field                   | Value                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------- |
+| Estimated changed lines | ~1,300 (additions + deletions)                                                        |
+| 400-line budget risk    | High                                                                                  |
+| Chained PRs recommended | Yes                                                                                   |
 | Suggested split         | Unit 1 (schema) → Unit 2 (CRUD API) → Unit 3 (engine fixes) → Unit 4 (dashboard form) |
-| Delivery strategy       | ask-on-risk                                                              |
+| Delivery strategy       | ask-on-risk                                                                           |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
