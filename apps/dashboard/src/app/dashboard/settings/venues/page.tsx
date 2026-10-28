@@ -194,6 +194,17 @@ export default function VenuesPage() {
     }
   };
 
+  // No confirmation: bringing a branch back undoes nothing and loses nothing.
+  const reactivate = async (venue: BranchView) => {
+    try {
+      await api.reactivateVenue(venue.id);
+      loadVenues();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo reactivar la sede';
+      window.dispatchEvent(new CustomEvent('dashboard-toast', { detail: { type: 'error', message } }));
+    }
+  };
+
   return (
     <>
       <ToastContainer />
@@ -295,8 +306,9 @@ export default function VenuesPage() {
                         <input
                           type="checkbox"
                           checked={v.is_active}
-                          onChange={() => deactivate(v)}
-                          disabled={!v.is_active || loading}
+                          onChange={() => (v.is_active ? deactivate(v) : reactivate(v))}
+                          disabled={loading}
+                          aria-label={v.is_active ? `Desactivar ${v.name}` : `Activar ${v.name}`}
                         />
                         <span className="slider"></span>
                       </label>
@@ -311,7 +323,7 @@ export default function VenuesPage() {
                         >
                           <EditIcon />
                         </button>
-                        {v.is_active && (
+                        {v.is_active ? (
                           <button
                             className="btn btn-danger btn-sm"
                             onClick={() => deactivate(v)}
@@ -319,6 +331,15 @@ export default function VenuesPage() {
                             title="Desactivar"
                           >
                             <TrashIcon />
+                          </button>
+                        ) : (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => reactivate(v)}
+                            disabled={loading}
+                            aria-label={`Reactivar ${v.name}`}
+                          >
+                            Reactivar
                           </button>
                         )}
                       </div>

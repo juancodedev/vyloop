@@ -87,6 +87,7 @@ Todo evento o acción que genere efectos de negocio debe incluir el contexto de 
 | POST | `/v1/businesses/{id}/branches` | Crea una sucursal; la posición es opcional y se envía como `latitude` + `longitude` o `geohash` |
 | PATCH | `/v1/businesses/{id}/branches/{branchId}` | Actualiza una sucursal y, si vienen, sus coordenadas |
 | DELETE | `/v1/businesses/{id}/branches/{branchId}` | Desactiva la sucursal (`is_active: false`); no borra la fila |
+| POST | `/v1/businesses/{id}/branches/{branchId}/reactivate` | Reactiva una sucursal desactivada (`is_active: true`) |
 
 ### Customer Platform
 

@@ -905,6 +905,13 @@ export const api = {
     await apiFetch(`/v1/businesses/me/branches/${id}`, { method: 'DELETE' });
   },
 
+  /**
+   * Bring a deactivated venue back.
+   */
+  async reactivateVenue(id: string): Promise<void> {
+    await apiFetch(`/v1/businesses/me/branches/${id}/reactivate`, { method: 'POST' });
+  },
+
   // ============================================================================
   // Push Campaigns
   // ============================================================================

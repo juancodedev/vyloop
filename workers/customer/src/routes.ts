@@ -1289,11 +1289,15 @@ router.get('/v1/customers/:id', async (c) => {
       .select()
       .from(consents)
         .where(and(eq(consents.customerId, id), eq(consents.businessId, businessId))),
-    // Latest balance
+    // Latest balance. Scoped to the business as well as the customer, like
+    // every other read here: the 404 below would hide another business's rows
+    // anyway, but a query should not depend on a later check to stay in-tenant.
     db
       .select({ balance_after: pointsTransactions.balanceAfter })
       .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, id))
+      .where(
+        and(eq(pointsTransactions.customerId, id), eq(pointsTransactions.businessId, businessId)),
+      )
       .orderBy(desc(pointsTransactions.createdAt))
       .limit(1),
     // Total points earned
@@ -1303,6 +1307,7 @@ router.get('/v1/customers/:id', async (c) => {
       .where(
         and(
           eq(pointsTransactions.customerId, id),
+          eq(pointsTransactions.businessId, businessId),
           or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
         ),
       ),
@@ -1318,7 +1323,9 @@ router.get('/v1/customers/:id', async (c) => {
         createdAt: pointsTransactions.createdAt,
       })
       .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, id))
+      .where(
+        and(eq(pointsTransactions.customerId, id), eq(pointsTransactions.businessId, businessId)),
+      )
       .orderBy(desc(pointsTransactions.createdAt))
       .limit(5),
   ]);

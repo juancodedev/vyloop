@@ -307,16 +307,35 @@ export async function deactivateBranch(
   db: BranchesDb,
   input: { businessId: string; branchId: string },
 ): Promise<BranchView | null> {
+  return setBranchActive(db, input, false);
+}
+
+/**
+ * Bring a deactivated venue back. Deactivation kept the row and its history,
+ * so this only flips `is_active`; the position and the rest stay as they were.
+ */
+export async function reactivateBranch(
+  db: BranchesDb,
+  input: { businessId: string; branchId: string },
+): Promise<BranchView | null> {
+  return setBranchActive(db, input, true);
+}
+
+async function setBranchActive(
+  db: BranchesDb,
+  input: { businessId: string; branchId: string },
+  isActive: boolean,
+): Promise<BranchView | null> {
   return db.transaction(async (tx) => {
     await tx.execute(setCurrentBusinessId(input.businessId));
 
     const rows = (await tx
       .update(branches)
-      .set({ isActive: false })
+      .set({ isActive })
       .where(and(eq(branches.businessId, input.businessId), eq(branches.id, input.branchId)))
       .returning(BRANCH_COLUMNS)) as BranchRow[];
 
-    const deactivated = rows[0];
-    return deactivated ? toBranchView(deactivated) : null;
+    const updated = rows[0];
+    return updated ? toBranchView(updated) : null;
   });
 }

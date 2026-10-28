@@ -12,6 +12,7 @@ import { resolveBranchLocation, type BranchLocation } from './branch-location';
 import {
   createBranch,
   deactivateBranch,
+  reactivateBranch,
   listBranches,
   updateBranch,
 } from './branches';
@@ -1501,6 +1502,33 @@ app.delete('/v1/businesses/:id/branches/:branchId', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Venue not found' } }, 404);
   }
 
+  scheduleLocationsSync(c, { tenantId: auth.businessId, businessWide: true });
+
+  return c.json({ branch: venue });
+});
+
+app.post('/v1/businesses/:id/branches/:branchId/reactivate', async (c) => {
+  const auth = await authorizeVenueRequest(c);
+  if (!auth.ok) {
+    return c.json({ error: { code: auth.code, message: auth.message } }, auth.status);
+  }
+
+  const dbUrl = c.env.DATABASE_URL;
+  if (!dbUrl) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Database not configured' } }, 500);
+  }
+
+  const db = createDb(dbUrl);
+  const venue = await reactivateBranch(db, {
+    businessId: auth.businessId,
+    branchId: c.req.param('branchId'),
+  });
+
+  if (!venue) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Venue not found' } }, 404);
+  }
+
+  // Back in the business's locations, as deactivating took it out of them.
   scheduleLocationsSync(c, { tenantId: auth.businessId, businessWide: true });
 
   return c.json({ branch: venue });

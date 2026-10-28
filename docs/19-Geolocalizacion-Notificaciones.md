@@ -193,6 +193,7 @@ Owned by `workers/identity` (D6). The existing stub at `index.ts:880-890` is rep
 | `POST`   | `/v1/businesses/:id/branches`           | operator | Create a branch, optionally with coordinates.                                 |
 | `PATCH`  | `/v1/businesses/:id/branches/:branchId` | operator | Update name/address and/or set, change, or clear coordinates.                 |
 | `DELETE` | `/v1/businesses/:id/branches/:branchId` | operator | Deactivate/remove a branch.                                                   |
+| `POST`   | `/v1/businesses/:id/branches/:branchId/reactivate` | operator | Reactivate a deactivated branch.                                   |
 
 Every route resolves `businessId` from the authenticated operator, never from the path alone — the path `:id` must be checked against the caller's tenant or the route is a cross-tenant write.
 
