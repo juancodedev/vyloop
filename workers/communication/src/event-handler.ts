@@ -170,7 +170,7 @@ async function handleWhatsAppOutboundRequested(
           error: 'No phone number available',
         },
       })
-      .where(eq(messageLog.id, logEntry.id));
+      .where(and(eq(messageLog.id, logEntry.id), eq(messageLog.businessId, businessId)));
     return;
   }
 
@@ -191,7 +191,7 @@ async function handleWhatsAppOutboundRequested(
           status: 'sent',
           providerMessageId: providerMessageId ?? null,
         })
-        .where(eq(messageLog.id, logEntry.id));
+        .where(and(eq(messageLog.id, logEntry.id), eq(messageLog.businessId, businessId)));
 
       console.log(
         `${tag(event)} Message ${logEntry.id} sent via Meta — provider ID: ${providerMessageId}`,
@@ -221,7 +221,7 @@ async function handleWhatsAppOutboundRequested(
             error_code: response.status,
           },
         })
-        .where(eq(messageLog.id, logEntry.id));
+        .where(and(eq(messageLog.id, logEntry.id), eq(messageLog.businessId, businessId)));
 
       console.error(
         `${tag(event)} Message ${logEntry.id} failed permanently — Meta error: ${responseBody.error?.message ?? response.status}`,

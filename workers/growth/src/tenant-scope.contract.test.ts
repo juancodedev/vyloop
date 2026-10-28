@@ -35,11 +35,11 @@ describe('growth queries name the business', () => {
     }
   });
 
-  it('never selects, updates or deletes a tier, reward or program by id alone', () => {
+  it('never selects, updates or deletes a tier, reward, program or check-in by id alone', () => {
     for (const { file, text } of sources) {
       const byIdAlone = [
         ...text.matchAll(
-          /\.where\(\s*eq\(\s*(membershipTiers|rewards|loyaltyPrograms|rewardBranches)\.(id|rewardId),[^()]*\)\s*\)/g,
+          /\.where\(\s*eq\(\s*(membershipTiers|rewards|loyaltyPrograms|rewardBranches|checkins)\.(id|rewardId),[^()]*\)\s*\)/g,
         ),
       ].map((m) => m[0]);
 
