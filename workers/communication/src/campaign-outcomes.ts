@@ -134,6 +134,9 @@ export async function readCampaignFailures(
     .map((row) => ({
       customer_name: row.customer_name == null ? null : String(row.customer_name),
       error: row.error == null ? null : String(row.error),
-      created_at: String(row.created_at),
+      // A raw query hands timestamptz back as Postgres text
+      // (`2026-10-28 12:00:00+00`), which Safari cannot parse; send ISO like
+      // the rest of the response.
+      created_at: new Date(String(row.created_at)).toISOString(),
     }));
 }

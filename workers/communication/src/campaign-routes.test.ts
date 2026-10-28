@@ -414,7 +414,7 @@ describe('GET /v1/communication/push/campaigns/:referenceId', () => {
           {
             customer_name: 'Pedro Soto',
             error: 'The browser is no longer registered for push.',
-            created_at: '2026-10-28T12:01:00.000Z',
+            created_at: '2026-10-28 12:01:00+00',
           },
         ],
       });
