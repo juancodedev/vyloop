@@ -82,7 +82,7 @@ export default function CampaignsPage() {
         <div className="dash-header">
           <div>
             <h1 className="dash-title">Campañas push</h1>
-            <p className="dash-subtitle">Componé y enviá mensajes a clientes cercanos</p>
+            <p className="dash-subtitle">Escribe y envía mensajes a clientes cercanos</p>
           </div>
           <div className="dash-actions">
             <button className="btn btn-primary" onClick={() => router.push('/dashboard/communication/campaigns/new')}>

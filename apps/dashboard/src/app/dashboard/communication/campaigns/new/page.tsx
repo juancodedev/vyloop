@@ -71,7 +71,7 @@ export default function CampaignComposerPage() {
     }
 
     if (targetType === 'branch') {
-      if (!branchId) errors.branchId = 'Seleccioná una sede';
+      if (!branchId) errors.branchId = 'Selecciona una sede';
     } else {
       const lat = Number(latitude);
       const lng = Number(longitude);
@@ -186,7 +186,7 @@ export default function CampaignComposerPage() {
       <div className="dash-header">
         <div>
           <h1 className="dash-title">Nueva campaña push</h1>
-          <p className="dash-subtitle">Componé un mensaje para clientes cercanos</p>
+          <p className="dash-subtitle">Escribe un mensaje para clientes cercanos</p>
         </div>
         <div className="dash-actions">
           <button className="btn btn-secondary" onClick={() => router.push('/dashboard/communication/campaigns')} disabled={sending}>
@@ -254,7 +254,7 @@ export default function CampaignComposerPage() {
                   <input type="radio" name="target" value="branch" checked={targetType === 'branch'} onChange={() => { setTargetType('branch'); setPreview(null); }} />
                   <div>
                     <div style={{ fontWeight: 500 }}>Una sede</div>
-                    <div className="text-sm text-muted">Seleccioná una sede con coordenadas registradas</div>
+                    <div className="text-sm text-muted">Selecciona una sede con coordenadas registradas</div>
                   </div>
                 </label>
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer' }}>
@@ -276,7 +276,7 @@ export default function CampaignComposerPage() {
                     onChange={(e) => { setBranchId(e.target.value); if (fieldErrors.branchId) setFieldErrors(prev => ({ ...prev, branchId: '' })); }}
                     disabled={loadingVenues || sending}
                   >
-                    <option value="">Seleccioná una sede</option>
+                    <option value="">Selecciona una sede</option>
                     {venues.map((v) => (
                       <option key={v.id} value={v.id}>
                         {v.name} {v.latitude !== null && v.longitude !== null && `(${v.latitude.toFixed(4)}, ${v.longitude.toFixed(4)})`}

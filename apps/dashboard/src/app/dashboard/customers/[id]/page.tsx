@@ -1,5 +1,6 @@
 'use client';
 
+import { Cake } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
@@ -7,6 +8,7 @@ import { api, type CustomerDetail } from '@/lib/api';
 import {
   buildCustomerPatch,
   draftFromCustomer,
+  formatBirthDate,
   patchErrorFor,
   type CustomerDraft,
 } from '@/lib/customer-edit';
@@ -405,7 +407,7 @@ export default function CustomerDetailPage() {
           <p className="customer-hero-phone">{customer.phone}</p>
           {customer.birthDate && (
             <p className="customer-hero-birth">
-              🎂 {new Date(customer.birthDate).toLocaleDateString('es-MX')}
+              <Cake size={16} aria-hidden="true" /> {formatBirthDate(customer.birthDate)}
             </p>
           )}
           <p className="customer-hero-since">

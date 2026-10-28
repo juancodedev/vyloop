@@ -1,0 +1,18 @@
+/* The confirmation dialog. It sits on the shared .modal styles in globals.css. */
+
+.dialog {
+  max-width: 420px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.message {
+  margin-top: 0.5rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}

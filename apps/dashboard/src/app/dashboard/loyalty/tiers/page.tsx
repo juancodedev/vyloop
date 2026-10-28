@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 
+import { useConfirm } from '@/components/ConfirmDialog';
 import { api } from '@/lib/api';
 import type { Tier } from '@/lib/api';
 
@@ -23,6 +24,7 @@ const emptyForm: TierForm = {
 
 export default function LoyaltyTiersPage() {
   const [tiers, setTiers] = useState<Tier[]>([]);
+  const [askConfirm, confirmDialog] = useConfirm();
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; tier?: Tier } | null>(null);
   const [form, setForm] = useState<TierForm>(emptyForm);
@@ -86,9 +88,12 @@ export default function LoyaltyTiersPage() {
   }
 
   async function handleDelete(tier: Tier) {
-    if (!confirm(`¿Eliminar el nivel "${tier.name}"? Esta acción no se puede deshacer.`)) {
-      return;
-    }
+    const confirmed = await askConfirm({
+      title: `¿Eliminar el nivel "${tier.name}"?`,
+      message: 'Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteTier(tier.id);
       showToast('success', `Nivel "${tier.name}" eliminado`);
@@ -108,6 +113,7 @@ export default function LoyaltyTiersPage() {
 
   return (
     <>
+      {confirmDialog}
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <span className="text-sm text-muted">

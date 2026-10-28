@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 
+import { useConfirm } from '@/components/ConfirmDialog';
 import { api } from '@/lib/api';
 import type { Reward, Venue } from '@/lib/api';
 
@@ -37,6 +38,7 @@ function formatDate(iso?: string): string {
 
 export default function LoyaltyRewardsPage() {
   const [rewards, setRewards] = useState<Reward[]>([]);
+  const [askConfirm, confirmDialog] = useConfirm();
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; reward?: Reward } | null>(null);
   const [form, setForm] = useState<RewardForm>(emptyForm);
@@ -131,9 +133,12 @@ export default function LoyaltyRewardsPage() {
   }
 
   async function handleDelete(reward: Reward) {
-    if (!confirm(`¿Eliminar la recompensa "${reward.name}"? Esta acción no se puede deshacer.`)) {
-      return;
-    }
+    const confirmed = await askConfirm({
+      title: `¿Eliminar el premio "${reward.name}"?`,
+      message: 'Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteReward(reward.id);
       showToast('success', `Recompensa "${reward.name}" eliminada`);
@@ -153,6 +158,7 @@ export default function LoyaltyRewardsPage() {
 
   return (
     <>
+      {confirmDialog}
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <span className="text-sm text-muted">

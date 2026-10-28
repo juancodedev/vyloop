@@ -78,7 +78,7 @@ export default function SendMessagePage() {
       <div className="dash-header">
         <div>
           <h1 className="dash-title">Enviar Mensaje</h1>
-          <p className="dash-subtitle">Enviá un mensaje WhatsApp a un cliente</p>
+          <p className="dash-subtitle">Envía un mensaje de WhatsApp a un cliente</p>
         </div>
         <div className="dash-actions">
           <Link href="/dashboard/communication/messages" className="btn btn-secondary btn-sm">

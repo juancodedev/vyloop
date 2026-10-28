@@ -750,7 +750,7 @@ export const api = {
 
     if (entries.length !== 1) {
       throw new Error(
-        'Buscá por teléfono, correo o el código del pase: exactamente un dato, no una lista.',
+        'Busca por teléfono, correo o el código del pase: exactamente un dato, no una lista.',
       );
     }
 

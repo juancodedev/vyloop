@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
+import { useConfirm } from '@/components/ConfirmDialog';
 import { VenueForm } from '@/components/venue-form';
 import { api, type BranchView, type VenueFormData } from '@/lib/api';
 
@@ -102,6 +103,7 @@ function nearbyStatus(venue: BranchView, all: BranchView[]) {
 
 export default function VenuesPage() {
   const [venues, setVenues] = useState<BranchView[]>([]);
+  const [askConfirm, confirmDialog] = useConfirm();
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [perPage] = useState(20);
@@ -166,31 +168,34 @@ export default function VenuesPage() {
     }
   };
 
-  const toggleActive = async (venue: BranchView) => {
+  // The switch and the trash button both deactivate, and both ask once. The
+  // trash button used to ask, then call the switch's handler, which asked again.
+  const deactivate = async (venue: BranchView) => {
     if (!venue.is_active) return; // Only allow deactivation from list
-    if (!confirm(`¿Desactivar "${venue.name}"? Seguirá existiendo pero no aparecerá en listas.`)) return;
+    const confirmed = await askConfirm({
+      title: `¿Desactivar "${venue.name}"?`,
+      message: 'Seguirá existiendo, pero no aparecerá en las listas.',
+      confirmLabel: 'Desactivar',
+    });
+    if (!confirmed) return;
     try {
       await api.deactivateVenue(venue.id);
       loadVenues();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Error al desactivar';
-      alert(msg);
+      const message = err instanceof Error ? err.message : 'No se pudo desactivar la sede';
+      window.dispatchEvent(new CustomEvent('dashboard-toast', { detail: { type: 'error', message } }));
     }
-  };
-
-  const confirmDeactivate = (venue: BranchView) => {
-    if (!confirm(`¿Desactivar "${venue.name}"? Seguirá existiendo pero no aparecerá en listas.`)) return;
-    toggleActive(venue);
   };
 
   return (
     <>
       <ToastContainer />
+      {confirmDialog}
       <div className="page fade-in">
         <div className="dash-header">
           <div>
             <h1 className="dash-title">Sedes</h1>
-            <p className="dash-subtitle">Gestioná las sedes de tu negocio</p>
+            <p className="dash-subtitle">Gestiona las sedes de tu negocio</p>
           </div>
           <div className="dash-actions">
             <button className="btn btn-primary" onClick={openCreateModal} disabled={loading}>
@@ -279,7 +284,7 @@ export default function VenuesPage() {
                         <input
                           type="checkbox"
                           checked={v.is_active}
-                          onChange={() => toggleActive(v)}
+                          onChange={() => deactivate(v)}
                           disabled={!v.is_active || loading}
                         />
                         <span className="slider"></span>
@@ -298,7 +303,7 @@ export default function VenuesPage() {
                         {v.is_active && (
                           <button
                             className="btn btn-danger btn-sm"
-                            onClick={() => confirmDeactivate(v)}
+                            onClick={() => deactivate(v)}
                             disabled={loading}
                             title="Desactivar"
                           >
