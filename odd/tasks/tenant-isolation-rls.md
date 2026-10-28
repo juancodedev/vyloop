@@ -15,7 +15,7 @@ Branch: one per unit (`feat/rls-unit<N>-…`). Delivery: one PR per unit, stacke
 
 | ID | Specs | Route | Status | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | S1 | inline | done: RED (missing exports), then packages/db 281 tests, tsc, eslint green | see PR |
+| T1 | S1 | inline | done: RED (missing exports), then packages/db 281 tests, tsc, eslint green | PR #317 |
 | T2 | S2 | inline | pending | |
 | T3 | S3 | inline | pending | |
 | T4 | S4 | inline | pending | |
