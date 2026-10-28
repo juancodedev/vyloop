@@ -439,7 +439,8 @@ router.post('/webhook', async (c) => {
       const [customer] = matches;
       if (!customer) {
         console.warn(
-          `[communication] Inbound message from unknown phone ${customerPhone} — skipping`,
+          // The message id, not the phone: a phone number is personal data.
+          `[communication] Inbound message ${msg.id} from an unknown phone — skipping`,
         );
         continue;
       }

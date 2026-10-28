@@ -310,7 +310,7 @@ export async function deliverPushNotification(
 
     if (attempt.kind === 'delivered') {
       delivered += 1;
-      await db.update(messageLog).set({ status: 'sent' }).where(eq(messageLog.id, logEntry.id));
+      await db.update(messageLog).set({ status: 'sent' }).where(and(eq(messageLog.id, logEntry.id), eq(messageLog.businessId, businessId)));
       continue;
     }
 
@@ -326,7 +326,7 @@ export async function deliverPushNotification(
           status: 'failed',
           metadata: { error: 'The browser is no longer registered for push.' },
         })
-        .where(eq(messageLog.id, logEntry.id));
+        .where(and(eq(messageLog.id, logEntry.id), eq(messageLog.businessId, businessId)));
       continue;
     }
 
@@ -342,7 +342,7 @@ export async function deliverPushNotification(
     await db
       .update(messageLog)
       .set({ status: 'failed', metadata: { error: attempt.reason } })
-      .where(eq(messageLog.id, logEntry.id));
+      .where(and(eq(messageLog.id, logEntry.id), eq(messageLog.businessId, businessId)));
   }
 
   return { delivered, failed, removed, subscriptions: subscriptions.length };

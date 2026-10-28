@@ -2376,7 +2376,7 @@ async function creditCheckin(
   await db
     .update(checkins)
     .set({ points })
-    .where(eq(checkins.id, checkinId));
+    .where(and(eq(checkins.id, checkinId), eq(checkins.businessId, businessId)));
 
   return { points, balanceAfter };
 }
