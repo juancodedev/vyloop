@@ -17,10 +17,11 @@ Branch: feat/dashboard-redesign (one branch per phase). Delivery: one PR per pha
 | --- | --- | --- | --- | --- |
 | T1 | S1, S2, S7 (foundation: tokens, fonts, globals, dead code, page titles) | inline | done: 287 tests, tsc, eslint, next build green; no visual check (no browser here) | 2775ad8 (#298, merged) |
 | T2 | S3, S4 (landing + login) | inline | done: RED 4/4 on the old landing, then 293 tests, tsc, eslint, next build green; no visual check | c83a0fd |
-| T3 | S5 (sidebar + Hoy) | inline | pending | |
+| T3 | S5 (sidebar + Resumen) | inline | done: RED 7/7, then 303 tests, tsc, eslint, next build green; no visual check | see L3 |
 | T4 | S6 (POS) | inline | pending | |
 
 ## Log
 
 - L1 (2026-10-28) User: "revisemos un re diseño del sitio, desde el landing page hasta el dashboard, creo que no esta muy esteticamente atractivo, algunos elementos que estan ahi no se usan o no funcionan" → mockup → "me gusta la propuesta, implementemosla / vamos por parte eso si".
 - L2 Uncommitted wallet demo-mode files (workers/wallet/wrangler.jsonc, its contract test, docs/18) belong to another change; never stage them here.
+- L3 T3: the API has no per-day figures and no inactive-customer list, so the mockup's "Hoy" (sales today, "hace rato que no vienen") became "Resumen" with totals since the program started, labelled as such. /dashboard/analytics and /dashboard/loyalty redirect to /dashboard. loyalty/customers joins the sidebar as "Saldos".

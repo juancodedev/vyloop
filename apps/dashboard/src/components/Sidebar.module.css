@@ -23,26 +23,38 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-5) var(--space-4);
+  padding: var(--space-5) var(--space-4) var(--space-4);
   min-height: 60px;
   flex-shrink: 0;
+  font-family: var(--font-display);
+  font-size: 1.625rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--paper);
 }
 
-.brandAccent {
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--brand-500);
-  font-family: var(--font-display);
-  line-height: 1;
+/* ── The till, first ── */
+.primaryAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 48px;
+  margin: 0 var(--space-3) var(--space-4);
+  padding: 0 var(--space-3);
+  border-radius: 14px;
+  background: var(--yellow);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 1rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: filter var(--transition-fast);
 }
 
-.brandName {
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--stone-100);
-  font-family: var(--font-display);
-  line-height: 1;
+.primaryAction:hover {
+  filter: brightness(0.95);
 }
 
 /* ── Nav ── */
@@ -64,10 +76,8 @@
 .sectionTitle {
   font-size: var(--text-xs);
   font-weight: var(--font-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--stone-500);
-  padding: 0 var(--space-2) var(--space-1);
+  color: #a9c2b4;
+  padding: 0 var(--space-3) var(--space-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -79,13 +89,16 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  min-height: 40px;
   padding: var(--space-2) var(--space-3);
-  color: var(--stone-400);
+  color: var(--sidebar-text);
   text-decoration: none;
-  font-size: var(--text-sm);
+  font-size: 0.9375rem;
   font-weight: var(--font-medium);
-  border-radius: var(--radius-md);
-  transition: background var(--transition-fast), color var(--transition-fast);
+  border-radius: 10px;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
   white-space: nowrap;
   cursor: pointer;
   border: none;
@@ -96,17 +109,18 @@
 }
 
 .navLink:hover {
-  background: var(--stone-800);
-  color: var(--stone-100);
+  background: var(--sidebar-hover);
+  color: var(--paper);
 }
 
 .navLinkActive {
-  background: var(--brand-500);
-  color: var(--text-inverse);
+  background: var(--sidebar-active);
+  color: var(--paper);
+  font-weight: var(--font-semibold);
 }
 
 .navLinkActive:hover {
-  background: var(--brand-600);
+  background: var(--sidebar-active);
 }
 
 .navLinkAction {
@@ -114,8 +128,8 @@
 }
 
 .navLinkAction:hover {
-  background: var(--stone-800);
-  color: var(--error);
+  background: var(--sidebar-hover);
+  color: var(--paper);
 }
 
 .navIcon {
@@ -127,7 +141,6 @@
 .navLabel {
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: var(--text-sm);
 }
 
 /* ── Tooltip (collapsed desktop) ── */
@@ -136,8 +149,8 @@
   left: calc(100% + 12px);
   top: 50%;
   transform: translateY(-50%);
-  background: var(--stone-800);
-  color: var(--stone-100);
+  background: var(--ink);
+  color: var(--paper);
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
@@ -156,7 +169,7 @@
 /* ── Bottom area ── */
 .bottom {
   padding: var(--space-3);
-  border-top: 1px solid var(--stone-800);
+  border-top: 1px solid var(--sidebar-divider);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -168,18 +181,20 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-2);
-  color: var(--stone-500);
+  color: var(--sidebar-text);
   background: transparent;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: 10px;
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
   margin-top: var(--space-1);
 }
 
 .toggleBtn:hover {
-  background: var(--stone-800);
-  color: var(--stone-100);
+  background: var(--sidebar-hover);
+  color: var(--paper);
 }
 
 /* ── Mobile drawer ── */
