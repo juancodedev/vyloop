@@ -115,6 +115,9 @@ Objetivo: el negocio puede actuar sobre clientes en riesgo y medir satisfacción
 - [ ] Evento `ChurnRiskDetected` publicado al bus cuando un cliente supera el umbral
 
 ### Communication Domain
+> **Fuera de alcance por ahora (decisión del 2026-10-28):** WhatsApp no se usa en Vyloop. Ver
+> `docs/18-Trabajo-Pendiente.md`. No retomar sin una decisión de producto explícita.
+
 - [ ] Integración de Meta Business API (WhatsApp)
 - [ ] Templates de WhatsApp: bienvenida, puntos acumulados, beneficio disponible
 - [ ] Integración de Resend para email transaccional
