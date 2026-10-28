@@ -215,3 +215,21 @@ strings ("a year ago") MAY appear. No label MAY be rendered in all caps.
 - GIVEN any profile data
 - WHEN the page renders
 - THEN no text matches `/\b(ago|year|month|day)s?\b/i`
+
+### Requirement: Delete Account
+
+The profile MUST offer "Eliminar mi cuenta". The first action MUST only open an
+in-page confirm step that says the deletion cannot be undone and names the
+balance lost when there is one. Only "Sí, eliminar mi cuenta" sends the
+request; on success the web MUST sign out.
+
+#### Scenario: Confirm before deleting
+
+- WHEN the customer taps "Eliminar mi cuenta"
+- THEN no request is sent
+- AND the confirm step says "Esto no se puede deshacer"
+
+#### Scenario: Deleted
+
+- WHEN the customer confirms and the API answers 204
+- THEN the session is closed and the customer lands on the home page
