@@ -20,6 +20,7 @@
     "db:drift:baseline": "node scripts/check-migration-drift.mjs --check-baseline",
     "db:checkin-backlog": "node scripts/check-checkin-backlog.mjs",
     "db:payment-reconciliation": "node scripts/check-payment-reconciliation.mjs",
+    "db:anonymise-deleted": "node scripts/anonymise-deleted-customers.mjs",
     "deps:overrides": "node scripts/check-dependency-overrides.mjs",
     "deps:audit": "node scripts/check-audit.mjs"
   },
