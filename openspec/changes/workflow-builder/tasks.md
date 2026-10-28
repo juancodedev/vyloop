@@ -12,7 +12,7 @@
 | Suggested split         | Unit 1 (schema) → Unit 2 (CRUD API) → Unit 3 (engine fixes) → Unit 4 (dashboard form) |
 | Delivery strategy       | ask-on-risk                                                                           |
 
-Decision needed before apply: No
+Decision needed before apply: Yes (push action or WhatsApp back; see proposal)
 Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High

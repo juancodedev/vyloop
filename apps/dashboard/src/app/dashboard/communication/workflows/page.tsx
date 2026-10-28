@@ -24,7 +24,7 @@ export default function WorkflowsPage() {
           <Workflow size={40} aria-hidden="true" />
           <span className="badge badge-warning">Próximamente</span>
           <p>
-            Muy pronto podrás enviar un WhatsApp automático cuando un cliente se registra, está de
+            Muy pronto podrás enviar un aviso automático cuando un cliente se registra, está de
             cumpleaños, canjea un premio, llega a cierta cantidad de puntos o lleva tiempo sin
             venir.
           </p>

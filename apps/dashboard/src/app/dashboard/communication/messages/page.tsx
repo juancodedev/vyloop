@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState, useEffect } from 'react';
 
 import { apiFetch } from '@/lib/api';
+import { describeDeliveryFailure } from '@/lib/delivery-failure';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -12,26 +13,22 @@ import { apiFetch } from '@/lib/api';
 interface MessageLogEntry {
   id: string;
   customerId: string;
-  direction: string;
+  /** Joined by the worker; null when the customer row is gone. */
+  customerName: string | null;
   channel: string;
   status: string;
-  content: Record<string, unknown>;
-  providerMessageId?: string;
+  /** A push delivery's `{ title, body, url, reference_id }`. */
+  content: Record<string, unknown> | null;
+  /** Holds `error` when the delivery failed. */
+  metadata: Record<string, unknown> | null;
   createdAt: string;
 }
 
-const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  queued:    { label: 'En cola',     color: 'var(--text-muted)', bg: 'var(--bg-subtle)' },
-  sent:      { label: 'Enviado',     color: '#2563eb', bg: '#dbeafe' },
-  delivered: { label: 'Entregado',   color: 'var(--success)', bg: '#dcfce7' },
-  read:      { label: 'Leído',       color: '#059669', bg: '#d1fae5' },
-  failed:    { label: 'Fallido',     color: 'var(--error)', bg: '#fef2f2' },
-  received:  { label: 'Recibido',    color: '#7c3aed', bg: '#f5f3ff' },
-};
-
-const DIRECTION_LABELS: Record<string, string> = {
-  outbound: 'Saliente',
-  inbound: 'Entrante',
+/** The statuses a push delivery can be in. */
+const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
+  queued: { label: 'En cola', className: 'badge-muted' },
+  sent: { label: 'Enviado', className: 'badge-success' },
+  failed: { label: 'Fallido', className: 'badge-warning' },
 };
 
 const PER_PAGE = 15;
@@ -73,11 +70,16 @@ export default function MessagesPage() {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('per_page', String(PER_PAGE));
+    // Push only: WhatsApp is hidden for now, and so are its rows.
+    params.set('channel', 'push');
     if (statusFilter) params.set('status', statusFilter);
 
     apiFetch(`/v1/communication/history?${params}`)
       .then((data) => {
-        const resp = data as { data: MessageLogEntry[]; meta: { total: number; page: number; per_page: number } };
+        const resp = data as {
+          data: MessageLogEntry[];
+          meta: { total: number; page: number; per_page: number };
+        };
         setMessages(resp.data ?? []);
         setTotal(resp.meta?.total ?? 0);
       })
@@ -85,11 +87,10 @@ export default function MessagesPage() {
       .finally(() => setLoading(false));
   };
 
-   
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchMessages();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, statusFilter]);
 
   const handleStatusFilter = (status: string) => {
@@ -114,7 +115,17 @@ export default function MessagesPage() {
     return (
       <div className="page fade-in">
         <div className="empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
+          <svg
+            width="48"
+            height="48"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ color: 'var(--text-muted)' }}
+          >
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
             <line x1="12" y1="16" x2="12.01" y2="16" />
@@ -133,24 +144,20 @@ export default function MessagesPage() {
       {/* ─── Header ─── */}
       <div className="dash-header">
         <div>
-          <h1 className="dash-title">Historial de Mensajes</h1>
-          <p className="dash-subtitle">Todos los mensajes enviados y recibidos</p>
-        </div>
-        <div className="dash-actions">
-          <Link href="/dashboard/communication/send" className="btn btn-primary btn-sm">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            Enviar Mensaje
-          </Link>
+          <h1 className="dash-title">Mensajes</h1>
+          <p className="dash-subtitle">Las notificaciones que enviaste a tus clientes</p>
         </div>
       </div>
 
       {/* ─── Filters ─── */}
       <div className="card mb-4">
-        <div className="card-body" style={{ padding: '0.75rem 1rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <span className="text-sm" style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Filtrar:</span>
+        <div
+          className="card-body"
+          style={{ padding: '0.75rem 1rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}
+        >
+          <span className="text-sm" style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+            Filtrar:
+          </span>
           {[
             { value: '', label: 'Todos' },
             ...Object.entries(STATUS_CONFIG).map(([value, cfg]) => ({ value, label: cfg.label })),
@@ -170,12 +177,22 @@ export default function MessagesPage() {
       {messages.length === 0 && !error ? (
         <div className="card">
           <div className="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
+            <svg
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ color: 'var(--text-muted)' }}
+            >
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
-            <p>No hay mensajes todavía.</p>
-            <Link href="/dashboard/communication/send" className="btn btn-primary mt-4">
-              Enviar primer mensaje
+            <p>Todavía no hay notificaciones enviadas.</p>
+            <Link href="/dashboard/communication/campaigns" className="btn btn-primary mt-4">
+              Ir a Campañas
             </Link>
           </div>
         </div>
@@ -187,38 +204,51 @@ export default function MessagesPage() {
               <thead>
                 <tr>
                   <th>Cliente</th>
-                  <th>Dirección</th>
+                  <th>Notificación</th>
                   <th>Estado</th>
-                  <th>Contenido</th>
                   <th>Fecha</th>
                 </tr>
               </thead>
               <tbody>
                 {messages.map((msg) => {
-                  const statusCfg = STATUS_CONFIG[msg.status] ?? { label: msg.status, color: 'var(--text-muted)', bg: 'var(--bg-subtle)' };
-                  const contentText = msg.content?.template_name
-                    ? String(msg.content.template_name)
-                    : msg.content?.text
-                      ? String(msg.content.text).slice(0, 40)
-                      : `ID: ${msg.id.slice(0, 8)}…`;
+                  const statusCfg = STATUS_CONFIG[msg.status] ?? {
+                    label: 'Sin estado',
+                    className: 'badge-muted',
+                  };
+                  const title = msg.content?.title ? String(msg.content.title) : 'Notificación';
+                  const body = msg.content?.body ? String(msg.content.body) : '';
                   return (
                     <tr key={msg.id}>
-                      <td style={{ fontWeight: 500 }}>{msg.customerId.slice(0, 8)}…</td>
-                      <td>{DIRECTION_LABELS[msg.direction] ?? msg.direction}</td>
-                      <td>
-                        <span
-                          className="badge"
-                          style={{
-                            background: statusCfg.bg,
-                            color: statusCfg.color,
-                            border: `1px solid ${statusCfg.color}20`,
-                          }}
-                        >
-                          {statusCfg.label}
-                        </span>
+                      <td style={{ fontWeight: 500 }}>
+                        {msg.customerName ?? (
+                          <span className="text-muted">Cliente no disponible</span>
+                        )}
                       </td>
-                      <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {contentText}
+                      <td style={{ maxWidth: 320 }}>
+                        <div style={{ fontWeight: 500 }}>{title}</div>
+                        {body && (
+                          <div
+                            className="text-sm text-muted"
+                            style={{
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {body}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ maxWidth: 280 }}>
+                        <span className={`badge ${statusCfg.className}`}>{statusCfg.label}</span>
+                        {msg.status === 'failed' && (
+                          <div
+                            className="text-sm"
+                            style={{ marginTop: 4, color: 'var(--text-secondary)' }}
+                          >
+                            {describeDeliveryFailure(msg.metadata)}
+                          </div>
+                        )}
                       </td>
                       <td className="text-sm text-muted">{formatRelative(msg.createdAt)}</td>
                     </tr>
@@ -231,20 +261,28 @@ export default function MessagesPage() {
           {/* ─── Pagination ─── */}
           {totalPages > 1 && (
             <div className="pagination" style={{ padding: '0.75rem 1rem' }}>
-              <span className="pagination-info">{total} mensajes en total</span>
+              <span className="pagination-info">{total} notificaciones en total</span>
               <div className="pagination-controls">
-                <button disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</button>
+                <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                  Anterior
+                </button>
                 {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
                   const startPage = Math.max(1, Math.min(page - 2, totalPages - 4));
                   const p = startPage + i;
                   if (p > totalPages) return null;
                   return (
-                    <button key={p} className={page === p ? 'active' : ''} onClick={() => setPage(p)}>
+                    <button
+                      key={p}
+                      className={page === p ? 'active' : ''}
+                      onClick={() => setPage(p)}
+                    >
                       {p}
                     </button>
                   );
                 })}
-                <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Siguiente</button>
+                <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
+                  Siguiente
+                </button>
               </div>
             </div>
           )}

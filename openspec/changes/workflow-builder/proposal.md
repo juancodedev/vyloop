@@ -3,6 +3,13 @@
 > Status: deferred. Documented 2026-10-28; not scheduled. Until it ships, the
 > dashboard lists Flujos as "Próximamente" and the page makes no API calls.
 
+> **Decision needed before apply (2026-10-28):** WhatsApp is hidden from the
+> platform for now ("WhatsApp hay que ocultarlo por ahora, no es algo que sea
+> relevante y que la plataforma utilice"). The engine's only action is
+> `send_whatsapp`, so this change needs either a push-notification action
+> (sending through the campaign push path) or WhatsApp back before it can ship.
+> Everything else here stands either way.
+
 ## Intent
 
 Let a merchant set up automatic WhatsApp messages ("Flujos") from the

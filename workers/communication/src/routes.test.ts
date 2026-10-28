@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 function createQueryChain<T>(resolveValue: T) {
   const chain = {
     from: () => chain,
+    leftJoin: vi.fn(() => chain),
     where: vi.fn(() => chain),
     limit: () => chain,
     orderBy: () => chain,
@@ -80,7 +81,12 @@ vi.mock('@vyloop/db', async () => {
     readConsentMap: vi.fn(async () => ({ whatsapp: true })),
     messageLog: messageLogTable,
     whatsappTemplates: 'whatsapp_templates',
-    customers: 'customers',
+    // Real columns, so the history's join to the customer renders to SQL.
+    customers: pgTable('customers', {
+      id: uuid('id').primaryKey(),
+      businessId: uuid('business_id').notNull(),
+      fullName: text('full_name'),
+    }),
   };
 });
 
@@ -334,6 +340,23 @@ describe('GET /v1/communication/history', () => {
     const { sql, params } = renderedHistoryPredicate();
     expect(sql).toContain('channel');
     expect(params).toContain('push');
+  });
+
+  it('names the customer of each delivery, from the same business only', async () => {
+    // The page used to print a slice of the customer's UUID, because the rows
+    // carried nothing else to print.
+    await mockFetch({ path: '/v1/communication/history', headers: authHeaders() });
+
+    const rowsQuery = dbMock.select.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(Object.keys(rowsQuery)).toContain('customerName');
+
+    const chain = dbMock.select.mock.results[1]?.value as {
+      leftJoin: { mock: { calls: unknown[][] } };
+    };
+    const [, on] = chain.leftJoin.mock.calls[0] ?? [];
+    const { sql } = new PgDialect().sqlToQuery(on as SQL);
+    expect(sql).toContain('"customers"."id" = "message_log"."customer_id"');
+    expect(sql).toContain('"customers"."business_id" = "message_log"."business_id"');
   });
 
   it('still filters by customer and by status', async () => {
