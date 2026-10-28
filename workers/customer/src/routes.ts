@@ -489,11 +489,19 @@ router.get('/v1/customers/me', async (c) => {
     tiersResult,
     rewardsResult,
   ] = await Promise.all([
-    // Latest balance (uses customer.id PK — matches FK on points_transactions)
+    // Latest balance (uses customer.id PK — matches FK on points_transactions).
+    // Every read here is scoped to the business as well as the customer; the
+    // customer was found in this business, but a query should not depend on
+    // that to stay in-tenant.
     db
       .select({ balance_after: pointsTransactions.balanceAfter })
       .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, customer.id))
+      .where(
+        and(
+          eq(pointsTransactions.customerId, customer.id),
+          eq(pointsTransactions.businessId, businessId),
+        ),
+      )
       .orderBy(desc(pointsTransactions.createdAt))
       .limit(1),
     // Total points earned (sum of all 'earn'/'earned' transactions)
@@ -503,6 +511,7 @@ router.get('/v1/customers/me', async (c) => {
       .where(
         and(
           eq(pointsTransactions.customerId, customer.id),
+          eq(pointsTransactions.businessId, businessId),
           or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
         ),
       ),
@@ -510,7 +519,9 @@ router.get('/v1/customers/me', async (c) => {
     db
       .select()
       .from(customerEvents)
-      .where(eq(customerEvents.customerId, customer.id))
+      .where(
+        and(eq(customerEvents.customerId, customer.id), eq(customerEvents.businessId, businessId)),
+      )
       .orderBy(desc(customerEvents.createdAt))
       .limit(10),
     // Last 5 points transactions for activity timeline
@@ -525,7 +536,12 @@ router.get('/v1/customers/me', async (c) => {
         createdAt: pointsTransactions.createdAt,
       })
       .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, customer.id))
+      .where(
+        and(
+          eq(pointsTransactions.customerId, customer.id),
+          eq(pointsTransactions.businessId, businessId),
+        ),
+      )
       .orderBy(desc(pointsTransactions.createdAt))
       .limit(5),
     // Points earned in last 30 days
@@ -535,6 +551,7 @@ router.get('/v1/customers/me', async (c) => {
       .where(
         and(
           eq(pointsTransactions.customerId, customer.id),
+          eq(pointsTransactions.businessId, businessId),
           or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
           sql`${pointsTransactions.createdAt} >= now() - interval '30 days'`,
         ),
@@ -935,11 +952,16 @@ router.get('/v1/customers/by-global-id/:globalId', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' } }, 404);
   }
 
-  // Fetch current balance
+  // Fetch current balance, in this business
   const [balanceRow] = await db
     .select({ balance_after: pointsTransactions.balanceAfter })
     .from(pointsTransactions)
-    .where(eq(pointsTransactions.customerId, customer.id))
+    .where(
+      and(
+        eq(pointsTransactions.customerId, customer.id),
+        eq(pointsTransactions.businessId, businessId),
+      ),
+    )
     .orderBy(desc(pointsTransactions.createdAt))
     .limit(1);
 
