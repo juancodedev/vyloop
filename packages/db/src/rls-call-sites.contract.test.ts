@@ -4,11 +4,11 @@
  * Runtime code sets the tenant only through `withTenantTransaction`.
  *
  * `set_config(..., true)` lasts for the transaction it runs in. Issued as a
- * statement of its own (`withRls`, `openTenantSession`, a bare
- * `db.execute(setCurrentBusinessId(...))`) it ends with that statement, and the
- * queries after it run with no tenant: today they still return rows, because
- * the policies are not enforced, and the day they are, they return nothing or
- * fail. The helper is the one place that opens the transaction, sets the tenant
+ * statement of its own (`withRls`, `withTenantRls`, `openTenantSession`, a
+ * bare `db.execute(setCurrentBusinessId(...))` or a raw `set_config(...)`) it
+ * ends with that statement, and the queries after it run with no tenant: today
+ * they still return rows, because the policies are not enforced, and the day
+ * they are, they return nothing or fail. The helper is the one place that opens the transaction, sets the tenant
  * on it and hands the caller that handle, so this test keeps every other way
  * out of the runtime code.
  *
@@ -26,7 +26,7 @@ const REPO_ROOT = join(__dirname, '..', '..', '..');
 
 /** A call that sets the tenant outside the helper. */
 const RAW_TENANT_SETTING =
-  /\b(withRls|openTenantSession|setCurrentBusinessId|setCurrentTenantId)\(/;
+  /\b(withRls|withTenantRls|openTenantSession|setCurrentBusinessId|setCurrentTenantId|set_config)\(/;
 
 /**
  * Files allowed to set the tenant by hand, and why.
