@@ -4027,7 +4027,9 @@ describe('Growth Worker', () => {
      */
     function ledgerReference(): unknown {
       const { params } = new PgDialect().sqlToQuery(ledgerStatement() as never);
-      return params[5];
+      // business, customer, points, then the balance subquery's customer and
+      // business, then points again: the reference is the seventh value.
+      return params[6];
     }
 
     /** The `points` value the ledger INSERT was asked to write. */

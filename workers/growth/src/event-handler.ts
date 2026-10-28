@@ -233,7 +233,7 @@ async function handlePointsAssigned(
   // -----------------------------------------------------------------------
   const balanceResult = await db.execute(sql`
     SELECT COALESCE(
-      (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid ORDER BY created_at DESC LIMIT 1),
+      (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
       0
     ) AS balance
   `);
@@ -293,7 +293,7 @@ async function handlePointsAssigned(
       const [currentTier] = await db
         .select({ minPoints: membershipTiers.minPoints })
         .from(membershipTiers)
-        .where(eq(membershipTiers.id, customer.currentTierId))
+        .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
         .limit(1);
 
       // Downgrade guard: skip if the new tier's requirement is lower or equal
@@ -395,7 +395,7 @@ async function handlePointsAssigned(
       const scope = await db
         .select({ branchId: rewardBranches.branchId })
         .from(rewardBranches)
-        .where(eq(rewardBranches.rewardId, reward.id));
+        .where(and(eq(rewardBranches.rewardId, reward.id), eq(rewardBranches.businessId, businessId)));
 
       if (scope.length === 0) continue;
 

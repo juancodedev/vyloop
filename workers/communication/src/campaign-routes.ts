@@ -304,7 +304,8 @@ router.post('/v1/communication/push/campaigns', async (c) => {
     const [branch] = await db
       .select({ id: branches.id, name: branches.name })
       .from(branches)
-      .where(eq(branches.id, parsed.value.target.branch_id))
+      // Within the business: the id comes from the request body.
+      .where(and(eq(branches.id, parsed.value.target.branch_id), eq(branches.businessId, businessId)))
       .limit(1);
     if (branch) {
       perBranch = [{ branch_id: branch.id, name: branch.name, distance_m: 0 }];
