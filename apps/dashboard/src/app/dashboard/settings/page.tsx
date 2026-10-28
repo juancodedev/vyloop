@@ -203,7 +203,7 @@ export default function SettingsPage() {
               </div>
 
               {error && (
-                <p style={{ color: 'var(--danger, #b91c1c)', margin: 0 }}>{error}</p>
+                <p style={{ color: 'var(--danger, var(--error))', margin: 0 }}>{error}</p>
               )}
             </div>
           )}

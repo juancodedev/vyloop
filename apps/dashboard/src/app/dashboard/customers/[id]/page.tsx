@@ -40,7 +40,7 @@ function tierColor(tierName: string): string {
     Plata: '#a0a0a0',
     Oro: '#ffd700',
   };
-  return colors[tierName] || '#6b7280';
+  return colors[tierName] || 'var(--text-muted)';
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ export default function CustomerDetailPage() {
   if (error || !customer) {
     return (
       <div className="text-center" style={{ padding: '4rem' }}>
-        <p style={{ color: '#ef4444', marginBottom: '1rem' }}>{error || 'Cliente no encontrado'}</p>
+        <p style={{ color: 'var(--error)', marginBottom: '1rem' }}>{error || 'Cliente no encontrado'}</p>
         <button className="btn btn-secondary" onClick={() => router.push('/dashboard/customers')}>
           Volver a clientes
         </button>
@@ -374,11 +374,11 @@ export default function CustomerDetailPage() {
   }
 
   function timelineColor(type: string): string {
-    if (type === 'points.earned') return '#16a34a';
-    if (type === 'points.redeemed') return '#dc2626';
+    if (type === 'points.earned') return 'var(--success)';
+    if (type === 'points.redeemed') return 'var(--error)';
     if (type === 'visit') return '#2563eb';
     if (type === 'customer.registered') return '#7c3aed';
-    return '#6b7280';
+    return 'var(--text-muted)';
   }
 
   return (
@@ -476,7 +476,7 @@ export default function CustomerDetailPage() {
           )}
 
           {saveError?.field === null && (
-            <p style={{ color: '#ef4444', fontSize: '0.875rem', marginBottom: '1rem' }}>
+            <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginBottom: '1rem' }}>
               {saveError.message}
             </p>
           )}
@@ -500,7 +500,7 @@ export default function CustomerDetailPage() {
                   }
                 />
                 {saveError?.field === field.key && (
-                  <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                  <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
                     {saveError.message}
                   </p>
                 )}
@@ -552,7 +552,7 @@ export default function CustomerDetailPage() {
                     {ev.points > 0 && (
                       <span
                         className="event-points"
-                        style={{ color: isRedeem ? color : '#16a34a' }}
+                        style={{ color: isRedeem ? color : 'var(--success)' }}
                       >
                         {isRedeem ? '-' : '+'}{ev.points.toLocaleString()} pts
                       </span>
@@ -591,7 +591,7 @@ export default function CustomerDetailPage() {
               </div>
 
               {amount > 0 && (
-                <div className="points-preview" style={{ background: '#f9fafb', padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem' }}>
+                <div className="points-preview" style={{ background: 'var(--bg-subtle)', padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem' }}>
                   <p className="text-sm text-muted" style={{ marginBottom: '0.5rem' }}>
                     Desglose de puntos (estimado)
                   </p>
@@ -634,7 +634,7 @@ export default function CustomerDetailPage() {
               </div>
 
               {modalError && (
-                <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.5rem' }}>{modalError}</p>
+                <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.5rem' }}>{modalError}</p>
               )}
             </div>
 

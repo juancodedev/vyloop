@@ -73,7 +73,7 @@ export default function CampaignDetailPage() {
   };
 
   if (loading) return <div className="text-center text-muted" style={{ padding: '4rem' }}>Cargando…</div>;
-  if (error || !campaign) return <div className="text-center" style={{ padding: '4rem' }}><p style={{ color: '#ef4444' }}>{error || 'Campaña no encontrada'}</p><button className="btn btn-secondary" onClick={() => router.push('/dashboard/communication/campaigns')}>Volver</button></div>;
+  if (error || !campaign) return <div className="text-center" style={{ padding: '4rem' }}><p style={{ color: 'var(--error)' }}>{error || 'Campaña no encontrada'}</p><button className="btn btn-secondary" onClick={() => router.push('/dashboard/communication/campaigns')}>Volver</button></div>;
 
   return (
     <div className="page fade-in">
@@ -112,11 +112,11 @@ export default function CampaignDetailPage() {
             </div>
             <div className="tier-stat">
               <span className="tier-stat-label">Entregados</span>
-              <span className="tier-stat-value" style={{ color: '#16a34a' }}>{campaign.delivered.toLocaleString()}</span>
+              <span className="tier-stat-value" style={{ color: 'var(--success)' }}>{campaign.delivered.toLocaleString()}</span>
             </div>
             <div className="tier-stat">
               <span className="tier-stat-label">Fallidos</span>
-              <span className="tier-stat-value" style={{ color: '#dc2626' }}>{campaign.failed.toLocaleString()}</span>
+              <span className="tier-stat-value" style={{ color: 'var(--error)' }}>{campaign.failed.toLocaleString()}</span>
             </div>
             <div className="tier-stat">
               <span className="tier-stat-label">Omitidos</span>
@@ -125,13 +125,13 @@ export default function CampaignDetailPage() {
           </div>
 
           {campaign.target_type === 'radius' && campaign.target && 'latitude' in campaign.target && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f9fafb', borderRadius: '6px' }}>
+            <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--bg-subtle)', borderRadius: '6px' }}>
               <p className="text-sm text-muted">Centro: {campaign.target.latitude}, {campaign.target.longitude} · Radio: {campaign.target.radius_m} m</p>
             </div>
           )}
 
           {campaign.target_type === 'branch' && campaign.target && 'branch_id' in campaign.target && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f9fafb', borderRadius: '6px' }}>
+            <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--bg-subtle)', borderRadius: '6px' }}>
               <p className="text-sm text-muted">Sede: {campaign.target.branch_id}</p>
             </div>
           )}
@@ -148,8 +148,8 @@ export default function CampaignDetailPage() {
                         <tr key={b.branch_id}>
                           <td>{b.name}</td>
                           <td className="text-muted">{Math.round(b.distance_m)} m</td>
-                          <td style={{ color: '#16a34a' }}>{b.delivered}</td>
-                          <td style={{ color: '#dc2626' }}>{b.failed}</td>
+                          <td style={{ color: 'var(--success)' }}>{b.delivered}</td>
+                          <td style={{ color: 'var(--error)' }}>{b.failed}</td>
                         </tr>
                       ))}
                     </tbody>
