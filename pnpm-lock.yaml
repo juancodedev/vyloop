@@ -204,8 +204,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
       jose:
         specifier: ^6.2.13
         version: 6.2.13
@@ -319,8 +319,8 @@ importers:
         specifier: ^5.20261019.1
         version: 5.20261019.1
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -374,8 +374,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -408,8 +408,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -442,8 +442,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -464,8 +464,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -501,8 +501,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -535,8 +535,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -569,8 +569,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
       jose:
         specifier: ^6.2.13
         version: 6.2.13
@@ -600,8 +600,8 @@ importers:
         specifier: ^0.45.4
         version: 0.45.4(@cloudflare/workers-types@5.20261019.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.11.6)(gel@2.2.0)(pg@8.23.1)(postgres@3.4.9)
       hono:
-        specifier: ^4.13.13
-        version: 4.13.13
+        specifier: ^4.13.14
+        version: 4.13.14
       jose:
         specifier: ^6.2.13
         version: 6.2.13
@@ -3104,8 +3104,8 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
-  hono@4.13.13:
-    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
+  hono@4.13.14:
+    resolution: {integrity: sha512-yhRLQ21U6qa9Hsu2N7Qcbh8tE+WKEcoErjIo56LeSGiGXGp9sA7UpE86Ui9uexb61KakiGwuHMn2QdV7w6i6kQ==}
     engines: {node: '>=16.9.0'}
 
   html-encoding-sniffer@7.0.0:
@@ -7277,7 +7277,7 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono@4.13.13: {}
+  hono@4.13.14: {}
 
   html-encoding-sniffer@7.0.0:
     dependencies:

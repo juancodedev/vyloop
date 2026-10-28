@@ -11,7 +11,7 @@
   "dependencies": {
     "@vyloop/request-context": "workspace:*",
     "@vyloop/types": "workspace:*",
-    "hono": "^4.13.13"
+    "hono": "^4.13.14"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261019.1",
