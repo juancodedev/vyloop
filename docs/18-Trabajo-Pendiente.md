@@ -979,7 +979,14 @@ medio de pago no tiene*. Es la misma trampa que el writer del receptor de pagos 
 cometer al revés, y por eso el PR #208 exige que su harness pueda hacer requests sin credenciales.
 
 **Decisión del usuario el 2026-10-08: Meta/WhatsApp no entra en Vyloop todavía.** Es superficie
-dormida, no un bug a corregir ya. Queda registrado acá para que nadie asuma que funciona. Cuando se
+dormida, no un bug a corregir ya.
+
+**Ratificada el 2026-10-28: WhatsApp no se usa en Vyloop por ahora.** El dashboard lo oculta en
+todas partes (PR #309: sin Plantillas ni Enviar, historial solo de push, Flujos "Próximamente").
+Mientras siga vigente, **no se abren tareas, revisiones ni PRs sobre WhatsApp**: ni la firma del
+webhook de Meta, ni plantillas, ni el builder de flujos con `send_whatsapp`. Los hallazgos sobre
+ese código se registran acá y no se levantan como pendientes. Retomarlo es una decisión de
+producto explícita del usuario. Queda registrado acá para que nadie asuma que funciona. Cuando se
 retome, el fix son tres cosas y ninguna es cosmética:
 
 1. `PUBLIC_PATHS` en `workers/communication/src/index.ts`, con `/webhook` como entrada exacta,
