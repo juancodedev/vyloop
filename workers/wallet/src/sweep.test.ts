@@ -161,6 +161,8 @@ class SweepStore implements WalletStore {
   readonly expiries: PassExpiryUpdate[] = [];
   /** The page sizes the pending-expiry enumeration was asked for. */
   readonly expiryPageRequests: number[] = [];
+  /** The rotation each pending-expiry enumeration was asked for. */
+  readonly expiryRotations: number[] = [];
 
   /**
    * `tenantId:customerId` of every customer whose `customers.deleted_at` is set.
@@ -455,9 +457,17 @@ class SweepStore implements WalletStore {
     return null;
   }
 
-  async listPassesPendingExpiry(options: { limit: number }): Promise<WalletPassRow[]> {
+  /**
+   * The same window the SQL takes: the pending set in deletion order, entered
+   * at `rotation * limit` and wrapping round its end. Deletion order is the
+   * order `deletedCustomers` was filled in, which is what `c.deleted_at ASC`
+   * means for a fixture.
+   */
+  async listPassesPendingExpiry(options: { limit: number; rotation: number }): Promise<WalletPassRow[]> {
     this.record('listPassesPendingExpiry', '');
     this.expiryPageRequests.push(options.limit);
+    this.expiryRotations.push(options.rotation);
+    const deletionOrder = [...this.deletedCustomers];
     const pending: WalletPassRow[] = [];
     for (const rows of this.passes.values()) {
       for (const row of rows.values()) {
@@ -466,7 +476,14 @@ class SweepStore implements WalletStore {
         pending.push({ ...row });
       }
     }
-    return pending.slice(0, options.limit);
+    pending.sort(
+      (a, b) =>
+        deletionOrder.indexOf(`${a.tenantId}:${a.customerId}`) -
+        deletionOrder.indexOf(`${b.tenantId}:${b.customerId}`),
+    );
+    if (pending.length === 0) return [];
+    const start = (options.rotation * options.limit) % pending.length;
+    return [...pending.slice(start), ...pending.slice(0, start)].slice(0, options.limit);
   }
 
   async recordPassExpired(update: PassExpiryUpdate): Promise<number> {
@@ -2261,6 +2278,51 @@ describe('the sweep expires the passes of deleted customers', () => {
       expect(patch).not.toHaveProperty('state');
       expect(patch).not.toHaveProperty('accountName');
     }
+  });
+
+  it('reaches a newer deletion even when more than a page of older passes keeps failing', async () => {
+    // The starvation the oldest-first page had: a hundred and fifty passes of a
+    // tenant whose class stopped being usable are `skipped` on every run and never
+    // leave the set, and a page that always started at the oldest deletion handed
+    // them every slot, so a deletion made after them was never attempted at all.
+    const stuck = tenantId(1);
+    const healthy = tenantId(2);
+    const store = new SweepStore({
+      [stuck]: program(stuck, { reviewStatus: 'draft' }),
+      [healthy]: program(healthy),
+    });
+    const stuckCount = MAX_EXPIRIES_PER_RUN + 50;
+    for (let i = 0; i < stuckCount; i += 1) {
+      store.seedPass({ tenant: stuck, customer: `old-${i}`, objectId: `obj-old-${i}`, balance: 1 });
+      store.deletedCustomers.add(`${stuck}:old-${i}`);
+    }
+    store.seedPass({ tenant: healthy, customer: 'newest', objectId: OBJECT_ID, balance: 500 });
+    store.deletedCustomers.add(`${healthy}:newest`);
+    const client = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 500)]) });
+
+    // The bound: every pending pass is attempted within this many daily runs.
+    const runsToCoverEveryPass = Math.ceil((stuckCount + 1) / MAX_EXPIRIES_PER_RUN);
+    const day = 24 * 60 * 60 * 1000;
+    for (let run = 0; run < runsToCoverEveryPass; run += 1) {
+      await sweepPasses(
+        {
+          store,
+          client,
+          now: new Date(RUN_ONE.getTime() + run * day),
+          demoMode: false,
+          provisioning: PROVISIONING,
+        },
+        { demoMode: false },
+      );
+    }
+
+    expect(store.passes.get(healthy)?.get(OBJECT_ID)?.state).toBe('expired');
+    expect(client.patchObject).toHaveBeenCalledWith(OBJECT_ID, { state: 'EXPIRED', accountName: null });
+    // One rotation per day, so consecutive runs enter the set at consecutive pages.
+    expect(new Set(store.expiryRotations).size).toBe(runsToCoverEveryPass);
+    // And the stuck passes are still pending: the rotation moved past them, it did
+    // not give up on them.
+    expect(store.passes.get(stuck)?.get('obj-old-0')?.state).toBe('issued');
   });
 
   it('expires nothing in Demo Mode, because the sweep refuses before it reads anything', async () => {

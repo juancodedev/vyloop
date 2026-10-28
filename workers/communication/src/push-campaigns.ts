@@ -7,7 +7,7 @@ import {
   customerWalletPasses as _customerWalletPasses,
 } from '@vyloop/db';
 import type { ConsentType } from '@vyloop/types';
-import { and, eq, gte, inArray } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull } from 'drizzle-orm';
 
 import { findBranchesInRadius } from '../../../packages/db/src/proximity';
 
@@ -133,6 +133,15 @@ export async function resolveCampaignAudience(
         eq(customerEvents.businessId, businessId),
         inArray(customerEvents.branchId, branchIds),
         gte(customerEvents.createdAt, since),
+        // Deleting an account is an `UPDATE` of `deleted_at`, and the
+        // interaction rows outlive it, so a deleted customer would otherwise stay
+        // in the audience for the whole window. The browser channel refuses them
+        // downstream (`deliverPushNotification` reads the customer with the same
+        // predicate), but the wallet channel reads the pass row directly, and a
+        // pass whose expiry has not gone through yet is still `issued`. Leaving
+        // them out here is what keeps both channels, and `audience_size`, about
+        // the customers who are still members.
+        isNull(customers.deletedAt),
       ),
     );
 

@@ -2841,6 +2841,42 @@ describe('Growth Worker', () => {
         expect(ledgerStatements().some((s) => s.includes('"cust-bob"'))).toBe(true);
         expect(publish).toHaveBeenCalledOnce();
       });
+
+      it('takes the deleted check and the INSERT as one locked statement', async () => {
+        // A delete that commits after the read above must not let the credit
+        // through: the INSERT re-checks deleted_at under a row lock.
+        stubVisitProgram();
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([{ id: 'cust-bob', businessId: DEV_TENANT, currentTierId: null, deletedAt: null }]),
+        );
+        mockDb.execute.mockResolvedValueOnce({ rows: [] });
+        mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-bob', balance_after: 910 }] });
+
+        await POST('/v1/loyalty/points/assign', { customer_id: 'cust-bob', points: 10, reference_id: 'ref-lock' });
+
+        const [insert] = ledgerStatements();
+        expect(insert).toMatch(/deleted_at IS NULL[\s\S]*FOR SHARE/);
+      });
+
+      it('answers 404 when the customer was deleted between the read and the INSERT', async () => {
+        stubVisitProgram();
+        mockDb.select.mockReturnValueOnce(
+          createBuilder([{ id: 'cust-bob', businessId: DEV_TENANT, currentTierId: null, deletedAt: null }]),
+        );
+        mockDb.execute.mockResolvedValueOnce({ rows: [] });
+        // The guarded INSERT selected no row: the customer is deleted by now.
+        mockDb.execute.mockResolvedValueOnce({ rows: [] });
+
+        const res = await POST('/v1/loyalty/points/assign', {
+          customer_id: 'cust-bob',
+          points: 10,
+          reference_id: 'ref-race',
+        });
+
+        expect(res.status).toBe(404);
+        expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+        expect(publish).not.toHaveBeenCalled();
+      });
     });
 
     describe('POST /v1/loyalty/rewards/redeem', () => {

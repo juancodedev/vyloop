@@ -258,14 +258,30 @@ export const MAX_RECONCILES_PER_TENANT = 200;
  * read in a scheduled job is an outage with a delay before it. The set only holds
  * passes whose expiry under the deletion's `waitUntil` failed, so in steady state
  * it is empty; a hundred covers an afternoon-long Google outage of deletions in
- * one run, and anything beyond is picked up by the next one, oldest deletion
- * first.
+ * one run, and anything beyond is picked up by the next one, a page further
+ * into the set each day (see `expiryRotationFor`).
  *
  * Its own budget, not a share of `MAX_RECONCILES_PER_TENANT`, because the two
  * protect different things: a balance a day late is a support question, a name
  * still on the phone of someone who deleted their account is a privacy one.
  */
 export const MAX_EXPIRIES_PER_RUN = 100;
+
+/**
+ * Which page of the pending-expiry set this run reads: whole UTC days since the
+ * epoch.
+ *
+ * The sweep runs daily, so this advances by one per run and the store walks one
+ * page further into the set each day — the rotation that stops a page's worth of
+ * passes that can never be expired from holding every slot. See
+ * `WalletStore.listPassesPendingExpiry`. A day rather than a stored counter
+ * because a counter is the completion marker `MAX_TENANTS_PER_RUN` explains this
+ * sweep does without; a second run on the same day reads the same page, which
+ * costs a retry and loses nothing.
+ */
+export function expiryRotationFor(observedAt: Date): number {
+  return Math.floor(observedAt.getTime() / 86_400_000);
+}
 
 // ---------------------------------------------------------------------------
 // The report
@@ -789,7 +805,10 @@ async function expirePendingPasses(
 ): Promise<void> {
   let pending: WalletPassRow[];
   try {
-    pending = await deps.store.listPassesPendingExpiry({ limit: MAX_EXPIRIES_PER_RUN });
+    pending = await deps.store.listPassesPendingExpiry({
+      limit: MAX_EXPIRIES_PER_RUN,
+      rotation: expiryRotationFor(observedAt),
+    });
   } catch (err: unknown) {
     report.failures.push({ tenantId: '', stage: 'list_pending_expiries', reason: describe(err) });
     return;

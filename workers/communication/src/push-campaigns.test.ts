@@ -32,6 +32,7 @@ vi.mock('@vyloop/db', async () => {
     id: uuid('id').primaryKey(),
     globalId: uuid('global_id').notNull(),
     businessId: uuid('business_id').notNull(),
+    deletedAt: timestamp('deleted_at'),
   });
 
   // Real, for the same reason as the tables above: the wallet channel's
@@ -229,6 +230,20 @@ describe('resolveCampaignAudience', () => {
     // A hundred and eighty days, give or take the time the test itself takes to run.
     expect(daysAgo).toBeGreaterThan(179.9);
     expect(daysAgo).toBeLessThan(180.1);
+  });
+
+  it('leaves deleted customers out of the audience, so neither channel reaches them', async () => {
+    // Deleting an account is an `UPDATE` of `deleted_at`, and the interaction
+    // rows survive it, so without this predicate a deleted customer stays in the
+    // audience for the whole window. The browser channel refuses them further
+    // down, but the wallet channel reads the pass row directly, and a pass whose
+    // expiry failed is still `issued` — so the audience is where they leave.
+    const chain = audienceRows([]);
+
+    await resolveCampaignAudience(dbMock, 'biz-1', { branch_id: 'branch-1' });
+
+    const { sql } = renderedPredicate(chain as never);
+    expect(sql).toContain('"customers"."deleted_at" is null');
   });
 
   it('counts a customer who interacted at two branches of the campaign once', async () => {

@@ -760,9 +760,30 @@ export interface WalletStore {
    * tenant's rows. Every row carries its own `tenant_id`, and every write the
    * caller makes from it is tenant-scoped in its own `WHERE`.
    *
-   * Oldest deletion first, so a retry backlog drains in the order it built up.
+   * ## Why the page rotates
+   *
+   * The set is ordered oldest deletion first, so a backlog drains in the order
+   * it built up — but a page that always *started* at the oldest deletion would
+   * starve. A pass that can never be expired (a tenant whose class stopped being
+   * usable is `skipped` on every run; an object Google keeps refusing `failed`s
+   * on every run) never leaves the set, and a page's worth of them would hold
+   * every slot for ever, so a deletion made after them would never be tried.
+   *
+   * So the page is entered at `rotation * limit`, modulo the size of the set,
+   * and wraps round its end. The caller advances `rotation` by one per run, which
+   * walks consecutive pages: every pending pass is attempted within
+   * `ceil(pending / limit)` runs, whatever the passes ahead of it do. When the
+   * set fits in one page — the steady state — every pass is attempted every run
+   * and the rotation changes nothing.
+   *
+   * Stateless on purpose. The obvious alternative, ordering by when each pass
+   * was last attempted, needs that fact stored somewhere: `customer_wallet_passes`
+   * has no column for it, and the two it has are not free — `last_synced_at` is
+   * the balance loop's due filter, and `updated_at` is also written by that
+   * loop's reconciliation of the same rows, so neither can say "attempted by the
+   * expiry" without the other writer deciding the order instead.
    */
-  listPassesPendingExpiry(options: { limit: number }): Promise<WalletPassRow[]>;
+  listPassesPendingExpiry(options: { limit: number; rotation: number }): Promise<WalletPassRow[]>;
 
   /**
    * Record that a deleted customer's pass is expired at Google.
@@ -912,6 +933,16 @@ export interface WalletStore {
    * report could not say how much it had not reached. Truncation is reported as
    * `truncated` rather than silently applied, because a report that says "400
    * deactivated" when 4,000 were due is a report nobody can act on.
+   *
+   * ## Deleted customers are never candidates
+   *
+   * `customers.deleted_at IS NULL`, joined on the pass's own tenant. Deleting an
+   * account leaves the pass row as it was, and a pass whose expiry has not gone
+   * through yet is still `issued` — so without the predicate this rule would
+   * patch it `INACTIVE` and record `inactive`, deciding something about a person
+   * who has left, on the one pass `listPassesPendingExpiry` is still trying to
+   * reach. That pass belongs to the expiry, which is terminal and clears the name;
+   * deactivation would only stand in its way.
    */
   findInactivePassCandidates(input: {
     tenantId: string;
@@ -934,6 +965,12 @@ export interface WalletStore {
    *   - `consent.granted = true` — the whole reason locations are object-level.
    *     A business-wide fan-out that ignored it would write positions onto a
    *     pass whose holder refused them.
+   *   - `customers.deleted_at IS NULL` — the consent cannot be what excludes a
+   *     deleted customer, because deleting an account keeps the consent rows
+   *     (only their address is cleared), and a pass whose expiry has not gone
+   *     through yet is still `issued`. The same set backs the wallet message
+   *     fan-out, so without this a merchant's promotion would land on the pass
+   *     of someone who deleted their account.
    *
    * `after` is a keyset cursor on `customers.id`, not an offset: rows change
    * between calls, and an offset would skip or repeat a customer. `null` starts
