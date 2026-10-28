@@ -47,6 +47,11 @@ const VOSEO = [
   'Habilitalo',
   'Buscá',
   'Podés',
+  'Identificá',
+  'Registralo',
+  'anotá',
+  'escalalo',
+  'Mostrale',
   'Cerrala',
 ];
 
@@ -59,8 +64,7 @@ describe('the merchant app', () => {
   });
 
   it('speaks tú, not voseo', () => {
-    // The till is rewritten in its own PR (#307), which changes its copy too.
-    for (const file of files.filter((f) => !f.endsWith('loyalty/pos/page.tsx'))) {
+    for (const file of files) {
       const code = readFileSync(file, 'utf8');
       for (const word of VOSEO) {
         expect(code, `${file} says "${word}"`).not.toMatch(

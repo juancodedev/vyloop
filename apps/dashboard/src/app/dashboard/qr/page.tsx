@@ -321,7 +321,7 @@ export default function QRCodePage() {
         <h4>¿Cómo funciona?</h4>
         <ol>
           <li>
-            <strong>Mostrale este QR al cliente</strong> en la caja o en la mesa
+            <strong>Muéstrale este QR al cliente</strong> en la caja o en la mesa
           </li>
           <li>
             <strong>El cliente escanea</strong> con la cámara de su celular
