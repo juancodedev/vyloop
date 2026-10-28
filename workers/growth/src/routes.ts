@@ -1014,9 +1014,15 @@ router.post('/v1/loyalty/points/assign', async (c) => {
   // Atomic insert with balance calculation
   // -----------------------------------------------------------------------
   try {
+    // `SELECT ... WHERE`, not `VALUES`: the deleted check above is a read, and a
+    // delete committing after it would otherwise still be credited. The
+    // sub-select locks the customer row `FOR SHARE`, so a concurrent
+    // anonymisation either commits first (this re-reads `deleted_at` and
+    // inserts nothing) or waits for this credit to commit. An unknown customer
+    // reads as NULL and is let through to the foreign key, as before.
     const result = await db.execute(sql`
       INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount)
-      VALUES (
+      SELECT
         ${businessId}::uuid,
         ${body.customer_id}::uuid,
         'earn',
@@ -1028,11 +1034,20 @@ router.post('/v1/loyalty/points/assign', async (c) => {
         ${body.reference_id},
         ${body.note ?? null},
         ${purchaseAmount}
-      )
+      WHERE (
+        SELECT deleted_at IS NULL FROM customers
+        WHERE id = ${body.customer_id}::uuid AND business_id = ${businessId}::uuid
+        FOR SHARE
+      ) IS DISTINCT FROM false
       RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount, created_at
     `);
 
     const tx = result.rows?.[0];
+    // The guarded INSERT selected nothing: the customer was deleted after the
+    // read above. Same answer as a deleted customer found by that read.
+    if (!tx && customer && !customer.deletedAt) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
+    }
     if (!tx) {
       return c.json(
         { error: { code: 'INTERNAL_ERROR', message: 'Failed to create transaction' } },
