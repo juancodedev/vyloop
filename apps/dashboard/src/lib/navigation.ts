@@ -28,6 +28,8 @@ export interface NavItem {
   isBottom?: boolean;
   /** Action item, not a route link */
   isAction?: boolean;
+  /** Listed so merchants know it is coming, but not reachable yet. */
+  comingSoon?: boolean;
 }
 
 export interface NavSection {
@@ -67,7 +69,13 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: 'Campañas', href: '/dashboard/communication/campaigns', icon: BellRing },
       { label: 'Mensajes', href: '/dashboard/communication/messages', icon: Inbox },
       { label: 'Plantillas', href: '/dashboard/communication/templates', icon: FileText },
-      { label: 'Flujos', href: '/dashboard/communication/workflows', icon: Workflow },
+      // Not built yet: see openspec/changes/workflow-builder.
+      {
+        label: 'Flujos',
+        href: '/dashboard/communication/workflows',
+        icon: Workflow,
+        comingSoon: true,
+      },
     ],
   },
   {

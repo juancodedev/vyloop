@@ -54,6 +54,24 @@ export function Sidebar() {
             )}
             {section.items.map((item) => {
               const Icon = item.icon;
+              if (item.comingSoon) {
+                return (
+                  <span
+                    key={item.href}
+                    className={clsx(styles.navLink, styles.navLinkSoon)}
+                    aria-disabled="true"
+                  >
+                    <Icon className={styles.navIcon} aria-hidden="true" />
+                    {expanded && <span className={styles.navLabel}>{item.label}</span>}
+                    {expanded && <span className={styles.soonTag}>Próximamente</span>}
+                    {collapsed && !isMobile && (
+                      <span className={styles.tooltip} role="tooltip">
+                        {item.label} (próximamente)
+                      </span>
+                    )}
+                  </span>
+                );
+              }
               const active = isActive(pathname, item);
               return (
                 <Link
