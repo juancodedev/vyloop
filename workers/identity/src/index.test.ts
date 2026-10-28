@@ -922,6 +922,38 @@ describe("the business's venues", () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('POST /v1/businesses/:id/branches/:branchId/reactivate', () => {
+    it('brings a deactivated venue back', async () => {
+      branchFixtures.stage([venueRow({ is_active: false })]);
+
+      const res = await app.fetch(
+        new Request(`http://localhost/v1/businesses/${TENANT}/branches/venue-1/reactivate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${await operatorToken()}` },
+        }),
+        env(),
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { branch: Record<string, unknown> };
+      expect(body.branch).toMatchObject({ id: 'venue-1', is_active: true });
+    });
+
+    it('does not reactivate a venue belonging to another business', async () => {
+      branchFixtures.stage([venueRow({ business_id: OTHER_TENANT, is_active: false })]);
+
+      const res = await app.fetch(
+        new Request(`http://localhost/v1/businesses/${TENANT}/branches/venue-1/reactivate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${await operatorToken()}` },
+        }),
+        env(),
+      );
+
+      expect(res.status).toBe(404);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

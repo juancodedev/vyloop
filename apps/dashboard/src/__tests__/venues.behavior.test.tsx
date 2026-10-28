@@ -9,12 +9,14 @@
  * the page filters and searches what it already has.
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ getVenues: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getVenues: vi.fn(), reactivateVenue: vi.fn() }));
 
-vi.mock('@/lib/api', () => ({ api: { getVenues: mocks.getVenues } }));
+vi.mock('@/lib/api', () => ({
+  api: { getVenues: mocks.getVenues, reactivateVenue: mocks.reactivateVenue },
+}));
 
 import VenuesPage from '../app/dashboard/settings/venues/page';
 
@@ -91,5 +93,18 @@ describe('the branch list', () => {
     });
 
     expect(screen.getByText('Ninguna sede coincide con la búsqueda.')).toBeTruthy();
+  });
+
+  it('reactivates a deactivated branch', async () => {
+    mocks.reactivateVenue.mockResolvedValue(undefined);
+    render(<VenuesPage />);
+    await screen.findByText('Providencia');
+    fireEvent.click(screen.getByLabelText('Incluir inactivas'));
+    await screen.findByText('Las Condes');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reactivar Las Condes' }));
+
+    await waitFor(() => expect(mocks.reactivateVenue).toHaveBeenCalledWith('b3'));
+    await waitFor(() => expect(mocks.getVenues).toHaveBeenCalledTimes(2));
   });
 });

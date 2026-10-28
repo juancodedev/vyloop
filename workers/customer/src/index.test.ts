@@ -1636,6 +1636,17 @@ expect(res.status).toBe(201);
       expect(data.consents[0].consentType).toBe('marketing');
     });
 
+    it('reads the balance, total and recent transactions of this business only', async () => {
+      await request('GET', '/v1/customers/c-1');
+
+      const wheres = wheresFor('pointsTransactions');
+      expect(wheres.length).toBeGreaterThanOrEqual(3);
+      for (const where of wheres) {
+        expect(where.sql).toContain('"points_transactions"."business_id" = $');
+        expect(where.params).toContain('biz-1');
+      }
+    });
+
     it('returns 404 for cross-business access (RLS isolation)', async () => {
       // No customer found for this business
       mockDb.select.mockImplementationOnce(() => {
@@ -2724,6 +2735,26 @@ function lookupCustomerWhere() {
   return scoped[0]!;
 }
 
+describe('Self read (GET /v1/customers/me) tenant scope', () => {
+  it('reads transactions and events of this business only', async () => {
+    seedMe({ balance: 10 });
+
+    await request('GET', '/v1/customers/me');
+
+    for (const [table, column] of [
+      ['pointsTransactions', '"points_transactions"."business_id" = $'],
+      ['customerEvents', '"customer_events"."business_id" = $'],
+    ] as const) {
+      const wheres = wheresFor(table);
+      expect(wheres.length, table).toBeGreaterThan(0);
+      for (const where of wheres) {
+        expect(where.sql, table).toContain(column);
+        expect(where.params, table).toContain('biz-1');
+      }
+    }
+  });
+});
+
 describe('Self update (PATCH /v1/customers/me)', () => {
   beforeEach(() => {
     resetMocks();
@@ -3282,6 +3313,23 @@ describe('POS lookup (GET /v1/customers/lookup)', () => {
   // -----------------------------------------------------------------------
 
   describe('QR path is untouched', () => {
+    it('reads the balance of this business only', async () => {
+      setTableResults({
+        [key('customers')]: [LOOKUP_CUSTOMER],
+        [key('pointsTransactions', { balance_after: 1 })]: [{ balance_after: 320 }],
+        [key('membershipTiers')]: [LOOKUP_TIER],
+      });
+
+      await request('GET', `/v1/customers/by-global-id/${LOOKUP_CUSTOMER.globalId}`);
+
+      const wheres = wheresFor('pointsTransactions');
+      expect(wheres.length).toBeGreaterThan(0);
+      for (const where of wheres) {
+        expect(where.sql).toContain('"points_transactions"."business_id" = $');
+        expect(where.params).toContain('biz-1');
+      }
+    });
+
     it('still resolves a customer by globalId', async () => {
       // No projection on this route — it selects the whole row.
       setTableResults({
