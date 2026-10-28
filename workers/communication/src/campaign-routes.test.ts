@@ -11,6 +11,9 @@ const dbMock: any = {
   select: vi.fn(),
   insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing: vi.fn() })) })),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
+  // The tenant transaction hands the callback a handle; by default it is the
+  // same mock, so a query on `tx` lands on the spies below.
+  transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbMock)),
 };
 
 vi.mock('@vyloop/db', async () => {
@@ -31,9 +34,14 @@ vi.mock('@vyloop/db', async () => {
     name: text('name'),
   });
 
+  // The real helper, so the test sees the `set_config` it really issues.
+  const { withTenantTransaction } =
+    await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db');
+
   return {
     createDb: vi.fn(() => dbMock),
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+    withTenantTransaction,
     messageLog: messageLogTable,
     branches: branchesTable,
     pushCampaigns: pgTable('push_campaigns', { referenceId: text('reference_id').primaryKey() }),
@@ -153,9 +161,81 @@ beforeEach(() => {
   ]);
 });
 
+/**
+ * Route the next tenant transaction to a handle of its own, recording what ran
+ * on it and in which order. The handle shares the query spies of `dbMock`, but
+ * its `execute` is its own, so a `set_config` issued on the outer `db` cannot
+ * pass for one issued on the transaction.
+ */
+function useTransactionHandle(): { tx: any; log: string[] } {
+  const log: string[] = [];
+  const tx: any = {
+    ...dbMock,
+    execute: vi.fn(async (query: SQL) => {
+      const { sql, params } = new PgDialect().sqlToQuery(query);
+      log.push(`execute ${sql} ${JSON.stringify(params)}`);
+      return { rows: [] };
+    }),
+    select: vi.fn((...args: unknown[]) => {
+      log.push('select');
+      return dbMock.select(...args);
+    }),
+  };
+  dbMock.transaction.mockImplementationOnce(async (fn: (handle: unknown) => unknown) => {
+    const result = await fn(tx);
+    log.push('commit');
+    return result;
+  });
+  return { tx, log };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('tenant transaction', () => {
+  it('sets the business on the transaction before the campaign detail is read', async () => {
+    const { tx, log } = useTransactionHandle();
+
+    await mockFetch({
+      path: '/v1/communication/push/campaigns/campaign-7',
+      headers: operatorHeaders(),
+    });
+
+    expect(dbMock.transaction).toHaveBeenCalledTimes(1);
+    // Never on the outer `db`: a transaction-local setting issued there ends
+    // with its own statement and reaches no query after it.
+    expect(dbMock.execute).not.toHaveBeenCalled();
+    expect(tx.select).toHaveBeenCalled();
+    expect(log[0]).toMatch(/^execute SELECT set_config\('app\.current_business_id', \$1, true\)/);
+    expect(log[0]).toContain('"biz-1"');
+    expect(log.slice(1)).toContain('select');
+  });
+
+  it('sets the business on the transaction before a campaign is composed, and publishes after it', async () => {
+    const { tx, log } = useTransactionHandle();
+    publish.mockImplementationOnce(async () => {
+      log.push('publish');
+    });
+
+    const res = await mockFetch({
+      path: '/v1/communication/push/campaigns',
+      method: 'POST',
+      headers: operatorHeaders(),
+      body: { ...VALID_BRANCH_BODY, reference_id: 'campaign-8' },
+    });
+
+    expect(res.status).toBe(202);
+    expect(dbMock.execute).not.toHaveBeenCalled();
+    expect(log[0]).toMatch(/^execute SELECT set_config\('app\.current_business_id', \$1, true\)/);
+    expect(log[0]).toContain('"biz-1"');
+    // The audience is resolved on the transaction handle, not on the outer db.
+    expect(resolveCampaignAudience).toHaveBeenCalledWith(tx, 'biz-1', VALID_BRANCH_BODY.target);
+    // The event leaves only once the transaction that recorded the campaign
+    // has committed.
+    expect(log.slice(-2)).toEqual(['commit', 'publish']);
+  });
+});
 
 describe('POST /v1/communication/push/campaigns', () => {
   it('accepts a branch target, resolves the audience and publishes the campaign', async () => {

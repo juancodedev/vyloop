@@ -93,13 +93,18 @@ vi.mock('@vyloop/db', async () => {
       balanceAfter: integer('balance_after').notNull(),
       createdAt: timestamp('created_at').notNull(),
     }),
-    // Real statement builders rather than `vi.fn()`: `openTenantSession` hands
-    // what these return straight to `db.execute`, and a `vi.fn()` returning
-    // `undefined` would make "which session variable was set" unobservable.
+    // Real statement builders rather than `vi.fn()`: `withTenantTransaction`
+    // hands what these return straight to `tx.execute`, and a `vi.fn()`
+    // returning `undefined` would make "which session variable was set"
+    // unobservable.
     setCurrentBusinessId: (id: string) =>
       sql`SELECT set_config('app.current_business_id', ${id}, true);`,
     setCurrentTenantId: (id: string) =>
       sql`SELECT set_config('app.current_tenant_id', ${id}, true);`,
+    // The real helper. The fake db's `transaction` runs the callback with the
+    // same fake, so every statement still lands in `statements`, in order.
+    withTenantTransaction: (await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db'))
+      .withTenantTransaction,
   };
 });
 
@@ -496,6 +501,9 @@ function installDb() {
   builder.finally = (f?: () => void) => Promise.resolve(admit()).finally(f);
 
   const db: Builder = {
+    // A tenant transaction is the same fake: what matters to these tests is the
+    // statements and their order, which a separate handle would only split.
+    transaction: vi.fn((fn: (tx: unknown) => Promise<unknown>) => fn(db)),
     select: vi.fn(() => builder),
     update: vi.fn(() => ({ set: () => ({ where: () => Promise.resolve(undefined) }) })),
     execute: vi.fn((chunk: unknown) => {
@@ -872,14 +880,23 @@ describe('tenant scoping', () => {
     // the wallet tables unreadable the day their policy goes live; setting only
     // the tenant one would make the loyalty tables unreadable today. The request
     // touches both, so both are set.
-    const sessionStatements = statements.filter((sql) => sql.includes('set_config'));
-    expect(sessionStatements).toHaveLength(2);
-    expect(sessionStatements.some((sql) => sql.includes('app.current_business_id'))).toBe(true);
-    expect(sessionStatements.some((sql) => sql.includes('app.current_tenant_id'))).toBe(true);
+    //
+    // Every store call is its own tenant transaction, so the pair is issued once
+    // per transaction, business first, then tenant.
+    const db = vi.mocked(createDb).mock.results[0]!.value as { transaction: ReturnType<typeof vi.fn> };
+    const transactions = db.transaction.mock.calls.length;
+    expect(transactions).toBeGreaterThan(0);
 
-    // And they are the first two statements issued, i.e. before any read.
-    expect(statements[0]).toContain('set_config');
-    expect(statements[1]).toContain('set_config');
+    const sessionStatements = statements.filter((sql) => sql.includes('set_config'));
+    expect(sessionStatements).toHaveLength(2 * transactions);
+    for (let i = 0; i < sessionStatements.length; i += 2) {
+      expect(sessionStatements[i]).toContain('app.current_business_id');
+      expect(sessionStatements[i + 1]).toContain('app.current_tenant_id');
+    }
+
+    // And the first pair is the first thing issued, i.e. before any read.
+    expect(statements[0]).toContain('app.current_business_id');
+    expect(statements[1]).toContain('app.current_tenant_id');
   });
 
   it('never sets a session variable to a tenant other than the authenticated one', async () => {
@@ -891,7 +908,7 @@ describe('tenant scoping', () => {
 
     // The compiled statement parameterises the tenant, so this is empty by
     // construction here; the real assertion is that the *parameter* is the
-    // authenticated tenant, which `openTenantSession`'s own test pins. What this
+    // authenticated tenant, which `createTenantWalletStore`'s own test pins. What this
     // guards is that no other tenant id is hardcoded into a session statement.
     expect(uuidsInSessionStatements).not.toContain(OTHER_TENANT);
   });

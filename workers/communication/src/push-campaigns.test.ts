@@ -10,6 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const dbMock: any = {
   select: vi.fn(),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
+  // The tenant transaction hands the callback this same mock as its handle.
+  transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbMock)),
 };
 
 vi.mock('@vyloop/db', async () => {
@@ -45,9 +47,14 @@ vi.mock('@vyloop/db', async () => {
     state: text('state').notNull(),
   });
 
+  // The real helper, so a test sees the `set_config` it really issues.
+  const { withTenantTransaction } =
+    await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db');
+
   return {
     createDb: vi.fn(() => dbMock),
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+    withTenantTransaction,
     customerEvents: customerEventsTable,
     customers: customersTable,
     customerWalletPasses: customerWalletPassesTable,

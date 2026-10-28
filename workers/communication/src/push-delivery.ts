@@ -7,11 +7,11 @@ import {
   pushSubscriptions,
   readConsentMap,
   readPushSubscriptions,
+  withTenantTransaction,
 } from '@vyloop/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
-import { withRls } from './helpers';
 import { buildVapidAuthorization, encryptPushPayload } from './push-encryption';
 
 // ---------------------------------------------------------------------------
@@ -138,50 +138,63 @@ export async function deliverPushNotification(
   fetcher: typeof fetch = fetch,
 ): Promise<PushDeliveryOutcome> {
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
+  const empty: PushDeliveryOutcome = { delivered: 0, failed: 0, removed: 0, subscriptions: 0 };
 
-  // The customer, by the global id the event carries.
-  //
-  // The soft-deleted are excluded here. Deleting a customer in this platform
-  // is an `UPDATE` of `deleted_at` and not a `DELETE`, so the row is still
-  // there to be found — and the `ON DELETE CASCADE` on
-  // `push_subscriptions.customer_id` never fires. A customer who asked to be
-  // forgotten must not be pushed at, and the row that says they were forgotten
-  // is the only thing that knows.
-  const [customer] = await db
-    .select({ id: customers.id })
-    .from(customers)
-    .where(
-      and(
-        eq(customers.businessId, businessId),
-        eq(customers.globalId, payload.customer_id),
-        isNull(customers.deletedAt),
-      ),
-    )
-    .limit(1);
+  // Every write and read runs in a tenant transaction, and the push service is
+  // called outside any of them: a transaction is not held open across the
+  // network, and the queued row is committed before the send.
+  const recipient = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // The customer, by the global id the event carries.
+    //
+    // The soft-deleted are excluded here. Deleting a customer in this platform
+    // is an `UPDATE` of `deleted_at` and not a `DELETE`, so the row is still
+    // there to be found — and the `ON DELETE CASCADE` on
+    // `push_subscriptions.customer_id` never fires. A customer who asked to be
+    // forgotten must not be pushed at, and the row that says they were forgotten
+    // is the only thing that knows.
+    const [customer] = await tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(
+        and(
+          eq(customers.businessId, businessId),
+          eq(customers.globalId, payload.customer_id),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .limit(1);
 
-  if (!customer) {
-    console.warn(`[communication] Customer ${payload.customer_id} not found — acking`);
-    return { delivered: 0, failed: 0, removed: 0, subscriptions: 0 };
-  }
+    if (!customer) {
+      console.warn(`[communication] Customer ${payload.customer_id} not found — acking`);
+      return null;
+    }
 
-  // The consent, checked again at the moment of the delivery.
-  const consents = await readConsentMap(db, { businessId, customerId: customer.id });
-  if (consents[PUSH_CONSENT_TYPE] !== true) {
-    console.log(
-      `[communication] Customer ${payload.customer_id} has no nearby-notification consent — not delivering`,
-    );
-    return { delivered: 0, failed: 0, removed: 0, subscriptions: 0 };
-  }
+    // The consent, checked again at the moment of the delivery.
+    const consents = await readConsentMap(tx, { businessId, customerId: customer.id });
+    if (consents[PUSH_CONSENT_TYPE] !== true) {
+      console.log(
+        `[communication] Customer ${payload.customer_id} has no nearby-notification consent — not delivering`,
+      );
+      return null;
+    }
 
-  const subscriptions = await readPushSubscriptions(db, {
-    businessId,
-    customerId: customer.id,
+    const subscriptions = await readPushSubscriptions(tx, {
+      businessId,
+      customerId: customer.id,
+    });
+
+    return { customer, subscriptions };
   });
+
+  if (!recipient) {
+    return empty;
+  }
+
+  const { customer, subscriptions } = recipient;
 
   if (subscriptions.length === 0) {
     console.log(`[communication] Customer ${payload.customer_id} has no browser registered`);
-    return { delivered: 0, failed: 0, removed: 0, subscriptions: 0 };
+    return empty;
   }
 
   // The audience of the push service is the endpoint itself.
@@ -214,45 +227,54 @@ export async function deliverPushNotification(
     // before the first one's rows exist. Either way, a browser that already
     // received this reference, or refused it for good, is skipped. A row still
     // `queued` is an attempt that never finished, and is attempted again.
-    if (payload.reference_id) {
-      const [decided] = await db
-        .select({ id: messageLog.id })
-        .from(messageLog)
-        .where(
-          and(
-            eq(messageLog.businessId, businessId),
-            eq(messageLog.channel, 'push'),
-            sql`${messageLog.content}->>'reference_id' = ${referenceId}`,
-            inArray(messageLog.status, ['sent', 'failed']),
-          ),
-        )
-        .limit(1);
+    //
+    // The probe and the queued row commit together, and before the send: a
+    // send whose row was never recorded would be a delivery nobody can see.
+    const logEntry = await withTenantTransaction(db, { businessId }, async (tx) => {
+      if (payload.reference_id) {
+        const [decided] = await tx
+          .select({ id: messageLog.id })
+          .from(messageLog)
+          .where(
+            and(
+              eq(messageLog.businessId, businessId),
+              eq(messageLog.channel, 'push'),
+              sql`${messageLog.content}->>'reference_id' = ${referenceId}`,
+              inArray(messageLog.status, ['sent', 'failed']),
+            ),
+          )
+          .limit(1);
 
-      if (decided) continue;
-    }
+        if (decided) return null;
+      }
 
-    // One row per delivery. The message is delivered once per browser, and
-    // each of those has its own outcome, so each of those is its own row.
-    const [logEntry] = await db
-      .insert(messageLog)
-      .values({
-        businessId,
-        customerId: customer.id,
-        direction: 'outbound',
-        channel: 'push',
-        status: 'queued',
-        pushEndpointHash: endpointHash,
-        content: {
-          title: payload.title,
-          body: payload.body,
-          url: payload.url ?? '/',
-          reference_id: referenceId,
-          ...(payload.target !== undefined ? { target: payload.target } : {}),
-          ...(payload.target_type !== undefined ? { target_type: payload.target_type } : {}),
-          ...(payload.audience_size !== undefined ? { audience_size: payload.audience_size } : {}),
-        },
-      })
-      .returning();
+      // One row per delivery. The message is delivered once per browser, and
+      // each of those has its own outcome, so each of those is its own row.
+      const [entry] = await tx
+        .insert(messageLog)
+        .values({
+          businessId,
+          customerId: customer.id,
+          direction: 'outbound',
+          channel: 'push',
+          status: 'queued',
+          pushEndpointHash: endpointHash,
+          content: {
+            title: payload.title,
+            body: payload.body,
+            url: payload.url ?? '/',
+            reference_id: referenceId,
+            ...(payload.target !== undefined ? { target: payload.target } : {}),
+            ...(payload.target_type !== undefined ? { target_type: payload.target_type } : {}),
+            ...(payload.audience_size !== undefined ? { audience_size: payload.audience_size } : {}),
+          },
+        })
+        .returning();
+
+      return entry;
+    });
+
+    if (!logEntry) continue;
 
     let attempt: Attempt;
     try {
@@ -303,30 +325,49 @@ export async function deliverPushNotification(
     // failed, because a push service that answers "no" has still reached the
     // browser. So the moment the outcome is decided is the moment the
     // registration is refreshed.
-    await db
-      .update(pushSubscriptions)
-      .set({ lastSeenAt: new Date() })
-      .where(eq(pushSubscriptions.id, subscription.id));
+    await withTenantTransaction(db, { businessId }, async (tx) => {
+      await tx
+        .update(pushSubscriptions)
+        .set({ lastSeenAt: new Date() })
+        .where(eq(pushSubscriptions.id, subscription.id));
+
+      if (attempt.kind === 'delivered') {
+        await tx.update(messageLog).set({ status: 'sent' }).where(eq(messageLog.id, logEntry.id));
+        return;
+      }
+
+      if (attempt.kind === 'dead') {
+        // The push service no longer holds the registration. The subscription
+        // is removed: every future message would otherwise pay for a delivery
+        // that cannot happen.
+        await deletePushSubscriptionByEndpoint(tx, subscription.endpoint);
+        await tx
+          .update(messageLog)
+          .set({
+            status: 'failed',
+            metadata: { error: 'The browser is no longer registered for push.' },
+          })
+          .where(eq(messageLog.id, logEntry.id));
+        return;
+      }
+
+      if (attempt.kind === 'terminal') {
+        await tx
+          .update(messageLog)
+          .set({ status: 'failed', metadata: { error: attempt.reason } })
+          .where(eq(messageLog.id, logEntry.id));
+      }
+
+      // A `retry` leaves the row queued: only the registration is refreshed.
+    });
 
     if (attempt.kind === 'delivered') {
       delivered += 1;
-      await db.update(messageLog).set({ status: 'sent' }).where(eq(messageLog.id, logEntry.id));
       continue;
     }
 
     if (attempt.kind === 'dead') {
-      // The push service no longer holds the registration. The subscription is
-      // removed: every future message would otherwise pay for a delivery that
-      // cannot happen.
       removed += 1;
-      await deletePushSubscriptionByEndpoint(db, subscription.endpoint);
-      await db
-        .update(messageLog)
-        .set({
-          status: 'failed',
-          metadata: { error: 'The browser is no longer registered for push.' },
-        })
-        .where(eq(messageLog.id, logEntry.id));
       continue;
     }
 
@@ -339,10 +380,6 @@ export async function deliverPushNotification(
     }
 
     failed += 1;
-    await db
-      .update(messageLog)
-      .set({ status: 'failed', metadata: { error: attempt.reason } })
-      .where(eq(messageLog.id, logEntry.id));
   }
 
   return { delivered, failed, removed, subscriptions: subscriptions.length };

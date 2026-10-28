@@ -10,6 +10,7 @@ import {
   customerWalletPasses,
   rewards,
   upsertConsent,
+  withTenantTransaction,
 } from '@vyloop/db';
 import {
   CUSTOMER_PROFILE_UPDATED,
@@ -142,6 +143,8 @@ router.put('/v1/customers', async (c) => {
       );
     }
 
+    // Resolving the tenant from its public slug is the one read with no tenant
+    // yet: `tenants` is RLS-exempt, so it stays on `db`.
     const [tenant] = await db
       .select({ id: tenants.id })
       .from(tenants)
@@ -158,17 +161,19 @@ router.put('/v1/customers', async (c) => {
   }
 
   // Check if a customer already exists for this business + phone
-  const existing = await db
-    .select()
-    .from(customers)
-    .where(
-      and(
-        eq(customers.businessId, businessId),
-        eq(customers.phone, body.phone),
-        isNull(customers.deletedAt),
-      ),
-    )
-    .limit(1);
+  const existing = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .select()
+      .from(customers)
+      .where(
+        and(
+          eq(customers.businessId, businessId),
+          eq(customers.phone, body.phone),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .limit(1),
+  );
 
   if (existing.length > 0) {
     // Update existing — skip event
@@ -188,7 +193,7 @@ router.put('/v1/customers', async (c) => {
     // branch the customer happened to land in.
     let updatedRows: (typeof customers.$inferSelect)[];
     try {
-      updatedRows = await db.transaction(async (tx) => {
+      updatedRows = await withTenantTransaction(db, { businessId }, async (tx) => {
         const rows = await tx
         .update(customers)
         .set(updateData)
@@ -239,7 +244,7 @@ router.put('/v1/customers', async (c) => {
   // well-formed and the business's own data is what conflicts with it.
   let insertedRows: (typeof customers.$inferSelect)[];
   try {
-    insertedRows = await db.transaction(async (tx) => {
+    insertedRows = await withTenantTransaction(db, { businessId }, async (tx) => {
       const rows = await tx.insert(customers).values(insertData).returning();
       const registered = rows[0];
       await recordConsents(
@@ -369,49 +374,51 @@ router.get('/v1/customers', async (c) => {
   // NOTE: Points are fetched separately via raw SQL because Drizzle ORM
   // with @neondatabase/serverless mishandles correlated subqueries in
   // .select() — it returns 0 instead of the actual balance.
-  const [totalResult, data, pointsResult] = await Promise.all([
-    db.select({ total: count() }).from(customers).where(where),
-    db
-      .select({
-        id: customers.id,
-        globalId: customers.globalId,
-        businessId: customers.businessId,
-        phone: customers.phone,
-        email: customers.email,
-        fullName: customers.fullName,
-        birthDate: customers.birthDate,
-        identityDoc: customers.identityDoc,
-        identityType: customers.identityType,
-        language: customers.language,
-        optedInAt: customers.optedInAt,
-        lastVisitAt: customers.lastVisitAt,
-        currentTierId: customers.currentTierId,
-        metadata: customers.metadata,
-        deletedAt: customers.deletedAt,
-        createdAt: customers.createdAt,
-        updatedAt: customers.updatedAt,
-      })
-      .from(customers)
-      .where(where)
-      .limit(limit)
-      .offset(offset)
-      .orderBy(customers.createdAt),
-    // Fetch latest balance + total earned per customer in one pass
-    db.execute(sql`
-      SELECT
-        customer_id,
-        COALESCE(MAX(balance_after) FILTER (WHERE rn = 1), 0)::integer as points,
-        COALESCE(SUM(points) FILTER (WHERE type IN ('earn', 'earned')), 0)::integer as total_earned
-      FROM (
+  const [totalResult, data, pointsResult] = await withTenantTransaction(db, { businessId }, (tx) =>
+    Promise.all([
+      tx.select({ total: count() }).from(customers).where(where),
+      tx
+        .select({
+          id: customers.id,
+          globalId: customers.globalId,
+          businessId: customers.businessId,
+          phone: customers.phone,
+          email: customers.email,
+          fullName: customers.fullName,
+          birthDate: customers.birthDate,
+          identityDoc: customers.identityDoc,
+          identityType: customers.identityType,
+          language: customers.language,
+          optedInAt: customers.optedInAt,
+          lastVisitAt: customers.lastVisitAt,
+          currentTierId: customers.currentTierId,
+          metadata: customers.metadata,
+          deletedAt: customers.deletedAt,
+          createdAt: customers.createdAt,
+          updatedAt: customers.updatedAt,
+        })
+        .from(customers)
+        .where(where)
+        .limit(limit)
+        .offset(offset)
+        .orderBy(customers.createdAt),
+      // Fetch latest balance + total earned per customer in one pass
+      tx.execute(sql`
         SELECT
-          pt.customer_id, pt.balance_after, pt.points, pt.type,
-          ROW_NUMBER() OVER (PARTITION BY pt.customer_id ORDER BY pt.created_at DESC) as rn
-        FROM points_transactions pt
-        WHERE pt.business_id = ${businessId}
-      ) ranked
-      GROUP BY customer_id
-    `),
-  ]);
+          customer_id,
+          COALESCE(MAX(balance_after) FILTER (WHERE rn = 1), 0)::integer as points,
+          COALESCE(SUM(points) FILTER (WHERE type IN ('earn', 'earned')), 0)::integer as total_earned
+        FROM (
+          SELECT
+            pt.customer_id, pt.balance_after, pt.points, pt.type,
+            ROW_NUMBER() OVER (PARTITION BY pt.customer_id ORDER BY pt.created_at DESC) as rn
+          FROM points_transactions pt
+          WHERE pt.business_id = ${businessId}
+        ) ranked
+        GROUP BY customer_id
+      `),
+    ]),
+  );
 
   const total = totalResult[0]?.total ?? 0;
 
@@ -459,26 +466,177 @@ router.get('/v1/customers/me', async (c) => {
 
   const db = createDb(c.env.DATABASE_URL);
 
-  // Look up customer by globalId + businessId
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(
-      and(
-        eq(customers.globalId, userId),
-        eq(customers.businessId, businessId),
-        isNull(customers.deletedAt),
-      ),
-    )
-    .limit(1);
+  const loaded = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // Look up customer by globalId + businessId
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(
+        and(
+          eq(customers.globalId, userId),
+          eq(customers.businessId, businessId),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .limit(1);
 
-  if (!customer) {
+    if (!customer) return null;
+
+    // Fetch balance, total earned, events, recent transactions, last-30-days
+    // points, and the loyalty "pass" context (business, program, tiers, rewards).
+    const [
+      balanceResult,
+      earnedResult,
+      eventsResult,
+      txResult,
+      points30Result,
+      businessResult,
+      programResult,
+      tiersResult,
+      rewardsResult,
+    ] = await Promise.all([
+      // Latest balance (uses customer.id PK — matches FK on points_transactions)
+      tx
+        .select({ balance_after: pointsTransactions.balanceAfter })
+        .from(pointsTransactions)
+        .where(eq(pointsTransactions.customerId, customer.id))
+        .orderBy(desc(pointsTransactions.createdAt))
+        .limit(1),
+      // Total points earned (sum of all 'earn'/'earned' transactions)
+      tx
+        .select({ total: sum(pointsTransactions.points) })
+        .from(pointsTransactions)
+        .where(
+          and(
+            eq(pointsTransactions.customerId, customer.id),
+            or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
+          ),
+        ),
+      // Last 10 customer events
+      tx
+        .select()
+        .from(customerEvents)
+        .where(eq(customerEvents.customerId, customer.id))
+        .orderBy(desc(customerEvents.createdAt))
+        .limit(10),
+      // Last 5 points transactions for activity timeline
+      tx
+        .select({
+          id: pointsTransactions.id,
+          type: pointsTransactions.type,
+          points: pointsTransactions.points,
+          balanceAfter: pointsTransactions.balanceAfter,
+          note: pointsTransactions.note,
+          purchaseAmount: pointsTransactions.purchaseAmount,
+          createdAt: pointsTransactions.createdAt,
+        })
+        .from(pointsTransactions)
+        .where(eq(pointsTransactions.customerId, customer.id))
+        .orderBy(desc(pointsTransactions.createdAt))
+        .limit(5),
+      // Points earned in last 30 days
+      tx
+        .select({ total: sum(pointsTransactions.points) })
+        .from(pointsTransactions)
+        .where(
+          and(
+            eq(pointsTransactions.customerId, customer.id),
+            or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
+            sql`${pointsTransactions.createdAt} >= now() - interval '30 days'`,
+          ),
+        ),
+
+      // ------------------------------------------------------------------
+      // Loyalty "web pass" context.
+      //
+      // Row-level security is not enforced on these tables yet: the tenant
+      // transaction sets the context, but no policy reads it until the rollout.
+      // Tenant isolation therefore rests ENTIRELY on an explicit business filter
+      // in every query below. Removing one of these filters would leak another
+      // tenant's program and tiers.
+      // ------------------------------------------------------------------
+
+      // Business (tenant). `tenants.id` IS the business id — the table is the
+      // root of the model and has no business_id column, so scope by primary key.
+      tx
+        .select({ id: tenants.id, name: tenants.name, slug: tenants.slug })
+        .from(tenants)
+        .where(eq(tenants.id, businessId))
+        .limit(1),
+
+      // Loyalty program. businessId is UNIQUE here, so at most one row can match.
+      // Only id/name/pointsCurrency are exposed — earnRate, minRedeemPoints and
+      // pointsExpiryDays are intentionally not surfaced to the customer app.
+      tx
+        .select({
+          id: loyaltyPrograms.id,
+          name: loyaltyPrograms.name,
+          pointsCurrency: loyaltyPrograms.pointsCurrency,
+        })
+        .from(loyaltyPrograms)
+        .where(eq(loyaltyPrograms.businessId, businessId))
+        .limit(1),
+
+      // All tiers for this business, canonical display order.
+      tx
+        .select({
+          id: membershipTiers.id,
+          name: membershipTiers.name,
+          minPoints: membershipTiers.minPoints,
+          multiplier: membershipTiers.multiplier,
+          displayOrder: membershipTiers.displayOrder,
+        })
+        .from(membershipTiers)
+        .where(eq(membershipTiers.businessId, businessId))
+        .orderBy(asc(membershipTiers.displayOrder), asc(membershipTiers.minPoints)),
+
+      // Active rewards for this business. Activeness lives in SQL: not deleted,
+      // inside its validity window, and not sold out. The business filter is the
+      // tenant guarantee, as above.
+      tx
+        .select({ id: rewards.id, name: rewards.name, pointsCost: rewards.pointsCost })
+        .from(rewards)
+        .where(
+          and(
+            eq(rewards.businessId, businessId),
+            isNull(rewards.deletedAt),
+            or(isNull(rewards.validFrom), sql`${rewards.validFrom} <= now()`),
+            or(isNull(rewards.validUntil), sql`${rewards.validUntil} > now()`),
+            or(isNull(rewards.stock), gt(rewards.stock, 0)),
+          ),
+        ),
+    ]);
+
+    // Tier row, if the customer has a tier assigned
+    const [tierRow] = customer.currentTierId
+      ? await tx
+          .select()
+          .from(membershipTiers)
+          .where(eq(membershipTiers.id, customer.currentTierId))
+          .limit(1)
+      : [];
+
+    return {
+      customer,
+      balanceResult,
+      earnedResult,
+      eventsResult,
+      txResult,
+      points30Result,
+      businessResult,
+      programResult,
+      tiersResult,
+      rewardsResult,
+      tierRow,
+    };
+  });
+
+  if (!loaded) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
   }
 
-  // Fetch balance, total earned, events, recent transactions, last-30-days
-  // points, and the loyalty "pass" context (business, program, tiers, rewards).
-  const [
+  const {
+    customer,
     balanceResult,
     earnedResult,
     eventsResult,
@@ -488,118 +646,8 @@ router.get('/v1/customers/me', async (c) => {
     programResult,
     tiersResult,
     rewardsResult,
-  ] = await Promise.all([
-    // Latest balance (uses customer.id PK — matches FK on points_transactions)
-    db
-      .select({ balance_after: pointsTransactions.balanceAfter })
-      .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, customer.id))
-      .orderBy(desc(pointsTransactions.createdAt))
-      .limit(1),
-    // Total points earned (sum of all 'earn'/'earned' transactions)
-    db
-      .select({ total: sum(pointsTransactions.points) })
-      .from(pointsTransactions)
-      .where(
-        and(
-          eq(pointsTransactions.customerId, customer.id),
-          or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
-        ),
-      ),
-    // Last 10 customer events
-    db
-      .select()
-      .from(customerEvents)
-      .where(eq(customerEvents.customerId, customer.id))
-      .orderBy(desc(customerEvents.createdAt))
-      .limit(10),
-    // Last 5 points transactions for activity timeline
-    db
-      .select({
-        id: pointsTransactions.id,
-        type: pointsTransactions.type,
-        points: pointsTransactions.points,
-        balanceAfter: pointsTransactions.balanceAfter,
-        note: pointsTransactions.note,
-        purchaseAmount: pointsTransactions.purchaseAmount,
-        createdAt: pointsTransactions.createdAt,
-      })
-      .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, customer.id))
-      .orderBy(desc(pointsTransactions.createdAt))
-      .limit(5),
-    // Points earned in last 30 days
-    db
-      .select({ total: sum(pointsTransactions.points) })
-      .from(pointsTransactions)
-      .where(
-        and(
-          eq(pointsTransactions.customerId, customer.id),
-          or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
-          sql`${pointsTransactions.createdAt} >= now() - interval '30 days'`,
-        ),
-      ),
-
-    // ------------------------------------------------------------------
-    // Loyalty "web pass" context.
-    //
-    // There is NO row-level security on these tables: enableRls() and
-    // createRlsPolicies() in packages/db/src/rls.ts are never applied by any
-    // migration, and no route calls withRls. Tenant isolation therefore rests
-    // ENTIRELY on an explicit business filter in every query below. Removing
-    // one of these filters would leak another tenant's program and tiers.
-    // ------------------------------------------------------------------
-
-    // Business (tenant). `tenants.id` IS the business id — the table is the
-    // root of the model and has no business_id column, so scope by primary key.
-    db
-      .select({ id: tenants.id, name: tenants.name, slug: tenants.slug })
-      .from(tenants)
-      .where(eq(tenants.id, businessId))
-      .limit(1),
-
-    // Loyalty program. businessId is UNIQUE here, so at most one row can match.
-    // Only id/name/pointsCurrency are exposed — earnRate, minRedeemPoints and
-    // pointsExpiryDays are intentionally not surfaced to the customer app.
-    db
-      .select({
-        id: loyaltyPrograms.id,
-        name: loyaltyPrograms.name,
-        pointsCurrency: loyaltyPrograms.pointsCurrency,
-      })
-      .from(loyaltyPrograms)
-      .where(eq(loyaltyPrograms.businessId, businessId))
-      .limit(1),
-
-    // All tiers for this business, canonical display order.
-    db
-      .select({
-        id: membershipTiers.id,
-        name: membershipTiers.name,
-        minPoints: membershipTiers.minPoints,
-        multiplier: membershipTiers.multiplier,
-        displayOrder: membershipTiers.displayOrder,
-      })
-      .from(membershipTiers)
-      .where(eq(membershipTiers.businessId, businessId))
-      .orderBy(asc(membershipTiers.displayOrder), asc(membershipTiers.minPoints)),
-
-    // Active rewards for this business. Activeness lives in SQL: not deleted,
-    // inside its validity window, and not sold out. The business filter is the
-    // tenant guarantee, as above.
-    db
-      .select({ id: rewards.id, name: rewards.name, pointsCost: rewards.pointsCost })
-      .from(rewards)
-      .where(
-        and(
-          eq(rewards.businessId, businessId),
-          isNull(rewards.deletedAt),
-          or(isNull(rewards.validFrom), sql`${rewards.validFrom} <= now()`),
-          or(isNull(rewards.validUntil), sql`${rewards.validUntil} > now()`),
-          or(isNull(rewards.stock), gt(rewards.stock, 0)),
-        ),
-      ),
-  ]);
+    tierRow,
+  } = loaded;
 
   const points = balanceResult[0]?.balance_after ?? 0;
   const totalPointsEarned = Number(earnedResult[0]?.total ?? 0);
@@ -607,20 +655,12 @@ router.get('/v1/customers/me', async (c) => {
 
   // Resolve tier name if customer has a tier assigned
   let tier: { id: string; name: string; multiplier: number } | null = null;
-  if (customer.currentTierId) {
-    const [tierRow] = await db
-      .select()
-      .from(membershipTiers)
-      .where(eq(membershipTiers.id, customer.currentTierId))
-      .limit(1);
-
-    if (tierRow) {
-      tier = {
-        id: tierRow.id,
-        name: tierRow.name,
-        multiplier: Number(tierRow.multiplier),
-      };
-    }
+  if (tierRow) {
+    tier = {
+      id: tierRow.id,
+      name: tierRow.name,
+      multiplier: Number(tierRow.multiplier),
+    };
   }
 
   // ------------------------------------------------------------------
@@ -677,12 +717,14 @@ router.get('/v1/customers/me', async (c) => {
   c.executionCtx.waitUntil(
     (async () => {
       try {
-        await db.insert(customerEvents).values({
-          businessId,
-          customerId: customer.id,
-          eventType: 'customer.profile_viewed',
-          payload: {},
-        });
+        await withTenantTransaction(db, { businessId }, (tx) =>
+          tx.insert(customerEvents).values({
+            businessId,
+            customerId: customer.id,
+            eventType: 'customer.profile_viewed',
+            payload: {},
+          }),
+        );
         await publish(
           c.env.DOMAIN_EVENTS_QUEUE,
           createEnvelope(
@@ -835,17 +877,19 @@ router.patch('/v1/customers/me', async (c) => {
 
   let updated: typeof customers.$inferSelect | undefined;
   try {
-    [updated] = await db
-      .update(customers)
-      .set({ ...updateData, updatedAt: new Date() })
-      .where(
-        and(
-          eq(customers.globalId, userId),
-          eq(customers.businessId, businessId),
-          isNull(customers.deletedAt),
-        ),
-      )
-      .returning();
+    [updated] = await withTenantTransaction(db, { businessId }, (tx) =>
+      tx
+        .update(customers)
+        .set({ ...updateData, updatedAt: new Date() })
+        .where(
+          and(
+            eq(customers.globalId, userId),
+            eq(customers.businessId, businessId),
+            isNull(customers.deletedAt),
+          ),
+        )
+        .returning(),
+    );
   } catch (err) {
     const conflict = classifyUniqueViolation(
       err,
@@ -919,46 +963,55 @@ router.get('/v1/customers/by-global-id/:globalId', async (c) => {
   const globalId = c.req.param('globalId');
   const db = createDb(c.env.DATABASE_URL);
 
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(
-      and(
-        eq(customers.globalId, globalId),
-        eq(customers.businessId, businessId),
-        isNull(customers.deletedAt),
-      ),
-    )
-    .limit(1);
+  const loaded = await withTenantTransaction(db, { businessId }, async (tx) => {
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(
+        and(
+          eq(customers.globalId, globalId),
+          eq(customers.businessId, businessId),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .limit(1);
 
-  if (!customer) {
+    if (!customer) return null;
+
+    // Fetch current balance
+    const [balanceRow] = await tx
+      .select({ balance_after: pointsTransactions.balanceAfter })
+      .from(pointsTransactions)
+      .where(eq(pointsTransactions.customerId, customer.id))
+      .orderBy(desc(pointsTransactions.createdAt))
+      .limit(1);
+
+    // Tier row, if the customer has a tier assigned
+    const [tierRow] = customer.currentTierId
+      ? await tx
+          .select()
+          .from(membershipTiers)
+          .where(eq(membershipTiers.id, customer.currentTierId))
+          .limit(1)
+      : [];
+
+    return { customer, balanceRow, tierRow };
+  });
+
+  if (!loaded) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' } }, 404);
   }
 
-  // Fetch current balance
-  const [balanceRow] = await db
-    .select({ balance_after: pointsTransactions.balanceAfter })
-    .from(pointsTransactions)
-    .where(eq(pointsTransactions.customerId, customer.id))
-    .orderBy(desc(pointsTransactions.createdAt))
-    .limit(1);
+  const { customer, balanceRow, tierRow } = loaded;
 
   // Resolve tier
   let tier: { id: string; name: string; multiplier: number } | null = null;
-  if (customer.currentTierId) {
-    const [tierRow] = await db
-      .select()
-      .from(membershipTiers)
-      .where(eq(membershipTiers.id, customer.currentTierId))
-      .limit(1);
-
-    if (tierRow) {
-      tier = {
-        id: tierRow.id,
-        name: tierRow.name,
-        multiplier: Number(tierRow.multiplier),
-      };
-    }
+  if (tierRow) {
+    tier = {
+      id: tierRow.id,
+      name: tierRow.name,
+      multiplier: Number(tierRow.multiplier),
+    };
   }
 
   return c.json({
@@ -1053,10 +1106,10 @@ const LOOKUP_AMBIGUOUS_MESSAGE: Record<LookupIdentifier, string> = {
  *
  * ## Tenant isolation
  *
- * There is no row-level security on these tables — `enableRls()` and
- * `createRlsPolicies()` in `packages/db/src/rls.ts` are never applied by any
- * migration, and this worker opens no tenant session — so the `business_id`
- * filter below is the *only* thing keeping one business from reading another's
+ * Row-level security is not enforced on these tables yet — the tenant
+ * transaction below sets the context, but no policy reads it until the rollout
+ * — so the `business_id` filter below is the *only* thing keeping one business
+ * from reading another's
  * customers. It comes from the token the gateway injected and from nowhere else:
  * a `businessId` in the query string is ignored, not honoured.
  *
@@ -1120,20 +1173,88 @@ router.get('/v1/customers/lookup', async (c) => {
 
   const db = createDb(c.env.DATABASE_URL);
 
-  // `.limit(2)` — see the note above. Two is enough to detect a conflict and
-  // still bounds what a single request can pull.
-  const matches = await db
-    .select({
-      id: customers.id,
-      globalId: customers.globalId,
-      fullName: customers.fullName,
-      phone: customers.phone,
-      email: customers.email,
-      currentTierId: customers.currentTierId,
-    })
-    .from(customers)
-    .where(and(match, eq(customers.businessId, businessId), isNull(customers.deletedAt)))
-    .limit(2);
+  // The pass row is keyed by `tenant_id`, the rest by `business_id`; for this
+  // worker both are the token's business.
+  const loaded = await withTenantTransaction(
+    db,
+    { businessId, tenantId: businessId },
+    async (tx) => {
+      // `.limit(2)` — see the note above. Two is enough to detect a conflict and
+      // still bounds what a single request can pull.
+      const matches = await tx
+        .select({
+          id: customers.id,
+          globalId: customers.globalId,
+          fullName: customers.fullName,
+          phone: customers.phone,
+          email: customers.email,
+          currentTierId: customers.currentTierId,
+        })
+        .from(customers)
+        .where(and(match, eq(customers.businessId, businessId), isNull(customers.deletedAt)))
+        .limit(2);
+
+      // Only an unambiguous match reads further; the answer for zero or two is
+      // decided below, outside the transaction.
+      if (matches.length !== 1) return { matches };
+
+      const customer = matches[0]!;
+
+      // Pass state, scoped to the same tenant as the customer read above. A pass row
+      // is keyed by customer_id alone, so without `tenant_id` a stale or wrong id
+      // would be indistinguishable from this customer's own row.
+      const [pass] = await tx
+        .select({
+          state: customerWalletPasses.state,
+          lastSyncedAt: customerWalletPasses.lastSyncedAt,
+        })
+        .from(customerWalletPasses)
+        .where(
+          and(
+            eq(customerWalletPasses.customerId, customer.id),
+            eq(customerWalletPasses.tenantId, businessId),
+          ),
+        )
+        .limit(1);
+
+      // Balance: the most recent transaction's `balance_after`, never a sum of the
+      // deltas. `business_id` is redundant given the customer id is a primary key,
+      // and is here anyway so a wrong customer id cannot read another tenant's ledger.
+      const [balanceRow] = await tx
+        .select({ balanceAfter: pointsTransactions.balanceAfter })
+        .from(pointsTransactions)
+        .where(
+          and(
+            eq(pointsTransactions.customerId, customer.id),
+            eq(pointsTransactions.businessId, businessId),
+          ),
+        )
+        .orderBy(desc(pointsTransactions.createdAt))
+        .limit(1);
+
+      // Tiers are tenant-scoped rows, so a tier id pointing at another business is
+      // a data problem — reported as "no tier" rather than as their tier name.
+      const [tierRow] = customer.currentTierId
+        ? await tx
+            .select({
+              id: membershipTiers.id,
+              name: membershipTiers.name,
+              multiplier: membershipTiers.multiplier,
+            })
+            .from(membershipTiers)
+            .where(
+              and(
+                eq(membershipTiers.id, customer.currentTierId),
+                eq(membershipTiers.businessId, businessId),
+              ),
+            )
+            .limit(1)
+        : [];
+
+      return { matches, pass, balanceRow, tierRow };
+    },
+  );
+  const { matches } = loaded;
 
   if (matches.length === 0) {
     // A distinct code from a bad request and from a 5xx, because the UI's next
@@ -1166,65 +1287,15 @@ router.get('/v1/customers/lookup', async (c) => {
   }
 
   const customer = matches[0]!;
-
-  // Pass state, scoped to the same tenant as the customer read above. A pass row
-  // is keyed by customer_id alone, so without `tenant_id` a stale or wrong id
-  // would be indistinguishable from this customer's own row.
-  const [pass] = await db
-    .select({
-      state: customerWalletPasses.state,
-      lastSyncedAt: customerWalletPasses.lastSyncedAt,
-    })
-    .from(customerWalletPasses)
-    .where(
-      and(
-        eq(customerWalletPasses.customerId, customer.id),
-        eq(customerWalletPasses.tenantId, businessId),
-      ),
-    )
-    .limit(1);
-
-  // Balance: the most recent transaction's `balance_after`, never a sum of the
-  // deltas. `business_id` is redundant given the customer id is a primary key,
-  // and is here anyway so a wrong customer id cannot read another tenant's ledger.
-  const [balanceRow] = await db
-    .select({ balanceAfter: pointsTransactions.balanceAfter })
-    .from(pointsTransactions)
-    .where(
-      and(
-        eq(pointsTransactions.customerId, customer.id),
-        eq(pointsTransactions.businessId, businessId),
-      ),
-    )
-    .orderBy(desc(pointsTransactions.createdAt))
-    .limit(1);
+  const { pass, balanceRow, tierRow } = loaded;
 
   let tier: { id: string; name: string; multiplier: number } | null = null;
-  if (customer.currentTierId) {
-    const [tierRow] = await db
-      .select({
-        id: membershipTiers.id,
-        name: membershipTiers.name,
-        multiplier: membershipTiers.multiplier,
-      })
-      .from(membershipTiers)
-      .where(
-        and(
-          eq(membershipTiers.id, customer.currentTierId),
-          eq(membershipTiers.businessId, businessId),
-        ),
-      )
-      .limit(1);
-
-    // Tiers are tenant-scoped rows, so a tier id pointing at another business is
-    // a data problem — reported as "no tier" rather than as their tier name.
-    if (tierRow) {
-      tier = {
-        id: tierRow.id,
-        name: tierRow.name,
-        multiplier: Number(tierRow.multiplier),
-      };
-    }
+  if (tierRow) {
+    tier = {
+      id: tierRow.id,
+      name: tierRow.name,
+      multiplier: Number(tierRow.multiplier),
+    };
   }
 
   return c.json({
@@ -1266,62 +1337,64 @@ router.get('/v1/customers/:id', async (c) => {
 
   // Run customer query + events + consents + points in parallel
   const [customerResult, eventsResult, consentsResult, balanceResult, earnedResult, txResult] =
-    await Promise.all([
-    db
-      .select()
-      .from(customers)
-      .where(
-        and(
-          eq(customers.id, id),
-          eq(customers.businessId, businessId),
-          isNull(customers.deletedAt),
-        ),
-      )
-      .limit(1),
-    // Last 20 events, newest first
-    db
-      .select()
-      .from(customerEvents)
-        .where(and(eq(customerEvents.customerId, id), eq(customerEvents.businessId, businessId)))
-      .orderBy(desc(customerEvents.createdAt))
-      .limit(20),
-    db
-      .select()
-      .from(consents)
-        .where(and(eq(consents.customerId, id), eq(consents.businessId, businessId))),
-    // Latest balance
-    db
-      .select({ balance_after: pointsTransactions.balanceAfter })
-      .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, id))
-      .orderBy(desc(pointsTransactions.createdAt))
-      .limit(1),
-    // Total points earned
-    db
-      .select({ total: sum(pointsTransactions.points) })
-      .from(pointsTransactions)
-      .where(
-        and(
-          eq(pointsTransactions.customerId, id),
-          or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
-        ),
-      ),
-    // Last 5 transactions for activity timeline
-    db
-      .select({
-        id: pointsTransactions.id,
-        type: pointsTransactions.type,
-        points: pointsTransactions.points,
-        balanceAfter: pointsTransactions.balanceAfter,
-        note: pointsTransactions.note,
-        purchaseAmount: pointsTransactions.purchaseAmount,
-        createdAt: pointsTransactions.createdAt,
-      })
-      .from(pointsTransactions)
-      .where(eq(pointsTransactions.customerId, id))
-      .orderBy(desc(pointsTransactions.createdAt))
-      .limit(5),
-  ]);
+    await withTenantTransaction(db, { businessId }, (tx) =>
+      Promise.all([
+        tx
+          .select()
+          .from(customers)
+          .where(
+            and(
+              eq(customers.id, id),
+              eq(customers.businessId, businessId),
+              isNull(customers.deletedAt),
+            ),
+          )
+          .limit(1),
+        // Last 20 events, newest first
+        tx
+          .select()
+          .from(customerEvents)
+          .where(and(eq(customerEvents.customerId, id), eq(customerEvents.businessId, businessId)))
+          .orderBy(desc(customerEvents.createdAt))
+          .limit(20),
+        tx
+          .select()
+          .from(consents)
+          .where(and(eq(consents.customerId, id), eq(consents.businessId, businessId))),
+        // Latest balance
+        tx
+          .select({ balance_after: pointsTransactions.balanceAfter })
+          .from(pointsTransactions)
+          .where(eq(pointsTransactions.customerId, id))
+          .orderBy(desc(pointsTransactions.createdAt))
+          .limit(1),
+        // Total points earned
+        tx
+          .select({ total: sum(pointsTransactions.points) })
+          .from(pointsTransactions)
+          .where(
+            and(
+              eq(pointsTransactions.customerId, id),
+              or(eq(pointsTransactions.type, 'earn'), eq(pointsTransactions.type, 'earned')),
+            ),
+          ),
+        // Last 5 transactions for activity timeline
+        tx
+          .select({
+            id: pointsTransactions.id,
+            type: pointsTransactions.type,
+            points: pointsTransactions.points,
+            balanceAfter: pointsTransactions.balanceAfter,
+            note: pointsTransactions.note,
+            purchaseAmount: pointsTransactions.purchaseAmount,
+            createdAt: pointsTransactions.createdAt,
+          })
+          .from(pointsTransactions)
+          .where(eq(pointsTransactions.customerId, id))
+          .orderBy(desc(pointsTransactions.createdAt))
+          .limit(5),
+      ]),
+    );
 
   if (customerResult.length === 0) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
@@ -1475,13 +1548,15 @@ router.patch('/v1/customers/:id', async (c) => {
   // First, before the body is even looked at, and the filter takes the tenant
   // from the token — never from the payload. That stays the answer for another
   // business's customer whatever they send.
-  const existing = await db
-    .select()
-    .from(customers)
-    .where(
-      and(eq(customers.id, id), eq(customers.businessId, businessId), isNull(customers.deletedAt)),
-    )
-    .limit(1);
+  const existing = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .select()
+      .from(customers)
+      .where(
+        and(eq(customers.id, id), eq(customers.businessId, businessId), isNull(customers.deletedAt)),
+      )
+      .limit(1),
+  );
 
   if (existing.length === 0) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
@@ -1591,17 +1666,19 @@ router.patch('/v1/customers/:id', async (c) => {
   }
 
   try {
-    const [updated] = await db
-      .update(customers)
-      .set({ ...updateData, updatedAt: new Date() })
-      .where(
-        and(
-          eq(customers.id, id),
-          eq(customers.businessId, businessId),
-          isNull(customers.deletedAt),
-        ),
-      )
-      .returning();
+    const [updated] = await withTenantTransaction(db, { businessId }, (tx) =>
+      tx
+        .update(customers)
+        .set({ ...updateData, updatedAt: new Date() })
+        .where(
+          and(
+            eq(customers.id, id),
+            eq(customers.businessId, businessId),
+            isNull(customers.deletedAt),
+          ),
+        )
+        .returning(),
+    );
 
     return c.json(updated, 200);
   } catch (err) {

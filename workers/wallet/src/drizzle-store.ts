@@ -6,9 +6,10 @@
  * Each `WHERE` clause pairs the row's own key with the tenant. That is
  * deliberate belt-and-braces: the `tenant_wallet_programs` and
  * `customer_wallet_passes` tables have row-level security keyed on
- * `tenant_id` (`packages/db/src/rls.ts`, applied with `withTenantRls`), and
- * this layer does not rely on that being switched on. RLS is enabled
- * separately from business-scoped RLS precisely so the two can go live on
+ * `tenant_id` (`packages/db/src/rls.ts`, set per transaction by
+ * `withTenantTransaction`), and this layer does not rely on that being
+ * switched on. RLS is enabled separately from business-scoped RLS precisely
+ * so the two can go live on
  * different days, and a rollout where the policy exists but the code assumes it
  * is the only line of defence is a rollout with no line of defence.
  *
@@ -18,19 +19,18 @@
  *
  * ## RLS session variables
  *
- * Two of them, and they are not interchangeable. `withRls(db, businessId)`
- * sets `app.current_business_id` for the `business_id`-keyed tables
- * (`customers`, `loyalty_programs`, `membership_tiers`, `points_transactions`).
- * `withTenantRls(db, tenantId)` sets `app.current_tenant_id` for the two wallet
- * tables. A request that reads a pass touches all four groups, so it must set
- * both — setting one does not satisfy the other, and a request that set only the
+ * Two of them, and they are not interchangeable. `app.current_business_id`
+ * scopes the `business_id`-keyed tables (`customers`, `loyalty_programs`,
+ * `membership_tiers`, `points_transactions`); `app.current_tenant_id` scopes the
+ * wallet tables. A request that reads a pass touches both groups, so both are
+ * set — setting one does not satisfy the other, and a request that set only the
  * business variable would see no wallet rows once that policy is live.
  *
- * The session-context statements are issued by the route, next to
- * `createDb`, because that is where every other worker in this repository puts
- * its `withRls` call and a reader comparing the two will expect to find it
- * there. `withTenantRls` itself is imported from `@vyloop/db` rather than
- * reimplemented, for the reason its own doc comment gives.
+ * Both are set by `withTenantTransaction` from `@vyloop/db`, on the transaction
+ * handle and with `set_config(..., true)`, so they reach exactly the queries of
+ * that transaction and nothing else. `createTenantWalletStore` below is the one
+ * place this worker opens such a transaction for its store; routes never issue
+ * the statements themselves.
  */
 
 import {
@@ -40,13 +40,14 @@ import {
   loyaltyPrograms,
   membershipTiers,
   pointsTransactions,
-  setCurrentBusinessId,
-  setCurrentTenantId,
   tenantWalletPrograms,
   tenants,
+  withTenantTransaction,
 } from '@vyloop/db';
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
+import { createLocationsSource } from './locations-source';
+import type { LocationsSource } from './locations-source';
 import type {
   ConsentingPassRow,
   InactivityCandidateRow,
@@ -107,30 +108,20 @@ function passRowsOf(result: unknown): WalletPassRow[] {
 }
 
 /**
- * Open a tenant-scoped database session.
+ * Run `fn` in a transaction scoped to one tenant, with its queries on `tx`.
  *
- * Both session variables are set, and they are set before anything is read. A
- * missing one is invisible until the matching policy is enabled, which is the
- * worst possible time to find out.
+ * The wallet's tenant is both a `business_id` (the loyalty tables) and a
+ * `tenant_id` (the wallet tables), so both session variables are set to the
+ * same id. This is the only thing it adds to `withTenantTransaction`; it exists
+ * so that no caller in this worker can set one variable and forget the other.
  *
- * Note the two exported statement builders rather than a `withRls` helper:
- * `@vyloop/db` exports `setCurrentBusinessId` and `setCurrentTenantId` but **not**
- * a combined `withRls` — that one lives in each of the four existing workers,
- * which is the duplication `rls.ts` complains about ("four independent
- * definitions of the same security-relevant statement"). Copying a fifth one
- * here would be adding to that. What is duplicated in the four workers is the
- * SQL string; calling these two builders is not duplicating the statement, it is
- * using the one place that owns it.
- *
- * The symmetric fix is to add `withRls` to `@vyloop/db` and have the four
- * workers import it. That is a change to shared code and to four workers' call
- * sites, so it belongs in its own change rather than inside the wallet unit.
+ * `fn` must not call Google, sign a JWT or touch KV: the transaction holds a
+ * pooled connection for as long as `fn` runs, and a network round trip inside it
+ * is a connection held hostage by somebody else's latency. Read, close, call
+ * out, then open a new transaction to write.
  */
-export async function openTenantSession(databaseUrl: string, tenantId: string): Promise<Db> {
-  const db = createDb(databaseUrl);
-  await db.execute(setCurrentBusinessId(tenantId));
-  await db.execute(setCurrentTenantId(tenantId));
-  return db;
+export function inTenantTransaction<T>(db: Db, tenantId: string, fn: (tx: Db) => Promise<T>): Promise<T> {
+  return withTenantTransaction(db, { businessId: tenantId, tenantId }, fn);
 }
 
 const CUSTOMER_COLUMNS = {
@@ -1160,5 +1151,69 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
 
       return countRows(result);
     },
+  };
+}
+
+/**
+ * A `WalletStore` whose every method runs in its own tenant transaction.
+ *
+ * Each call opens a transaction, sets both session variables on it (see
+ * `inTenantTransaction`), runs the one store method on the transaction handle
+ * and commits. One transaction per call rather than one per request, because
+ * the callers interleave store calls with calls to Google: the issuance path
+ * reads the customer, signs a JWT, then records the pass, and the reconcile path
+ * reads the pass, PATCHes Google, then writes the outcome. A request-wide
+ * transaction would hold a connection open across each of those round trips.
+ * Per call, every store read and every store write is its own short transaction
+ * and nothing is ever open while the worker waits on the network.
+ *
+ * The wrapper is built from the method names of `createDrizzleWalletStore`
+ * itself, so a method added to the store is scoped the moment it exists; a
+ * hand-written list would leave the new one on the bare pool, where it fails
+ * the day its table's policy is enabled.
+ *
+ * The tenant is still a parameter of every method, and every `WHERE` still
+ * filters on it. The transaction's tenant is the second line of defence, not a
+ * replacement for the first (see the note at the top of this file).
+ */
+export function createTenantWalletStore(db: Db, tenantId: string): WalletStore {
+  const methods = Object.keys(createDrizzleWalletStore(db)) as Array<keyof WalletStore>;
+  const scoped: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+  for (const name of methods) {
+    scoped[name] = (...args: unknown[]) =>
+      inTenantTransaction(db, tenantId, (tx) => {
+        const method = createDrizzleWalletStore(tx)[name] as (...a: unknown[]) => Promise<unknown>;
+        return method(...args);
+      });
+  }
+  return scoped as unknown as WalletStore;
+}
+
+/**
+ * Open the database and return the tenant-scoped store for `tenantId`.
+ *
+ * The one-line form for a caller that needs the store and nothing else, which
+ * is every RPC entrypoint in `index.ts` except `syncLocations`. It is also the
+ * single seam those entrypoints' tests replace: `createDb` is lazy and connects
+ * on the first query, so nothing here touches the network.
+ */
+export function openTenantWalletStore(databaseUrl: string, tenantId: string): WalletStore {
+  return createTenantWalletStore(createDb(databaseUrl), tenantId);
+}
+
+/**
+ * The merchant-locations read, in a tenant transaction of its own.
+ *
+ * It reads `consents` and `branches`, both `business_id` tables, so it needs the
+ * same session context as the store. One transaction per call, for the same
+ * reason as `createTenantWalletStore`: the caller puts the answer on a pass it is
+ * about to send to Google, and the transaction is closed before that happens.
+ */
+export function createTenantLocationsSource(db: Db, tenantId: string): LocationsSource {
+  return {
+    merchantLocationsFor: (customerId, forTenantId) =>
+      inTenantTransaction(db, tenantId, (tx) =>
+        createLocationsSource(tx).merchantLocationsFor(customerId, forTenantId),
+      ),
   };
 }

@@ -1,12 +1,12 @@
 import type { Message } from '@cloudflare/workers-types';
-import { createDb, customers, membershipTiers, loyaltyPrograms, rewards, rewardBranches, rewardGrants } from '@vyloop/db';
+import { createDb, customers, membershipTiers, loyaltyPrograms, rewards, rewardBranches, rewardGrants, withTenantTransaction } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { publish } from '@vyloop/event-bus';
 import { logPrefix } from '@vyloop/request-context';
 import { eq, and, lte, desc, sql, isNotNull, isNull } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
-import { withRls, buildRewardAutoGrantedEvent, buildRewardAvailableAtBranchEvent } from './helpers';
+import { buildRewardAutoGrantedEvent, buildRewardAvailableAtBranchEvent } from './helpers';
 
 /**
  * Log prefix for a queued event. The id travels in the envelope, so a failure
@@ -76,87 +76,98 @@ async function handleCustomerRegistered(
   const customerGlobalId = payload.customer_id;
 
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // -----------------------------------------------------------------------
-  // Resolve the customer's internal id from global_id
-  // -----------------------------------------------------------------------
-  const [customer] = await db
-    .select({ id: customers.id })
-    .from(customers)
-    .where(
-      and(
-        eq(customers.businessId, businessId),
-        eq(customers.globalId, customerGlobalId),
-        // A late event for an account deleted since must not open a wallet or
-        // assign a tier on the anonymised row: skipped like an unknown one.
-        isNull(customers.deletedAt),
-      ),
-    )
-    .limit(1);
-
-  if (!customer) {
-    console.warn(
-      `${tag(event)} Customer with global_id ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
-    );
-    return;
-  }
-
-  // -----------------------------------------------------------------------
-  // Find the lowest tier (min_points = 0) for this business
-  // -----------------------------------------------------------------------
-  const [lowestTier] = await db
-    .select()
-    .from(membershipTiers)
-    .where(
-      and(eq(membershipTiers.businessId, businessId), eq(membershipTiers.minPoints, 0)),
-    )
-    .orderBy(membershipTiers.displayOrder)
-    .limit(1);
-
-  let tierId: string;
-
-  if (!lowestTier) {
-    // -------------------------------------------------------------------
-    // No tier exists — create a Bronze tier
-    // -------------------------------------------------------------------
-    const [program] = await db
-      .select({ id: loyaltyPrograms.id })
-      .from(loyaltyPrograms)
-      .where(eq(loyaltyPrograms.businessId, businessId))
+  // The reads, and the Bronze tier when there is none, share one tenant-scoped
+  // transaction. The wallet row and the tier assignment below each get their
+  // own: the wallet INSERT is allowed to fail on a redelivery, and a failed
+  // statement aborts the transaction it runs in, so sharing one would take the
+  // tier assignment down with it.
+  const resolved = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // -----------------------------------------------------------------------
+    // Resolve the customer's internal id from global_id
+    // -----------------------------------------------------------------------
+    const [customer] = await tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(
+        and(
+          eq(customers.businessId, businessId),
+          eq(customers.globalId, customerGlobalId),
+          // A late event for an account deleted since must not open a wallet or
+          // assign a tier on the anonymised row: skipped like an unknown one.
+          isNull(customers.deletedAt),
+        ),
+      )
       .limit(1);
 
-    if (!program) {
+    if (!customer) {
       console.warn(
-        `${tag(event)} No loyalty program found for business ${businessId} — cannot create tier for CustomerRegistered`,
+        `${tag(event)} Customer with global_id ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
       );
-      return;
+      return undefined;
     }
 
-    const [createdTier] = await db
-      .insert(membershipTiers)
-      .values({
-        businessId,
-        programId: program.id,
-        name: 'Bronze',
-        minPoints: 0,
-        multiplier: '1.0',
-        benefits: [],
-        displayOrder: 0,
-      })
-      .returning();
+    // -----------------------------------------------------------------------
+    // Find the lowest tier (min_points = 0) for this business
+    // -----------------------------------------------------------------------
+    const [lowestTier] = await tx
+      .select()
+      .from(membershipTiers)
+      .where(
+        and(eq(membershipTiers.businessId, businessId), eq(membershipTiers.minPoints, 0)),
+      )
+      .orderBy(membershipTiers.displayOrder)
+      .limit(1);
 
-    tierId = createdTier.id;
-    console.log(`${tag(event)} Created Bronze tier for business ${businessId}`);
-  } else {
-    tierId = lowestTier.id;
-  }
+    let tierId: string;
+
+    if (!lowestTier) {
+      // -------------------------------------------------------------------
+      // No tier exists — create a Bronze tier
+      // -------------------------------------------------------------------
+      const [program] = await tx
+        .select({ id: loyaltyPrograms.id })
+        .from(loyaltyPrograms)
+        .where(eq(loyaltyPrograms.businessId, businessId))
+        .limit(1);
+
+      if (!program) {
+        console.warn(
+          `${tag(event)} No loyalty program found for business ${businessId} — cannot create tier for CustomerRegistered`,
+        );
+        return undefined;
+      }
+
+      const [createdTier] = await tx
+        .insert(membershipTiers)
+        .values({
+          businessId,
+          programId: program.id,
+          name: 'Bronze',
+          minPoints: 0,
+          multiplier: '1.0',
+          benefits: [],
+          displayOrder: 0,
+        })
+        .returning();
+
+      tierId = createdTier.id;
+      console.log(`${tag(event)} Created Bronze tier for business ${businessId}`);
+    } else {
+      tierId = lowestTier.id;
+    }
+
+    return { customer, tierId };
+  });
+
+  if (!resolved) return;
+  const { customer, tierId } = resolved;
 
   // -----------------------------------------------------------------------
   // Upsert wallet with 0 balance (idempotent via unique constraint)
   // -----------------------------------------------------------------------
   try {
-    await db.execute(sql`
+    await withTenantTransaction(db, { businessId }, (tx) => tx.execute(sql`
       INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
       VALUES (
         ${businessId}::uuid,
@@ -168,7 +179,7 @@ async function handleCustomerRegistered(
         'Wallet initialization via CustomerRegistered'
       )
       RETURNING id
-    `);
+    `));
 
     console.log(`${tag(event)} Wallet initialized for customer ${customer.id}`);
   } catch (err: unknown) {
@@ -184,10 +195,12 @@ async function handleCustomerRegistered(
   // -----------------------------------------------------------------------
   // Assign lowest tier as currentTierId (idempotent; safe to re-apply)
   // -----------------------------------------------------------------------
-  await db
-    .update(customers)
-    .set({ currentTierId: tierId })
-    .where(eq(customers.id, customer.id));
+  await withTenantTransaction(db, { businessId }, async (tx) => {
+    await tx
+      .update(customers)
+      .set({ currentTierId: tierId })
+      .where(eq(customers.id, customer.id));
+  });
 
   console.log(`${tag(event)} Customer ${customer.id} assigned to tier ${tierId}`);
 }
@@ -226,119 +239,132 @@ async function handlePointsAssigned(
   const customerId = payload.customer_id;
 
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // -----------------------------------------------------------------------
-  // Re-read the customer's current balance
-  // -----------------------------------------------------------------------
-  const balanceResult = await db.execute(sql`
-    SELECT COALESCE(
-      (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
-      0
-    ) AS balance
-  `);
+  // The balance, the tier move and the auto-grant candidates share one
+  // tenant-scoped transaction. Each grant below gets its own, committed before
+  // its event is published, so an event never announces a grant that can still
+  // roll back.
+  const evaluated = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // -----------------------------------------------------------------------
+    // Re-read the customer's current balance
+    // -----------------------------------------------------------------------
+    const balanceResult = await tx.execute(sql`
+      SELECT COALESCE(
+        (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
+        0
+      ) AS balance
+    `);
 
-  const currentBalance = Number(balanceResult.rows?.[0]?.balance ?? 0);
+    const currentBalance = Number(balanceResult.rows?.[0]?.balance ?? 0);
 
-  // -----------------------------------------------------------------------
-  // Get the customer record to find current tier
-  // -----------------------------------------------------------------------
-  const [customer] = await db
-    .select({
-      id: customers.id,
-      globalId: customers.globalId,
-      currentTierId: customers.currentTierId,
-    })
-    .from(customers)
-    .where(
-      and(
-        eq(customers.businessId, businessId),
-        eq(customers.id, customerId),
-        // An event published just before the account was deleted must not move a
-        // tier or grant a reward on the anonymised row: skipped like an unknown one.
-        isNull(customers.deletedAt),
-      ),
-    )
-    .limit(1);
-
-  if (!customer) {
-    console.warn(
-      `${tag(event)} Customer ${customerId} not found in business ${businessId} — skipping PointsAssigned`,
-    );
-    return;
-  }
-
-  // -----------------------------------------------------------------------
-  // Find the highest tier whose min_points ≤ balance
-  // -----------------------------------------------------------------------
-  const [highestTier] = await db
-    .select()
-    .from(membershipTiers)
-    .where(
-      and(
-        eq(membershipTiers.businessId, businessId),
-        lte(membershipTiers.minPoints, currentBalance),
-      ),
-    )
-    .orderBy(desc(membershipTiers.minPoints))
-    .limit(1);
-
-  // -----------------------------------------------------------------------
-  // Evaluate tier upgrade (only upgrade, never downgrade)
-  // -----------------------------------------------------------------------
-  if (highestTier && customer.currentTierId !== highestTier.id) {
-    let isUpgrade = true;
-
-    if (customer.currentTierId) {
-      const [currentTier] = await db
-        .select({ minPoints: membershipTiers.minPoints })
-        .from(membershipTiers)
-        .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
-        .limit(1);
-
-      // Downgrade guard: skip if the new tier's requirement is lower or equal
-      if (currentTier && highestTier.minPoints <= currentTier.minPoints) {
-        isUpgrade = false;
-        console.log(
-          `${tag(event)} Customer ${customerId} tier unchanged — ${highestTier.name} is not an upgrade from current tier`,
-        );
-      }
-    }
-
-    if (isUpgrade) {
-      await db
-        .update(customers)
-        .set({ currentTierId: highestTier.id })
-        .where(eq(customers.id, customer.id));
-
-      console.log(
-        `${tag(event)} Customer ${customerId} upgraded to tier ${highestTier.name} (minPoints: ${highestTier.minPoints}, balance: ${currentBalance})`,
-      );
-    }
-  } else if (!highestTier) {
-    console.log(
-      `${tag(event)} Customer ${customerId} — no eligible tier found (balance: ${currentBalance})`,
-    );
-  }
-
-  // -----------------------------------------------------------------------
-  // Auto-reward hook: check threshold-based rewards after points update
-  // -----------------------------------------------------------------------
-  if (currentBalance > 0) {
-    const autoRewards = await db
-      .select()
-      .from(rewards)
+    // -----------------------------------------------------------------------
+    // Get the customer record to find current tier
+    // -----------------------------------------------------------------------
+    const [customer] = await tx
+      .select({
+        id: customers.id,
+        globalId: customers.globalId,
+        currentTierId: customers.currentTierId,
+      })
+      .from(customers)
       .where(
         and(
-          eq(rewards.businessId, businessId),
-          isNotNull(rewards.autoGrantThreshold),
-          lte(rewards.autoGrantThreshold, currentBalance),
+          eq(customers.businessId, businessId),
+          eq(customers.id, customerId),
+          // An event published just before the account was deleted must not move a
+          // tier or grant a reward on the anonymised row: skipped like an unknown one.
+          isNull(customers.deletedAt),
         ),
-      );
+      )
+      .limit(1);
 
-    for (const reward of autoRewards) {
+    if (!customer) {
+      console.warn(
+        `${tag(event)} Customer ${customerId} not found in business ${businessId} — skipping PointsAssigned`,
+      );
+      return undefined;
+    }
+
+    // -----------------------------------------------------------------------
+    // Find the highest tier whose min_points ≤ balance
+    // -----------------------------------------------------------------------
+    const [highestTier] = await tx
+      .select()
+      .from(membershipTiers)
+      .where(
+        and(
+          eq(membershipTiers.businessId, businessId),
+          lte(membershipTiers.minPoints, currentBalance),
+        ),
+      )
+      .orderBy(desc(membershipTiers.minPoints))
+      .limit(1);
+
+    // -----------------------------------------------------------------------
+    // Evaluate tier upgrade (only upgrade, never downgrade)
+    // -----------------------------------------------------------------------
+    if (highestTier && customer.currentTierId !== highestTier.id) {
+      let isUpgrade = true;
+
+      if (customer.currentTierId) {
+        const [currentTier] = await tx
+          .select({ minPoints: membershipTiers.minPoints })
+          .from(membershipTiers)
+          .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
+          .limit(1);
+
+        // Downgrade guard: skip if the new tier's requirement is lower or equal
+        if (currentTier && highestTier.minPoints <= currentTier.minPoints) {
+          isUpgrade = false;
+          console.log(
+            `${tag(event)} Customer ${customerId} tier unchanged — ${highestTier.name} is not an upgrade from current tier`,
+          );
+        }
+      }
+
+      if (isUpgrade) {
+        await tx
+          .update(customers)
+          .set({ currentTierId: highestTier.id })
+          .where(eq(customers.id, customer.id));
+
+        console.log(
+          `${tag(event)} Customer ${customerId} upgraded to tier ${highestTier.name} (minPoints: ${highestTier.minPoints}, balance: ${currentBalance})`,
+        );
+      }
+    } else if (!highestTier) {
+      console.log(
+        `${tag(event)} Customer ${customerId} — no eligible tier found (balance: ${currentBalance})`,
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // Auto-reward hook: check threshold-based rewards after points update
+    // -----------------------------------------------------------------------
+    const autoRewards =
+      currentBalance > 0
+        ? await tx
+            .select()
+            .from(rewards)
+            .where(
+              and(
+                eq(rewards.businessId, businessId),
+                isNotNull(rewards.autoGrantThreshold),
+                lte(rewards.autoGrantThreshold, currentBalance),
+              ),
+            )
+        : [];
+
+    return { customer, currentBalance, autoRewards };
+  });
+
+  if (!evaluated) return;
+  const { customer, currentBalance, autoRewards } = evaluated;
+
+  for (const reward of autoRewards) {
+    const grant = await withTenantTransaction(db, { businessId }, async (tx) => {
       // Check idempotency: skip if already granted to this customer
-      const [existingGrant] = await db
+      const [existingGrant] = await tx
         .select({ id: rewardGrants.id })
         .from(rewardGrants)
         .where(
@@ -353,11 +379,11 @@ async function handlePointsAssigned(
         console.log(
           `${tag(event)} Auto-reward ${reward.name} already granted to customer ${customer.id} — skipping`,
         );
-        continue;
+        return undefined;
       }
 
       // Insert grant record
-      const [grant] = await db
+      const [inserted] = await tx
         .insert(rewardGrants)
         .values({
           businessId,
@@ -367,61 +393,67 @@ async function handlePointsAssigned(
         })
         .returning({ id: rewardGrants.id });
 
-      console.log(
-        `${tag(event)} Auto-reward "${reward.name}" granted to customer ${customer.id} (threshold: ${reward.autoGrantThreshold}, balance: ${currentBalance})`,
-      );
+      return inserted;
+    });
 
-      // Publish RewardAutoGranted event
-      const autoGrantedEvent = buildRewardAutoGrantedEvent(
-        customer.id,
+    if (!grant) continue;
+
+    console.log(
+      `${tag(event)} Auto-reward "${reward.name}" granted to customer ${customer.id} (threshold: ${reward.autoGrantThreshold}, balance: ${currentBalance})`,
+    );
+
+    // Publish RewardAutoGranted event
+    const autoGrantedEvent = buildRewardAutoGrantedEvent(
+      customer.id,
+      businessId,
+      reward.id,
+      reward.name,
+      currentBalance,
+      event.header.request_id,
+    );
+
+    await publish(env.DOMAIN_EVENTS_QUEUE, autoGrantedEvent);
+
+    // -----------------------------------------------------------------
+    // A reward that is only good at some venues is worth telling the
+    // customer about, and a reward that is good everywhere is not: that is
+    // the difference between "you have a prize" and "your prize is here".
+    //
+    // The scope is read after the grant exists, so a failure between the
+    // two publishes loses the announcement and never the grant. The
+    // consumer's own cap and the grant's idempotency make a redelivery safe.
+    // -----------------------------------------------------------------
+    const scope = await withTenantTransaction(db, { businessId }, (tx) =>
+      tx
+        .select({ branchId: rewardBranches.branchId })
+        .from(rewardBranches)
+        .where(and(eq(rewardBranches.rewardId, reward.id), eq(rewardBranches.businessId, businessId))),
+    );
+
+    if (scope.length === 0) continue;
+
+    const queue = env.DELIVERY_QUEUE;
+    if (!queue) {
+      // Same call the check-in route makes: the grant is the record, and a
+      // missing binding must not fail the points that produced it.
+      console.error(
+        `${tag(event)} No DELIVERY_QUEUE binding, so the grant of "${reward.name}" to customer ` +
+          `${customer.id} in tenant ${businessId} was not announced. The reward_grants row is the record.`,
+      );
+      continue;
+    }
+
+    await publish(
+      queue,
+      buildRewardAvailableAtBranchEvent(
+        customer.globalId,
         businessId,
         reward.id,
         reward.name,
-        currentBalance,
+        grant.id,
+        scope.map((row) => row.branchId),
         event.header.request_id,
-      );
-
-      await publish(env.DOMAIN_EVENTS_QUEUE, autoGrantedEvent);
-
-      // -----------------------------------------------------------------
-      // A reward that is only good at some venues is worth telling the
-      // customer about, and a reward that is good everywhere is not: that is
-      // the difference between "you have a prize" and "your prize is here".
-      //
-      // The scope is read after the grant exists, so a failure between the
-      // two publishes loses the announcement and never the grant. The
-      // consumer's own cap and the grant's idempotency make a redelivery safe.
-      // -----------------------------------------------------------------
-      const scope = await db
-        .select({ branchId: rewardBranches.branchId })
-        .from(rewardBranches)
-        .where(and(eq(rewardBranches.rewardId, reward.id), eq(rewardBranches.businessId, businessId)));
-
-      if (scope.length === 0) continue;
-
-      const queue = env.DELIVERY_QUEUE;
-      if (!queue) {
-        // Same call the check-in route makes: the grant is the record, and a
-        // missing binding must not fail the points that produced it.
-        console.error(
-          `${tag(event)} No DELIVERY_QUEUE binding, so the grant of "${reward.name}" to customer ` +
-            `${customer.id} in tenant ${businessId} was not announced. The reward_grants row is the record.`,
-        );
-        continue;
-      }
-
-      await publish(
-        queue,
-        buildRewardAvailableAtBranchEvent(
-          customer.globalId,
-          businessId,
-          reward.id,
-          reward.name,
-          grant.id,
-          scope.map((row) => row.branchId),
-          event.header.request_id,
-        ),
-      );
-    }
+      ),
+    );
   }
 }

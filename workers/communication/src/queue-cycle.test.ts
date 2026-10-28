@@ -31,11 +31,16 @@ const dbMock = {
   select: vi.fn(() => chain()),
   update: vi.fn(() => chain()),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
+  // The tenant transaction hands the callback this same mock as its handle.
+  transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbMock)),
 };
 
-vi.mock('@vyloop/db', () => ({
+vi.mock('@vyloop/db', async () => ({
   createDb: vi.fn(() => dbMock),
   setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+  // The real helper, so a test sees the `set_config` it really issues.
+  withTenantTransaction: (await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db'))
+    .withTenantTransaction,
   messageLog: 'message_log',
   customers: 'customers',
 }));

@@ -5,6 +5,7 @@ import {
   readConsentMap,
   readPushSubscriptions,
   customerWalletPasses as _customerWalletPasses,
+  withTenantTransaction,
 } from '@vyloop/db';
 import type { ConsentType } from '@vyloop/types';
 import { and, eq, gte, inArray, isNull } from 'drizzle-orm';
@@ -18,7 +19,6 @@ declare module './helpers' {
     WALLET_SERVICE_TOKEN?: string;
   }
 }
-import { withRls } from './helpers';
 import { deliverPushNotification } from './push-delivery';
 
 // ---------------------------------------------------------------------------
@@ -170,13 +170,14 @@ async function deliverWebPushChannel(
   businessId: string,
   audienceSize: number,
   env: Bindings,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
+  db: ReturnType<typeof createDb>,
 ): Promise<ChannelOutcome> {
-  const subscriptions = await readPushSubscriptions(db, {
-    businessId,
-    customerId: member.customerId,
-  });
+  const subscriptions = await withTenantTransaction(db, { businessId }, (tx) =>
+    readPushSubscriptions(tx, {
+      businessId,
+      customerId: member.customerId,
+    }),
+  );
 
   if (subscriptions.length === 0) {
     return { delivered: 0, failed: 0, skipped: 1 };
@@ -214,21 +215,25 @@ async function deliverWalletChannel(
   campaignReferenceId: string,
   businessId: string,
   env: Bindings,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
+  db: ReturnType<typeof createDb>,
 ): Promise<ChannelOutcome> {
   try {
-    const pass = await db
-      .select({ objectId: _customerWalletPasses.objectId })
-      .from(_customerWalletPasses)
-      .where(
-        and(
-          eq(_customerWalletPasses.customerId, member.customerId),
-          eq(_customerWalletPasses.tenantId, businessId),
-          eq(_customerWalletPasses.state, 'issued'),
-        ),
-      )
-      .limit(1);
+    // The read is in its own transaction: the wallet worker is called after
+    // it, and a transaction is not held open across the network. Wallet passes
+    // are keyed by `tenant_id`, which is the business id, so both are set.
+    const pass = await withTenantTransaction(db, { businessId, tenantId: businessId }, (tx) =>
+      tx
+        .select({ objectId: _customerWalletPasses.objectId })
+        .from(_customerWalletPasses)
+        .where(
+          and(
+            eq(_customerWalletPasses.customerId, member.customerId),
+            eq(_customerWalletPasses.tenantId, businessId),
+            eq(_customerWalletPasses.state, 'issued'),
+          ),
+        )
+        .limit(1),
+    );
 
     if (pass.length === 0) {
       return { delivered: 0, failed: 0, skipped: 1 };
@@ -291,9 +296,12 @@ export async function handlePushCampaignRequested(
   env: Bindings,
 ): Promise<PushCampaignOutcome> {
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  const audience = await resolveCampaignAudience(db, businessId, payload.target);
+  // Each read runs in a tenant transaction of its own, never one held across a
+  // delivery: the push service and the wallet worker are called in between.
+  const audience = await withTenantTransaction(db, { businessId }, (tx) =>
+    resolveCampaignAudience(tx, businessId, payload.target),
+  );
 
   // A campaign without a reference of its own still needs one: the reference
   // is what names its rows, and what the composing route refuses to repeat.
@@ -303,10 +311,12 @@ export async function handlePushCampaignRequested(
   const wallet = { delivered: 0, failed: 0, skipped: 0 };
 
   for (const member of audience) {
-    const consents = await readConsentMap(db, {
-      businessId,
-      customerId: member.customerId,
-    });
+    const consents = await withTenantTransaction(db, { businessId }, (tx) =>
+      readConsentMap(tx, {
+        businessId,
+        customerId: member.customerId,
+      }),
+    );
 
     if (consents[PUSH_CONSENT_TYPE] !== true) {
       webPush.skipped += 1;

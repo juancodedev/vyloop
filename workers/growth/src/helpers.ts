@@ -1,5 +1,5 @@
 import type { Queue, KVNamespace } from '@cloudflare/workers-types';
-import { setCurrentBusinessId, customers } from '@vyloop/db';
+import { customers } from '@vyloop/db';
 import {
   POINTS_ASSIGNED,
   REWARD_REDEEMED,
@@ -685,18 +685,4 @@ export function schedulePassReconcile(
   }
 
   waitUntil(handled);
-}
-
-// ---------------------------------------------------------------------------
-// RLS helper
-// ---------------------------------------------------------------------------
-
-/**
- * Set the `app.current_business_id` session variable for RLS isolation.
- *
- * Call this at the start of every request that touches tenant-scoped tables.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function withRls(db: any, businessId: string): Promise<void> {
-  await db.execute(setCurrentBusinessId(businessId));
 }
