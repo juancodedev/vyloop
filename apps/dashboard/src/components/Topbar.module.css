@@ -5,7 +5,7 @@
   background: var(--surface-topbar);
   border-bottom: 1px solid var(--border);
   padding: 0 var(--space-8);
-  height: 56px;
+  height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -28,9 +28,11 @@
 }
 
 .title {
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -42,29 +44,27 @@
   white-space: nowrap;
 }
 
-.logoutBtn {
-  color: var(--text-secondary);
-}
-
 /* ── Hamburger (mobile only) ── */
 .hamburger {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
   flex-shrink: 0;
 }
 
 .hamburger:hover {
-  background: var(--stone-100);
-  color: var(--text-primary);
+  background: var(--border-light);
+  color: var(--ink);
 }
 
 /* ── Mobile ── */

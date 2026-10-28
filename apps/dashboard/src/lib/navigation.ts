@@ -1,14 +1,19 @@
 import {
-  LayoutDashboard,
-  Users,
-  BarChart3,
+  BellRing,
+  FileText,
   Gift,
-  Star,
-  QrCode,
-  Settings,
+  Inbox,
+  LayoutDashboard,
   LogOut,
-  MessageSquare,
   MapPin,
+  QrCode,
+  ScanLine,
+  Settings,
+  Sparkles,
+  Star,
+  Users,
+  Wallet,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -30,43 +35,53 @@ export interface NavSection {
   items: NavItem[];
 }
 
+/**
+ * The till leads the sidebar: it is the screen the counter opens all day, and
+ * before this it was only reachable from a card on another page.
+ */
+export const PRIMARY_ACTION: NavItem = {
+  label: 'Abrir caja',
+  href: '/dashboard/loyalty/pos',
+  icon: ScanLine,
+};
+
 export const NAV_SECTIONS: NavSection[] = [
-  // First section has no title (it's the primary nav)
   {
     items: [
-      { label: 'Inicio', href: '/dashboard', icon: LayoutDashboard },
+      { label: 'Resumen', href: '/dashboard', icon: LayoutDashboard },
       { label: 'Clientes', href: '/dashboard/customers', icon: Users },
-      { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3 },
     ],
   },
   {
-    title: 'Lealtad',
+    title: 'Programa',
     items: [
-      { label: 'Programa', href: '/dashboard/loyalty', icon: Gift },
-      { label: 'Canjes', href: '/dashboard/loyalty/rewards', icon: Star },
-      { label: 'QR', href: '/dashboard/qr', icon: QrCode },
-      { label: 'Sedes', href: '/dashboard/settings/venues', icon: MapPin },
+      { label: 'Puntos', href: '/dashboard/loyalty/config', icon: Sparkles },
+      { label: 'Niveles', href: '/dashboard/loyalty/tiers', icon: Star },
+      { label: 'Premios', href: '/dashboard/loyalty/rewards', icon: Gift },
+      { label: 'Saldos', href: '/dashboard/loyalty/customers', icon: Wallet },
     ],
   },
   {
-    title: 'Comunicación',
+    title: 'Avisos',
     items: [
-      { label: 'Campañas', href: '/dashboard/communication/campaigns', icon: MessageSquare },
-      { label: 'Plantillas', href: '/dashboard/communication/templates', icon: MessageSquare },
-      { label: 'Mensajes', href: '/dashboard/communication/messages', icon: MessageSquare },
-      { label: 'Flujos', href: '/dashboard/communication/workflows', icon: MessageSquare },
+      { label: 'Campañas', href: '/dashboard/communication/campaigns', icon: BellRing },
+      { label: 'Mensajes', href: '/dashboard/communication/messages', icon: Inbox },
+      { label: 'Plantillas', href: '/dashboard/communication/templates', icon: FileText },
+      { label: 'Flujos', href: '/dashboard/communication/workflows', icon: Workflow },
     ],
   },
   {
-    title: 'Cuenta',
+    title: 'Tu local',
     items: [
-      { label: 'Configuración', href: '/dashboard/settings', icon: Settings },
+      { label: 'QR para el mesón', href: '/dashboard/qr', icon: QrCode },
+      { label: 'Sucursales', href: '/dashboard/settings/venues', icon: MapPin },
+      { label: 'Ajustes', href: '/dashboard/settings', icon: Settings },
     ],
   },
 ];
 
 export const BOTTOM_ITEMS: NavItem[] = [
-  { label: 'Cerrar Sesión', href: '#', icon: LogOut, isBottom: true, isAction: true },
+  { label: 'Cerrar sesión', href: '#', icon: LogOut, isBottom: true, isAction: true },
 ];
 
 /** Check if a nav item matches the current pathname */
@@ -76,22 +91,21 @@ export function isActive(pathname: string, item: NavItem): boolean {
 }
 
 const PAGE_TITLES: Record<string, string> = {
-  '/dashboard': 'Panel Principal',
+  '/dashboard': 'Resumen',
   '/dashboard/customers': 'Clientes',
-  '/dashboard/analytics': 'Analytics',
-  '/dashboard/loyalty': 'Lealtad',
-  '/dashboard/loyalty/config': 'Configuración de Lealtad',
-  '/dashboard/loyalty/tiers': 'Niveles de Lealtad',
-  '/dashboard/loyalty/rewards': 'Recompensas',
-  '/dashboard/settings/venues': 'Sedes',
-  '/dashboard/loyalty/customers': 'Puntos de Clientes',
-  '/dashboard/qr': 'QR del Negocio',
-  '/dashboard/settings': 'Configuración',
+  '/dashboard/loyalty/config': 'Puntos',
+  '/dashboard/loyalty/tiers': 'Niveles',
+  '/dashboard/loyalty/rewards': 'Premios',
+  '/dashboard/loyalty/pos': 'Caja',
+  '/dashboard/settings/venues': 'Sucursales',
+  '/dashboard/loyalty/customers': 'Saldos de clientes',
+  '/dashboard/qr': 'QR para el mesón',
+  '/dashboard/settings': 'Ajustes',
   '/dashboard/communication/templates': 'Plantillas',
   '/dashboard/communication/messages': 'Mensajes',
   '/dashboard/communication/workflows': 'Flujos',
-  '/dashboard/communication/campaigns': 'Campañas push',
-  '/dashboard/communication/send': 'Enviar Mensaje',
+  '/dashboard/communication/campaigns': 'Campañas',
+  '/dashboard/communication/send': 'Enviar mensaje',
 };
 
 /** Resolve a human-readable page title from the current pathname */
@@ -101,7 +115,7 @@ export function getPageTitle(pathname: string): string {
 
   // Customer detail route
   if (/^\/dashboard\/customers\//.test(pathname)) {
-    return 'Detalle del Cliente';
+    return 'Cliente';
   }
 
   // Prefix match for nested routes (longest first)
