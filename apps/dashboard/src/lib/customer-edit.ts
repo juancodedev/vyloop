@@ -120,7 +120,7 @@ const FIELD_FOR_CODE: Record<string, CustomerPatchableField> = {
   [CUSTOMER_PATCH_ERROR.EMAIL_TAKEN]: 'email',
 };
 
-const FALLBACK_MESSAGE = 'No se pudo guardar. Revisá la conexión e intentá de nuevo.';
+const FALLBACK_MESSAGE = 'No se pudo guardar. Revisa la conexión e inténtalo de nuevo.';
 
 export function patchErrorFor(error: unknown): PatchFailure {
   if (error instanceof ApiError) {
@@ -131,4 +131,21 @@ export function patchErrorFor(error: unknown): PatchFailure {
     return { field: null, message: error.message };
   }
   return { field: null, message: FALLBACK_MESSAGE };
+}
+
+/**
+ * A stored birth date (`YYYY-MM-DD`) as Chile writes it: `05-03-1990`.
+ *
+ * Read as a calendar day, not an instant. `new Date('1990-03-05')` is midnight
+ * UTC, which is still the 4th in Santiago, so formatting it in local time shows
+ * the day before.
+ */
+export function formatBirthDate(isoDate: string): string {
+  const [year, month, day] = isoDate.slice(0, 10).split('-').map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day!)).toLocaleDateString('es-CL', {
+    timeZone: 'UTC',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
 }

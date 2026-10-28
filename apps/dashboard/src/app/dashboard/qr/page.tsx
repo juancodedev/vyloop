@@ -228,7 +228,7 @@ export default function QRCodePage() {
           <div className="qr-info">
             <p className="text-muted" style={{ margin: 0 }}>
               El QR apunta a la página de registro de tu negocio, y esa página se construye con su
-              slug. Configurá el slug y volvé a abrir esta pantalla: acá va a aparecer el código
+              slug. Configura el slug y vuelve a abrir esta pantalla: aquí aparecerá el código
               listo para imprimir.
             </p>
           </div>
@@ -255,7 +255,7 @@ export default function QRCodePage() {
               row is missing gets a working QR and no invented name over it.
             */}
             {businessName && <h3>{businessName}</h3>}
-            <p className="qr-subtitle">Escaneá para acceder a tu tarjeta de puntos</p>
+            <p className="qr-subtitle">Escanea para acceder a tu tarjeta de puntos</p>
           </div>
 
           <div className="qr-code-wrapper">
@@ -338,7 +338,7 @@ export default function QRCodePage() {
             <line x1="12" y1="8" x2="12.01" y2="8" />
           </svg>
           <span>
-            Podés imprimir este QR y ponerlo en la caja, o mostrarlo en una tablet en el mostrador.
+            Puedes imprimir este QR y ponerlo en la caja, o mostrarlo en una tablet en el mesón.
           </span>
         </div>
       </div>

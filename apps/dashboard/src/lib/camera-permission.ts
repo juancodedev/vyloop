@@ -130,17 +130,17 @@ const PRESENTATION: Record<CameraFailure, CameraFailurePresentation> = {
   denied: {
     title: 'Permiso de cámara denegado',
     detail:
-      'El navegador no permite usar la cámara en este sitio. Habilitalo desde el candado o el ícono de cámara de la barra de direcciones y volvé a intentarlo.',
+      'El navegador no permite usar la cámara en este sitio. Habilítalo desde el candado o el ícono de cámara de la barra de direcciones y vuelve a intentarlo.',
   },
   no_camera: {
     title: 'No hay cámara disponible',
     detail:
-      'Este dispositivo no tiene ninguna cámara, o la que tiene no sirve para escanear. Podés buscar al cliente por teléfono o correo en el campo de arriba.',
+      'Este dispositivo no tiene ninguna cámara, o la que tiene no sirve para escanear. Puedes buscar al cliente por teléfono o correo en el buscador.',
   },
   busy: {
     title: 'Cámara ocupada',
     detail:
-      'Otra aplicación está usando la cámara. Cerrala y volvé a intentarlo.',
+      'Otra aplicación está usando la cámara. Ciérrala y vuelve a intentarlo.',
   },
   insecure_context: {
     title: 'Conexión no segura',
@@ -150,12 +150,12 @@ const PRESENTATION: Record<CameraFailure, CameraFailurePresentation> = {
   unsupported: {
     title: 'Cámara no soportada',
     detail:
-      'Este navegador no expone la API de cámara. Podés buscar al cliente por teléfono o correo en el campo de arriba.',
+      'Este navegador no expone la API de cámara. Puedes buscar al cliente por teléfono o correo en el buscador.',
   },
   unknown: {
     title: 'No se pudo abrir la cámara',
     detail:
-      'El navegador falló sin explicar por qué. Podés buscar al cliente por teléfono o correo en el campo de arriba.',
+      'El navegador falló sin explicar por qué. Puedes buscar al cliente por teléfono o correo en el buscador.',
   },
 };
 

@@ -183,7 +183,7 @@ export default function WorkflowsPage() {
       <div className="dash-header">
         <div>
           <h1 className="dash-title">Flujos de Automatización</h1>
-          <p className="dash-subtitle">Configurá flujos automáticos de comunicación</p>
+          <p className="dash-subtitle">Configura flujos automáticos de comunicación</p>
         </div>
         <div className="dash-actions">
           <button className="btn btn-primary btn-sm" onClick={() => setShowForm(!showForm)}>

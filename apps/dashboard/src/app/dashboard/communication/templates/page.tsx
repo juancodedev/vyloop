@@ -163,7 +163,7 @@ export default function TemplatesPage() {
       <div className="dash-header">
         <div>
           <h1 className="dash-title">Plantillas WhatsApp</h1>
-          <p className="dash-subtitle">Gestioná las plantillas de mensajes para tus campañas</p>
+          <p className="dash-subtitle">Gestiona las plantillas de mensajes para tus campañas</p>
         </div>
         <div className="dash-actions">
           <button className="btn btn-primary btn-sm" onClick={() => setShowForm(!showForm)}>
@@ -232,7 +232,7 @@ export default function TemplatesPage() {
                   onChange={(e) => setForm({ ...form, body: e.target.value })}
                   placeholder="Ej: ¡Hola {{1}}! Gracias por registrarte..."
                 />
-                <span className="hint">Usá {'{{1}}'}, {'{{2}}'}, etc. para parámetros variables.</span>
+                <span className="hint">Usa {'{{1}}'}, {'{{2}}'}, etc. para parámetros variables.</span>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
                 <button className="btn btn-primary" type="submit" disabled={creating}>
