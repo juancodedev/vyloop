@@ -1,10 +1,10 @@
-import { createDb, messageLog } from '@vyloop/db';
+import { createDb, messageLog, withTenantTransaction } from '@vyloop/db';
 import { requireOperatorRole } from '@vyloop/types';
 import { and, count, desc, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, withRls } from './helpers';
+import { extractAuthHeaders } from './helpers';
 
 // ---------------------------------------------------------------------------
 // The push delivery dashboard.
@@ -86,41 +86,42 @@ router.get('/v1/communication/push/deliveries', async (c) => {
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // The push deliveries of this business, and nothing else.
-  const where = and(eq(messageLog.businessId, businessId), eq(messageLog.channel, 'push'));
+  const { counts, total, items } = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // The push deliveries of this business, and nothing else.
+    const where = and(eq(messageLog.businessId, businessId), eq(messageLog.channel, 'push'));
 
-  // -------------------------------------------------------------------------
-  // The counts, by status
-  // -------------------------------------------------------------------------
-  const byStatus = await db
-    .select({ status: messageLog.status, total: count() })
-    .from(messageLog)
-    .where(where)
-    .groupBy(messageLog.status);
+    // -------------------------------------------------------------------------
+    // The counts, by status
+    // -------------------------------------------------------------------------
+    const byStatus = await tx
+      .select({ status: messageLog.status, total: count() })
+      .from(messageLog)
+      .where(where)
+      .groupBy(messageLog.status);
 
-  const counts: DeliveryCounts = { queued: 0, sent: 0, failed: 0 };
-  for (const row of byStatus as { status: string; total: number | string }[]) {
-    if (row.status === STATUS_QUEUED) counts.queued = Number(row.total ?? 0);
-    if (row.status === STATUS_SENT) counts.sent = Number(row.total ?? 0);
-    if (row.status === STATUS_FAILED) counts.failed = Number(row.total ?? 0);
-  }
+    const counts: DeliveryCounts = { queued: 0, sent: 0, failed: 0 };
+    for (const row of byStatus as { status: string; total: number | string }[]) {
+      if (row.status === STATUS_QUEUED) counts.queued = Number(row.total ?? 0);
+      if (row.status === STATUS_SENT) counts.sent = Number(row.total ?? 0);
+      if (row.status === STATUS_FAILED) counts.failed = Number(row.total ?? 0);
+    }
 
-  // -------------------------------------------------------------------------
-  // The deliveries
-  // -------------------------------------------------------------------------
-  const [totalResult] = await db.select({ total: count() }).from(messageLog).where(where);
+    // -------------------------------------------------------------------------
+    // The deliveries
+    // -------------------------------------------------------------------------
+    const [totalResult] = await tx.select({ total: count() }).from(messageLog).where(where);
 
-  const total = Number(totalResult?.total ?? 0);
+    const rows = await tx
+      .select()
+      .from(messageLog)
+      .where(where)
+      .orderBy(desc(messageLog.createdAt))
+      .limit(perPage)
+      .offset((page - 1) * perPage);
 
-  const items = await db
-    .select()
-    .from(messageLog)
-    .where(where)
-    .orderBy(desc(messageLog.createdAt))
-    .limit(perPage)
-    .offset((page - 1) * perPage);
+    return { counts, total: Number(totalResult?.total ?? 0), items: rows };
+  });
 
   return c.json({
     counts,

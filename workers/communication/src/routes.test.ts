@@ -38,7 +38,7 @@ function renderedHistoryPredicate(): { sql: string; params: unknown[] } {
 }
 
 // ---------------------------------------------------------------------------
-// DB Mock — include setCurrentBusinessId used by withRls
+// DB Mock — `transaction` hands the callback this same mock as its handle
 // ---------------------------------------------------------------------------
 
 /** The mocked consent store, so a test can decide what the customer agreed to. */
@@ -51,6 +51,7 @@ const dbMock: any = {
   select: vi.fn(() => createQueryChain([])),
   update: vi.fn(() => createQueryChain([])),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
+  transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbMock)),
 };
 
 vi.mock('@vyloop/db', async () => {
@@ -73,9 +74,14 @@ vi.mock('@vyloop/db', async () => {
     createdAt: timestamp('created_at').notNull(),
   });
 
+  // The real helper, so a test sees the `set_config` it really issues.
+  const { withTenantTransaction } =
+    await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db');
+
   return {
     createDb: vi.fn(() => dbMock),
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+    withTenantTransaction,
     // The authoritative consent store. The route reads the customer's consents
     // from here, so the mock is what decides whether a message may be sent.
     readConsentMap: vi.fn(async () => ({ whatsapp: true })),

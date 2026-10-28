@@ -1,10 +1,17 @@
-import { createDb, messageLog, whatsappTemplates, customers, readConsentMap } from '@vyloop/db';
+import {
+  createDb,
+  messageLog,
+  whatsappTemplates,
+  customers,
+  readConsentMap,
+  withTenantTransaction,
+} from '@vyloop/db';
 import { publish } from '@vyloop/event-bus';
 import { eq, and, desc, count, sql, getTableColumns } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildWhatsAppOutboundRequestedEvent, withRls } from './helpers';
+import { extractAuthHeaders, buildWhatsAppOutboundRequestedEvent } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -45,106 +52,128 @@ router.post('/v1/communication/send', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // -----------------------------------------------------------------------
-  // Validate customer exists and check consent
-  // -----------------------------------------------------------------------
-  const [customer] = await db
-    .select({ id: customers.id, phone: customers.phone })
-    .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
-    .limit(1);
+  // The checks and the log row run in one tenant transaction; the event is
+  // published after it commits.
+  const outcome = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // -----------------------------------------------------------------------
+    // Validate customer exists and check consent
+    // -----------------------------------------------------------------------
+    const [customer] = await tx
+      .select({ id: customers.id, phone: customers.phone })
+      .from(customers)
+      .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
+      .limit(1);
 
-  if (!customer) {
-    return c.json({ error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } }, 404);
-  }
+    if (!customer) {
+      return {
+        response: c.json(
+          { error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } },
+          404,
+        ),
+      };
+    }
 
-  // The consent is read from the authoritative store.
-  //
-  // It used to be a flag in the customer's jsonb metadata, and that flag had no
-  // writer: the table that was supposed to record a consent was read by two
-  // surfaces and written by none. A flag cannot say when the agreement began or
-  // when it was withdrawn, and a consent that cannot be withdrawn is not a
-  // consent.
-  const consents = await readConsentMap(db, {
-    businessId,
-    customerId: body.customer_id,
-  });
-
-  if (consents.whatsapp !== true) {
-    return c.json(
-      {
-        error: {
-          code: 'CONSENT_REQUIRED',
-          message: 'Customer has not consented to WhatsApp messaging',
-        },
-      },
-      403,
-    );
-  }
-
-  // -----------------------------------------------------------------------
-  // Resolve phone number
-  // -----------------------------------------------------------------------
-  const phone = body.phone ?? customer.phone;
-
-  if (!phone) {
-    return c.json(
-      { error: { code: 'PHONE_REQUIRED', message: 'No phone number available for this customer' } },
-      400,
-    );
-  }
-
-  // -----------------------------------------------------------------------
-  // Idempotency check
-  // -----------------------------------------------------------------------
-  const referenceId =
-    body.reference_id ?? `${body.customer_id}-${body.template_name}-${Date.now()}`;
-
-  const [existing] = await db
-    .select({ id: messageLog.id })
-    .from(messageLog)
-    .where(
-      and(
-        eq(messageLog.businessId, businessId),
-        eq(messageLog.customerId, body.customer_id),
-        // Use content->>'reference_id' as a dedup signal
-        sql`${messageLog.content}->>'reference_id' = ${referenceId}`,
-      ),
-    )
-    .limit(1);
-
-  if (existing) {
-    return c.json(
-      {
-        error: {
-          code: 'DUPLICATE_MESSAGE',
-          message: 'A message with this reference already exists',
-        },
-      },
-      409,
-    );
-  }
-
-  // -----------------------------------------------------------------------
-  // Create message_log entry
-  // -----------------------------------------------------------------------
-  const [logEntry] = await db
-    .insert(messageLog)
-    .values({
+    // The consent is read from the authoritative store.
+    //
+    // It used to be a flag in the customer's jsonb metadata, and that flag had no
+    // writer: the table that was supposed to record a consent was read by two
+    // surfaces and written by none. A flag cannot say when the agreement began or
+    // when it was withdrawn, and a consent that cannot be withdrawn is not a
+    // consent.
+    const consents = await readConsentMap(tx, {
       businessId,
       customerId: body.customer_id,
-      direction: 'outbound',
-      channel: 'whatsapp',
-      status: 'queued',
-      content: {
-        template_name: body.template_name,
-        parameters: body.parameters ?? {},
-        reference_id: referenceId,
-      },
-    })
-    .returning();
+    });
+
+    if (consents.whatsapp !== true) {
+      return {
+        response: c.json(
+          {
+            error: {
+              code: 'CONSENT_REQUIRED',
+              message: 'Customer has not consented to WhatsApp messaging',
+            },
+          },
+          403,
+        ),
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Resolve phone number
+    // -----------------------------------------------------------------------
+    const phone = body.phone ?? customer.phone;
+
+    if (!phone) {
+      return {
+        response: c.json(
+          { error: { code: 'PHONE_REQUIRED', message: 'No phone number available for this customer' } },
+          400,
+        ),
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Idempotency check
+    // -----------------------------------------------------------------------
+    const referenceId =
+      body.reference_id ?? `${body.customer_id}-${body.template_name}-${Date.now()}`;
+
+    const [existing] = await tx
+      .select({ id: messageLog.id })
+      .from(messageLog)
+      .where(
+        and(
+          eq(messageLog.businessId, businessId),
+          eq(messageLog.customerId, body.customer_id),
+          // Use content->>'reference_id' as a dedup signal
+          sql`${messageLog.content}->>'reference_id' = ${referenceId}`,
+        ),
+      )
+      .limit(1);
+
+    if (existing) {
+      return {
+        response: c.json(
+          {
+            error: {
+              code: 'DUPLICATE_MESSAGE',
+              message: 'A message with this reference already exists',
+            },
+          },
+          409,
+        ),
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Create message_log entry
+    // -----------------------------------------------------------------------
+    const [logEntry] = await tx
+      .insert(messageLog)
+      .values({
+        businessId,
+        customerId: body.customer_id,
+        direction: 'outbound',
+        channel: 'whatsapp',
+        status: 'queued',
+        content: {
+          template_name: body.template_name,
+          parameters: body.parameters ?? {},
+          reference_id: referenceId,
+        },
+      })
+      .returning();
+
+    return { logEntry, phone };
+  });
+
+  if ('response' in outcome) {
+    return outcome.response;
+  }
+
+  const { logEntry, phone } = outcome;
 
   // -----------------------------------------------------------------------
   // Publish event
@@ -180,7 +209,6 @@ router.get('/v1/communication/templates', async (c) => {
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
   const conditions: ReturnType<typeof and>[] = [eq(whatsappTemplates.businessId, businessId)];
 
@@ -190,17 +218,19 @@ router.get('/v1/communication/templates', async (c) => {
 
   const where = and(...conditions);
 
-  const [totalResult] = await db.select({ total: count() }).from(whatsappTemplates).where(where);
+  const { total, items } = await withTenantTransaction(db, { businessId }, async (tx) => {
+    const [totalResult] = await tx.select({ total: count() }).from(whatsappTemplates).where(where);
 
-  const total = Number(totalResult?.total ?? 0);
+    const rows = await tx
+      .select()
+      .from(whatsappTemplates)
+      .where(where)
+      .orderBy(desc(whatsappTemplates.createdAt))
+      .limit(perPage)
+      .offset((page - 1) * perPage);
 
-  const items = await db
-    .select()
-    .from(whatsappTemplates)
-    .where(where)
-    .orderBy(desc(whatsappTemplates.createdAt))
-    .limit(perPage)
-    .offset((page - 1) * perPage);
+    return { total: Number(totalResult?.total ?? 0), items: rows };
+  });
 
   return c.json({
     data: items,
@@ -239,18 +269,19 @@ router.post('/v1/communication/templates', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  const [inserted] = await db
-    .insert(whatsappTemplates)
-    .values({
-      businessId,
-      name: body.name,
-      language: body.language,
-      category: body.category,
-      body: body.body,
-    })
-    .returning();
+  const [inserted] = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .insert(whatsappTemplates)
+      .values({
+        businessId,
+        name: body.name,
+        language: body.language,
+        category: body.category,
+        body: body.body,
+      })
+      .returning(),
+  );
 
   return c.json({ data: inserted }, 201);
 });
@@ -284,7 +315,6 @@ router.get('/v1/communication/history', async (c) => {
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
   const conditions: ReturnType<typeof and>[] = [eq(messageLog.businessId, businessId)];
 
@@ -302,24 +332,26 @@ router.get('/v1/communication/history', async (c) => {
 
   const where = and(...conditions);
 
-  const [totalResult] = await db.select({ total: count() }).from(messageLog).where(where);
+  const { total, items } = await withTenantTransaction(db, { businessId }, async (tx) => {
+    const [totalResult] = await tx.select({ total: count() }).from(messageLog).where(where);
 
-  const total = Number(totalResult?.total ?? 0);
+    // Each row carries its customer's name, so the history can say who it was
+    // for. Joined on the business as well as the id: a customer row of another
+    // tenant must never lend its name, whatever RLS is doing.
+    const rows = await tx
+      .select({ ...getTableColumns(messageLog), customerName: customers.fullName })
+      .from(messageLog)
+      .leftJoin(
+        customers,
+        and(eq(customers.id, messageLog.customerId), eq(customers.businessId, messageLog.businessId)),
+      )
+      .where(where)
+      .orderBy(desc(messageLog.createdAt))
+      .limit(perPage)
+      .offset((page - 1) * perPage);
 
-  // Each row carries its customer's name, so the history can say who it was
-  // for. Joined on the business as well as the id: a customer row of another
-  // tenant must never lend its name, whatever RLS is doing.
-  const items = await db
-    .select({ ...getTableColumns(messageLog), customerName: customers.fullName })
-    .from(messageLog)
-    .leftJoin(
-      customers,
-      and(eq(customers.id, messageLog.customerId), eq(customers.businessId, messageLog.businessId)),
-    )
-    .where(where)
-    .orderBy(desc(messageLog.createdAt))
-    .limit(perPage)
-    .offset((page - 1) * perPage);
+    return { total: Number(totalResult?.total ?? 0), items: rows };
+  });
 
   return c.json({
     data: items,
@@ -423,6 +455,9 @@ router.post('/webhook', async (c) => {
       // unique per business, not across them, and the payload does not say
       // which business the message is for: two matches cannot be told apart,
       // so the message is skipped rather than logged against one of them.
+      //
+      // The tenant is not known until this lookup returns, so it runs on `db`,
+      // across businesses, by necessity.
       const matches = await db
         .select({ id: customers.id, businessId: customers.businessId })
         .from(customers)
@@ -444,26 +479,29 @@ router.post('/webhook', async (c) => {
         continue;
       }
 
-      await withRls(db, customer.businessId);
-
-      await db.insert(messageLog).values({
-        businessId: customer.businessId,
-        customerId: customer.id,
-        direction: 'inbound',
-        channel: 'whatsapp',
-        status: 'received',
-        providerMessageId: msg.id,
-        content: {
-          text: msg.text?.body,
-          type: msg.type,
-          from: msg.from,
-          timestamp: msg.timestamp,
-        },
-      });
+      await withTenantTransaction(db, { businessId: customer.businessId }, (tx) =>
+        tx.insert(messageLog).values({
+          businessId: customer.businessId,
+          customerId: customer.id,
+          direction: 'inbound',
+          channel: 'whatsapp',
+          status: 'received',
+          providerMessageId: msg.id,
+          content: {
+            text: msg.text?.body,
+            type: msg.type,
+            from: msg.from,
+            timestamp: msg.timestamp,
+          },
+        }),
+      );
     }
   }
 
-  // Process status callbacks
+  // Process status callbacks. A callback names only the provider's message id,
+  // not the business, so there is no tenant to scope it to: these updates run
+  // on `db`, across businesses, until the business is resolved from the
+  // payload's phone_number_id.
   if (value.statuses) {
     for (const status of value.statuses) {
       await db

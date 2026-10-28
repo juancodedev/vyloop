@@ -1,12 +1,12 @@
 import type { Message } from '@cloudflare/workers-types';
-import { createDb, messageLog, customers } from '@vyloop/db';
+import { createDb, messageLog, customers, withTenantTransaction } from '@vyloop/db';
 import { CUSTOMER_CHECKED_IN, PUSH_CAMPAIGN_REQUESTED, REWARD_AVAILABLE_AT_BRANCH } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { logPrefix } from '@vyloop/request-context';
 import { eq, and } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
-import { withRls, callMetaApi, isRetryableError } from './helpers';
+import { callMetaApi, isRetryableError } from './helpers';
 import { handlePushCampaignRequested, type PushCampaignPayload } from './push-campaigns';
 import { deliverPushNotification, type PushNotificationPayload } from './push-delivery';
 import {
@@ -109,70 +109,82 @@ async function handleWhatsAppOutboundRequested(
   const businessId = event.header.business_id;
 
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // -----------------------------------------------------------------------
-  // Read message_log by idempotency_key
-  // -----------------------------------------------------------------------
-  const [logEntry] = await db
-    .select()
-    .from(messageLog)
-    .where(
-      and(
-        eq(messageLog.businessId, businessId),
-        eq(messageLog.id, payload.idempotency_key),
-      ),
-    )
-    .limit(1);
-
-  if (!logEntry) {
-    console.warn(
-      `${tag(event)} message_log entry ${payload.idempotency_key} not found — acking`,
-    );
-    return;
-  }
-
-  // Idempotency: skip if already sent or failed permanently
-  if (logEntry.status !== 'queued') {
-    console.log(
-      `${tag(event)} message_log ${payload.idempotency_key} already ${logEntry.status} — skipping`,
-    );
-    return;
-  }
-
-  // -----------------------------------------------------------------------
-  // Resolve phone number
-  // -----------------------------------------------------------------------
-  let phone = payload.phone;
-
-  if (!phone) {
-    const [customer] = await db
-      .select({ phone: customers.phone })
-      .from(customers)
+  // The reads, and the failure when there is no phone, run in one tenant
+  // transaction. Meta is called outside it, and each outcome is written in a
+  // transaction of its own.
+  const prepared = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // -----------------------------------------------------------------------
+    // Read message_log by idempotency_key
+    // -----------------------------------------------------------------------
+    const [logEntry] = await tx
+      .select()
+      .from(messageLog)
       .where(
-        and(eq(customers.businessId, businessId), eq(customers.id, payload.customer_id)),
+        and(
+          eq(messageLog.businessId, businessId),
+          eq(messageLog.id, payload.idempotency_key),
+        ),
       )
       .limit(1);
 
-    phone = customer?.phone ?? undefined;
-  }
+    if (!logEntry) {
+      console.warn(
+        `${tag(event)} message_log entry ${payload.idempotency_key} not found — acking`,
+      );
+      return null;
+    }
 
-  if (!phone) {
-    console.warn(
-      `${tag(event)} No phone for customer ${payload.customer_id} — marking failed`,
-    );
-    await db
-      .update(messageLog)
-      .set({
-        status: 'failed',
-        metadata: {
-          ...(logEntry.metadata as Record<string, unknown> ?? {}),
-          error: 'No phone number available',
-        },
-      })
-      .where(eq(messageLog.id, logEntry.id));
+    // Idempotency: skip if already sent or failed permanently
+    if (logEntry.status !== 'queued') {
+      console.log(
+        `${tag(event)} message_log ${payload.idempotency_key} already ${logEntry.status} — skipping`,
+      );
+      return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Resolve phone number
+    // -----------------------------------------------------------------------
+    let phone = payload.phone;
+
+    if (!phone) {
+      const [customer] = await tx
+        .select({ phone: customers.phone })
+        .from(customers)
+        .where(
+          and(eq(customers.businessId, businessId), eq(customers.id, payload.customer_id)),
+        )
+        .limit(1);
+
+      phone = customer?.phone ?? undefined;
+    }
+
+    if (!phone) {
+      console.warn(
+        `${tag(event)} No phone for customer ${payload.customer_id} — marking failed`,
+      );
+      await tx
+        .update(messageLog)
+        .set({
+          status: 'failed',
+          metadata: {
+            ...(logEntry.metadata as Record<string, unknown> ?? {}),
+            error: 'No phone number available',
+          },
+        })
+        .where(eq(messageLog.id, logEntry.id));
+      return null;
+    }
+
+    return { logEntry, phone };
+  });
+
+  if (!prepared) {
     return;
   }
+
+  const { logEntry, phone } = prepared;
 
   // -----------------------------------------------------------------------
   // Call Meta API
@@ -185,13 +197,15 @@ async function handleWhatsAppOutboundRequested(
       const responseBody = await response.json() as { messages?: Array<{ id: string }> };
       const providerMessageId = responseBody.messages?.[0]?.id;
 
-      await db
-        .update(messageLog)
-        .set({
-          status: 'sent',
-          providerMessageId: providerMessageId ?? null,
-        })
-        .where(eq(messageLog.id, logEntry.id));
+      await withTenantTransaction(db, { businessId }, (tx) =>
+        tx
+          .update(messageLog)
+          .set({
+            status: 'sent',
+            providerMessageId: providerMessageId ?? null,
+          })
+          .where(eq(messageLog.id, logEntry.id)),
+      );
 
       console.log(
         `${tag(event)} Message ${logEntry.id} sent via Meta — provider ID: ${providerMessageId}`,
@@ -211,17 +225,19 @@ async function handleWhatsAppOutboundRequested(
       }
 
       // Non-retryable 4xx error — mark as failed permanently
-      await db
-        .update(messageLog)
-        .set({
-          status: 'failed',
-          metadata: {
-            ...(logEntry.metadata as Record<string, unknown> ?? {}),
-            error: responseBody.error?.message ?? `Meta API returned ${response.status}`,
-            error_code: response.status,
-          },
-        })
-        .where(eq(messageLog.id, logEntry.id));
+      await withTenantTransaction(db, { businessId }, (tx) =>
+        tx
+          .update(messageLog)
+          .set({
+            status: 'failed',
+            metadata: {
+              ...(logEntry.metadata as Record<string, unknown> ?? {}),
+              error: responseBody.error?.message ?? `Meta API returned ${response.status}`,
+              error_code: response.status,
+            },
+          })
+          .where(eq(messageLog.id, logEntry.id)),
+      );
 
       console.error(
         `${tag(event)} Message ${logEntry.id} failed permanently — Meta error: ${responseBody.error?.message ?? response.status}`,
