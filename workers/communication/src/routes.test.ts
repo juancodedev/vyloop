@@ -487,6 +487,48 @@ describe('POST /webhook — Meta callbacks', () => {
     expect(dbMock.insert).toHaveBeenCalled();
   });
 
+  it('skips an inbound message whose phone belongs to customers of two businesses', async () => {
+    // Nothing in the payload says which business the message is for, so
+    // logging it against whichever row comes back first would misattribute it.
+    dbMock.select.mockReturnValue(
+      createQueryChain([
+        { id: 'cust-1', businessId: 'biz-1' },
+        { id: 'cust-9', businessId: 'biz-9' },
+      ]),
+    );
+
+    const res = await mockFetch({
+      path: '/webhook',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: '123' },
+                  messages: [
+                    {
+                      from: '56912345678',
+                      id: 'wamid-shared',
+                      text: { body: 'Hola' },
+                      type: 'text',
+                      timestamp: String(Math.floor(Date.now() / 1000)),
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
   it('skips inbound message from unknown phone', async () => {
     // No customer found for this phone
     dbMock.select.mockReturnValue(createQueryChain([]));

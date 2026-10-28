@@ -419,13 +419,24 @@ router.post('/webhook', async (c) => {
     for (const msg of value.messages) {
       const customerPhone = msg.from;
 
-      // Look up customer by phone to get customer_id + business_id
-      const [customer] = await db
+      // Look up customer by phone to get customer_id + business_id. A phone is
+      // unique per business, not across them, and the payload does not say
+      // which business the message is for: two matches cannot be told apart,
+      // so the message is skipped rather than logged against one of them.
+      const matches = await db
         .select({ id: customers.id, businessId: customers.businessId })
         .from(customers)
         .where(eq(customers.phone, customerPhone))
-        .limit(1);
+        .limit(2);
 
+      if (matches.length > 1) {
+        console.warn(
+          `[communication] Inbound message ${msg.id} matches customers of several businesses — skipping`,
+        );
+        continue;
+      }
+
+      const [customer] = matches;
       if (!customer) {
         console.warn(
           `[communication] Inbound message from unknown phone ${customerPhone} — skipping`,

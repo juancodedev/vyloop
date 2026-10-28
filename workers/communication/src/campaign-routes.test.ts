@@ -27,6 +27,7 @@ vi.mock('@vyloop/db', async () => {
 
   const branchesTable = pgTable('branches', {
     id: uuid('id').primaryKey(),
+    businessId: uuid('business_id'),
     name: text('name'),
   });
 
@@ -187,6 +188,30 @@ describe('POST /v1/communication/push/campaigns', () => {
       body: 'Two for one today',
       reference_id: 'campaign-7',
     });
+  });
+
+  it('looks up the target branch within the business only', async () => {
+    // The branch id comes from the request body. Looked up by id alone, an
+    // operator could name another business's branch and read its name back.
+    await mockFetch({
+      path: '/v1/communication/push/campaigns',
+      method: 'POST',
+      headers: operatorHeaders(),
+      body: { ...VALID_BRANCH_BODY, dry_run: true },
+    });
+
+    const results = dbMock.select.mock.results as Array<{
+      value: { where: { mock: { calls: unknown[][] } } };
+    }>;
+    const branchLookups = results
+      .map((r) => r.value.where.mock.calls[0]?.[0])
+      .filter((where): where is SQL => Boolean(where))
+      .map((where) => new PgDialect().sqlToQuery(where))
+      .filter((q) => q.sql.includes('"branches"."id"'));
+
+    expect(branchLookups).toHaveLength(1);
+    expect(branchLookups[0]!.sql).toContain('"branches"."business_id" = $');
+    expect(branchLookups[0]!.params).toContain('biz-1');
   });
 
   it('accepts a radius target', async () => {

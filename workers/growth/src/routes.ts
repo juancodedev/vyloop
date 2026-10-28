@@ -392,7 +392,7 @@ router.put('/v1/loyalty/config', async (c) => {
     const [updated] = await db
       .update(loyaltyPrograms)
       .set(updateData)
-      .where(eq(loyaltyPrograms.id, existing.id))
+      .where(and(eq(loyaltyPrograms.id, existing.id), eq(loyaltyPrograms.businessId, businessId)))
       .returning();
 
     return c.json({
@@ -717,7 +717,7 @@ router.put('/v1/loyalty/tiers/:id', async (c) => {
   const [updated] = await db
     .update(membershipTiers)
     .set(updateData)
-    .where(eq(membershipTiers.id, id))
+    .where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)))
     .returning();
 
   return c.json({ data: updated });
@@ -780,7 +780,7 @@ router.delete('/v1/loyalty/tiers/:id', async (c) => {
     );
   }
 
-  await db.delete(membershipTiers).where(eq(membershipTiers.id, id));
+  await db.delete(membershipTiers).where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)));
 
   return c.body(null, 204);
 });
@@ -976,7 +976,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     const [tier] = await db
       .select()
       .from(membershipTiers)
-      .where(eq(membershipTiers.id, customer.currentTierId))
+      .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
       .limit(1);
 
     if (tier) {
@@ -1028,7 +1028,7 @@ router.post('/v1/loyalty/points/assign', async (c) => {
         'earn',
         ${effectivePoints}::integer,
         COALESCE(
-          (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid ORDER BY created_at DESC LIMIT 1),
+          (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
           0
         ) + ${effectivePoints}::integer,
         ${body.reference_id},
@@ -1232,12 +1232,13 @@ async function replaceBranchScope(
       .where(
         and(
           eq(rewardBranches.rewardId, rewardId),
+          eq(rewardBranches.businessId, businessId),
           notInArray(rewardBranches.branchId, ids),
         ),
       );
     return;
   }
-  await db.delete(rewardBranches).where(eq(rewardBranches.rewardId, rewardId));
+  await db.delete(rewardBranches).where(and(eq(rewardBranches.rewardId, rewardId), eq(rewardBranches.businessId, businessId)));
 }
 
 /** The venue scope of many rewards, in one read rather than one per reward. */
@@ -1362,7 +1363,7 @@ router.post('/v1/loyalty/rewards', async (c) => {
       // Without the scope the reward would read as "available everywhere",
       // which is a different promise to the one the caller asked for. Removing
       // the row is the only way back to "nothing was created".
-      await db.delete(rewards).where(eq(rewards.id, rewardId));
+      await db.delete(rewards).where(and(eq(rewards.id, rewardId), eq(rewards.businessId, businessId)));
       throw error;
     }
   }
@@ -1581,7 +1582,7 @@ router.put('/v1/loyalty/rewards/:id', async (c) => {
   const [updated] = await db
     .update(rewards)
     .set(updateData)
-    .where(eq(rewards.id, id))
+    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
     .returning();
 
   const scopes = await branchScopeByReward(db, [id]);
@@ -1625,7 +1626,7 @@ router.delete('/v1/loyalty/rewards/:id', async (c) => {
   await db
     .update(rewards)
     .set({ deletedAt: new Date() })
-    .where(eq(rewards.id, id));
+    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)));
 
   return c.json({ data: { id } });
 });
@@ -1766,7 +1767,7 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
   // -----------------------------------------------------------------------
   const balanceResult = await db.execute(sql`
     SELECT COALESCE(
-      (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid ORDER BY created_at DESC LIMIT 1),
+      (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
       0
     ) AS balance
   `);
@@ -1820,7 +1821,7 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
               'redeem',
               ${redeemPoints}::integer,
               COALESCE(
-                (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid ORDER BY created_at DESC LIMIT 1),
+                (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
                 0
               ) - ${redeemPoints}::integer,
               ${body.reference_id},
@@ -1831,7 +1832,7 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
 
           // Atomic stock decrement — no-op if already out of stock
           await tx.execute(sql`
-            UPDATE rewards SET stock = stock - 1 WHERE id = ${resolvedRewardId}::uuid AND stock > 0
+            UPDATE rewards SET stock = stock - 1 WHERE id = ${resolvedRewardId}::uuid AND business_id = ${businessId}::uuid AND stock > 0
           `);
 
           return txResult;
@@ -1847,7 +1848,7 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
           'redeem',
           ${redeemPoints}::integer,
           COALESCE(
-            (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid ORDER BY created_at DESC LIMIT 1),
+            (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
             0
           ) - ${redeemPoints}::integer,
           ${body.reference_id},
@@ -2237,7 +2238,7 @@ async function creditCheckin(
     const [tier] = await db
       .select()
       .from(membershipTiers)
-      .where(eq(membershipTiers.id, customer.currentTierId))
+      .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
       .limit(1);
 
     // Same reason as `earnRate`: `Number('N/A')` is `NaN`, and the tier bonus is
@@ -2313,7 +2314,7 @@ async function creditCheckin(
         'earn',
         ${points}::integer,
         COALESCE(
-          (SELECT balance_after FROM points_transactions WHERE customer_id = ${customer.id}::uuid ORDER BY created_at DESC LIMIT 1),
+          (SELECT balance_after FROM points_transactions WHERE customer_id = ${customer.id}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
           0
         ) + ${points}::integer,
         ${referenceId},
