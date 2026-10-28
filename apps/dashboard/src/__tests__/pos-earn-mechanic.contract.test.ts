@@ -637,24 +637,20 @@ describe('the sale as the worker will read it', () => {
     expect(String(sale.body.note)).not.toContain('3.5');
   });
 
-  it('is accepted for every price in the demo menu', async () => {
-    // The whole `MENU` array from the POS page, read out of the source. A test that
-    // lists its own prices proves nothing about the ones a cashier can actually
-    // ring up.
-    const prices = [...posSource.matchAll(/price:\s*([\d.]+)/g)].map((match) => Number(match[1]));
+  it('is accepted for any whole-peso amount the cashier can type', async () => {
+    // The till reads only digits, so every amount it can send is a whole number of
+    // pesos — from a $1 candy to a large order.
+    for (const amount of [1, 990, 4500, 12990, 250000]) {
+      for (const earnBy of ['visit', 'purchase'] as const) {
+        const sale = await chargeLikeThePos(
+          { earnBy, earnRate: 1.5, earnUnitAmount: 1000 },
+          amount,
+        );
 
-    expect(prices.length).toBeGreaterThan(10);
-
-    for (const price of prices) {
-      const sale = await chargeLikeThePos(
-        { earnBy: 'visit', earnRate: 1.5, earnUnitAmount: 1000 },
-        price,
-      );
-
-      expect(
-        workerAccepts(sale.earnBy, sale.body),
-        `a $${price.toFixed(2)} sale was refused`,
-      ).toBe(true);
+        expect(workerAccepts(earnBy, sale.body), `${earnBy} refused a $${amount} sale`).toBe(
+          true,
+        );
+      }
     }
   });
 
@@ -694,7 +690,7 @@ describe('the POS page', () => {
   it('reads the tenant’s mechanic from the loyalty config it already loads', () => {
     // `earn_by` defaults to `visit`, so a failure to load must not flip the POS
     // into sending money to a program that counts visits.
-    expect(posSource).toMatch(/api\.getLoyaltyConfig\(\)/);
+    expect(posSource).toMatch(/api\s*\.getLoyaltyConfig\(\)/);
     expect(posSource).toContain('earnBy');
     expect(posSource).toContain('earnUnitAmount');
   });

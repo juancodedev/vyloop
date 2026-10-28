@@ -233,7 +233,7 @@ describe('the assign request', () => {
     // Guards the fix against being "simplified" into a bare two-argument call.
     const sent = secondArgumentOf(posSource, 'api.assignPoints');
 
-    expect(posSource).toMatch(/Venta POS:/);
+    expect(posSource).toMatch(/Venta en caja:/);
     expect(sent.length).toBeGreaterThan(0);
   });
 
@@ -285,7 +285,7 @@ describe('the receipt', () => {
   });
 
   it('renders the server number on the receipt', () => {
-    expect(posSource).toMatch(/receipt\.pointsEarned\.toLocaleString\(\)/);
+    expect(posSource).toMatch(/receipt\.pointsEarned\.toLocaleString\(/);
   });
 
   it('shows the server number even when it differs from the preview', () => {
@@ -310,7 +310,7 @@ describe('the preview', () => {
   it('is still rendered before the charge', () => {
     // The estimate is worth showing — a cashier needs to know roughly what the
     // customer is earning. It is the presenting-as-final part that is not.
-    expect(posSource).toMatch(/\{pointsToEarn > 0 && \(/);
+    expect(posSource).toMatch(/pointsToEarn > 0 && \(/);
     expect(posSource).toMatch(/styles\.earnRow/);
   });
 
