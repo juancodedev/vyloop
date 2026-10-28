@@ -1,6 +1,7 @@
 'use client';
 
 import { Html5Qrcode } from 'html5-qrcode';
+import { Camera, ScanLine } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 
 import styles from './pos.module.css';
@@ -20,17 +21,6 @@ import { presentPass, type WirePassState } from '@/lib/pass-state';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
-interface MenuItem {
-  id: string;
-  name: string;
-  price: number;
-}
-
-interface CartEntry {
-  item: MenuItem;
-  qty: number;
-}
-
 type Status = 'idle' | 'identifying' | 'charging' | 'done' | 'error';
 
 /**
@@ -42,32 +32,29 @@ type Status = 'idle' | 'identifying' | 'charging' | 'done' | 'error';
  */
 type LookupFailure = 'not_registered' | 'ambiguous' | 'system';
 
-// ─── Menu data (realistic café prices) ──────────────────────────────
+// ─── Money ──────────────────────────────────────────────────────────
 
-const MENU: MenuItem[] = [
-  { id: 'latte',      name: 'Café Latte',          price: 3.50 },
-  { id: 'cappuccino', name: 'Cappuccino',          price: 3.00 },
-  { id: 'espresso',   name: 'Espresso',            price: 2.00 },
-  { id: 'mocaccino',  name: 'Mocaccino',           price: 4.00 },
-  { id: 'americano',  name: 'Americano',           price: 2.50 },
-  { id: 'chai',       name: 'Té Chai Latte',       price: 3.50 },
-  { id: 'latte-g',    name: 'Latte Grande',        price: 4.50 },
-  { id: 'croissant',  name: 'Croissant',           price: 3.00 },
-  { id: 'muffin',     name: 'Muffin Arándanos',    price: 2.50 },
-  { id: 'cookie',     name: 'Cookie Chocolate',    price: 1.50 },
-  { id: 'sandwich',   name: 'Sandwich Pollo',      price: 5.50 },
-  { id: 'tostado',    name: 'Tostado JyQ',         price: 5.00 },
-  { id: 'alfajor',    name: 'Alfajor',             price: 1.50 },
-  { id: 'medialuna',  name: 'Medialuna',           price: 1.00 },
-  { id: 'jugo',       name: 'Jugo Naranja',        price: 3.00 },
-  { id: 'agua',       name: 'Agua Mineral',        price: 1.50 },
-];
+/** Whole pesos, the way a Chilean receipt prints them: `$4.500`. */
+function clp(amount: number): string {
+  return `$${Math.round(amount).toLocaleString('es-CL')}`;
+}
+
+/**
+ * The amount the cashier typed, in whole pesos.
+ *
+ * Only the digits count, so "4.500", "4500" and "$4.500" are the same sale. A
+ * peso has no cents, which is why a comma is not read as a decimal separator.
+ */
+function parseClp(typed: string): number {
+  const digits = typed.replace(/\D/g, '');
+  return digits === '' ? 0 : Number(digits);
+}
 
 // ─── Component ──────────────────────────────────────────────────────
 
 export default function PosPage() {
-  // Cart
-  const [cart, setCart] = useState<CartEntry[]>([]);
+  // The receipt amount, as typed. Parsed on every render by `parseClp`.
+  const [amountInput, setAmountInput] = useState('');
 
   // Customer
   const [customer, setCustomer] = useState<{
@@ -118,7 +105,6 @@ export default function PosPage() {
 
   // Receipt
   const [receipt, setReceipt] = useState<{
-    items: CartEntry[];
     subtotal: number;
     pointsEarned: number;
     pointsRedeemed: number;
@@ -137,7 +123,8 @@ export default function PosPage() {
   const [earnRule, setEarnRule] = useState<EarnRule>(DEFAULT_EARN_RULE);
 
   useEffect(() => {
-    api.getLoyaltyConfig()
+    api
+      .getLoyaltyConfig()
       .then((c) =>
         setEarnRule({
           earnBy: c.earnBy,
@@ -148,32 +135,10 @@ export default function PosPage() {
       .catch(() => setEarnRule(DEFAULT_EARN_RULE));
   }, []);
 
-  // ─── Cart helpers ─────────────────────────────────────────────────
+  // ─── Sale helpers ─────────────────────────────────────────────────
 
-  const addToCart = useCallback((item: MenuItem) => {
-    setCart((prev) => {
-      const existing = prev.find((e) => e.item.id === item.id);
-      if (existing) {
-        return prev.map((e) =>
-          e.item.id === item.id ? { ...e, qty: e.qty + 1 } : e,
-        );
-      }
-      return [...prev, { item, qty: 1 }];
-    });
-  }, []);
-
-  const updateQty = useCallback((itemId: string, delta: number) => {
-    setCart((prev) =>
-      prev
-        .map((e) =>
-          e.item.id === itemId ? { ...e, qty: Math.max(0, e.qty + delta) } : e,
-        )
-        .filter((e) => e.qty > 0),
-    );
-  }, []);
-
-  const clearCart = useCallback(() => {
-    setCart([]);
+  const resetSale = useCallback(() => {
+    setAmountInput('');
     setCustomer(null);
     setRedeemInput('');
     setRedeemResult(null);
@@ -182,7 +147,7 @@ export default function PosPage() {
     setReceipt(null);
   }, []);
 
-  const subtotal = cart.reduce((sum, e) => sum + e.item.price * e.qty, 0);
+  const subtotal = parseClp(amountInput);
 
   // ─── Points calculation ───────────────────────────────────────────
 
@@ -191,8 +156,8 @@ export default function PosPage() {
   // it. They used to be two separate ones — `previewPoints(subtotal, …)` for the
   // screen and a hard `points: subtotal` for the request — and that is how pesos
   // ended up being displayed as a visit count, why a `purchase` program refused the
-  // body as `AMOUNT_REQUIRED`, and why half the menu failed the worker's integer
-  // guard on the way out.
+  // body as `AMOUNT_REQUIRED`, and why fractional prices failed the worker's
+  // integer guard on the way out.
   //
   // The two facts go in separately and the mechanic picks the one it pays on: money
   // for `purchase`, a count for `visit`. Neither number is sent — the worker applies
@@ -207,7 +172,8 @@ export default function PosPage() {
   // screen, so a purchase program says what it pays per $X of purchase and a visit
   // program says nothing about money at all — it has no money rule.
   const earnRuleText = describeEarnRule(earnRule);
-  // Canje máximo: no más de lo que tiene el cliente, ni más que el subtotal (1 pt = $1)
+  // The most that can be redeemed: no more than the customer holds, nor more than
+  // the sale is worth (1 point = $1).
   const maxRedeem = customer ? Math.min(customer.points, Math.ceil(subtotal)) : 0;
   const redeemValue = Math.min(Number(redeemInput) || 0, maxRedeem);
   const discount = redeemResult?.discount ?? 0;
@@ -215,52 +181,53 @@ export default function PosPage() {
 
   // ─── Search box ───────────────────────────────────────────────────
 
-  const handleLookup = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const handleLookup = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
 
-    // One box, three identifiers. The resolver returns the pair together so the
-    // value cannot be sent under the wrong parameter.
-    const target = resolveLookupTarget(lookupInput);
-    if (!target) return;
+      // One box, three identifiers. The resolver returns the pair together so the
+      // value cannot be sent under the wrong parameter.
+      const target = resolveLookupTarget(lookupInput);
+      if (!target) return;
 
-    setStatus('identifying');
-    setErrorMsg('');
-    setLookupFailure(null);
+      setStatus('identifying');
+      setErrorMsg('');
+      setLookupFailure(null);
 
-    try {
-      const found = await api.lookupCustomer({ [target.identifier]: target.value });
+      try {
+        const found = await api.lookupCustomer({ [target.identifier]: target.value });
 
-      setCustomer({
-        id: found.id,
-        globalId: found.globalId,
-        fullName: found.fullName,
-        points: found.points,
-        currentTier: found.currentTier,
-        multiplier: found.tier?.multiplier ?? 1,
-        pass: { state: found.pass.state, lastSyncedAt: found.pass.lastSyncedAt },
-      });
-      setRedeemInput('');
-      setRedeemResult(null);
-      setStatus('idle');
-    } catch (err) {
-      setStatus('idle');
+        setCustomer({
+          id: found.id,
+          globalId: found.globalId,
+          fullName: found.fullName,
+          points: found.points,
+          currentTier: found.currentTier,
+          multiplier: found.tier?.multiplier ?? 1,
+          pass: { state: found.pass.state, lastSyncedAt: found.pass.lastSyncedAt },
+        });
+        setRedeemInput('');
+        setRedeemResult(null);
+        setStatus('idle');
+      } catch (err) {
+        setStatus('idle');
 
-      // The three outcomes are told apart on the server's code, not on the
-      // message. "Not registered" invites a registration; a duplicate has to be
-      // escalated; anything else is a broken system, and answering that with a
-      // registration form would send a real customer into the wrong screen.
-      if (err instanceof ApiError && err.code === 'CUSTOMER_NOT_REGISTERED') {
-        setLookupFailure('not_registered');
-      } else if (err instanceof ApiError && err.status === 409) {
-        setLookupFailure('ambiguous');
-      } else {
-        setLookupFailure('system');
-        setErrorMsg(
-          err instanceof Error ? err.message : 'No se pudo consultar el cliente',
-        );
+        // The three outcomes are told apart on the server's code, not on the
+        // message. "Not registered" invites a registration; a duplicate has to be
+        // escalated; anything else is a broken system, and answering that with a
+        // registration form would send a real customer into the wrong screen.
+        if (err instanceof ApiError && err.code === 'CUSTOMER_NOT_REGISTERED') {
+          setLookupFailure('not_registered');
+        } else if (err instanceof ApiError && err.status === 409) {
+          setLookupFailure('ambiguous');
+        } else {
+          setLookupFailure('system');
+          setErrorMsg(err instanceof Error ? err.message : 'No se pudo consultar el cliente');
+        }
       }
-    }
-  }, [lookupInput]);
+    },
+    [lookupInput],
+  );
 
   // ─── QR Scanner ───────────────────────────────────────────────────
 
@@ -347,7 +314,11 @@ export default function PosPage() {
 
   const stopScanner = useCallback(async () => {
     if (scannerRef.current) {
-      try { await scannerRef.current.stop(); } catch { /* ignore */ }
+      try {
+        await scannerRef.current.stop();
+      } catch {
+        /* ignore */
+      }
       scannerRef.current = null;
     }
     setCameraFailure(null);
@@ -366,7 +337,7 @@ export default function PosPage() {
   // ─── Redeem points ────────────────────────────────────────────────
 
   const handleRedeem = useCallback(async () => {
-    // redeemValue ya está capoteado a maxRedeem (≤ subtotal, ≤ customer.points)
+    // redeemValue is already capped at maxRedeem (≤ the sale, ≤ the balance).
     const value = Math.floor(redeemValue);
     if (!customer || value <= 0) return;
     setErrorMsg('');
@@ -374,19 +345,19 @@ export default function PosPage() {
     try {
       const result = await api.redeemPoints(customer.id, value, 'Descuento POS');
       setRedeemResult({ used: Math.abs(result.points), discount: Math.abs(result.points) });
-      setCustomer((prev) => prev ? { ...prev, points: result.balance_after } : prev);
+      setCustomer((prev) => (prev ? { ...prev, points: result.balance_after } : prev));
       setRedeemInput('');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Error al canjear puntos');
+      setErrorMsg(err instanceof Error ? err.message : 'No se pudieron canjear los puntos');
     }
   }, [customer, redeemValue]);
 
   // ─── Charge ───────────────────────────────────────────────────────
 
   const handleCharge = useCallback(async () => {
-    if (cart.length === 0) return;
+    if (subtotal <= 0) return;
     if (!customer) {
-      setErrorMsg('Identificá al cliente antes de cobrar');
+      setErrorMsg('Identifica al cliente antes de registrar la venta');
       return;
     }
 
@@ -394,7 +365,7 @@ export default function PosPage() {
     setErrorMsg('');
 
     try {
-      const note = `Venta POS: ${cart.map((e) => `${e.item.name} x${e.qty}`).join(', ')}`;
+      const note = `Venta en caja: ${clp(subtotal)}`;
 
       // 1. Accumulate. Which field the sale travels in, and what value travels in it,
       // are the PROGRAM's facts — so both come from `earn` above, resolved once from
@@ -405,15 +376,14 @@ export default function PosPage() {
       // Two values in two units, and the units are the whole point: `purchase` gets
       // the raw money — the division by the tenant's unit is the worker's to do — and
       // `visit` gets the visit count, never the peso subtotal. A money amount sent as
-      // a count fails the worker's integer guard on every fractional peso, which is
-      // half this menu. The estimate is not sent either; see `earn`.
+      // a count fails the worker's integer guard on every fractional amount. The
+      // estimate is not sent either; see `earn`.
       const earned =
         earn.inputField === 'amount_pesos'
           ? await api.assignPurchasePoints(customer.id, subtotal, note)
           : await api.assignPoints(customer.id, earn.base, note);
 
       const receiptData = {
-        items: [...cart],
         subtotal,
         pointsEarned: earned.points,
         pointsRedeemed: redeemResult?.used ?? 0,
@@ -425,22 +395,10 @@ export default function PosPage() {
       setReceipt(receiptData);
       setStatus('done');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Error al procesar el cobro');
+      setErrorMsg(err instanceof Error ? err.message : 'No se pudo registrar la venta');
       setStatus('idle');
     }
-  }, [cart, customer, earn, redeemResult, discount, total, subtotal]);
-
-  // ─── New sale after receipt ───────────────────────────────────────
-
-  const handleNewSale = useCallback(() => {
-    setCart([]);
-    setCustomer(null);
-    setRedeemInput('');
-    setRedeemResult(null);
-    setStatus('idle');
-    setErrorMsg('');
-    setReceipt(null);
-  }, []);
+  }, [customer, earn, redeemResult, discount, total, subtotal]);
 
   // ─── Render ───────────────────────────────────────────────────────
 
@@ -450,179 +408,98 @@ export default function PosPage() {
 
   return (
     <div className={styles.container}>
-      {/* Header */}
-      <div className={styles.header}>
-        <h1>POS</h1>
-        <span className={styles.headerBadge}>Emulado</span>
-      </div>
-
-      {/* Error */}
       {errorMsg && (
-        <div className={styles.errorMsg} style={{ marginBottom: 16, textAlign: 'center' }}>
+        <div role="alert" className={styles.errorMsg}>
           {errorMsg}
         </div>
       )}
 
       {!receipt ? (
         <div className={styles.layout}>
-          {/* ─── Menu ─── */}
-          <div className={styles.menuSection}>
-            <h2>Menú</h2>
-            <div className={styles.menuGrid}>
-              {MENU.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={styles.menuItem}
-                  onClick={() => addToCart(item)}
-                >
-                  <div className={styles.menuItemName}>{item.name}</div>
-                  <div className={styles.menuItemPrice}>${item.price.toFixed(2)}</div>
-                </button>
-              ))}
-            </div>
-          </div>
+          {/* ─── Who is buying ─── */}
+          <section className={styles.card} aria-labelledby="pos-customer">
+            <h2 id="pos-customer" className={styles.cardTitle}>
+              Cliente
+            </h2>
 
-          {/* ─── Cart ─── */}
-          <div className={styles.cartCard}>
-            <div className={styles.cartHeader}>
-              Carrito ({cart.reduce((s, e) => s + e.qty, 0)} items)
-            </div>
-
-            {cart.length === 0 ? (
-              <div className={styles.cartEmpty}>
-                Seleccioná productos del menú
-              </div>
-            ) : (
+            {!customer ? (
               <>
-                <div className={styles.cartList}>
-                  {cart.map((entry) => (
-                    <div key={entry.item.id} className={styles.cartItem}>
-                      <div className={styles.cartItemInfo}>
-                        <div className={styles.cartItemName}>{entry.item.name}</div>
-                      </div>
-                      <div className={styles.cartItemQty}>
-                        <button
-                          type="button"
-                          className={styles.qtyBtn}
-                          onClick={() => updateQty(entry.item.id, -1)}
-                        >
-                          −
-                        </button>
-                        <span className={styles.qtyValue}>{entry.qty}</span>
-                        <button
-                          type="button"
-                          className={styles.qtyBtn}
-                          onClick={() => updateQty(entry.item.id, 1)}
-                        >
-                          +
-                        </button>
-                      </div>
-                      <span className={styles.cartItemTotal}>
-                        ${(entry.item.price * entry.qty).toFixed(2)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                <div className={styles.cartSummary}>
-                  <div className={styles.cartTotal}>
-                    <span>Total</span>
-                    <span>${subtotal.toFixed(2)}</span>
-                  </div>
-                  {discount > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-sm)', color: 'var(--error)' }}>
-                      <span>Descuento</span>
-                      <span>−${discount.toFixed(2)}</span>
-                    </div>
+                <button
+                  type="button"
+                  className={styles.scanBtn}
+                  onClick={startScanner}
+                  disabled={status === 'identifying'}
+                >
+                  {status === 'identifying' ? (
+                    <>
+                      <span className={styles.spinner} />
+                      Identificando…
+                    </>
+                  ) : (
+                    <>
+                      <ScanLine size={20} aria-hidden="true" />
+                      Escanear tarjeta
+                    </>
                   )}
-                </div>
-              </>
-            )}
+                </button>
 
-            {/* ─── Customer section ─── */}
-            <div className={styles.customerSection}>
-              {!customer ? (
-                <>
-                  {/* Search first: a cashier without the QR in front of them
-                      still has to identify the person. */}
-                  <form className={styles.lookupForm} onSubmit={handleLookup}>
-                    <input
-                      type="text"
-                      className={styles.lookupInput}
-                      placeholder="Teléfono, correo o código del pase…"
-                      value={lookupInput}
-                      onChange={(e) => {
-                        setLookupInput(e.currentTarget.value);
-                        setLookupFailure(null);
-                      }}
-                      aria-label="Buscar cliente por teléfono, correo o código del pase"
-                      autoComplete="off"
-                    />
-                    <button
-                      type="submit"
-                      className={styles.lookupBtn}
-                      disabled={status === 'identifying' || lookupInput.trim() === ''}
-                    >
-                      Buscar
-                    </button>
-                  </form>
-
-                  {lookupFailure === 'not_registered' && (
-                    <p className={styles.lookupNote}>
-                      No encontramos a ningún cliente con ese dato.{' '}
-                      <a href="/dashboard/customers">Registralo desde Clientes</a>.
-                    </p>
-                  )}
-
-                  {lookupFailure === 'ambiguous' && (
-                    <p className={styles.lookupWarn}>
-                      Hay más de un cliente con ese dato. No es algo que se pueda
-                      resolver en el mostrador: anotá el caso y escalalo.
-                    </p>
-                  )}
-
+                {/* Search too: a customer without the card at hand still has to
+                    be found. */}
+                <form className={styles.lookupForm} onSubmit={handleLookup}>
+                  <input
+                    type="text"
+                    className={styles.input}
+                    placeholder="Teléfono, correo o código del pase"
+                    value={lookupInput}
+                    onChange={(e) => {
+                      setLookupInput(e.currentTarget.value);
+                      setLookupFailure(null);
+                    }}
+                    aria-label="Buscar cliente por teléfono, correo o código del pase"
+                    autoComplete="off"
+                  />
                   <button
-                    type="button"
-                    className={styles.scanBtn}
-                    onClick={startScanner}
-                    disabled={status === 'identifying'}
+                    type="submit"
+                    className={styles.secondaryBtn}
+                    disabled={status === 'identifying' || lookupInput.trim() === ''}
                   >
-                    {status === 'identifying' ? (
-                      <>
-                        <span className={styles.spinner} />
-                        Identificando…
-                      </>
-                    ) : (
-                      <>
-                        📷 Escanear QR
-                      </>
-                    )}
+                    Buscar
                   </button>
-                </>
-              ) : (
-                <div className={styles.customerInfo}>
-                  <div className={styles.customerRow}>
-                    <span className={styles.customerLabel}>Cliente</span>
-                    <span className={styles.customerValue}>{customer.fullName}</span>
-                  </div>
-                  <div className={styles.customerRow}>
-                    <span className={styles.customerLabel}>Puntos</span>
-                    <span className={styles.customerValue}>
-                      {customer.points.toLocaleString()}
-                      {' '}
-                      {customer.currentTier && (
-                        <span className={styles.customerTier}>{customer.currentTier}</span>
-                      )}
-                    </span>
-                  </div>
+                </form>
 
-                  {/* The pass badge, and the sentence under it that says what is
-                      actually known. Both come from `lib/pass-state.ts`: the label
-                      and the detail are one decision, and a `not_issued` row is
-                      rendered as work still to do on our side rather than as a
-                      customer who turned out to have no card. */}
-                  {customer.pass && (() => {
+                {lookupFailure === 'not_registered' && (
+                  <p className={styles.lookupNote}>
+                    No encontramos a ningún cliente con ese dato.{' '}
+                    <a href="/dashboard/customers">Regístralo desde Clientes</a>.
+                  </p>
+                )}
+
+                {lookupFailure === 'ambiguous' && (
+                  <p className={styles.lookupWarn}>
+                    Hay más de un cliente con ese dato. No es algo que se pueda resolver en caja:
+                    anota el caso y escálalo.
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className={styles.customerInfo}>
+                <div className={styles.customerHead}>
+                  <span className={styles.customerName}>{customer.fullName}</span>
+                  {customer.currentTier && (
+                    <span className={styles.customerTier}>{customer.currentTier}</span>
+                  )}
+                </div>
+                <p className={styles.customerPoints}>
+                  {customer.points.toLocaleString('es-CL')} puntos
+                </p>
+
+                {/* The pass badge, and the sentence under it that says what is
+                    actually known. Both come from `lib/pass-state.ts`: the label
+                    and the detail are one decision, and a `not_issued` row is
+                    rendered as work still to do on our side rather than as a
+                    customer who turned out to have no card. */}
+                {customer.pass &&
+                  (() => {
                     const pass = presentPass(customer.pass.state, customer.pass.lastSyncedAt);
                     return (
                       <div
@@ -643,160 +520,188 @@ export default function PosPage() {
                     );
                   })()}
 
-                  {pointsToEarn > 0 && (
-                    <>
-                      <div className={styles.earnRow}>
-                        <span>Puntos a ganar (estimado)</span>
-                        <span>+{pointsToEarn}</span>
-                      </div>
-                      {/* The number above cannot be the charge. The server resolves
-                          the tier when it charges, and the tier can change between
-                          this estimate and the sale, so the receipt shows what the
-                          server decided instead. An estimate dressed as a final
-                          figure is worse than showing none. */}
-                      <p className={styles.earnNote}>
-                        Estimado con la tasa y el nivel actuales. El cobro real lo calcula el
-                        servidor, que resuelve el nivel en el momento del cobro.
-                      </p>
-                      {/* Which rule produced it. Without this the estimate is a number
-                          the cashier can only take on faith; with it, and only for a
-                          `purchase` program, it is checkable against the cart's own
-                          total. The wording is the config screen's, so the two cannot
-                          describe one program two different ways. */}
-                      <p className={styles.earnNote}>{earnRuleText.headline}</p>
-                    </>
-                  )}
+                <button
+                  type="button"
+                  className={styles.linkBtn}
+                  onClick={() => {
+                    setCustomer(null);
+                    setRedeemInput('');
+                    setRedeemResult(null);
+                  }}
+                >
+                  Cambiar cliente
+                </button>
+              </div>
+            )}
+          </section>
 
-                  {customer.points > 0 && !redeemResult && subtotal > 0 && (
-                    <div className={styles.redeemRow}>
-                      <div className={styles.redeemInputGroup}>
-                        <input
-                          type="number"
-                          className={styles.redeemInput}
-                          placeholder={`Máx ${Math.min(customer.points, Math.ceil(subtotal))} pts`}
-                          min={0}
-                          max={Math.min(customer.points, Math.ceil(subtotal))}
-                          value={redeemInput}
-                          onChange={(e) => setRedeemInput(e.target.value)}
-                        />
-                        <button
-                          type="button"
-                          className={styles.redeemBtn}
-                          onClick={handleRedeem}
-                          disabled={!redeemInput || Number(redeemInput) <= 0}
-                        >
-                          Canjear
-                        </button>
-                      </div>
-                      <span className={styles.redeemResult}>
-                        Disponibles: {customer.points.toLocaleString()}
-                      </span>
-                    </div>
-                  )}
+          {/* ─── What they bought ─── */}
+          <section className={styles.card} aria-labelledby="pos-sale">
+            <h2 id="pos-sale" className={styles.cardTitle}>
+              Venta
+            </h2>
 
-                  {redeemResult && (
-                    <div className={styles.redeemRow}>
-                      <span className={styles.redeemResult} style={{ color: 'var(--error)' }}>
-                        ✓ {redeemResult.used.toLocaleString()} pts canjeados — ${redeemResult.discount.toFixed(2)} de descuento
-                      </span>
-                    </div>
-                  )}
+            <label htmlFor="pos-amount" className={styles.amountLabel}>
+              Monto de la boleta
+            </label>
+            <div className={styles.amountField}>
+              <span className={styles.amountPrefix} aria-hidden="true">
+                $
+              </span>
+              <input
+                id="pos-amount"
+                type="text"
+                inputMode="numeric"
+                className={styles.amountInput}
+                placeholder="0"
+                value={subtotal > 0 ? subtotal.toLocaleString('es-CL') : ''}
+                onChange={(e) => {
+                  setAmountInput(e.currentTarget.value);
+                  // A redemption was sized against the old amount.
+                  setRedeemInput('');
+                }}
+                autoComplete="off"
+              />
+            </div>
 
-                  {cart.length > 0 && (
-                    <button
-                      type="button"
-                      className={styles.chargeBtn}
-                      onClick={handleCharge}
-                      disabled={status === 'charging'}
-                      style={{ marginTop: 10 }}
-                    >
-                      {status === 'charging' ? (
-                        <>
-                          <span className={styles.spinner} />
-                          Procesando…
-                        </>
-                      ) : (
-                        `Cobrar $${total.toFixed(2)}`
-                      )}
-                    </button>
-                  )}
+            {!customer && (
+              <p className={styles.hint}>Escanea o busca al cliente para sumar sus puntos.</p>
+            )}
 
-                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
-                    <button
-                      type="button"
-                      className={styles.clearBtn}
-                      onClick={() => setCustomer(null)}
-                    >
-                      Cambiar cliente
-                    </button>
-                  </div>
+            {customer && pointsToEarn > 0 && (
+              <div className={styles.earnBox}>
+                <div className={styles.earnRow}>
+                  <span>Puntos a sumar (estimado)</span>
+                  <span className={styles.earnValue}>+{pointsToEarn}</span>
                 </div>
-              )}
+                {/* The number above cannot be the charge. The server resolves the
+                    tier when it records the sale, and the tier can change between
+                    this estimate and the sale, so the receipt shows what the server
+                    decided instead. */}
+                <p className={styles.earnNote}>
+                  Estimado con la tasa y el nivel actuales. El número final lo calcula el servidor
+                  al registrar la venta.
+                </p>
+                {/* Which rule produced it, in the config screen's own wording, so
+                    the two screens cannot describe one program two ways. */}
+                <p className={styles.earnNote}>{earnRuleText.headline}</p>
+              </div>
+            )}
 
-              {cart.length > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
-                  <button type="button" className={styles.clearBtn} onClick={clearCart}>
-                    Vaciar carrito
+            {customer && customer.points > 0 && !redeemResult && subtotal > 0 && (
+              <div className={styles.redeemRow}>
+                <label htmlFor="pos-redeem" className={styles.redeemLabel}>
+                  Canjear puntos como descuento (máx. {maxRedeem.toLocaleString('es-CL')})
+                </label>
+                <div className={styles.redeemGroup}>
+                  <input
+                    id="pos-redeem"
+                    type="number"
+                    className={styles.input}
+                    min={0}
+                    max={maxRedeem}
+                    value={redeemInput}
+                    onChange={(e) => setRedeemInput(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={handleRedeem}
+                    disabled={!redeemInput || Number(redeemInput) <= 0}
+                  >
+                    Canjear
                   </button>
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
+
+            {redeemResult && (
+              <p className={styles.redeemDone}>
+                {redeemResult.used.toLocaleString('es-CL')} puntos canjeados:{' '}
+                {clp(redeemResult.discount)} de descuento. Total a pagar {clp(total)}.
+              </p>
+            )}
+
+            {customer && subtotal > 0 && (
+              <button
+                type="button"
+                className={styles.chargeBtn}
+                onClick={handleCharge}
+                disabled={status === 'charging'}
+              >
+                {status === 'charging' ? (
+                  <>
+                    <span className={styles.spinner} />
+                    Registrando…
+                  </>
+                ) : (
+                  `Registrar venta de ${clp(subtotal)}`
+                )}
+              </button>
+            )}
+
+            {(subtotal > 0 || customer) && (
+              <button type="button" className={styles.linkBtn} onClick={resetSale}>
+                Empezar de nuevo
+              </button>
+            )}
+          </section>
         </div>
       ) : (
         /* ─── Receipt ─── */
-        <div className={styles.receipt} style={{ margin: '0 auto' }}>
-          <div className={styles.receiptIcon}>🧾</div>
-          <h2>Venta completada</h2>
-          <p className={styles.receiptSub}>Cliente: {receipt.customerName}</p>
+        <section className={styles.receipt} aria-labelledby="pos-receipt">
+          <h2 id="pos-receipt" className={styles.receiptTitle}>
+            Venta registrada
+          </h2>
+          <p className={styles.receiptSub}>{receipt.customerName}</p>
 
-          {receipt.items.map((entry) => (
-            <div key={entry.item.id} className={styles.receiptDetail}>
-              <span>{entry.item.name} x{entry.qty}</span>
-              <span>${(entry.item.price * entry.qty).toFixed(2)}</span>
+          <dl className={styles.receiptList}>
+            <div className={styles.receiptRow}>
+              <dt>Monto de la boleta</dt>
+              <dd>{clp(receipt.subtotal)}</dd>
             </div>
-          ))}
-
-          <div className={styles.receiptTotal}>
-            <span>Total</span>
-            <span>${receipt.total.toFixed(2)}</span>
-          </div>
+            {receipt.discount > 0 && (
+              <>
+                <div className={styles.receiptRow}>
+                  <dt>Descuento con puntos</dt>
+                  <dd>−{clp(receipt.discount)}</dd>
+                </div>
+                <div className={`${styles.receiptRow} ${styles.receiptTotal}`}>
+                  <dt>Total pagado</dt>
+                  <dd>{clp(receipt.total)}</dd>
+                </div>
+              </>
+            )}
+          </dl>
 
           {receipt.pointsEarned > 0 && (
-            <div className={styles.receiptPoints}>
-              +{receipt.pointsEarned.toLocaleString()} puntos acumulados
-            </div>
+            <p className={styles.receiptPoints}>
+              +{receipt.pointsEarned.toLocaleString('es-CL')} puntos
+            </p>
           )}
           {receipt.pointsRedeemed > 0 && (
-            <div className={styles.receiptRedeem}>
-              −{receipt.pointsRedeemed.toLocaleString()} puntos canjeados (${receipt.discount.toFixed(2)})
-            </div>
+            <p className={styles.receiptRedeem}>
+              {receipt.pointsRedeemed.toLocaleString('es-CL')} puntos canjeados
+            </p>
           )}
 
-          <div className={styles.receiptActions}>
-            <button
-              type="button"
-              className={`${styles.receiptBtn} ${styles.receiptBtnPrimary}`}
-              onClick={handleNewSale}
-            >
-              Nueva venta
-            </button>
-            <button
-              type="button"
-              className={`${styles.receiptBtn} ${styles.receiptBtnSecondary}`}
-              onClick={() => setReceipt(null)}
-            >
-              Ver detalle
-            </button>
-          </div>
-        </div>
+          <button type="button" className={styles.chargeBtn} onClick={resetSale}>
+            Nueva venta
+          </button>
+        </section>
       )}
 
       {/* ─── QR Scanner Modal ─── */}
       {showScanner && (
         <div className={styles.overlay} onClick={stopScanner}>
-          <div className={styles.scannerModal} onClick={(e) => e.stopPropagation()}>
-            <h3>Escanear QR</h3>
+          <div
+            className={styles.scannerModal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pos-scanner"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="pos-scanner">Escanear tarjeta</h3>
 
             {/* The failure replaces the reader instead of hiding behind it: a
                 black rectangle where the video should be tells the cashier
@@ -806,25 +711,21 @@ export default function PosPage() {
               <>
                 <div role="alert" className={styles.lookupWarn}>
                   <strong>{cameraMessage.title}</strong>
-                  <p style={{ margin: '6px 0 0' }}>{cameraMessage.detail}</p>
+                  <p className={styles.cameraDetail}>{cameraMessage.detail}</p>
                 </div>
-                <button
-                  type="button"
-                  className={styles.scanBtn}
-                  onClick={startScanner}
-                  style={{ marginTop: 12 }}
-                >
+                <button type="button" className={styles.scanBtn} onClick={startScanner}>
+                  <Camera size={20} aria-hidden="true" />
                   Reintentar
                 </button>
               </>
             ) : (
               <>
-                <p>Mostrale el código QR al cliente para identificarlo</p>
+                <p>Pídele al cliente que muestre el QR de su tarjeta.</p>
                 <div id={scannerContainerId} className={styles.scannerReader} />
               </>
             )}
 
-            <button type="button" className={styles.closeBtn} onClick={stopScanner}>
+            <button type="button" className={styles.secondaryBtn} onClick={stopScanner}>
               Cerrar
             </button>
           </div>
