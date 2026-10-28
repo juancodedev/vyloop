@@ -62,6 +62,10 @@ export const BUSINESS_ID_TABLES = [
   'wallet_messages',
   // One row per (message, pass) — the delivery ledger for a manual send.
   'wallet_message_deliveries',
+  // A customer's browser subscriptions for push. Each row carries the
+  // business it was subscribed under, and a campaign must only ever reach the
+  // subscriptions of the business that composed it.
+  'push_subscriptions',
 ] as const;
 
 /**
@@ -78,7 +82,33 @@ export const BUSINESS_ID_TABLES = [
  * explicitly, and it is not derivable from `customer_id` without a join, which
  * is exactly the sort of implicit link a policy should not depend on.
  */
-export const TENANT_ID_TABLES = ['tenant_wallet_programs', 'customer_wallet_passes'] as const;
+export const TENANT_ID_TABLES = [
+  'tenant_wallet_programs',
+  'customer_wallet_passes',
+  // Google's callbacks for a tenant's passes, keyed by `tenant_id` like the
+  // passes they report on.
+  'wallet_callback_deliveries',
+] as const;
+
+/**
+ * Tables that carry no single tenant column to scope by, and why.
+ *
+ * Listed rather than left out so that `rls.test.ts` can require every schema
+ * table with a tenant column to be placed somewhere: a table that is in no
+ * list gets no policy, and nothing fails when that happens.
+ */
+export const RLS_EXEMPT_TABLES = [
+  {
+    table: 'tenants',
+    reason:
+      'The root table: a tenant is its own id, and it has no business_id or tenant_id column to compare.',
+  },
+  {
+    table: 'cross_loyalty_alliances',
+    reason:
+      'An alliance belongs to two tenants (tenant_a_id, tenant_b_id), so a single-tenant policy cannot express it.',
+  },
+] as const satisfies ReadonlyArray<{ table: string; reason: string }>;
 
 /**
  * Render a `current_setting(...)` comparison against a uuid column.
@@ -209,8 +239,52 @@ export function setCurrentTenantId(id: string): SQL {
  *
  * @param db A Drizzle instance, e.g. the return value of `createDb`.
  * @param tenantId The `tenants.id` that owns the rows being touched.
+ * @deprecated It runs `set_config(..., true)` as a statement of its own, so the
+ * setting ends with that statement's implicit transaction and never reaches
+ * the queries after it. Use {@link withTenantTransaction}.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function withTenantRls(db: any, tenantId: string): Promise<void> {
   await db.execute(setCurrentTenantId(tenantId));
+}
+
+/** The tenant a transaction runs for. At least one of the two is required. */
+export interface TenantScope {
+  /** Sets `app.current_business_id`, for the `BUSINESS_ID_TABLES`. */
+  businessId?: string;
+  /** Sets `app.current_tenant_id`, for the `TENANT_ID_TABLES`. */
+  tenantId?: string;
+}
+
+/** The part of a Drizzle database (or transaction) this helper needs. */
+interface TransactionalDb<Tx> {
+  transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
+}
+
+/**
+ * Run `fn` in a transaction that is scoped to one tenant.
+ *
+ * The settings are transaction-local (`set_config(..., true)`), so they only
+ * reach queries issued on the same transaction: `fn` must run every tenant
+ * query on the `tx` it is given, never on the outer `db`. This works through
+ * Neon's pooled endpoint, where a session-level setting could leak into
+ * another request that reuses the server connection.
+ *
+ * Throws before opening a transaction when neither id is given, because a
+ * query with no tenant set errors under the policies (see `policyPredicate`).
+ */
+export async function withTenantTransaction<Tx extends { execute(query: SQL): Promise<unknown> }, T>(
+  db: TransactionalDb<Tx>,
+  scope: TenantScope,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  if (!scope.businessId && !scope.tenantId) {
+    throw new Error('withTenantTransaction needs a businessId or tenantId');
+  }
+
+  return db.transaction(async (tx) => {
+    if (scope.businessId) await tx.execute(setCurrentBusinessId(scope.businessId));
+    if (scope.tenantId) await tx.execute(setCurrentTenantId(scope.tenantId));
+    return fn(tx);
+  });
 }

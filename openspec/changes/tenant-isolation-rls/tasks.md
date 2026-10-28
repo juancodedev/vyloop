@@ -31,11 +31,11 @@ Chain strategy: stacked-to-main
 
 ## Unit 1: Phase 0 — the shared helper and the table lists
 
-- [ ] 1.1 `packages/db/src/rls.ts` — add `withTenantTransaction(db, { businessId?, tenantId? }, fn)`: `db.transaction`, `tx.execute(setCurrentBusinessId(...))` and/or `tx.execute(setCurrentTenantId(...))`, then `return fn(tx)`; throw if neither id is given. Deprecate `withTenantRls` (it executes outside a transaction) in its doc comment.
-- [ ] 1.2 `packages/db/src/index.ts` — export `withTenantTransaction`.
-- [ ] 1.3 `packages/db/src/rls.ts` — add `push_subscriptions` to `BUSINESS_ID_TABLES` and `wallet_callback_deliveries` to `TENANT_ID_TABLES`; add `RLS_EXEMPT_TABLES` (`tenants`, `cross_loyalty_alliances`) with the reason for each.
-- [ ] 1.4 `packages/db/src/rls.test.ts` — completeness test: every table from `schema.ts` (collected with `is(value, Table)`, as the file already does at line 98) that has a `business_id` or `tenant_id` column is in exactly one of the three lists; a test that `withTenantTransaction` issues the `set_config` statements on the transaction handle, before `fn`, and never on the outer `db`.
-- [ ] 1.5 `packages/db/src/rls.test.ts` — the predicate rendered by `createRlsPolicies()` and `createTenantRlsPolicies()` contains `current_setting('app.current_business_id')` / `current_setting('app.current_tenant_id')` with no second argument (the fail-loud rule).
+- [x] 1.1 `packages/db/src/rls.ts` — add `withTenantTransaction(db, { businessId?, tenantId? }, fn)`: `db.transaction`, `tx.execute(setCurrentBusinessId(...))` and/or `tx.execute(setCurrentTenantId(...))`, then `return fn(tx)`; throw if neither id is given. Deprecate `withTenantRls` (it executes outside a transaction) in its doc comment.
+- [x] 1.2 `packages/db/src/index.ts` — export `withTenantTransaction`.
+- [x] 1.3 `packages/db/src/rls.ts` — add `push_subscriptions` to `BUSINESS_ID_TABLES` and `wallet_callback_deliveries` to `TENANT_ID_TABLES`; add `RLS_EXEMPT_TABLES` (`tenants`, `cross_loyalty_alliances`) with the reason for each.
+- [x] 1.4 `packages/db/src/rls.test.ts` — completeness test: every table from `schema.ts` (collected with `is(value, Table)`, as the file already does at line 98) that has a `business_id` or `tenant_id` column is in exactly one of the three lists; a test that `withTenantTransaction` issues the `set_config` statements on the transaction handle, before `fn`, and never on the outer `db`.
+- [x] 1.5 `packages/db/src/rls.test.ts` — the predicate rendered by `createRlsPolicies()` and `createTenantRlsPolicies()` contains `current_setting('app.current_business_id')` / `current_setting('app.current_tenant_id')` with no second argument (the fail-loud rule).
 
 ## Unit 2: Phase 0 — move the worker call sites
 
