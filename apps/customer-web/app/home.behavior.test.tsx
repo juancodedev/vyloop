@@ -29,6 +29,7 @@ describe('entry actions', () => {
   beforeEach(() => {
     mocks.businessSlug = null;
     mocks.replace.mockReset();
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -52,6 +53,15 @@ describe('entry actions', () => {
 
   it('offers registration carrying the business context when one exists', () => {
     mocks.businessSlug = 'cafe-central';
+    renderEntry();
+
+    expect(screen.getByRole('link', { name: 'Registrarme' }).getAttribute('href')).toBe(
+      '/register?biz=cafe-central',
+    );
+  });
+
+  it('offers registration for the last business when the link lost it', () => {
+    localStorage.setItem('vyloop_business_slug', 'cafe-central');
     renderEntry();
 
     expect(screen.getByRole('link', { name: 'Registrarme' }).getAttribute('href')).toBe(

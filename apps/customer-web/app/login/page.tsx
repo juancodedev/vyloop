@@ -8,6 +8,7 @@ import { ClubShell } from '../components/club-shell';
 import { ClubLoading } from '../components/club-status';
 import { FormField } from '../components/form-field';
 import { useAuth, type LoginFailureReason } from '../lib/auth';
+import { resolveBusinessSlug } from '../lib/business-context';
 
 const LOGIN_FAILURE_MESSAGES: Record<LoginFailureReason, string> = {
   not_registered: 'Número no registrado. ¿Ya te registraste?',
@@ -60,7 +61,7 @@ function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { login } = useAuth();
-  const businessSlug = searchParams.get('biz') || null;
+  const businessSlug = resolveBusinessSlug(searchParams.get('biz'));
   const homeHref = buildBusinessHref('/', businessSlug);
   const registerHref = buildBusinessHref('/register', businessSlug);
 

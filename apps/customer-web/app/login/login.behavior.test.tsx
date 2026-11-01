@@ -129,6 +129,8 @@ describe('login page behavior', () => {
     // "still works" without a business — which is the behaviour that made the
     // choice invisible.
     cleanup();
+    // No link and nothing remembered from an earlier visit.
+    localStorage.clear();
     mocks.businessSlug = null;
     renderPage();
 
@@ -150,6 +152,26 @@ describe('login page behavior', () => {
 
     // No request at all: the server refuses this too, with `AUTH_BUSINESS_REQUIRED`.
     expect(mocks.login).not.toHaveBeenCalled();
+  });
+
+  it('recovers the last business when the link lost it', async () => {
+    // A session that expires on /profile, or a "Volver al inicio", lands here
+    // with no `biz`. The customer already came through their café's link once.
+    cleanup();
+    localStorage.setItem('vyloop_business_slug', 'barber');
+    mocks.businessSlug = null;
+    renderPage();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Regístrate aquí' }).getAttribute('href')).toBe(
+      '/register?biz=barber',
+    );
+
+    typePhone('+56912345678');
+    await submitForm();
+
+    expect(mocks.login).toHaveBeenCalledWith('+56912345678', 'barber');
+    expect(mocks.push).toHaveBeenCalledWith('/profile?biz=barber');
   });
 
   it('carries the biz onto the profile after a successful login', async () => {
@@ -174,6 +196,8 @@ describe('login page behavior', () => {
 
   it('drops the biz parameter from every link when there is no context', () => {
     cleanup();
+    // No link and nothing remembered from an earlier visit.
+    localStorage.clear();
     mocks.businessSlug = null;
     renderPage();
 
