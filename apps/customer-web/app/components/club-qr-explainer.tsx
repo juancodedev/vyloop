@@ -16,7 +16,7 @@ const steps = [
   {
     number: '03',
     title: 'Muestra tu código',
-    description: 'Para seguir con tu programa.',
+    description: 'En caja, para sumar los puntos de tu compra.',
     icon: ScanLine,
   },
 ] as const;
