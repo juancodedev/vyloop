@@ -70,8 +70,20 @@ describe('registration behavior', () => {
     vi.unstubAllGlobals();
   });
 
+  it('registers in the last business when the link lost it', () => {
+    cleanup();
+    localStorage.setItem('vyloop_business_slug', 'cafe-recordado');
+    mocks.businessSlug = null;
+
+    render(<RegisterPage />);
+
+    expect(screen.queryByText('Falta el contexto del comercio.')).toBeNull();
+  });
+
   it('shows the missing business context and disables the fieldset', () => {
     cleanup();
+    // No link and nothing remembered from an earlier visit.
+    localStorage.clear();
     mocks.businessSlug = null;
 
     render(<RegisterPage />);

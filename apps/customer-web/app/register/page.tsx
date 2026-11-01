@@ -9,6 +9,7 @@ import { ClubLoading } from '../components/club-status';
 import { ConsentList } from '../components/consent-list';
 import { FormField } from '../components/form-field';
 import { api } from '../lib/api';
+import { resolveBusinessSlug } from '../lib/business-context';
 import { gatewayUrl } from '../lib/gateway-url';
 
 interface RegisterFormValues {
@@ -111,7 +112,7 @@ function RegisterLoading() {
 function RegisterContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const businessSlug = searchParams.get('biz') || null;
+  const businessSlug = resolveBusinessSlug(searchParams.get('biz'));
   const hasBusinessContext = businessSlug !== null;
   const homeHref = buildBusinessHref('/', businessSlug);
   const loginHref = buildBusinessHref('/login', businessSlug);

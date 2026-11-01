@@ -9,6 +9,7 @@ import { ClubQrExplainer } from './components/club-qr-explainer';
 import { ClubShell } from './components/club-shell';
 import { ClubLoading } from './components/club-status';
 import { useAuth } from './lib/auth';
+import { resolveBusinessSlug } from './lib/business-context';
 
 function EntryLoading() {
   return (
@@ -32,7 +33,7 @@ function HomeEntry() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { customer, isLoading } = useAuth();
-  const businessSlug = searchParams.get('biz');
+  const businessSlug = resolveBusinessSlug(searchParams.get('biz'));
   const loginHref = buildBusinessHref('/login', businessSlug);
   const registerHref = buildBusinessHref('/register', businessSlug);
   // Registration needs a tenant: the page refuses to create a customer without
