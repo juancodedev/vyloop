@@ -165,4 +165,33 @@ describe('public programme page', () => {
     const initial = /setAttribute\(\s*'data-lang'\s*,\s*'en'\s*\)/.test(script);
     expect(initial).toBe(false);
   });
+
+  it('says how points are earned', () => {
+    // "No purchase on the pass" is true, but alone it reads as points coming from
+    // nowhere. The shop credits them from the amount a customer spends.
+    expect(visible).toMatch(/in proportion to the amount/i);
+    expect(visible).toMatch(/según el monto/i);
+  });
+
+  it('names the company behind the pass and how to reach it', () => {
+    expect(visible).toMatch(/Lawen Tech Solutions SpA/);
+    expect(visible).toMatch(/77\.936\.149-7/);
+    expect(page).toMatch(/href="mailto:cl\.jmunoz@gmail\.com"/);
+  });
+
+  it('links to the privacy policy and to the customer app', () => {
+    expect(page).toMatch(/href="\/privacy"/);
+    expect(page).toMatch(/href="\/"/);
+  });
+
+  it('describes the hosting that actually serves the app', () => {
+    // The customer app moved from Pages to a Worker; a reviewer may check.
+    expect(visible).not.toMatch(/Cloudflare Pages/);
+  });
+
+  it('keeps table cells laid out as cells when a language is shown', () => {
+    // The generic reveal rule sets `display: block`; on `th`/`td` that breaks the
+    // table into stacked boxes.
+    expect(page).toMatch(/th\[data-lang="en"\][^{]*\{\s*display:\s*table-cell/);
+  });
 });

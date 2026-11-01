@@ -415,6 +415,12 @@ function RegisterContent() {
             >
               {submitting ? 'Registrando…' : accountCreated ? 'Cuenta creada' : 'Registrarme'}
             </button>
+            {/* A plain anchor, not next/link: the policy is a static file served by
+                the assets layer, which client-side routing cannot reach. */}
+            <p className="club-register__legal">
+              Al registrarte, tus datos se tratan según la{' '}
+              <a href="/privacy">Política de privacidad</a>.
+            </p>
           </fieldset>
         </form>
 

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="es" data-lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vyloop — Política de privacidad</title>
+    <meta
+      name="description"
+      content="Cómo Vyloop trata los datos de los clientes que se registran en el programa de puntos de un comercio."
+    />
+    <style>
+      /* Self-contained like program.html: no fonts, scripts or images from
+         elsewhere, so it renders the same for a customer and for a reviewer. */
+      :root {
+        --ink: #17150f;
+        --muted: #5c574b;
+        --line: #e2ddd1;
+        --paper: #faf7f0;
+        --card: #ffffff;
+        --accent: #1f6f5c;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--ink);
+        background: var(--paper);
+        line-height: 1.6;
+      }
+      .wrap { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+      header { border-bottom: 1px solid var(--line); background: var(--card); }
+      header .wrap { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; }
+      .wordmark { font-weight: 700; letter-spacing: -0.02em; font-size: 1.15rem; color: var(--ink); text-decoration: none; }
+      .lang { display: flex; gap: 6px; }
+      .lang button {
+        font: inherit; font-size: 0.8rem; padding: 5px 14px; border-radius: 999px; min-height: 44px;
+        border: 1px solid var(--line); background: transparent; color: var(--muted);
+        cursor: pointer;
+      }
+      .lang button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+      main { padding: 48px 0 72px; }
+      h1 { font-size: clamp(1.8rem, 4.4vw, 2.5rem); line-height: 1.15; letter-spacing: -0.03em; margin: 0 0 10px; }
+      h2 { font-size: 1.2rem; letter-spacing: -0.02em; margin: 40px 0 10px; }
+      .updated { color: var(--muted); margin: 0 0 24px; }
+      ul { padding-left: 20px; margin: 0; }
+      li { margin-bottom: 6px; }
+      a { color: var(--accent); }
+      footer { border-top: 1px solid var(--line); background: var(--card); padding: 22px 0; color: var(--muted); font-size: 0.9rem; }
+      /* Same language mechanism as program.html: the root carries the active
+         language, so the hiding rule must exclude it or the page hides itself. */
+      [data-lang]:not(html) { display: none; }
+      html[data-lang="en"] [data-lang="en"], html[data-lang="es"] [data-lang="es"] { display: block; }
+      html[data-lang="en"] li[data-lang="en"], html[data-lang="es"] li[data-lang="es"] { display: list-item; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <a class="wordmark" href="/program">Vyloop</a>
+        <div class="lang" role="group" aria-label="Idioma / Language">
+          <button type="button" data-set-lang="es" aria-pressed="true">Español</button>
+          <button type="button" data-set-lang="en" aria-pressed="false">English</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <!-- Spanish -->
+      <div data-lang="es">
+        <h1>Política de privacidad</h1>
+        <p class="updated">Última actualización: 1 de noviembre de 2026.</p>
+
+        <p>
+          Vyloop es una plataforma de programas de puntos para cafeterías y comercios de barrio en
+          Chile. Esta política explica qué datos se tratan cuando una persona se registra en el
+          programa de un comercio, para qué se usan, quién los recibe y cómo eliminarlos.
+        </p>
+
+        <h2>Responsable</h2>
+        <p>
+          Lawen Tech Solutions SpA, RUT 77.936.149-7, Providencia 1017, Of. 41, Providencia, Chile.
+          Contacto: <a href="mailto:cl.jmunoz@gmail.com">cl.jmunoz@gmail.com</a>.
+        </p>
+
+        <h2>Datos que se tratan</h2>
+        <ul>
+          <li>Al registrarse: nombre y número de teléfono (obligatorios), y correo electrónico y fecha de nacimiento (opcionales).</li>
+          <li>Las preferencias de comunicación que la persona elige: promociones y avisos cercanos.</li>
+          <li>Lo que el comercio registra en su caja: el monto de cada compra, los puntos abonados, el nivel alcanzado y los canjes realizados.</li>
+          <li>Los identificadores del pase de Google Wallet, si la persona lo guarda.</li>
+          <li>La suscripción a notificaciones del navegador, solo si la persona las activa.</li>
+        </ul>
+
+        <h2>Para qué se usan</h2>
+        <ul>
+          <li>Llevar el saldo de puntos y el nivel de la persona en el programa del comercio.</li>
+          <li>Mostrar ese saldo en la aplicación web y en el pase de Google Wallet.</li>
+          <li>Permitir que el personal del comercio identifique a la persona en la caja.</li>
+          <li>Enviar mensajes solo cuando la persona dio su consentimiento para ese tipo de mensaje.</li>
+        </ul>
+
+        <h2>Quién recibe los datos</h2>
+        <ul>
+          <li>El comercio en cuyo programa se registró la persona. Cada comercio ve solo a sus propios clientes.</li>
+          <li>Google, cuando la persona guarda el pase en Google Wallet: el nombre, el saldo, el nivel, el código de socio y el código QR del pase.</li>
+          <li>Los proveedores de infraestructura que alojan la aplicación y la base de datos por cuenta de Vyloop, que no usan los datos para fines propios.</li>
+        </ul>
+        <p>No vendemos ni cedemos datos personales a terceros para publicidad.</p>
+
+        <h2>Cuánto tiempo se guardan</h2>
+        <p>
+          Mientras la cuenta esté activa. Cuando la persona elimina su cuenta, sus datos personales se
+          anonimizan y el pase de Google Wallet se da de baja. Los movimientos de puntos quedan
+          asociados a una cuenta anónima, sin datos que identifiquen a la persona.
+        </p>
+
+        <h2>Derechos y cómo ejercerlos</h2>
+        <p>
+          Conforme a la Ley N° 19.628 sobre protección de la vida privada, la persona puede pedir
+          acceso a sus datos, su rectificación, su eliminación o oponerse a su tratamiento. Puede
+          corregir sus datos desde su perfil en la aplicación, eliminar su cuenta con la opción
+          «Eliminar mi cuenta» del perfil, o escribir a
+          <a href="mailto:cl.jmunoz@gmail.com">cl.jmunoz@gmail.com</a>.
+        </p>
+
+        <h2>Cambios a esta política</h2>
+        <p>
+          Si esta política cambia, la nueva versión se publica en esta misma dirección con su fecha
+          de actualización.
+        </p>
+      </div>
+
+      <!-- English -->
+      <div data-lang="en">
+        <h1>Privacy policy</h1>
+        <p class="updated">Last updated: November 1, 2026.</p>
+
+        <p>
+          Vyloop is a loyalty points platform for coffee shops and neighborhood businesses in Chile.
+          This policy explains what data is handled when a person joins a shop's program, what it is
+          used for, who receives it and how to delete it.
+        </p>
+
+        <h2>Data controller</h2>
+        <p>
+          Lawen Tech Solutions SpA, tax ID (RUT) 77.936.149-7, Providencia 1017, Of. 41, Providencia,
+          Chile. Contact: <a href="mailto:cl.jmunoz@gmail.com">cl.jmunoz@gmail.com</a>.
+        </p>
+
+        <h2>Data handled</h2>
+        <ul>
+          <li>At sign-up: name and phone number (required), and email and birth date (optional).</li>
+          <li>The communication preferences the person chooses: promotions and nearby notices.</li>
+          <li>What the shop records at its till: the amount of each purchase, the points credited, the tier reached and the rewards redeemed.</li>
+          <li>The identifiers of the Google Wallet pass, if the person saves it.</li>
+          <li>The browser notification subscription, only if the person turns notifications on.</li>
+        </ul>
+
+        <h2>What it is used for</h2>
+        <ul>
+          <li>Keeping the person's points balance and tier in the shop's program.</li>
+          <li>Showing that balance in the web app and on the Google Wallet pass.</li>
+          <li>Letting the shop's staff identify the person at the till.</li>
+          <li>Sending messages only where the person consented to that kind of message.</li>
+        </ul>
+
+        <h2>Who receives the data</h2>
+        <ul>
+          <li>The shop whose program the person joined. Each shop sees only its own customers.</li>
+          <li>Google, when the person saves the pass to Google Wallet: the name, balance, tier, member code and QR code on the pass.</li>
+          <li>The infrastructure providers that host the app and the database on Vyloop's behalf, which do not use the data for their own purposes.</li>
+        </ul>
+        <p>We do not sell or hand over personal data to third parties for advertising.</p>
+
+        <h2>How long it is kept</h2>
+        <p>
+          While the account is active. When the person deletes their account, their personal data is
+          anonymized and the Google Wallet pass is retired. Points movements stay attached to an
+          anonymous account, with no data that identifies the person.
+        </p>
+
+        <h2>Rights and how to exercise them</h2>
+        <p>
+          Under Chilean Law No. 19,628 on the protection of private life, the person may request
+          access to their data, its correction or deletion, or object to its processing. They can
+          correct their data from their profile in the app, delete their account with the
+          "Eliminar mi cuenta" option in the profile, or write to
+          <a href="mailto:cl.jmunoz@gmail.com">cl.jmunoz@gmail.com</a>.
+        </p>
+
+        <h2>Changes to this policy</h2>
+        <p>
+          If this policy changes, the new version is published at this same address with its update
+          date.
+        </p>
+      </div>
+    </main>
+
+    <footer>
+      <div class="wrap" data-lang="es">
+        Vyloop — Lawen Tech Solutions SpA. <a href="/program">Sobre el programa</a> ·
+        <a href="/">Aplicación de clientes</a>
+      </div>
+      <div class="wrap" data-lang="en">
+        Vyloop — Lawen Tech Solutions SpA. <a href="/program">About the program</a> ·
+        <a href="/">Customer app</a>
+      </div>
+    </footer>
+
+    <script>
+      // Only the language switch; the Spanish content is visible without it.
+      (function () {
+        var root = document.documentElement;
+        var buttons = document.querySelectorAll('[data-set-lang]');
+        Array.prototype.forEach.call(buttons, function (button) {
+          button.addEventListener('click', function () {
+            var lang = button.getAttribute('data-set-lang');
+            root.setAttribute('data-lang', lang);
+            root.setAttribute('lang', lang);
+            Array.prototype.forEach.call(buttons, function (other) {
+              other.setAttribute('aria-pressed', String(other === button));
+            });
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

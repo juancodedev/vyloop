@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vyloop — Google Wallet loyalty passes for neighbourhood businesses</title>
+    <title>Vyloop — Google Wallet loyalty passes for neighborhood businesses</title>
     <meta
       name="description"
       content="Vyloop issues a Google Wallet loyalty pass so customers carry their points balance and membership tier on the phone they already have, and shop staff identify them by scanning a code."
@@ -36,7 +36,7 @@
       .wordmark { font-weight: 700; letter-spacing: -0.02em; font-size: 1.15rem; }
       .lang { display: flex; gap: 6px; }
       .lang button {
-        font: inherit; font-size: 0.8rem; padding: 5px 11px; border-radius: 999px;
+        font: inherit; font-size: 0.8rem; padding: 5px 14px; border-radius: 999px; min-height: 44px;
         border: 1px solid var(--line); background: transparent; color: var(--muted);
         cursor: pointer;
       }
@@ -90,6 +90,10 @@
       th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
       footer { border-top: 1px solid var(--line); background: var(--card); padding: 22px 0; color: var(--muted); font-size: 0.9rem; }
+      a { color: var(--accent); }
+      dl.company { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; }
+      dl.company dt { color: var(--muted); }
+      dl.company dd { margin: 0; }
       /* The root carries the active language, and the reveal rule below is a
          descendant combinator — it cannot match `<html>` itself. So the hiding rule
          has to exclude the root explicitly. Without `:not(html)` the document
@@ -100,6 +104,8 @@
       [data-lang]:not(html) { display: none; }
       html[data-lang="en"] [data-lang="en"], html[data-lang="es"] [data-lang="es"] { display: block; }
       html[data-lang="en"] li[data-lang="en"], html[data-lang="es"] li[data-lang="es"] { display: list-item; }
+      html[data-lang="en"] th[data-lang="en"], html[data-lang="en"] td[data-lang="en"],
+      html[data-lang="es"] th[data-lang="es"], html[data-lang="es"] td[data-lang="es"] { display: table-cell; }
     </style>
   </head>
   <body>
@@ -117,8 +123,8 @@
       <div data-lang="en">
         <h1>A loyalty pass in the wallet they already carry.</h1>
         <p class="lede">
-          Vyloop gives independent coffee shops and small neighbourhood businesses in Chile a loyalty
-          programme their customers do not have to manage. The shop issues one Google Wallet pass
+          Vyloop gives independent coffee shops and small neighborhood businesses in Chile a loyalty
+          program their customers do not have to manage. The shop issues one Google Wallet pass
           class; each customer saves one pass against it and carries their balance and tier on their
           phone, with no second app to install.
         </p>
@@ -155,7 +161,7 @@
               </div>
               <div class="pass-tier">Oro</div>
             </div>
-            <div class="pass-balance">1 240 <span>puntos</span></div>
+            <div class="pass-balance">1.240 <span>puntos</span></div>
             <div class="pass-label">Puntos disponibles</div>
             <div class="pass-foot">
               <!-- A placeholder pattern, not a real barcode. The issued pass carries a
@@ -181,14 +187,14 @@
           <h2 data-lang="es">Cómo funciona</h2>
           <ol class="steps">
             <li data-lang="en">
-              <strong>The shop enrols.</strong> Vyloop creates a pass class carrying that shop's own
-              name, logo and programme. Classes are created programmatically, so a new shop is
-              onboarded without an engineering task.
+              <strong>The shop enrolls.</strong> Vyloop creates a pass class carrying that shop's own
+              name, logo and program. Classes are created automatically, so a new shop is onboarded
+              with no custom development.
             </li>
             <li data-lang="es">
               <strong>El comercio se inscribe.</strong> Vyloop crea una clase de pase con el nombre,
-              el logo y el programa del propio comercio. Las clases se crean por código, así que un
-              comercio nuevo no requiere trabajo de ingeniería.
+              el logo y el programa del propio comercio. Las clases se crean de forma automática, así que
+              sumar un comercio nuevo no requiere desarrollo a medida.
             </li>
             <li data-lang="en">
               <strong>The customer signs in.</strong> They use their phone number, in a web app. They
@@ -239,14 +245,26 @@
           <tr>
             <th data-lang="en">Tier</th>
             <th data-lang="es">Nivel</th>
-            <td data-lang="en">A name for a band of the programme, chosen by the shop.</td>
+            <td data-lang="en">A name for a band of the program, chosen by the shop.</td>
             <td data-lang="es">El nombre de una franja del programa, elegido por el comercio.</td>
           </tr>
           <tr>
             <th data-lang="en">Member code and QR</th>
             <th data-lang="es">Código de socio y QR</th>
-            <td data-lang="en">An identifier for the shop's own staff to recognise the customer.</td>
+            <td data-lang="en">An identifier for the shop's own staff to recognize the customer.</td>
             <td data-lang="es">Un identificador para que el personal del comercio reconozca al cliente.</td>
+          </tr>
+          <tr>
+            <th data-lang="en">How points are earned</th>
+            <th data-lang="es">Cómo se ganan los puntos</th>
+            <td data-lang="en">
+              The shop credits points in proportion to the amount a customer spends there, recording
+              the sale at its own till. The pass shows the result; it never takes part in the payment.
+            </td>
+            <td data-lang="es">
+              El comercio abona puntos según el monto que el cliente gasta en el local, registrando la
+              venta en su propia caja. El pase muestra el resultado; nunca participa del pago.
+            </td>
           </tr>
           <tr>
             <th data-lang="en">Not in this pass</th>
@@ -305,10 +323,10 @@
       <h2 data-lang="es">Técnico</h2>
       <ul class="plain">
         <li data-lang="en">
-          Customer app: Next.js, served on Cloudflare Pages, responsive and keyboard accessible.
+          Customer app: Next.js, served on Cloudflare Workers, responsive and keyboard accessible.
         </li>
         <li data-lang="es">
-          Aplicación para clientes: Next.js, servida en Cloudflare Pages, responsive y accesible por
+          Aplicación para clientes: Next.js, servida en Cloudflare Workers, responsive y accesible por
           teclado.
         </li>
         <li data-lang="en">API: Cloudflare Workers, with a Postgres ledger.</li>
@@ -322,16 +340,44 @@
           pase que referencia la clase de su comercio.
         </li>
       </ul>
+
+      <h2 data-lang="en">Company and contact</h2>
+      <h2 data-lang="es">Empresa y contacto</h2>
+      <dl class="company">
+        <dt data-lang="en">Company</dt>
+        <dt data-lang="es">Empresa</dt>
+        <dd>Lawen Tech Solutions SpA</dd>
+        <dt data-lang="en">Tax ID (RUT)</dt>
+        <dt data-lang="es">RUT</dt>
+        <dd>77.936.149-7</dd>
+        <dt data-lang="en">Address</dt>
+        <dt data-lang="es">Dirección</dt>
+        <dd>Providencia 1017, Of. 41, Providencia, Chile</dd>
+        <dt data-lang="en">Email</dt>
+        <dt data-lang="es">Correo</dt>
+        <dd><a href="mailto:cl.jmunoz@gmail.com">cl.jmunoz@gmail.com</a></dd>
+        <dt data-lang="en">Phone</dt>
+        <dt data-lang="es">Teléfono</dt>
+        <dd><a href="tel:+56998307778">+56 9 9830 7778</a></dd>
+      </dl>
+      <p data-lang="en">
+        The <a href="/">Vyloop customer app</a> is where customers sign in. How their data is
+        handled is described in the <a href="/privacy">privacy policy</a>.
+      </p>
+      <p data-lang="es">
+        Los clientes ingresan en la <a href="/">aplicación de clientes de Vyloop</a>. Cómo se tratan
+        sus datos se explica en la <a href="/privacy">política de privacidad</a>.
+      </p>
     </main>
 
     <footer>
       <div class="wrap" data-lang="en">
-        Vyloop — loyalty passes for neighbourhood businesses in Chile.
-        <br />Google Wallet issuer account 3388000000023206930.
+        Vyloop — loyalty passes for neighborhood businesses in Chile. Lawen Tech Solutions SpA.
+        <br />Google Wallet issuer account 3388000000023206930. <a href="/privacy">Privacy policy</a>
       </div>
       <div class="wrap" data-lang="es">
-        Vyloop — pases de lealtad para comercios de barrio en Chile.
-        <br />Cuenta de emisor de Google Wallet 3388000000023206930.
+        Vyloop — pases de lealtad para comercios de barrio en Chile. Lawen Tech Solutions SpA.
+        <br />Cuenta de emisor de Google Wallet 3388000000023206930. <a href="/privacy">Política de privacidad</a>
       </div>
     </footer>
 
