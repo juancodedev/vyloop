@@ -200,8 +200,8 @@ describe('the wallet card tells a returning customer apart from a new one', () =
 
     await screen.findByRole('link', { name: /google wallet/i });
 
-    // "Agregala una vez" is the phrase that lies to a returning customer.
-    expect(document.body.textContent).not.toMatch(/agreg[áa]la una vez/i);
+    // "Agrégala una vez" is the phrase that lies to a returning customer.
+    expect(document.body.textContent).not.toMatch(/agr[eé]g[aá]la una vez/i);
   });
 
   it('says the card is already theirs when the pass exists and was saved', async () => {
@@ -224,7 +224,7 @@ describe('the wallet card tells a returning customer apart from a new one', () =
     await screen.findByRole('link', { name: /google wallet/i });
 
     expect(document.body.textContent).toMatch(/volver a agregar|volver a sumar/i);
-    expect(document.body.textContent).not.toMatch(/agreg[áa]la una vez/i);
+    expect(document.body.textContent).not.toMatch(/agr[eé]g[aá]la una vez/i);
   });
 
   it('still reads as a first add when the customer never saved the pass', async () => {
@@ -237,7 +237,7 @@ describe('the wallet card tells a returning customer apart from a new one', () =
 
     await screen.findByRole('link', { name: /google wallet/i });
 
-    expect(document.body.textContent).toMatch(/agreg[áa]la una vez/i);
+    expect(document.body.textContent).toMatch(/agr[eé]g[aá]la una vez/i);
   });
 
   it('still shows the link either way, because a returning customer may want it', async () => {
@@ -321,7 +321,7 @@ describe('every refusal renders as itself', () => {
 
     const text = (await screen.findByRole('alert').then(() => alertText())).toLowerCase();
 
-    expect(text).not.toMatch(/no (tenés|tienes|hay) (una )?(tarjeta|pase)/);
+    expect(text).not.toMatch(/no (tienes|tienes|hay) (una )?(tarjeta|pase)/);
     expect(text).toMatch(/tu cuenta est[áa] bien/i);
   });
 
@@ -730,7 +730,7 @@ describe('the card offers a way to write on a refusal', () => {
   });
 
   it('keeps the remedy note beside it, because that advice still holds', async () => {
-    // "Contale al comercio" is what `lib/wallet.ts` decided for these codes and it
+    // "Cuéntale al comercio" is what `lib/wallet.ts` decided for these codes and it
     // is correct whether or not the channel is deployed — it is the one route to a
     // human that needs no infrastructure. The form is an addition, not a
     // replacement, and losing the note would be a regression.
@@ -740,6 +740,6 @@ describe('the card offers a way to write on a refusal', () => {
 
     await screen.findByRole('alert');
 
-    expect(screen.getByText(/contale al comercio/i)).toBeTruthy();
+    expect(screen.getByText(/cuéntale al comercio/i)).toBeTruthy();
   });
 });

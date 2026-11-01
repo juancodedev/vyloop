@@ -59,7 +59,7 @@ function HomeEntry() {
             <span>Tu local de siempre,</span> <span>con un motivo para volver.</span>
           </h1>
           <p className="club-entry__summary">
-            Acumulá progreso, revisá las recompensas de tu programa y volvé a tu local de siempre.
+            Acumula progreso, revisa las recompensas de tu programa y vuelve a tu local de siempre.
           </p>
 
           <nav className="club-entry__actions" aria-label="Acciones para entrar al club">

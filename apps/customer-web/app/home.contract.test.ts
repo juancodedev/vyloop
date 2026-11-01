@@ -29,10 +29,10 @@ describe('Stage 1 club-barrio entry contract', () => {
   it('exposes only the two entry actions and a textual QR flow', () => {
     expect(page).toMatch(/>Ingresar</);
     expect(page).toMatch(/>\s*Registrarme\s*</);
-    expect(explainer).toMatch(/Escaneá el QR/);
-    expect(explainer).toMatch(/Creá tu cuenta/);
-    expect(explainer).toMatch(/Mostrá tu código/);
-    expect(explainer).toMatch(/No necesitás descargar una aplicación para empezar/);
+    expect(explainer).toMatch(/Escanea el QR/);
+    expect(explainer).toMatch(/Crea tu cuenta/);
+    expect(explainer).toMatch(/Muestra tu código/);
+    expect(explainer).toMatch(/No necesitas descargar una aplicación para empezar/);
     expect(page).not.toMatch(/<svg/);
     expect(explainer).not.toMatch(/<svg/);
   });

@@ -74,7 +74,7 @@ describe('Stage 4 club-barrio pass contract', () => {
     // file: the page renders the card, and it carries **no wallet copy of its
     // own**. Every refusal message lives in `lib/wallet.ts`, which is where
     // `delivery.contract.test.ts` asserts it stays. A branch invented inline here
-    // is exactly how a 409 would end up rendered as "no tenés tarjeta".
+    // is exactly how a 409 would end up rendered as "no tienes tarjeta".
     expect(page).toMatch(/<WalletCard\b/);
 
     // No code and no refusal prose: this page delegates the wording.

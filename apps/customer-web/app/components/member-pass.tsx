@@ -6,7 +6,7 @@ import { TierLadder } from './tier-ladder';
 
 const SETUP_TITLE = 'Tu programa se está configurando';
 const SETUP_DESCRIPTION =
-  'Este local todavía no tiene un programa de puntos activo. En cuanto lo tenga, vas a ver acá tu nivel y cuánto te falta para el siguiente.';
+  'Este local todavía no tiene un programa de puntos activo. En cuanto lo tenga, vas a ver aquí tu nivel y cuánto te falta para el siguiente.';
 
 function formatPoints(value: number): string {
   return value.toLocaleString('es-CL');

@@ -166,7 +166,7 @@ describe('recent purchase rows', () => {
   it('says there are no movements yet when the list is empty', () => {
     render(<PurchaseTimeline profile={makeProfile()} />);
 
-    expect(screen.getByText('Todavía no hay movimientos. Cuando sumes en el local, aparecen acá.')).toBeTruthy();
+    expect(screen.getByText('Todavía no hay movimientos. Cuando sumes en el local, aparecen aquí.')).toBeTruthy();
   });
 });
 

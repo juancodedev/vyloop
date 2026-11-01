@@ -137,7 +137,7 @@ export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & {
       >
         <span className="club-qr-sheet__grip" aria-hidden="true" />
         <h2 ref={headingRef} className="club-qr-sheet__title" id="club-qr-sheet-title" tabIndex={-1}>
-          Mostrale esto en caja
+          Muéstrale esto en caja
         </h2>
 
         <MemberQrCode globalId={globalId} fullName={fullName} showIdOnFailure={!code} />
@@ -145,10 +145,10 @@ export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & {
         {code ? (
           <>
             <p className="club-qr-sheet__code">{code}</p>
-            <p className="club-qr-sheet__note">Si no pueden escanear, dictá el código.</p>
+            <p className="club-qr-sheet__note">Si no pueden escanear, dicta el código.</p>
           </>
         ) : (
-          <p className="club-qr-sheet__note">Tu código aparece cuando agregás la tarjeta a Wallet</p>
+          <p className="club-qr-sheet__note">Tu código aparece cuando agregas la tarjeta a Wallet</p>
         )}
 
         <button type="button" className="club-qr-sheet__close" onClick={onClose}>

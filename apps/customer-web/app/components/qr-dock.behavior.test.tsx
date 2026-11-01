@@ -19,7 +19,7 @@ vi.mock('qrcode', () => ({
 }));
 
 const GLOBAL_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
-const NOT_MINTED_COPY = 'Tu código aparece cuando agregás la tarjeta a Wallet';
+const NOT_MINTED_COPY = 'Tu código aparece cuando agregas la tarjeta a Wallet';
 
 type WakeLockStub = { request: ReturnType<typeof vi.fn> } | undefined;
 
@@ -73,7 +73,7 @@ describe('the QR sheet', () => {
     const dialog = await openSheet();
 
     expect(dialog.getAttribute('aria-modal')).toBe('true');
-    const heading = screen.getByRole('heading', { name: 'Mostrale esto en caja' });
+    const heading = screen.getByRole('heading', { name: 'Muéstrale esto en caja' });
     expect(document.activeElement).toBe(heading);
   });
 
@@ -158,7 +158,7 @@ describe('the QR sheet', () => {
     fireEvent.keyDown(retry, { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(done);
 
-    screen.getByRole('heading', { name: 'Mostrale esto en caja' }).focus();
+    screen.getByRole('heading', { name: 'Muéstrale esto en caja' }).focus();
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(done);
   });

@@ -63,7 +63,7 @@ function ConfirmContent() {
           customer web is careful not to make.
         */}
         <p className="club-confirm__message">
-          Te has registrado correctamente. Ingresá con tu teléfono para ver tu pase.
+          Te registraste correctamente. Ingresa con tu teléfono para ver tu pase.
         </p>
 
         <Link href="/" className="btn btn--primary club-confirm__action">

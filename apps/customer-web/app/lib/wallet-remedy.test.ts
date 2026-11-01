@@ -123,7 +123,7 @@ const CLASSIFIED: ReadonlyArray<{
     why:
       'Either `WALLET_ALLOWED_ORIGINS` is empty (routes.ts:524) or the member code could not be ' +
       "derived (routes.ts:906). The worker's own comment on the constant says this deployment is " +
-      "broken and no pass will ever work — so the previous 'reintentá más tarde' was false.",
+      "broken and no pass will ever work — so the previous 'reintenta más tarde' was false.",
   },
   {
     code: 'WALLET_DEMO_MODE',
@@ -267,7 +267,7 @@ describe('the copy and the retry verdict never disagree', () => {
  * The fallback cannot know, and must stop saying that it does.
  *
  * One constant used to answer every unrecognised code, and it promised
- * "podés reintentar en un momento" for all of them. A 500 of network is
+ * "puedes reintentar en un momento" for all of them. A 500 of network is
  * transient; a 500 of a bug here is not and will be produced forever. The
  * constant could not tell those apart, so it promised the transient case on
  * behalf of the permanent one.

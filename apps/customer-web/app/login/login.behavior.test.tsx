@@ -68,7 +68,7 @@ describe('login page behavior', () => {
 
     await submitForm();
 
-    expect(await screen.findByText('Ingresá tu número de teléfono.')).toBeTruthy();
+    expect(await screen.findByText('Ingresa tu número de teléfono.')).toBeTruthy();
     expect(document.activeElement).toBe(getPhoneInput());
     expect(mocks.login).not.toHaveBeenCalled();
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(0);
@@ -79,18 +79,18 @@ describe('login page behavior', () => {
 
     await submitForm();
 
-    expect(await screen.findByText('Ingresá tu número de teléfono.')).toBeTruthy();
+    expect(await screen.findByText('Ingresa tu número de teléfono.')).toBeTruthy();
     expect(mocks.login).not.toHaveBeenCalled();
   });
 
   it('clears the inline field error as soon as the user types again', async () => {
     typePhone('   ');
     await submitForm();
-    expect(await screen.findByText('Ingresá tu número de teléfono.')).toBeTruthy();
+    expect(await screen.findByText('Ingresa tu número de teléfono.')).toBeTruthy();
 
     typePhone('+56912345678');
 
-    expect(screen.queryByText('Ingresá tu número de teléfono.')).toBeNull();
+    expect(screen.queryByText('Ingresa tu número de teléfono.')).toBeNull();
   });
 
   it('normalizes every accepted phone shape to the same +56 value', async () => {
@@ -164,7 +164,7 @@ describe('login page behavior', () => {
   });
 
   it('keeps the biz parameter on the register and back links', () => {
-    expect(screen.getByRole('link', { name: 'Registrate aquí' }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: 'Regístrate aquí' }).getAttribute('href')).toBe(
       '/register?biz=barber',
     );
     expect(screen.getByRole('link', { name: /Volver al inicio/ }).getAttribute('href')).toBe(
@@ -177,7 +177,7 @@ describe('login page behavior', () => {
     mocks.businessSlug = null;
     renderPage();
 
-expect(screen.getByRole('link', { name: 'Registrate aquí' }).getAttribute('href')).toBe(
+expect(screen.getByRole('link', { name: 'Regístrate aquí' }).getAttribute('href')).toBe(
       '/register',
     );
     // Two links back to the home page now exist — the shell's and the one inside the
@@ -229,7 +229,7 @@ expect(screen.getByRole('link', { name: 'Registrate aquí' }).getAttribute('href
     await submitForm();
 
     expect(
-      await screen.findByText(/No pudimos completar el ingreso\. Revisá los datos/),
+      await screen.findByText(/No pudimos completar el ingreso\. Revisa los datos/),
     ).toBeTruthy();
     expect(screen.getByText('Algo salió mal al ingresar.')).toBeTruthy();
     expect(screen.queryByText(NOT_REGISTERED)).toBeNull();

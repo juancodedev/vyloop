@@ -121,6 +121,6 @@ describe('Stage 2 club-barrio registration contract', () => {
     expect(page).toMatch(/Failed to fetch|failed to fetch|networkerror|load failed/);
     expect(page).toMatch(/gateway local/);
     expect(page).toMatch(/Tu cuenta fue creada/);
-    expect(page).toMatch(/Ingresá con tu teléfono para continuar/);
+    expect(page).toMatch(/Ingresa con tu teléfono para continuar/);
   });
 });

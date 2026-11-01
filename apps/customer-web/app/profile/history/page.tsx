@@ -13,7 +13,7 @@ import { useAuth } from '../../lib/auth';
 
 const ERROR_TITLE = 'No pudimos cargar tu historial';
 const ERROR_DESCRIPTION =
-  'Hubo un problema al traer tus movimientos. Podés reintentar; no modificamos nada en tu cuenta.';
+  'Hubo un problema al traer tus movimientos. Puedes reintentar; no modificamos nada en tu cuenta.';
 
 const HISTORY_LABEL = 'Tus movimientos de puntos';
 
@@ -26,8 +26,8 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 const EMPTY_COPY: Record<Filter, string> = {
-  all: 'Todavía no tenés movimientos. Cuando acumules o canjees puntos, los vas a ver acá.',
-  earn: 'Todavía no tené movimientos de puntos ganados.',
+  all: 'Todavía no tienes movimientos. Cuando acumules o canjees puntos, los vas a ver aquí.',
+  earn: 'Todavía no tienes movimientos de puntos ganados.',
   redeem: 'Todavía no canjeaste ninguna recompensa.',
 };
 

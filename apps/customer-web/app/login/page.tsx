@@ -11,8 +11,8 @@ import { useAuth, type LoginFailureReason } from '../lib/auth';
 
 const LOGIN_FAILURE_MESSAGES: Record<LoginFailureReason, string> = {
   not_registered: 'Número no registrado. ¿Ya te registraste?',
-  unavailable: 'No pudimos conectar con el servidor. Revisá tu conexión e intentá de nuevo.',
-  unknown: 'No pudimos completar el ingreso. Revisá los datos e intentá de nuevo.',
+  unavailable: 'No pudimos conectar con el servidor. Revisa tu conexión e intenta de nuevo.',
+  unknown: 'No pudimos completar el ingreso. Revisa los datos e intenta de nuevo.',
 };
 
 const LOGIN_FAILURE_TITLES: Record<LoginFailureReason, string> = {
@@ -98,7 +98,7 @@ function LoginContent() {
 
     const fullPhone = parsePhone(phone);
     if (!fullPhone) {
-      setPhoneError('Ingresá tu número de teléfono.');
+      setPhoneError('Ingresa tu número de teléfono.');
       shouldFocusPhone.current = true;
       return;
     }
@@ -131,10 +131,10 @@ function LoginContent() {
         <div className="club-login__intro">
           <p className="club-login__eyebrow">Club del barrio</p>
           <h1 id="club-login-title" className="club-login__title">
-            Ingresá
+            Ingresa
           </h1>
           <p className="club-login__summary">
-            Con el teléfono con el que te registraste entrás directo a tu club.
+            Con el teléfono con el que te registraste entras directo a tu club.
           </p>
         </div>
 
@@ -166,7 +166,7 @@ function LoginContent() {
         {!businessSlug ? (
           <div className="club-login__status club-login__status--error" role="alert" aria-atomic="true">
             <strong>Falta el contexto del comercio.</strong>
-            <p>Volvé al inicio y abrí el enlace o el código QR del club al que pertenecés.</p>
+            <p>Vuelve al inicio y abre el enlace o el código QR del club al que perteneces.</p>
             <Link className="btn btn--outline club-login__status-action" href="/">
               Volver al inicio
             </Link>
@@ -223,7 +223,7 @@ function LoginContent() {
             onChange={updatePhone}
             autoComplete="tel"
             className="input--phone"
-            helperText="Incluí el código de país. Por ejemplo, +56 9 1234 5678."
+            helperText="Incluye el código de país. Por ejemplo, +56 9 1234 5678."
             error={phoneError ?? undefined}
             required
             inputRef={phoneRef}
@@ -241,7 +241,7 @@ function LoginContent() {
 
         <p className="club-login__switch">
           ¿Nuevo en este club?{' '}
-          <Link href={registerHref}>Registrate aquí</Link>
+          <Link href={registerHref}>Regístrate aquí</Link>
         </p>
       </section>
     </ClubShell>

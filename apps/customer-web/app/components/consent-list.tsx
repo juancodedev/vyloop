@@ -6,7 +6,7 @@ const consentOptions = [
   {
     name: 'promotions',
     label: 'Promociones y novedades',
-    description: 'Ofertas y novedades que el commerce quiera compartirte.',
+    description: 'Ofertas y novedades que el comercio quiera compartirte.',
   },
   {
     name: 'nearby_notifications',
@@ -15,7 +15,7 @@ const consentOptions = [
     // says a reward can be redeemed somewhere, so the copy has to say so. A
     // consent that only mentions proximity does not cover the reward message.
     description:
-      'Información sobre lugares y momentos cercanos, y avisos cuando tenés una recompensa para canjear.',
+      'Información sobre lugares y momentos cercanos, y avisos cuando tienes una recompensa para canjear.',
   },
 ] as const;
 

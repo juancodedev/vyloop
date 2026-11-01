@@ -81,7 +81,7 @@ describe('deleting the account', () => {
     confirm();
 
     await waitFor(() =>
-      expect(screen.getByText('Para eliminar tu cuenta, cerrá sesión y volvé a entrar.')).toBeTruthy(),
+      expect(screen.getByText('Para eliminar tu cuenta, cierra sesión y vuelve a entrar.')).toBeTruthy(),
     );
     expect(onDeleted).not.toHaveBeenCalled();
   });
@@ -94,7 +94,7 @@ describe('deleting the account', () => {
     confirm();
 
     await waitFor(() =>
-      expect(screen.getByText('No pudimos eliminar tu cuenta. Intentá de nuevo.')).toBeTruthy(),
+      expect(screen.getByText('No pudimos eliminar tu cuenta. Intenta de nuevo.')).toBeTruthy(),
     );
     expect(onDeleted).not.toHaveBeenCalled();
   });

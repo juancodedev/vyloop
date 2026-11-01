@@ -87,7 +87,7 @@ export function PurchaseTimeline({ profile }: { profile: CustomerProfile }) {
       </h2>
       {items.length === 0 ? (
         <p className="club-purchase-timeline__empty">
-          Todavía no hay movimientos. Cuando sumes en el local, aparecen acá.
+          Todavía no hay movimientos. Cuando sumes en el local, aparecen aquí.
         </p>
       ) : (
         <ul className="club-purchase-timeline__list">
