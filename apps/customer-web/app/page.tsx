@@ -11,13 +11,16 @@ import { ClubLoading } from './components/club-status';
 import { useAuth } from './lib/auth';
 import { resolveBusinessSlug } from './lib/business-context';
 
-function EntryLoading() {
+/**
+ * Holds the place of the two buttons while the session and the link are read.
+ * Only the actions wait: the copy and the steps below never depend on either,
+ * so they are in the prerendered HTML instead of a full-screen "Cargando…".
+ */
+function ActionsLoading() {
   return (
-    <ClubShell className="club-entry-shell">
-      <div className="club-entry-loading">
-        <ClubLoading />
-      </div>
-    </ClubShell>
+    <div className="club-entry__actions">
+      <ClubLoading />
+    </div>
   );
 }
 
@@ -29,7 +32,7 @@ function buildBusinessHref(pathname: string, businessSlug: string | null) {
   return `${pathname}?${searchParams.toString()}`;
 }
 
-function HomeEntry() {
+function EntryActions() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { customer, isLoading } = useAuth();
@@ -48,44 +51,46 @@ function HomeEntry() {
     }
   }, [isLoading, customer, router]);
 
-  if (isLoading) return <EntryLoading />;
+  if (isLoading) return <ActionsLoading />;
   if (customer) return null;
 
   return (
-    <ClubShell className="club-entry-shell">
-      <div className="club-entry">
-        <section className="club-entry__copy" aria-labelledby="club-entry-title">
-          <p className="club-entry__eyebrow">Fidelización sin instalar nada</p>
-          <h1 id="club-entry-title" className="club-entry__title">
-            <span>Tu local de siempre,</span> <span>con un motivo para volver.</span>
-          </h1>
-          <p className="club-entry__summary">
-            Acumula progreso, revisa las recompensas de tu programa y vuelve a tu local de siempre.
-          </p>
-
-          <nav className="club-entry__actions" aria-label="Acciones para entrar al club">
-            <Link href={loginHref} className="btn btn--primary club-entry__action">
-              <span>Ingresar</span>
-              <ArrowRight className="club-entry__action-arrow" size={18} aria-hidden="true" />
-            </Link>
-            {canRegister ? (
-              <Link href={registerHref} className="btn btn--outline club-entry__action">
-                Registrarme
-              </Link>
-            ) : null}
-          </nav>
-        </section>
-
-        <ClubQrExplainer />
-      </div>
-    </ClubShell>
+    <nav className="club-entry__actions" aria-label="Acciones para entrar al club">
+      <Link href={loginHref} className="btn btn--primary club-entry__action">
+        <span>Ingresar</span>
+        <ArrowRight className="club-entry__action-arrow" size={18} aria-hidden="true" />
+      </Link>
+      {canRegister ? (
+        <Link href={registerHref} className="btn btn--outline club-entry__action">
+          Registrarme
+        </Link>
+      ) : null}
+    </nav>
   );
 }
 
 export default function Home() {
   return (
-    <Suspense fallback={<EntryLoading />}>
-      <HomeEntry />
-    </Suspense>
+    <ClubShell className="club-entry-shell">
+      <div className="club-entry">
+        <section className="club-entry__copy" aria-labelledby="club-entry-title">
+          <p className="club-entry__eyebrow">El programa de puntos de tu local</p>
+          <h1 id="club-entry-title" className="club-entry__title">
+            <span>Tu local de siempre,</span> <span>con un motivo para volver.</span>
+          </h1>
+          {/* Matches /program: the shop credits points in proportion to the amount spent. */}
+          <p className="club-entry__summary">
+            Tu local te abona puntos según el monto de tus compras. Cámbialos por las recompensas
+            de su programa y revisa tu saldo desde el teléfono.
+          </p>
+
+          <Suspense fallback={<ActionsLoading />}>
+            <EntryActions />
+          </Suspense>
+        </section>
+
+        <ClubQrExplainer />
+      </div>
+    </ClubShell>
   );
 }

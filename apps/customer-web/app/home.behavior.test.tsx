@@ -5,6 +5,7 @@ import HomePage from './page';
 
 const mocks = vi.hoisted(() => ({
   businessSlug: null as string | null,
+  isLoading: false,
   replace: vi.fn(),
 }));
 
@@ -18,7 +19,7 @@ vi.mock('next/navigation', () => ({
 // What matters here is which entry actions the page offers, not the redirect
 // that a signed-in visitor would get.
 vi.mock('./lib/auth', () => ({
-  useAuth: () => ({ customer: null, isLoading: false }),
+  useAuth: () => ({ customer: null, isLoading: mocks.isLoading }),
 }));
 
 function renderEntry() {
@@ -28,12 +29,27 @@ function renderEntry() {
 describe('entry actions', () => {
   beforeEach(() => {
     mocks.businessSlug = null;
+    mocks.isLoading = false;
     mocks.replace.mockReset();
     localStorage.clear();
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it('says what the customer gets before the session has loaded', () => {
+    // The page used to be a full-screen "Cargando…" until the session check
+    // finished, and the prerendered HTML held nothing else.
+    mocks.isLoading = true;
+    renderEntry();
+
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toMatch(/local de siempre/);
+    expect(document.body.textContent).toMatch(/puntos según el monto de tus compras/);
+    expect(document.body.textContent).toMatch(/recompensas/);
+    expect(screen.getByRole('list')).toBeTruthy();
+    // Only the actions wait, because they depend on the session.
+    expect(screen.queryByRole('link', { name: /Ingresar/ })).toBeNull();
   });
 
   it('always offers login, which works without a business context', () => {

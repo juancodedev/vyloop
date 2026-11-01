@@ -18,8 +18,17 @@ describe('Stage 1 club-barrio entry contract', () => {
     expect(page).not.toMatch(/from ['"]\.\/lib\/api['"]/);
   });
 
-  it('preserves business navigation context behind a Suspense boundary', () => {
-    expect(page).toMatch(/<Suspense fallback=\{<EntryLoading \/>\}>/);
+  it('keeps only the actions behind the Suspense boundary, so the HTML carries the copy', () => {
+    // `useSearchParams` makes Next render the Suspense fallback into the static
+    // HTML. When the whole page sat inside it, the prerendered page was only
+    // "Cargando…".
+    expect(page).toMatch(/<Suspense fallback=\{<ActionsLoading \/>\}>\s*<EntryActions \/>\s*<\/Suspense>/);
+    const home = page.slice(page.indexOf('export default function Home'));
+    expect(home).toMatch(/<h1 id="club-entry-title"/);
+    expect(home).toMatch(/<ClubQrExplainer \/>/);
+  });
+
+  it('preserves business navigation context', () => {
     expect(page).toMatch(/useSearchParams\(\)/);
     expect(page).toMatch(/searchParams\.set\('biz', businessSlug\)/);
     expect(page).toMatch(/href=\{loginHref\}/);

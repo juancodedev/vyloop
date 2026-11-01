@@ -1148,12 +1148,6 @@ a {
   text-wrap: pretty;
 }
 
-.club-entry-loading {
-  display: grid;
-  min-height: calc(100dvh - var(--space-8));
-  place-items: center;
-}
-
 @media (max-width: 47.99rem) {
   .club-entry__actions {
     flex-direction: column;
