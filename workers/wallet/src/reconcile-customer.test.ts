@@ -13,7 +13,7 @@
 
 vi.mock('./drizzle-store', async (importOriginal) => {
   const original = await importOriginal<typeof import('./drizzle-store')>();
-  return { ...original, createDrizzleWalletStore: vi.fn(), openTenantSession: vi.fn() };
+  return { ...original, createDrizzleWalletStore: vi.fn(), openTenantWalletStore: vi.fn() };
 });
 
 // The real helpers, with the one function that can reach the network replaced.
@@ -28,7 +28,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
 import { BALANCE_DISPLAY_MAX } from './balance';
-import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import { createDrizzleWalletStore, openTenantWalletStore } from './drizzle-store';
 import type { GoogleWalletClient } from './google-client';
 import { googleWalletClientFor } from './helpers';
 import { DEMO_MODE_NAME_PREFIX, classIdFor } from './ids';
@@ -223,7 +223,7 @@ function install(
   input: { tenantId?: string; customerId?: string } = {},
 ) {
   vi.mocked(createDrizzleWalletStore).mockReturnValue(store.store);
-  vi.mocked(openTenantSession).mockResolvedValue({} as never);
+  vi.mocked(openTenantWalletStore).mockReturnValue(store.store);
   vi.mocked(googleWalletClientFor).mockReturnValue(client);
 
   return reconcileCustomer(
@@ -274,7 +274,7 @@ describe('reconcileCustomer: it is the push trigger, and it delegates', () => {
 
     await install(store, client);
 
-    expect(openTenantSession).toHaveBeenCalledWith('postgres://mock', TENANT);
+    expect(openTenantWalletStore).toHaveBeenCalledWith('postgres://mock', TENANT);
     expect(store.findProgram).toHaveBeenCalledWith(TENANT);
   });
 

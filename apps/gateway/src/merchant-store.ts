@@ -27,7 +27,7 @@
  * enabled a read with no `app.current_business_id` set returns **no rows at
  * all** — silently, which is the failure mode that turns into "the page is
  * empty" and gets blamed on the merchant. So the tenant is resolved first, and
- * `setCurrentBusinessId` is issued with the id that lookup returned *before* the
+ * `withTenantTransaction` sets the id that lookup returned *before* the
  * program row is read.
  *
  * The ordering is load-bearing and not an optimisation: resolving the tenant is
@@ -43,7 +43,7 @@
  * which trusts the caller's value for anything but the lookup itself.
  */
 
-import { createDb, loyaltyPrograms, setCurrentBusinessId, tenants } from '@vyloop/db';
+import { createDb, loyaltyPrograms, tenants, withTenantTransaction } from '@vyloop/db';
 import { eq } from 'drizzle-orm';
 
 import type { MerchantPageData, MerchantPageReader } from './merchant-page';
@@ -75,22 +75,23 @@ export function createMerchantPageReader(env: MerchantPageDbEnv): MerchantPageRe
 
       if (tenant === undefined) return null;
 
-      // Step two: arm the RLS session variable with the tenant we just resolved.
-      // Before the program read, always — the alternative is a query that returns
-      // zero rows with no error once the policy is live.
-      await db.execute(setCurrentBusinessId(tenant.id));
-
-      const [program] = await db
-        .select({
-          name: loyaltyPrograms.name,
-          promoCopy: loyaltyPrograms.promoCopy,
-          pointsCurrency: loyaltyPrograms.pointsCurrency,
-          earnRate: loyaltyPrograms.earnRate,
-          minRedeemPoints: loyaltyPrograms.minRedeemPoints,
-        })
-        .from(loyaltyPrograms)
-        .where(eq(loyaltyPrograms.businessId, tenant.id))
-        .limit(1);
+      // Step two: the program, read in a transaction scoped to the tenant we just
+      // resolved. The setting comes first, always — the alternative is a query
+      // that returns zero rows with no error once the policy is live — and on the
+      // same transaction, because it lasts only for the transaction it runs in.
+      const [program] = await withTenantTransaction(db, { businessId: tenant.id }, (tx) =>
+        tx
+          .select({
+            name: loyaltyPrograms.name,
+            promoCopy: loyaltyPrograms.promoCopy,
+            pointsCurrency: loyaltyPrograms.pointsCurrency,
+            earnRate: loyaltyPrograms.earnRate,
+            minRedeemPoints: loyaltyPrograms.minRedeemPoints,
+          })
+          .from(loyaltyPrograms)
+          .where(eq(loyaltyPrograms.businessId, tenant.id))
+          .limit(1),
+      );
 
       // Every optional field is normalised to `null` rather than passed through,
       // matching `findPromoCopy` and `findProgramName` in the wallet store: the

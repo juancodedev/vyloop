@@ -13,7 +13,7 @@
 
 vi.mock('./drizzle-store', async (importOriginal) => {
   const original = await importOriginal<typeof import('./drizzle-store')>();
-  return { ...original, createDrizzleWalletStore: vi.fn(), openTenantSession: vi.fn() };
+  return { ...original, createDrizzleWalletStore: vi.fn(), openTenantWalletStore: vi.fn() };
 });
 
 vi.mock('./helpers', async (importOriginal) => {
@@ -24,7 +24,7 @@ vi.mock('./helpers', async (importOriginal) => {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
-import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import { createDrizzleWalletStore, openTenantWalletStore } from './drizzle-store';
 import { GoogleWalletApiError } from './google-client';
 import type { GoogleWalletClient } from './google-client';
 import { googleWalletClientFor } from './helpers';
@@ -200,7 +200,7 @@ function fakeClient(options: { failWith?: Error } = {}): FakeClient {
 
 function install(store: FakeStore, client: FakeClient) {
   vi.mocked(createDrizzleWalletStore).mockReturnValue(store.store);
-  vi.mocked(openTenantSession).mockResolvedValue({} as never);
+  vi.mocked(openTenantWalletStore).mockReturnValue(store.store);
   vi.mocked(googleWalletClientFor).mockReturnValue(client);
 
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -239,7 +239,7 @@ describe('expireCustomerPass', () => {
     });
     expect(store.row()).toMatchObject({ state: 'expired', lastSyncedAt: NOW });
     // The tenant session is opened for the caller's tenant, like every other RPC.
-    expect(openTenantSession).toHaveBeenCalledWith('postgres://mock', TENANT);
+    expect(openTenantWalletStore).toHaveBeenCalledWith('postgres://mock', TENANT);
   });
 
   it('asks Google nothing and records nothing when the customer has no pass row', async () => {

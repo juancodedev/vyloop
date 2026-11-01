@@ -39,16 +39,16 @@ Chain strategy: stacked-to-main
 
 ## Unit 2: Phase 0 — move the worker call sites
 
-- [ ] 2.1 `workers/growth/src/routes.ts` and `workers/growth/src/event-handler.ts` — replace each `await withRls(db, businessId)` + following queries with `withTenantTransaction(db, { businessId }, async (tx) => ...)`; remove `withRls` from `workers/growth/src/helpers.ts`.
-- [ ] 2.2 `workers/customer/src/*.ts` — the customer worker defines `withRls` (`helpers.ts:138`) and never calls it, so its routes set no tenant context at all; wrap every tenant-table query in `withTenantTransaction` and delete the unused helper.
-- [ ] 2.3 `workers/communication/src/` (`routes.ts`, `campaign-routes.ts`, `push-routes.ts`, `push-campaigns.ts`, `push-delivery.ts`, `delivery-stats.ts`, `event-handler.ts`) — same, and remove `withRls` from `workers/communication/src/helpers.ts`.
-- [ ] 2.4 `workers/automation/src/event-handler.ts` (lines 138, 288, 424) — same, and remove `withRls` from `workers/automation/src/helpers.ts` (the cron handlers move in Unit 3).
-- [ ] 2.5 `workers/wallet/src/drizzle-store.ts` — replace `openTenantSession` (lines 105-110) with a store whose methods run inside `withTenantTransaction(db, { businessId: tenantId, tenantId }, ...)`; update its callers (9 today; recount if `wallet-pass-correctness` landed first, which adds the operator pass routes).
-- [ ] 2.6 `workers/identity/src/branches.ts` and `business-signup.ts` — switch the existing correct `db.transaction` + `setCurrentBusinessId` blocks to the helper, so there is one pattern.
-- [ ] 2.7 A contract test (e.g. `packages/db/src/rls-call-sites.contract.test.ts`) that reads every `workers/*/src/**/*.ts` and `apps/gateway/src/**/*.ts` (excluding tests) and fails on `withRls(`, `openTenantSession(`, or `setCurrentBusinessId(`/`setCurrentTenantId(` outside `packages/db/src/rls.ts`.
-- [ ] 2.8 Update each touched worker's existing route tests so the mocked `db` exposes `transaction` and assertions run against the transaction handle.
-- [ ] 2.9 `workers/analytics/src/index.ts:68,134` — replace the inline `setCurrentBusinessId` and the queries it scopes with `withTenantTransaction(db, { businessId }, ...)`; add a test that the queries run on the transaction handle.
-- [ ] 2.10 `apps/gateway/src/merchant-store.ts:81` — same for the `/p/{slug}` lookup; record in `docs/09` §4 that the gateway moves to `vyloop_app` with the workers (it consumes the same secret) or that it keeps a separate owner credential, which is the alternative phase 1 MUST resolve.
+- [x] 2.1 `workers/growth/src/routes.ts` and `workers/growth/src/event-handler.ts` — replace each `await withRls(db, businessId)` + following queries with `withTenantTransaction(db, { businessId }, async (tx) => ...)`; remove `withRls` from `workers/growth/src/helpers.ts`.
+- [x] 2.2 `workers/customer/src/*.ts` — the customer worker defines `withRls` (`helpers.ts:138`) and never calls it, so its routes set no tenant context at all; wrap every tenant-table query in `withTenantTransaction` and delete the unused helper.
+- [x] 2.3 `workers/communication/src/` (`routes.ts`, `campaign-routes.ts`, `push-routes.ts`, `push-campaigns.ts`, `push-delivery.ts`, `delivery-stats.ts`, `event-handler.ts`) — same, and remove `withRls` from `workers/communication/src/helpers.ts`.
+- [x] 2.4 `workers/automation/src/event-handler.ts` (lines 138, 288, 424) — same, and remove `withRls` from `workers/automation/src/helpers.ts` (the cron handlers move in Unit 3).
+- [x] 2.5 `workers/wallet/src/drizzle-store.ts` — replace `openTenantSession` (lines 105-110) with a store whose methods run inside `withTenantTransaction(db, { businessId: tenantId, tenantId }, ...)`; update its callers (9 today; recount if `wallet-pass-correctness` landed first, which adds the operator pass routes).
+- [x] 2.6 `workers/identity/src/branches.ts` and `business-signup.ts` — switch the existing correct `db.transaction` + `setCurrentBusinessId` blocks to the helper, so there is one pattern.
+- [x] 2.7 A contract test (e.g. `packages/db/src/rls-call-sites.contract.test.ts`) that reads every `workers/*/src/**/*.ts` and `apps/gateway/src/**/*.ts` (excluding tests) and fails on `withRls(`, `openTenantSession(`, or `setCurrentBusinessId(`/`setCurrentTenantId(` outside `packages/db/src/rls.ts`.
+- [x] 2.8 Update each touched worker's existing route tests so the mocked `db` exposes `transaction` and assertions run against the transaction handle.
+- [x] 2.9 `workers/analytics/src/index.ts:68,134` — replace the inline `setCurrentBusinessId` and the queries it scopes with `withTenantTransaction(db, { businessId }, ...)`; add a test that the queries run on the transaction handle.
+- [x] 2.10 `apps/gateway/src/merchant-store.ts:81` — same for the `/p/{slug}` lookup; record in `docs/09` §4 that the gateway moves to `vyloop_app` with the workers (it consumes the same secret) or that it keeps a separate owner credential, which is the alternative phase 1 MUST resolve.
 
 ## Unit 3: Phase 0 — cross-tenant jobs
 

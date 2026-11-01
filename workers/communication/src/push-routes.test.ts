@@ -34,9 +34,12 @@ const dbMock: any = {
   transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbMock)),
 };
 
-vi.mock('@vyloop/db', () => ({
+vi.mock('@vyloop/db', async () => ({
   createDb: vi.fn(() => dbMock),
   setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+  // The real helper, so the test sees the `set_config` it really issues.
+  withTenantTransaction: (await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db'))
+    .withTenantTransaction,
   customers: { id: 'id', businessId: 'business_id', globalId: 'global_id' },
   // The consent store and the subscription store are the authoritative
   // records, so the mock is what decides whether a browser may be registered

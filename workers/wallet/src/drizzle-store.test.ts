@@ -78,21 +78,24 @@ vi.mock('@vyloop/db', async () => {
       balanceAfter: integer('balance_after').notNull(),
       createdAt: timestamp('created_at').notNull(),
     }),
-    // Real statement builders, not `vi.fn()`. `openTenantSession` hands whatever
-    // these return straight to `db.execute`, and a mock returning `undefined`
-    // would make the assertion about *which* statement ran vacuous.
+    // Real statement builders, not `vi.fn()`. `withTenantTransaction` hands
+    // whatever these return straight to `tx.execute`, and a mock returning
+    // `undefined` would make the assertion about *which* statement ran vacuous.
     setCurrentBusinessId: (id: string) =>
       sql`SELECT set_config('app.current_business_id', ${id}, true);`,
     setCurrentTenantId: (id: string) =>
       sql`SELECT set_config('app.current_tenant_id', ${id}, true);`,
+    // The real helper, not a stand-in: what is under test is that the store
+    // routes its queries through it, so a fake helper would only test the fake.
+    withTenantTransaction: (await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db'))
+      .withTenantTransaction,
   };
 });
 
-import { createDb } from '@vyloop/db';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import { createDrizzleWalletStore, createTenantWalletStore } from './drizzle-store';
 import type { ProgramInsert } from './store';
 
 const TENANT = '90d5ad58-bc5c-46a3-b82a-9cebb47e00b1';
@@ -645,58 +648,108 @@ describe('recordPass', () => {
 // Session context
 // ============================================================================
 
-describe('openTenantSession', () => {
-  function captureSession(): Array<{ sql: string; params: unknown[] }> {
-    const executed: Array<{ sql: string; params: unknown[] }> = [];
-    vi.mocked(createDb).mockReturnValue({
-      execute: vi.fn((chunk: unknown) => {
-        executed.push(dialect.sqlToQuery(chunk as never));
-        return Promise.resolve({ rows: [] });
+describe('createTenantWalletStore', () => {
+  /**
+   * An outer database whose only job is to open transactions, and a transaction
+   * handle that is the predicate-honouring fake. `order` records what reached
+   * the handle and in which sequence, so "the session variables are set before
+   * the read" is an assertion about order rather than about presence.
+   */
+  function tenantFixture(rows: Row[]) {
+    const tx = createFakeDb(rows, 'businessId');
+    const order: string[] = [];
+    const txExecute = tx.db.execute;
+    tx.db.execute = vi.fn((chunk: unknown) => {
+      order.push(`execute:${dialect.sqlToQuery(chunk as never).sql}`);
+      return txExecute(chunk);
+    });
+    const txSelect = tx.db.select;
+    tx.db.select = vi.fn((...args: unknown[]) => {
+      order.push('select');
+      return txSelect(...args);
+    });
+
+    const outer = {
+      transaction: vi.fn((fn: (handle: unknown) => Promise<unknown>) => fn(tx.db)),
+      execute: vi.fn(() => Promise.resolve({ rows: [] })),
+      select: vi.fn(() => {
+        throw new Error('a tenant query reached the outer db instead of the transaction');
       }),
-    } as never);
-    return executed;
+    };
+
+    return { tx, outer, order };
   }
 
-  it('sets both session variables, and nothing else, before anything is read', async () => {
+  const rows: Row[] = [
+    { id: CUSTOMER, globalId: 'g-1', businessId: TENANT, fullName: 'Lucía Fernández' },
+    { id: OTHER_CUSTOMER, globalId: 'g-1', businessId: OTHER_TENANT, fullName: 'Otra Persona' },
+  ];
+
+  it('sets both session variables on the transaction handle before the query, never on the outer db', async () => {
     // Two variables, two table groups. Setting only the business one would make
     // the wallet tables unreadable the day their policy goes live, and setting
-    // only the tenant one would make the loyalty tables unreadable today. A
-    // request that reads a pass touches all four tables.
-    const executed = captureSession();
+    // only the tenant one would make the loyalty tables unreadable today.
+    const { tx, outer, order } = tenantFixture(rows);
 
-    await openTenantSession('postgres://mock', TENANT);
+    const found = await createTenantWalletStore(outer, TENANT).findCustomer('g-1', TENANT);
 
-    expect(createDb).toHaveBeenCalledWith('postgres://mock');
-    expect(executed).toHaveLength(2);
-    expect(executed[0]!.sql).toContain('app.current_business_id');
-    expect(executed[1]!.sql).toContain('app.current_tenant_id');
-    // Both scoped to the transaction, not the session. A `false` here would leak
-    // one request's tenant into the next request served by the same connection.
-    expect(executed.every((statement) => statement.sql.includes('set_config'))).toBe(true);
+    expect(found?.id).toBe(CUSTOMER);
+    expect(outer.transaction).toHaveBeenCalledTimes(1);
+    expect(outer.execute).not.toHaveBeenCalled();
+    expect(outer.select).not.toHaveBeenCalled();
+
+    expect(tx.executed).toHaveLength(2);
+    expect(tx.executed[0]!.sql).toContain("set_config('app.current_business_id'");
+    expect(tx.executed[1]!.sql).toContain("set_config('app.current_tenant_id'");
+    // The query ran on the same handle, and after both settings.
+    expect(order).toHaveLength(3);
+    expect(order[2]).toBe('select');
   });
 
-  it('sets both variables to the authenticated tenant, not a configured one', async () => {
-    const executed = captureSession();
+  it('sets both variables to the tenant the store was opened for', async () => {
+    const { tx, outer } = tenantFixture(rows);
 
-    await openTenantSession('postgres://mock', OTHER_TENANT);
+    await createTenantWalletStore(outer, OTHER_TENANT).findCustomer('g-1', OTHER_TENANT);
 
     // The tenant is a bind parameter, so the assertion is on the params: a
     // hardcoded or defaulted tenant would put a different uuid in the same slot.
-    expect(executed).toHaveLength(2);
-    for (const statement of executed) {
+    expect(tx.executed).toHaveLength(2);
+    for (const statement of tx.executed) {
       expect(statement.params).toEqual([OTHER_TENANT]);
     }
   });
 
   it('sets them transaction-locally, so one request cannot leak into the next', async () => {
-    const executed = captureSession();
+    const { tx, outer } = tenantFixture(rows);
 
-    await openTenantSession('postgres://mock', TENANT);
+    await createTenantWalletStore(outer, TENANT).findCustomer('g-1', TENANT);
 
     // `set_config(setting, value, is_local)` — the third argument is `true`.
-    for (const statement of executed) {
+    for (const statement of tx.executed) {
       expect(statement.sql).toMatch(/set_config\([^)]*,\s*\$\d+,\s*true\)/);
     }
+  });
+
+  it('opens one transaction per store call, so none stays open across a Google call', async () => {
+    // A route reads, calls Google, then writes. Each of those store calls gets
+    // its own short transaction; nothing the store does holds one open between
+    // them.
+    const { outer } = tenantFixture(rows);
+    const store = createTenantWalletStore(outer, TENANT);
+
+    await store.findCustomer('g-1', TENANT);
+    await store.findProgram(TENANT);
+
+    expect(outer.transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('wraps every WalletStore method, not a hand-picked subset', () => {
+    // A method left off the wrapper would run on the outer db with no tenant set
+    // and fail the day its table's policy is enabled.
+    const { outer } = tenantFixture(rows);
+    const scoped = createTenantWalletStore(outer, TENANT);
+
+    expect(Object.keys(scoped).sort()).toEqual(Object.keys(createDrizzleWalletStore(outer)).sort());
   });
 });
 

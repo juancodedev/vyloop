@@ -34,6 +34,10 @@ vi.mock('@vyloop/db', async () => {
     // the compiled SQL, and a mock returning `undefined` would make it vacuous.
     setCurrentBusinessId: (id: string) =>
       sql`SELECT set_config('app.current_business_id', ${id}, true);`,
+    // The real helper, so the test sees the statements it issues and the handle
+    // it issues them on.
+    withTenantTransaction: (await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db'))
+      .withTenantTransaction,
   };
 });
 
@@ -68,7 +72,8 @@ interface Scoped {
 
 function fakeDb(tables: Array<{ table: string; key: string; rows: Row[] }>) {
   const scoped: Scoped[] = [];
-  const executed: Array<{ sql: string; params: unknown[] }> = [];
+  const executed: Array<{ sql: string; params: unknown[]; on: 'db' | 'tx' }> = [];
+  const selectedOn: Array<'db' | 'tx'> = [];
   let projection: Record<string, { name: string }> | null = null;
 
   const entryFor = (name: string) => tables.find((candidate) => candidate.table === name)!;
@@ -121,16 +126,33 @@ function fakeDb(tables: Array<{ table: string; key: string; rows: Row[] }>) {
      * field and the reader would look like it dropped the merchant's promo copy.
      */
     select: vi.fn((fields?: Record<string, { name: string }>) => {
+      selectedOn.push('db');
       projection = fields ?? null;
       return builder;
     }),
     execute: vi.fn((chunk: unknown) => {
-      executed.push(dialect.sqlToQuery(chunk as never));
+      executed.push({ ...dialect.sqlToQuery(chunk as never), on: 'db' });
       return Promise.resolve({ rows: [] });
     }),
+    // The transaction handle records which handle each statement ran on, so a
+    // tenant setting issued on the outer database is told apart from one that
+    // reaches the query after it.
+    transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        select: (fields?: Record<string, { name: string }>) => {
+          selectedOn.push('tx');
+          projection = fields ?? null;
+          return builder;
+        },
+        execute: (chunk: unknown) => {
+          executed.push({ ...dialect.sqlToQuery(chunk as never), on: 'tx' });
+          return Promise.resolve({ rows: [] });
+        },
+      }),
+    ),
   };
 
-  return { db, scoped, executed };
+  return { db, scoped, executed, selectedOn };
 }
 
 /** The SQL table name off a drizzle table object, the way drizzle reads it. */
@@ -291,6 +313,19 @@ describe('RLS session ordering', () => {
     expect(fake.executed).toHaveLength(1);
     expect(fake.executed[0]!.sql).toContain("set_config('app.current_business_id'");
     expect(fake.executed[0]!.params).toEqual([TENANT]);
+  });
+
+  it('reads the program on the same transaction the setting was issued on', async () => {
+    // `set_config(..., true)` lasts for its transaction only. Issued on the
+    // outer database it would be gone before the program read.
+    const fake = readerFor(twoMerchants());
+
+    await fake.reader.findBySlug('cafe-central');
+
+    expect(fake.executed.map((statement) => statement.on)).toEqual(['tx']);
+    // The tenant lookup has no policy and stays outside; the program read follows
+    // the setting on the transaction.
+    expect(fake.selectedOn).toEqual(['db', 'tx']);
   });
 
   it('does not touch the database at all for a slug with no tenant', async () => {

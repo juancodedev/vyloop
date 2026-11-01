@@ -6,13 +6,14 @@ import {
   readConsentMap,
   readPushSubscriptions,
   upsertPushSubscription,
+  withTenantTransaction,
 } from '@vyloop/db';
 import { isCustomerRole } from '@vyloop/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, withRls } from './helpers';
+import { extractAuthHeaders } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Push subscriptions.
@@ -93,7 +94,8 @@ function isHttpsUrl(value: string): boolean {
  * references. `null` when the token names no customer of this business.
  */
 async function resolveCustomer(
-  db: ReturnType<typeof createDb>,
+  // The database or a transaction opened on it.
+  db: Pick<ReturnType<typeof createDb>, 'select'>,
   businessId: string,
   globalId: string,
 ): Promise<string | null> {
@@ -196,44 +198,51 @@ router.post('/v1/communication/push/subscribe', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, auth.businessId);
 
-  const customerId = await resolveCustomer(db, auth.businessId, auth.userId);
-  if (!customerId) {
-    return c.json({ error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } }, 404);
-  }
+  // One tenant transaction for the whole registration: the customer, the
+  // consent, and the count and write under the customer's lock.
+  const outcome = await withTenantTransaction(db, { businessId: auth.businessId }, async (tx) => {
+    const customerId = await resolveCustomer(tx, auth.businessId, auth.userId);
+    if (!customerId) {
+      return {
+        response: c.json(
+          { error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } },
+          404,
+        ),
+      };
+    }
 
-  // The consent gate. A browser that is registered without the customer having
-  // agreed to be contacted on it is a business holding a channel to a customer
-  // who never asked for one.
-  const consents = await readConsentMap(db, {
-    businessId: auth.businessId,
-    customerId,
-  });
-  if (consents[PUSH_CONSENT_TYPE] !== true) {
-    return c.json(
-      {
-        error: {
-          code: 'CONSENT_REQUIRED',
-          message: 'The customer has not consented to nearby notifications.',
-        },
-      },
-      403,
-    );
-  }
+    // The consent gate. A browser that is registered without the customer having
+    // agreed to be contacted on it is a business holding a channel to a customer
+    // who never asked for one.
+    const consents = await readConsentMap(tx, {
+      businessId: auth.businessId,
+      customerId,
+    });
+    if (consents[PUSH_CONSENT_TYPE] !== true) {
+      return {
+        response: c.json(
+          {
+            error: {
+              code: 'CONSENT_REQUIRED',
+              message: 'The customer has not consented to nearby notifications.',
+            },
+          },
+          403,
+        ),
+      };
+    }
 
-  // -----------------------------------------------------------------------
-  // How many browsers this customer already holds
-  // -----------------------------------------------------------------------
-  // A customer may hold a few: a phone and a laptop, or one browser with two
-  // accounts. Past the cap it is not a browser any more, it is a caller
-  // filling a table.
-  //
-  // The count and the write happen under one transaction-scoped lock per
-  // customer. Without it, two requests could both count nine and both write,
-  // and the cap would hold only for callers who wait for each other.
-  const record = await db.transaction(async (tx) => {
-    await withRls(tx, auth.businessId);
+    // -----------------------------------------------------------------------
+    // How many browsers this customer already holds
+    // -----------------------------------------------------------------------
+    // A customer may hold a few: a phone and a laptop, or one browser with two
+    // accounts. Past the cap it is not a browser any more, it is a caller
+    // filling a table.
+    //
+    // The count and the write happen under one transaction-scoped lock per
+    // customer. Without it, two requests could both count nine and both write,
+    // and the cap would hold only for callers who wait for each other.
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${`push-subscriptions:${customerId}`}, 0))`,
     );
@@ -245,10 +254,10 @@ router.post('/v1/communication/push/subscribe', async (c) => {
 
     const others = existing.filter((subscription) => subscription.endpoint !== endpoint);
     if (others.length >= MAX_SUBSCRIPTIONS_PER_CUSTOMER) {
-      return null;
+      return { record: null };
     }
 
-    return upsertPushSubscription(tx, {
+    const record = await upsertPushSubscription(tx, {
       businessId: auth.businessId,
       customerId,
       endpoint,
@@ -256,7 +265,14 @@ router.post('/v1/communication/push/subscribe', async (c) => {
       auth: authSecret,
       userAgent: c.req.header('User-Agent') ?? null,
     });
+    return { record };
   });
+
+  if ('response' in outcome) {
+    return outcome.response;
+  }
+
+  const { record } = outcome;
 
   if (!record) {
     return c.json(
@@ -318,12 +334,13 @@ router.post('/v1/communication/push/unsubscribe', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, auth.businessId);
 
-  const removed = await deletePushSubscription(db, {
-    businessId: auth.businessId,
-    endpoint,
-  });
+  const removed = await withTenantTransaction(db, { businessId: auth.businessId }, (tx) =>
+    deletePushSubscription(tx, {
+      businessId: auth.businessId,
+      endpoint,
+    }),
+  );
 
   // 404 when there was nothing to remove: the caller asked to stop a
   // subscription that was not there, and the answer is the same either way.
@@ -356,17 +373,19 @@ router.get('/v1/communication/push/subscriptions', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, auth.businessId);
 
-  const customerId = await resolveCustomer(db, auth.businessId, auth.userId);
-  if (!customerId) {
+  const records = await withTenantTransaction(db, { businessId: auth.businessId }, async (tx) => {
+    const customerId = await resolveCustomer(tx, auth.businessId, auth.userId);
+    if (!customerId) return null;
+
+    return readPushSubscriptions(tx, {
+      businessId: auth.businessId,
+      customerId,
+    });
+  });
+  if (!records) {
     return c.json({ error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } }, 404);
   }
-
-  const records = await readPushSubscriptions(db, {
-    businessId: auth.businessId,
-    customerId,
-  });
 
   const subscriptions = await Promise.all(
     records.map(async (record) => ({

@@ -1,8 +1,7 @@
-import { createDb, branches, customers, messageLog } from '@vyloop/db';
+import { createDb, branches, customers, messageLog, withTenantTransaction } from '@vyloop/db';
 import { and, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
-import { withRls } from './helpers';
 import { deliverPushNotification } from './push-delivery';
 
 // ---------------------------------------------------------------------------
@@ -134,48 +133,58 @@ export async function handleRewardAvailableAtBranch(
   env: Bindings,
 ): Promise<RewardAnnouncementOutcome> {
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // The internal id is needed for the cap and for the venue lookup's tenant
-  // filter; the delivery resolves the customer again by the global id.
-  const [customer] = await db
-    .select({ id: customers.id })
-    .from(customers)
-    .where(
-      and(
-        eq(customers.businessId, businessId),
-        eq(customers.globalId, payload.customer_id),
-        isNull(customers.deletedAt),
-      ),
-    )
-    .limit(1);
+  // The reads run in one tenant transaction; the delivery opens its own.
+  const resolved = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // The internal id is needed for the cap and for the venue lookup's tenant
+    // filter; the delivery resolves the customer again by the global id.
+    const [customer] = await tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(
+        and(
+          eq(customers.businessId, businessId),
+          eq(customers.globalId, payload.customer_id),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .limit(1);
 
-  if (!customer) {
-    console.warn(
-      `[communication] Reward announcement for unknown customer ${payload.customer_id} — acking`,
-    );
-    return { result: 'no_customer', delivered: 0 };
+    if (!customer) {
+      console.warn(
+        `[communication] Reward announcement for unknown customer ${payload.customer_id} — acking`,
+      );
+      return { done: { result: 'no_customer', delivered: 0 } satisfies RewardAnnouncementOutcome };
+    }
+
+    if (await wasRewardAnnouncedToday(tx, businessId, customer.id)) {
+      console.log(
+        `[communication] Customer ${payload.customer_id} was already told about a reward today — ` +
+          `acknowledging grant ${payload.grant_id} without a delivery`,
+      );
+      return { done: { result: 'capped', delivered: 0 } satisfies RewardAnnouncementOutcome };
+    }
+
+    // The venue names, filtered to this tenant for the same reason every other
+    // read is: the ids came from an event, and an event is data.
+    const venues = await tx
+      .select({ id: branches.id, name: branches.name })
+      .from(branches)
+      .where(
+        and(
+          eq(branches.businessId, businessId),
+          inArray(branches.id, payload.branch_ids),
+        ),
+      );
+
+    return { venues };
+  });
+
+  if ('done' in resolved) {
+    return resolved.done;
   }
 
-  if (await wasRewardAnnouncedToday(db, businessId, customer.id)) {
-    console.log(
-      `[communication] Customer ${payload.customer_id} was already told about a reward today — ` +
-        `acknowledging grant ${payload.grant_id} without a delivery`,
-    );
-    return { result: 'capped', delivered: 0 };
-  }
-
-  // The venue names, filtered to this tenant for the same reason every other
-  // read is: the ids came from an event, and an event is data.
-  const venues = await db
-    .select({ id: branches.id, name: branches.name })
-    .from(branches)
-    .where(
-      and(
-        eq(branches.businessId, businessId),
-        inArray(branches.id, payload.branch_ids),
-      ),
-    );
+  const { venues } = resolved;
 
   const where = describeRewardVenues(
     venues.map((venue: { name: string }) => venue.name),

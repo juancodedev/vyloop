@@ -102,6 +102,7 @@ vi.mock('@vyloop/db', async () => {
     verifyPassword: actual.verifyPassword,
     schema: {},
     setCurrentBusinessId: vi.fn(),
+    withTenantTransaction: actual.withTenantTransaction,
   };
 });
 
@@ -167,16 +168,22 @@ interface MockDb {
   update: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
   execute: ReturnType<typeof vi.fn>;
+  transaction: ReturnType<typeof vi.fn>;
 }
 
 function createMockDb(): MockDb {
-  return {
+  const db: MockDb = {
     select: vi.fn(() => createBuilder()),
     insert: vi.fn(() => createBuilder()),
     update: vi.fn(() => createBuilder()),
     delete: vi.fn(() => createBuilder()),
     execute: vi.fn().mockResolvedValue({ rows: [] }),
+    transaction: vi.fn(),
   };
+  // The transaction handle is the same mock, so the queues a test sets up are
+  // read the same way inside and outside a transaction.
+  db.transaction.mockImplementation(async (cb: (tx: MockDb) => unknown) => cb(db));
+  return db;
 }
 
 let mockDb: MockDb;

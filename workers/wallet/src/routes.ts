@@ -12,7 +12,12 @@ import {
   verifyPassCallback,
 } from './callbacks';
 import type { PassCallbackEvent } from './callbacks';
-import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import {
+  createDrizzleWalletStore,
+  createTenantLocationsSource,
+  createTenantWalletStore,
+  inTenantTransaction,
+} from './drizzle-store';
 import {
   GoogleWalletApiError,
   GoogleWalletAuthError,
@@ -37,7 +42,6 @@ import {
   linkForExistingPass,
   reasonCodeFor,
   TIER_HEADER_UNAVAILABLE } from './issuance';
-import { createLocationsSource } from './locations-source';
 import type { PushNotification } from './object';
 import { reconcilePass, updatePassPushNotifications } from './reconcile';
 
@@ -243,7 +247,8 @@ router.post(WALLET_CALLBACK_PATH, async (c) => {
   // would admit no rows to it once the tenant RLS policies are enabled, and every
   // callback would resolve to `unknown_class` — a silent total failure rather
   // than an error. Same constraint `sweep.ts` documents for `listProgramTenants`.
-  const resolverStore = createDrizzleWalletStore(createDb(c.env.DATABASE_URL));
+  const db = createDb(c.env.DATABASE_URL);
+  const resolverStore = createDrizzleWalletStore(db);
 
   let event: PassCallbackEvent;
   try {
@@ -283,12 +288,14 @@ router.post(WALLET_CALLBACK_PATH, async (c) => {
   }
 
   // -- From here, every read and write is scoped to that one tenant --------
-  const db = await openTenantSession(c.env.DATABASE_URL, owner.tenantId);
+  // Each store call is its own transaction with both session variables set to
+  // the owner (see `createTenantWalletStore`).
+  const tenantStore = createTenantWalletStore(db, owner.tenantId);
 
   let outcome: VerifiedCallbackOutcome;
   try {
     outcome = await applyVerifiedCallback(
-      { store: createDrizzleWalletStore(db), recipientId: c.env.GOOGLE_WALLET_ISSUER_ID },
+      { store: tenantStore, recipientId: c.env.GOOGLE_WALLET_ISSUER_ID },
       event,
     );
   } catch (err: unknown) {
@@ -359,8 +366,8 @@ router.get('/v1/wallet/status', async (c) => {
   // one, so there is nothing for a caller to tamper with.
   const tenantId = auth.businessId;
 
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
-  const store = createDrizzleWalletStore(db);
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
 
   const customer = await store.findCustomer(auth.userId, tenantId);
   if (!customer) {
@@ -539,8 +546,8 @@ router.get('/v1/wallet/pass', async (c) => {
     );
   }
 
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
-  const store = createDrizzleWalletStore(db);
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
 
   const customer = await store.findCustomer(auth.userId, tenantId);
   if (!customer) {
@@ -651,9 +658,9 @@ router.get('/v1/wallet/pass', async (c) => {
       serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
       privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
       origins,
-      // Read here, with the session already armed for this tenant, so the pass
-      // carries positions only when the customer's consent allows them.
-      locations: createLocationsSource(db),
+      // Read in its own tenant transaction, so the pass carries positions only
+      // when the customer's consent allows them.
+      locations: createTenantLocationsSource(db, tenantId),
     };
     const issueInput = {
       tenantId,
@@ -964,8 +971,8 @@ router.get('/v1/wallet/program', async (c) => {
   }
 
   const tenantId = auth.businessId;
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
-  const store = createDrizzleWalletStore(db);
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
 
   const program = await store.findProgramWithBusiness(tenantId);
   if (!program) {
@@ -1077,8 +1084,8 @@ router.put('/v1/wallet/program/demo-mode', async (c) => {
   }
 
   const tenantId = auth.businessId;
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
-  const store = createDrizzleWalletStore(db);
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
 
   const program = await store.findProgram(tenantId);
   if (!program) {
@@ -1143,8 +1150,8 @@ router.post('/v1/wallet/program/sync', async (c) => {
   }
 
   const tenantId = auth.businessId;
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
-  const store = createDrizzleWalletStore(db);
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
 
   const program = await store.findProgram(tenantId);
   if (!program) {
@@ -1271,8 +1278,8 @@ router.post('/v1/wallet/push-notifications', async (c) => {
     );
   }
 
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
-  const store = createDrizzleWalletStore(db);
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
 
   // For customer role, use the authenticated user's ID
   // For service role, require customer_id in the request body
@@ -1378,15 +1385,21 @@ router.post('/v1/wallet/messages', async (c) => {
     linkValue = link;
   }
 
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
-  const store = createDrizzleWalletStore(db);
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
+
+  // Every raw query below runs in a tenant transaction of its own, like the
+  // store's methods do. The fan-out calls Google between its reads and writes,
+  // so no transaction here may span more than one statement group.
 
   // Daily limit: one message per business per day.
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const recent = await db
-    .select()
-    .from(walletMessages)
-    .where(and(eq(walletMessages.businessId, tenantId), gte(walletMessages.createdAt, since)));
+  const recent = await inTenantTransaction(db, tenantId, (tx) =>
+    tx
+      .select()
+      .from(walletMessages)
+      .where(and(eq(walletMessages.businessId, tenantId), gte(walletMessages.createdAt, since))),
+  );
   if (Array.isArray(recent) && recent.length >= WALLET_DAILY_MESSAGE_LIMIT) {
     return c.json({ error: { code: 'WALLET_MESSAGE_LIMIT', message: 'Daily message limit reached' } }, 429);
   }
@@ -1396,14 +1409,16 @@ router.post('/v1/wallet/messages', async (c) => {
   const eligible = eligibleRows.length;
 
   const messageId = crypto.randomUUID();
-  await db.insert(walletMessages).values({
-    id: messageId,
-    businessId: tenantId,
-    header,
-    body: messageBody,
-    link: linkValue,
-    createdBy: auth.userId,
-  });
+  await inTenantTransaction(db, tenantId, (tx) =>
+    tx.insert(walletMessages).values({
+      id: messageId,
+      businessId: tenantId,
+      header,
+      body: messageBody,
+      link: linkValue,
+      createdBy: auth.userId,
+    }),
+  );
 
   // Fan out asynchronously. Each delivery is idempotent on (message_id, object_id)
   // via the primary key, so a retry never double-delivers.
@@ -1419,14 +1434,16 @@ router.post('/v1/wallet/messages', async (c) => {
         batch.map(async (pass) => {
           // Idempotency: claim the delivery row first.
           try {
-            await db.insert(walletMessageDeliveries).values({
-              messageId,
-              businessId: tenantId,
-              objectId: pass.objectId,
-              mode: 'pending',
-              status: 'pending',
-              deliveredAt: null,
-            });
+            await inTenantTransaction(db, tenantId, (tx) =>
+              tx.insert(walletMessageDeliveries).values({
+                messageId,
+                businessId: tenantId,
+                objectId: pass.objectId,
+                mode: 'pending',
+                status: 'pending',
+                deliveredAt: null,
+              }),
+            );
           } catch {
             // Already claimed by a previous run — skip.
             return;
@@ -1443,10 +1460,12 @@ router.post('/v1/wallet/messages', async (c) => {
               messageType: mode === 'notify' ? 'TEXT_AND_NOTIFY' : 'TEXT',
               ...(linkValue ? { url: linkValue } : {}),
             });
-            await db
-              .update(walletMessageDeliveries)
-              .set({ mode, status: 'delivered', deliveredAt: new Date() })
-              .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId)));
+            await inTenantTransaction(db, tenantId, (tx) =>
+              tx
+                .update(walletMessageDeliveries)
+                .set({ mode, status: 'delivered', deliveredAt: new Date() })
+                .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId))),
+            );
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             const status = msg.includes('QuotaExceededException') ? 'rejected' : 'failed';
@@ -1461,19 +1480,23 @@ router.post('/v1/wallet/messages', async (c) => {
                   messageType: 'TEXT',
                   ...(linkValue ? { url: linkValue } : {}),
                 });
-                await db
-                  .update(walletMessageDeliveries)
-                  .set({ mode: 'text', status: 'delivered', deliveredAt: new Date() })
-                  .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId)));
+                await inTenantTransaction(db, tenantId, (tx) =>
+                  tx
+                    .update(walletMessageDeliveries)
+                    .set({ mode: 'text', status: 'delivered', deliveredAt: new Date() })
+                    .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId))),
+                );
                 return;
               }
             } catch {
               // fall through to recording failure
             }
-            await db
-              .update(walletMessageDeliveries)
-              .set({ mode: finalMode, status })
-              .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId)));
+            await inTenantTransaction(db, tenantId, (tx) =>
+              tx
+                .update(walletMessageDeliveries)
+                .set({ mode: finalMode, status })
+                .where(and(eq(walletMessageDeliveries.messageId, messageId), eq(walletMessageDeliveries.objectId, pass.objectId))),
+            );
           }
         }),
       );
@@ -1505,29 +1528,34 @@ router.get('/v1/wallet/messages', async (c) => {
   }
 
   const tenantId = auth.businessId;
-  const db = await openTenantSession(c.env.DATABASE_URL, tenantId);
+  const db = createDb(c.env.DATABASE_URL);
 
-  const messages = await db
-    .select()
-    .from(walletMessages)
-    .where(eq(walletMessages.businessId, tenantId))
-    .orderBy(desc(walletMessages.createdAt));
-
-  const result = [];
-  for (const m of messages) {
-    const deliveries = await db
+  // One transaction for the whole read. Nothing in it leaves the database, so
+  // there is no network call for it to stay open across.
+  const result = await inTenantTransaction(db, tenantId, async (tx) => {
+    const messages = await tx
       .select()
-      .from(walletMessageDeliveries)
-      .where(eq(walletMessageDeliveries.messageId, m.id));
-    const counts = { total: deliveries.length, delivered: 0, failed: 0, rejected: 0, pending: 0 };
-    for (const d of deliveries) {
-      if (d.status === 'delivered') counts.delivered += 1;
-      else if (d.status === 'failed') counts.failed += 1;
-      else if (d.status === 'rejected') counts.rejected += 1;
-      else counts.pending += 1;
+      .from(walletMessages)
+      .where(eq(walletMessages.businessId, tenantId))
+      .orderBy(desc(walletMessages.createdAt));
+
+    const rows = [];
+    for (const m of messages) {
+      const deliveries = await tx
+        .select()
+        .from(walletMessageDeliveries)
+        .where(eq(walletMessageDeliveries.messageId, m.id));
+      const counts = { total: deliveries.length, delivered: 0, failed: 0, rejected: 0, pending: 0 };
+      for (const d of deliveries) {
+        if (d.status === 'delivered') counts.delivered += 1;
+        else if (d.status === 'failed') counts.failed += 1;
+        else if (d.status === 'rejected') counts.rejected += 1;
+        else counts.pending += 1;
+      }
+      rows.push({ ...m, counts });
     }
-    result.push({ ...m, counts });
-  }
+    return rows;
+  });
 
   return c.json({ messages: result });
 });

@@ -22,6 +22,9 @@ const dbMock: any = {
   update: vi.fn(),
   delete: vi.fn(),
   execute: vi.fn().mockResolvedValue({ rows: [] }),
+  // The tenant transaction hands the callback a handle; by default it is the
+  // same mock, so a query on `tx` lands on the spies above.
+  transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbMock)),
 };
 
 vi.mock('@vyloop/db', async () => {
@@ -54,9 +57,14 @@ vi.mock('@vyloop/db', async () => {
     createdAt: timestamp('created_at').notNull(),
   });
 
+  // The real helper, so a test sees the `set_config` it really issues.
+  const { withTenantTransaction } =
+    await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db');
+
   return {
     createDb: vi.fn(() => dbMock),
     setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
+    withTenantTransaction,
     customers: customersTable,
     messageLog: messageLogTable,
     pushSubscriptions: pushSubscriptionsTable,
@@ -196,6 +204,8 @@ beforeEach(() => {
   dbMock.insert.mockReset();
   dbMock.update.mockReset();
   dbMock.delete.mockReset();
+  // Back to the default: the callback runs on this same mock.
+  dbMock.transaction.mockReset();
 
   dbMock.select.mockImplementation(() => createQueryChain([{ id: 'cust-1' }]));
   dbMock.insert.mockImplementation(() => createQueryChain([{ id: 'log-1' }]));
@@ -464,6 +474,66 @@ describe('deliverPushNotification', () => {
     const update = updateChainFor(messageLogTable);
     expect(update).not.toBeNull();
     expect(update!.set.mock.calls[0]?.[0]).toMatchObject({ status: 'failed' });
+  });
+});
+
+describe('deliverPushNotification — tenant transactions', () => {
+  it('sets the business on each transaction, and sends only after the queued row committed', async () => {
+    const log: string[] = [];
+    // Each transaction gets a handle of its own: its `execute` is not the outer
+    // db's, so a `set_config` issued on the outer db cannot pass for one issued
+    // on the transaction. Queries are delegated to the usual spies.
+    dbMock.transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => {
+      const tx = {
+        execute: vi.fn(async (query: SQL) => {
+          const { sql, params } = new PgDialect().sqlToQuery(query);
+          if (sql.includes("set_config('app.current_business_id'")) {
+            log.push(`set_config ${String(params[0])}`);
+          }
+          return { rows: [] };
+        }),
+        select: (...args: unknown[]) => {
+          log.push('select');
+          return dbMock.select(...args);
+        },
+        insert: (...args: unknown[]) => {
+          log.push('insert');
+          return dbMock.insert(...args);
+        },
+        update: (...args: unknown[]) => {
+          log.push('update');
+          return dbMock.update(...args);
+        },
+        delete: (...args: unknown[]) => dbMock.delete(...args),
+      };
+      log.push('begin');
+      const result = await fn(tx);
+      log.push('commit');
+      return result;
+    });
+    const fetcher = vi.fn(async () => {
+      log.push('send');
+      return response(201);
+    });
+
+    const outcome = await deliverPushNotification(
+      PAYLOAD,
+      'biz-1',
+      mockEnv,
+      fetcher as unknown as typeof fetch,
+    );
+
+    expect(outcome.delivered).toBe(1);
+    expect(dbMock.execute).not.toHaveBeenCalled();
+    expect(log).toEqual([
+      // The customer, the consent and the subscriptions.
+      'begin', 'set_config biz-1', 'select', 'commit',
+      // The queued row, committed before the push service is called.
+      'begin', 'set_config biz-1', 'insert', 'commit',
+      'send',
+      // The outcome: the registration refreshed and the row marked sent.
+      'begin', 'set_config biz-1', 'update', 'update', 'commit',
+    ]);
   });
 });
 

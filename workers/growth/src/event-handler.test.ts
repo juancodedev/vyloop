@@ -27,14 +27,19 @@ const dbMock = {
   select: vi.fn(() => chain()),
   update: vi.fn(() => chain()),
   execute: vi.fn().mockResolvedValue({ rows: [{ balance: 1200 }] }),
+  // The transaction handle is this same mock: its first `execute` is the
+  // tenant's `set_config`, and the handler's queries read the same queues.
+  transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(dbMock)),
 };
 
 vi.mock('@vyloop/db', async () => {
   // A real table for `customers`, so a predicate on it compiles to the SQL the
   // database would run and a missing `deleted_at` guard is observable.
   const { pgTable, uuid, timestamp } = await import('drizzle-orm/pg-core');
+  const actual = await vi.importActual<typeof import('@vyloop/db')>('@vyloop/db');
   return {
   createDb: vi.fn(() => dbMock),
+  withTenantTransaction: actual.withTenantTransaction,
   setCurrentBusinessId: vi.fn(() => 'SELECT set_config(...)'),
   customers: pgTable('customers', {
     id: uuid('id').primaryKey(),
@@ -199,6 +204,41 @@ describe('PointsAssigned auto-grant', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The tenant scope
+// ---------------------------------------------------------------------------
+
+describe('the tenant scope', () => {
+  it('sets the business on the transaction before the handler reads anything', async () => {
+    const order: string[] = [];
+    const tx = {
+      ...dbMock,
+      execute: vi.fn((query: unknown) => {
+        const { sql: text, params } = new PgDialect().sqlToQuery(query as never);
+        order.push(`execute ${text} ${JSON.stringify(params)}`);
+        return Promise.resolve({ rows: [{ balance: 0 }] });
+      }),
+      select: vi.fn(() => {
+        order.push('select');
+        return chain([]);
+      }),
+    };
+    dbMock.transaction.mockImplementationOnce(async (fn: (handle: unknown) => unknown) => fn(tx));
+    dbMock.execute.mockClear();
+    dbMock.select.mockClear();
+
+    await handleEvent(pointsAssignedEvent(), {} as never, env());
+
+    expect(order[0]).toBe(
+      `execute SELECT set_config('app.current_business_id', $1, true); ["biz-1"]`,
+    );
+    expect(order.slice(1)).toContain('select');
+    // Nothing ran on the outer handle, where the setting would not apply.
+    expect(dbMock.execute).not.toHaveBeenCalled();
+    expect(dbMock.select).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // A deleted customer
 // ---------------------------------------------------------------------------
 
@@ -275,7 +315,7 @@ describe('a deleted customer', () => {
 
     await handleEvent(customerRegisteredEvent(), {} as never, env());
 
-    // Only `withRls` reached `execute`: no wallet-init ledger row.
+    // Only the tenant's `set_config` reached `execute`: no wallet-init ledger row.
     expect(dbMock.execute).toHaveBeenCalledOnce();
     expect(dbMock.update).not.toHaveBeenCalled();
     expect(dbMock.insert).not.toHaveBeenCalled();
@@ -287,8 +327,10 @@ describe('a deleted customer', () => {
 
     await handleEvent(customerRegisteredEvent(), {} as never, env());
 
-    // `withRls`, then the wallet-init INSERT.
-    expect(dbMock.execute).toHaveBeenCalledTimes(2);
+    // One `set_config` per transaction: the reads, the wallet-init INSERT (its
+    // own transaction, so a duplicate cannot abort the tier assignment) and the
+    // tier assignment — plus the INSERT itself.
+    expect(dbMock.execute).toHaveBeenCalledTimes(4);
     expect(dbMock.update).toHaveBeenCalledOnce();
   });
 });

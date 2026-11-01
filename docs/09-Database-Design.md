@@ -346,7 +346,7 @@ CREATE TABLE localization_configs (
 
 **Estado actual: RLS no está desplegado.** La estrategia de la sección 1 (multi-tenancy por `business_id` con RLS) sigue siendo la decisión de diseño, pero el rollout está staged, no completo. Los tres hechos que hay que conocer:
 
-1. `withRls(db, businessId)` en los workers solo ejecuta `SET app.current_business_id`. Eso, por sí solo, **no aísla nada**: sin políticas creadas y sin `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, la sesión ve todas las filas. El aislamiento real de hoy descansa en los filtros explícitos de `business_id` en los handlers de ruta.
+1. Los workers y el gateway fijan el tenant con `withTenantTransaction(db, { businessId?, tenantId? }, fn)` de `@vyloop/db`: abre una transacción, ejecuta `set_config(..., true)` sobre ella y corre las consultas de `fn` en ese mismo handle. Es la única forma válida, porque `set_config(..., true)` dura lo que dura su transacción; el `withRls` anterior lo ejecutaba como sentencia suelta y el valor desaparecía antes de la consulta siguiente. Un contract test (`packages/db/src/rls-call-sites.contract.test.ts`) impide volver a fijarlo a mano; las excepciones son el alta de negocio, que crea el id dentro de su propia transacción, y los crons que recorren todos los negocios (Unidad 3). Aun así, **hoy nada aísla por RLS**: sin políticas creadas y sin `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, la sesión ve todas las filas. El aislamiento real de hoy descansa en los filtros explícitos de `business_id` en los handlers de ruta.
 2. El mecanismo existe y está probado: `packages/db/src/rls.ts` expone `BUSINESS_ID_TABLES` (17 tablas con `business_id`), `TENANT_ID_TABLES`, `RLS_POLICY_NAME` (`tenant_isolation`) y `createRlsPolicies()`. `createRlsPolicies()` **no se llama en código de producción**; está disponible para el rollout.
 3. Hay dos formas de scope porque hay dos formas de clave. `app.current_business_id` para las tablas con `business_id`, y `app.current_tenant_id` para las dos tablas de wallet, que están indexadas por `tenant_id` y no tienen esa columna. Una política `USING (business_id = ...)` sobre una tabla sin `business_id` es un error duro al crearse, no un no-op silencioso, y el test suite lo verifica.
 
@@ -371,6 +371,8 @@ CREATE POLICY tenant_isolation ON customer_wallet_passes
 ```
 
 `workers/wallet` ya usa el mecanismo con scope de tenant: `openTenantSession` en `drizzle-store.ts` ejecuta `setCurrentBusinessId(tenantId)` y `setCurrentTenantId(tenantId)` antes de leer nada, usando los builders que exporta `@vyloop/db`. Poner las dos variables desde el inicio es deliberado: una variable faltante es invisible hasta que la política correspondiente se habilite, que es el peor momento para descubrirlo.
+
+**Credencial del gateway — decisión pendiente para la Unidad 6.** `apps/gateway` lee `loyalty_programs` para la página pública `/p/{slug}` con el mismo `DATABASE_URL` que los workers, y ya fija el tenant con `withTenantTransaction`. Cuando los workers pasen al rol `vyloop_app` (sin `BYPASSRLS`), el gateway tiene dos caminos: moverse con ellos, para lo que no le falta nada, o conservar una credencial propia de dueño. Se decide antes de habilitar políticas en `loyalty_programs`.
 
 ---
 

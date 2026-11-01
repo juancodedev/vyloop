@@ -22,7 +22,7 @@
 // ---------------------------------------------------------------------------
 
 import type { createDb } from '@vyloop/db';
-import { branches, setCurrentBusinessId } from '@vyloop/db';
+import { branches, withTenantTransaction } from '@vyloop/db';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 
@@ -133,8 +133,7 @@ function toBranchView(row: BranchRow): BranchView {
  * list of them is a list that moves between two consecutive requests.
  */
 export async function listBranches(db: BranchesDb, businessId: string): Promise<BranchView[]> {
-  return db.transaction(async (tx) => {
-    await tx.execute(setCurrentBusinessId(businessId));
+  return withTenantTransaction(db, { businessId: businessId }, async (tx) => {
 
     const rows = (await tx
       .select(BRANCH_COLUMNS)
@@ -166,8 +165,7 @@ export interface CreateBranchInput {
  * different business before it gets here.
  */
 export async function createBranch(db: BranchesDb, input: CreateBranchInput): Promise<BranchView> {
-  return db.transaction(async (tx) => {
-    await tx.execute(setCurrentBusinessId(input.businessId));
+  return withTenantTransaction(db, { businessId: input.businessId }, async (tx) => {
 
     const rows = (await tx
       .insert(branches)
@@ -237,8 +235,7 @@ export async function updateBranch(
   db: BranchesDb,
   input: UpdateBranchInput,
 ): Promise<BranchView | null> {
-  return db.transaction(async (tx) => {
-    await tx.execute(setCurrentBusinessId(input.businessId));
+  return withTenantTransaction(db, { businessId: input.businessId }, async (tx) => {
 
     // Typed against the table's own update shape, so a column written here is
     // checked against the column it names. An untyped bag of values would let
@@ -307,8 +304,7 @@ export async function deactivateBranch(
   db: BranchesDb,
   input: { businessId: string; branchId: string },
 ): Promise<BranchView | null> {
-  return db.transaction(async (tx) => {
-    await tx.execute(setCurrentBusinessId(input.businessId));
+  return withTenantTransaction(db, { businessId: input.businessId }, async (tx) => {
 
     const rows = (await tx
       .update(branches)

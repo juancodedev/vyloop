@@ -6,7 +6,12 @@ import { HTTPException } from 'hono/http-exception';
 import { jwtVerify } from 'jose';
 import type { JWTPayload } from 'jose';
 
-import { createDrizzleWalletStore, openTenantSession } from './drizzle-store';
+import {
+  createDrizzleWalletStore,
+  createTenantLocationsSource,
+  createTenantWalletStore,
+  openTenantWalletStore,
+} from './drizzle-store';
 import { expirePass } from './expire';
 import type { ExpireOutcome } from './expire';
 import type { AuthHeaders, WalletBindings } from './helpers';
@@ -24,7 +29,6 @@ import {
   planInactivityDeactivation,
 } from './inactivity';
 import type { InactivityApplyReport, InactivityPlan } from './inactivity';
-import { createLocationsSource } from './locations-source';
 import {
   syncBusinessLocations,
   syncCustomerLocations,
@@ -329,10 +333,10 @@ export interface DeactivateInactivePassesOptions {
  * object, because the RPC surface and Cloudflare's runtime read whichever they
  * find and a method exported one way only is a method that silently never runs.
  *
- * ## Why no tenant session is opened
+ * ## Why no tenant transaction is opened
  *
  * Same reason as the sweep, for the same reason: this enumerates tenants, and
- * `openTenantSession` would set `app.current_tenant_id` and hide every other
+ * a tenant transaction would set `app.current_tenant_id` and hide every other
  * tenant's rows from itself. Every statement below is tenant-scoped in its own
  * `WHERE`, which is where this repository's isolation actually lives — see the
  * note at the top of `drizzle-store.ts`, where RLS is a second line of defence
@@ -447,9 +451,9 @@ export interface ReconcileCustomerInput {
  * reconcile ends in `skipped`, and that is cheaper than two vocabularies for
  * "not yet".
  *
- * ## Why the tenant session is opened here and the sweep opens none
+ * ## Why the store is tenant-scoped here and the sweep's is not
  *
- * `openTenantSession` is what every route in this worker does, and it is
+ * A tenant-scoped store is what every route in this worker uses, and it is
  * correct for a call that already knows its tenant — including the cost of the
  * pool it opens, which a sale now costs this worker the same way every other
  * request already does. The sweep's omission of it is documented in `sweep.ts`
@@ -472,11 +476,9 @@ export async function reconcileCustomer(
   input: ReconcileCustomerInput,
   env: WalletBindings,
 ): Promise<ReconcileOutcome> {
-  const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
-
   const outcome = await reconcilePass(
     {
-      store: createDrizzleWalletStore(db),
+      store: openTenantWalletStore(env.DATABASE_URL, input.tenantId),
       client: googleWalletClientFor(env),
       demoMode: parseDemoMode(env.WALLET_DEMO_MODE),
     },
@@ -530,7 +532,7 @@ export interface ExpireCustomerPassInput {
  * because a wrong balance is worth failing loudly for; an expiry that did not
  * happen yet has a retry path that does not need the caller's help.
  *
- * ## Why the tenant session is opened here
+ * ## Why the store is tenant-scoped here
  *
  * The same reason `reconcileCustomer` gives: this call knows its tenant, and
  * reading one tenant's rows without the session variables would return nothing
@@ -545,10 +547,9 @@ export async function expireCustomerPass(
 ): Promise<ExpireOutcome> {
   let outcome: ExpireOutcome;
   try {
-    const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
     outcome = await expirePass(
       {
-        store: createDrizzleWalletStore(db),
+        store: openTenantWalletStore(env.DATABASE_URL, input.tenantId),
         client: googleWalletClientFor(env),
         demoMode: parseDemoMode(env.WALLET_DEMO_MODE),
       },
@@ -624,12 +625,12 @@ export async function syncLocations(
   input: SyncLocationsInput,
   env: WalletBindings,
 ): Promise<SyncLocationsResult> {
-  const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
+  const db = createDb(env.DATABASE_URL);
 
   const deps: LocationsSyncDeps = {
-    store: createDrizzleWalletStore(db),
+    store: createTenantWalletStore(db, input.tenantId),
     client: googleWalletClientFor(env),
-    locations: createLocationsSource(db),
+    locations: createTenantLocationsSource(db, input.tenantId),
   };
 
   if (input.customerGlobalId !== undefined) {
@@ -700,11 +701,9 @@ export async function provisionClass(
   input: { tenantId: string },
   env: WalletBindings,
 ): Promise<ProvisionOutcome> {
-  const db = await openTenantSession(env.DATABASE_URL, input.tenantId);
-
   return provisionTenantClass(
     {
-      store: createDrizzleWalletStore(db),
+      store: openTenantWalletStore(env.DATABASE_URL, input.tenantId),
       client: googleWalletClientFor(env),
       issuerId: env.GOOGLE_WALLET_ISSUER_ID,
       // Three origins, three parsers, on purpose. The logo and the homepage

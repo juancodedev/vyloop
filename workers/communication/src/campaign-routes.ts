@@ -1,4 +1,4 @@
-import { createDb, messageLog, branches, pushCampaigns } from '@vyloop/db';
+import { createDb, messageLog, branches, pushCampaigns, withTenantTransaction } from '@vyloop/db';
 import { PUSH_CAMPAIGN_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { getRequestId } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
@@ -8,7 +8,7 @@ import { Hono } from 'hono';
 import { findBranchesInRadius } from '../../../packages/db/src/proximity';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, withRls } from './helpers';
+import { extractAuthHeaders } from './helpers';
 import type { PushCampaignPayload, PushCampaignTarget } from './push-campaigns';
 import { resolveCampaignAudience } from './push-campaigns';
 
@@ -252,100 +252,116 @@ router.post('/v1/communication/push/campaigns', async (c) => {
   const dryRun = c.req.query('dry_run') === 'true';
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // The campaign's reference. A campaign that names none gets one, because
-  // the reference is what names its rows and what a second composition of the
-  // same campaign is refused on.
-  const referenceId = parsed.value.reference_id ?? crypto.randomUUID();
+  // Every read and the campaign row run in one tenant transaction. The event
+  // is published after it commits, so a consumer never sees a campaign whose
+  // row was rolled back.
+  const composed = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // The campaign's reference. A campaign that names none gets one, because
+    // the reference is what names its rows and what a second composition of the
+    // same campaign is refused on.
+    const referenceId = parsed.value.reference_id ?? crypto.randomUUID();
 
-  // -----------------------------------------------------------------------
-  // The duplicate probe (skipped on dry-run: a preview is not a composition)
-  // -----------------------------------------------------------------------
-  if (!dryRun) {
-    const [existing] = await db
-    .select({ id: messageLog.id })
-    .from(messageLog)
-    .where(
-      and(
-        eq(messageLog.businessId, businessId),
-        // A literal prefix comparison, not `LIKE`: an operator's reference may
-        // hold `_` or `%`, and as a pattern `promo_1` would match `promo-1`.
-        // `starts_with` and not `left(…, n)`: a length measured in JavaScript
-        // counts UTF-16 units and Postgres counts characters, so an emoji in
-        // the reference would make the two disagree.
-        sql`starts_with(${messageLog.content}->>'reference_id', ${`${referenceId}:`})`,
-      ),
-    )
-    .limit(1);
+    // -----------------------------------------------------------------------
+    // The duplicate probe (skipped on dry-run: a preview is not a composition)
+    // -----------------------------------------------------------------------
+    if (!dryRun) {
+      const [existing] = await tx
+        .select({ id: messageLog.id })
+        .from(messageLog)
+        .where(
+          and(
+            eq(messageLog.businessId, businessId),
+            // A literal prefix comparison, not `LIKE`: an operator's reference may
+            // hold `_` or `%`, and as a pattern `promo_1` would match `promo-1`.
+            // `starts_with` and not `left(…, n)`: a length measured in JavaScript
+            // counts UTF-16 units and Postgres counts characters, so an emoji in
+            // the reference would make the two disagree.
+            sql`starts_with(${messageLog.content}->>'reference_id', ${`${referenceId}:`})`,
+          ),
+        )
+        .limit(1);
 
-  if (existing) {
-    return c.json(
-      {
-        error: {
-          code: 'DUPLICATE_MESSAGE',
-          message: 'A campaign with this reference already exists.',
-        },
-      },
-      409,
-    );
-  }
-  }
-
-  // -----------------------------------------------------------------------
-  // The audience
-  // -----------------------------------------------------------------------
-  // Resolved on the server, from the interactions at the target's venues.
-  const audience = await resolveCampaignAudience(db, businessId, parsed.value.target);
-
-  // Per-branch breakdown (name + distance) for the preview/detail views.
-  let perBranch: Array<{ branch_id: string; name: string; distance_m: number }> = [];
-  if ('branch_id' in parsed.value.target) {
-    const [branch] = await db
-      .select({ id: branches.id, name: branches.name })
-      .from(branches)
-      // Within the business: the id comes from the request body.
-      .where(and(eq(branches.id, parsed.value.target.branch_id), eq(branches.businessId, businessId)))
-      .limit(1);
-    if (branch) {
-      perBranch = [{ branch_id: branch.id, name: branch.name, distance_m: 0 }];
+      if (existing) {
+        return {
+          response: c.json(
+            {
+              error: {
+                code: 'DUPLICATE_MESSAGE',
+                message: 'A campaign with this reference already exists.',
+              },
+            },
+            409,
+          ),
+        };
+      }
     }
-  } else {
-    const found = await findBranchesInRadius(db, {
+
+    // -----------------------------------------------------------------------
+    // The audience
+    // -----------------------------------------------------------------------
+    // Resolved on the server, from the interactions at the target's venues.
+    const audience = await resolveCampaignAudience(tx, businessId, parsed.value.target);
+
+    // Per-branch breakdown (name + distance) for the preview/detail views.
+    let perBranch: Array<{ branch_id: string; name: string; distance_m: number }> = [];
+    if ('branch_id' in parsed.value.target) {
+      const [branch] = await tx
+        .select({ id: branches.id, name: branches.name })
+        .from(branches)
+        // Within the business: the id comes from the request body.
+        .where(and(eq(branches.id, parsed.value.target.branch_id), eq(branches.businessId, businessId)))
+        .limit(1);
+      if (branch) {
+        perBranch = [{ branch_id: branch.id, name: branch.name, distance_m: 0 }];
+      }
+    } else {
+      const found = await findBranchesInRadius(tx, {
+        businessId,
+        latitude: parsed.value.target.latitude,
+        longitude: parsed.value.target.longitude,
+        radiusMeters: parsed.value.target.radius_m,
+      });
+      perBranch = found.map((b) => ({ branch_id: b.id, name: b.name, distance_m: b.distanceMeters }));
+    }
+
+    if (dryRun) {
+      return {
+        response: c.json(
+          { reference_id: referenceId, audience_size: audience.length, per_branch: perBranch },
+          202,
+        ),
+      };
+    }
+
+    const payload: PushCampaignPayload = {
+      business_id: businessId,
+      title: parsed.value.title,
+      body: parsed.value.body,
+      ...(parsed.value.url !== undefined ? { url: parsed.value.url } : {}),
+      reference_id: referenceId,
+      target: parsed.value.target,
+    };
+
+    await tx.insert(pushCampaigns).values({
+      referenceId,
       businessId,
-      latitude: parsed.value.target.latitude,
-      longitude: parsed.value.target.longitude,
-      radiusMeters: parsed.value.target.radius_m,
-    });
-    perBranch = found.map((b) => ({ branch_id: b.id, name: b.name, distance_m: b.distanceMeters }));
+      title: parsed.value.title,
+      body: parsed.value.body,
+      url: parsed.value.url ?? null,
+      target: parsed.value.target,
+      targetType: 'branch_id' in parsed.value.target ? 'branch' : 'radius',
+      audienceSize: audience.length,
+    }).onConflictDoNothing();
+
+    return { referenceId, payload, audienceSize: audience.length };
+  });
+
+  if ('response' in composed) {
+    return composed.response;
   }
 
-  if (dryRun) {
-    return c.json(
-      { reference_id: referenceId, audience_size: audience.length, per_branch: perBranch },
-      202,
-    );
-  }
-
-  const payload: PushCampaignPayload = {
-    business_id: businessId,
-    title: parsed.value.title,
-    body: parsed.value.body,
-    ...(parsed.value.url !== undefined ? { url: parsed.value.url } : {}),
-    reference_id: referenceId,
-    target: parsed.value.target,
-  };
-
-  await db.insert(pushCampaigns).values({
-    referenceId,
-    businessId,
-    title: parsed.value.title,
-    body: parsed.value.body,
-    url: parsed.value.url ?? null,
-    target: parsed.value.target,
-    targetType: 'branch_id' in parsed.value.target ? 'branch' : 'radius',
-    audienceSize: audience.length,
-  }).onConflictDoNothing();
+  const { referenceId, payload, audienceSize } = composed;
 
   await publish(
     c.env.DELIVERY_QUEUE,
@@ -356,7 +372,7 @@ router.post('/v1/communication/push/campaigns', async (c) => {
     ),
   );
 
-  return c.json({ reference_id: referenceId, audience_size: audience.length }, 202);
+  return c.json({ reference_id: referenceId, audience_size: audienceSize }, 202);
 });
 
 
@@ -375,13 +391,14 @@ router.get('/v1/communication/push/campaigns', async (c) => {
   const perPage = Math.min(100, Math.max(1, Number(c.req.query('per_page') ?? '20') || 20));
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  const rows = await db.select().from(pushCampaigns)
-    .where(eq(pushCampaigns.businessId, businessId))
-    .orderBy(desc(pushCampaigns.createdAt))
-    .limit(perPage)
-    .offset((page - 1) * perPage);
+  const rows = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx.select().from(pushCampaigns)
+      .where(eq(pushCampaigns.businessId, businessId))
+      .orderBy(desc(pushCampaigns.createdAt))
+      .limit(perPage)
+      .offset((page - 1) * perPage),
+  );
 
   const list = rows.map((r) => ({
     reference_id: r.referenceId,
@@ -410,11 +427,12 @@ router.get('/v1/communication/push/campaigns/:referenceId', async (c) => {
   const referenceId = c.req.param('referenceId');
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  const [r] = await db.select().from(pushCampaigns)
-    .where(eq(pushCampaigns.referenceId, referenceId))
-    .limit(1);
+  const [r] = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx.select().from(pushCampaigns)
+      .where(eq(pushCampaigns.referenceId, referenceId))
+      .limit(1),
+  );
 
   if (!r || r.businessId !== businessId) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Campaign not found.' } }, 404);

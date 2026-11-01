@@ -1,4 +1,4 @@
-import { createDb, setCurrentBusinessId } from '@vyloop/db';
+import { createDb, withTenantTransaction } from '@vyloop/db';
 import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -68,35 +68,42 @@ app.use('*', requestIdMiddleware());
 app.get('/v1/analytics/kpis', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const db = createDb(c.env.DATABASE_URL);
-  await db.execute(setCurrentBusinessId(businessId));
 
-  const customerResult = await db.execute(sql`
-    SELECT
-      count(*) AS total_customers,
-      count(*) FILTER (WHERE deleted_at IS NULL) AS active_customers
-    FROM customers
-    WHERE business_id = ${businessId}::uuid
-  `);
-  const pointsResult = await db.execute(sql`
-    SELECT
-      COALESCE(sum(points) FILTER (WHERE type = 'earn'), 0) AS total_issued,
-      COALESCE(sum(points) FILTER (WHERE type = 'redeem'), 0) AS total_redeemed
-    FROM points_transactions
-    WHERE business_id = ${businessId}::uuid
-  `);
-  const tierResult = await db.execute(sql`
-    SELECT mt.name, count(c.id) AS customer_count
-    FROM membership_tiers mt
-    LEFT JOIN customers c ON c.current_tier_id = mt.id AND c.business_id = ${businessId}::uuid
-    WHERE mt.business_id = ${businessId}::uuid
-    GROUP BY mt.id, mt.name, mt.display_order
-    ORDER BY mt.display_order
-  `);
-  const rewardResult = await db.execute(sql`
-    SELECT count(*) AS rewards_claimed
-    FROM reward_grants
-    WHERE business_id = ${businessId}::uuid
-  `);
+  const { customerResult, pointsResult, tierResult, rewardResult } = await withTenantTransaction(
+    db,
+    { businessId },
+    async (tx) => {
+      const customerResult = await tx.execute(sql`
+      SELECT
+        count(*) AS total_customers,
+        count(*) FILTER (WHERE deleted_at IS NULL) AS active_customers
+      FROM customers
+      WHERE business_id = ${businessId}::uuid
+    `);
+      const pointsResult = await tx.execute(sql`
+      SELECT
+        COALESCE(sum(points) FILTER (WHERE type = 'earn'), 0) AS total_issued,
+        COALESCE(sum(points) FILTER (WHERE type = 'redeem'), 0) AS total_redeemed
+      FROM points_transactions
+      WHERE business_id = ${businessId}::uuid
+    `);
+      const tierResult = await tx.execute(sql`
+      SELECT mt.name, count(c.id) AS customer_count
+      FROM membership_tiers mt
+      LEFT JOIN customers c ON c.current_tier_id = mt.id AND c.business_id = ${businessId}::uuid
+      WHERE mt.business_id = ${businessId}::uuid
+      GROUP BY mt.id, mt.name, mt.display_order
+      ORDER BY mt.display_order
+    `);
+      const rewardResult = await tx.execute(sql`
+      SELECT count(*) AS rewards_claimed
+      FROM reward_grants
+      WHERE business_id = ${businessId}::uuid
+    `);
+
+      return { customerResult, pointsResult, tierResult, rewardResult };
+    },
+  );
 
   const customers = customerResult.rows?.[0] ?? {
     total_customers: 0,
@@ -134,62 +141,63 @@ app.get('/v1/analytics/kpis', async (c) => {
 app.get('/v1/analytics/timeline', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const db = createDb(c.env.DATABASE_URL);
-  await db.execute(setCurrentBusinessId(businessId));
 
-  const result = await db.execute(sql`
-    SELECT type, customer_name, description, timestamp
-    FROM (
-      -- Recent customer registrations
-      SELECT
-        'customer.created' AS type,
-        c.full_name AS customer_name,
-        'Nuevo cliente registrado' AS description,
-        c.created_at AS timestamp
-      FROM customers c
-      WHERE c.business_id = ${businessId}::uuid
-        AND c.deleted_at IS NULL
+  const result = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx.execute(sql`
+      SELECT type, customer_name, description, timestamp
+      FROM (
+        -- Recent customer registrations
+        SELECT
+          'customer.created' AS type,
+          c.full_name AS customer_name,
+          'Nuevo cliente registrado' AS description,
+          c.created_at AS timestamp
+        FROM customers c
+        WHERE c.business_id = ${businessId}::uuid
+          AND c.deleted_at IS NULL
 
-      UNION ALL
+        UNION ALL
 
-      -- Recent points transactions with customer name
-      SELECT
-        CASE pt.type
-          WHEN 'earn'   THEN 'points.earned'
-          WHEN 'redeem' THEN 'points.redeemed'
-        END AS type,
-        c.full_name AS customer_name,
-        CASE pt.type
-          WHEN 'earn'
-            THEN 'Ganó ' || ABS(pt.points) || ' pts - ' || COALESCE(pt.note, '')
-          WHEN 'redeem'
-            THEN 'Canjeó ' || ABS(pt.points) || ' pts - ' || COALESCE(pt.note, '')
-        END AS description,
-        pt.created_at AS timestamp
-      FROM points_transactions pt
-      JOIN customers c ON c.id = pt.customer_id
-      WHERE pt.business_id = ${businessId}::uuid
+        -- Recent points transactions with customer name
+        SELECT
+          CASE pt.type
+            WHEN 'earn'   THEN 'points.earned'
+            WHEN 'redeem' THEN 'points.redeemed'
+          END AS type,
+          c.full_name AS customer_name,
+          CASE pt.type
+            WHEN 'earn'
+              THEN 'Ganó ' || ABS(pt.points) || ' pts - ' || COALESCE(pt.note, '')
+            WHEN 'redeem'
+              THEN 'Canjeó ' || ABS(pt.points) || ' pts - ' || COALESCE(pt.note, '')
+          END AS description,
+          pt.created_at AS timestamp
+        FROM points_transactions pt
+        JOIN customers c ON c.id = pt.customer_id
+        WHERE pt.business_id = ${businessId}::uuid
 
-      UNION ALL
+        UNION ALL
 
-      -- Recent customer events
-      SELECT
-        CASE ce.event_type
-          WHEN 'customer.profile_viewed' THEN 'customer.profile_viewed'
-          ELSE 'customer.event'
-        END AS type,
-        c.full_name AS customer_name,
-        CASE ce.event_type
-          WHEN 'customer.profile_viewed' THEN 'Perfil consultado'
-          ELSE ce.event_type
-        END AS description,
-        ce.created_at AS timestamp
-      FROM customer_events ce
-      JOIN customers c ON c.id = ce.customer_id
-      WHERE ce.business_id = ${businessId}::uuid
-    ) AS timeline
-    ORDER BY timestamp DESC
-    LIMIT 20
-  `);
+        -- Recent customer events
+        SELECT
+          CASE ce.event_type
+            WHEN 'customer.profile_viewed' THEN 'customer.profile_viewed'
+            ELSE 'customer.event'
+          END AS type,
+          c.full_name AS customer_name,
+          CASE ce.event_type
+            WHEN 'customer.profile_viewed' THEN 'Perfil consultado'
+            ELSE ce.event_type
+          END AS description,
+          ce.created_at AS timestamp
+        FROM customer_events ce
+        JOIN customers c ON c.id = ce.customer_id
+        WHERE ce.business_id = ${businessId}::uuid
+      ) AS timeline
+      ORDER BY timestamp DESC
+      LIMIT 20
+    `),
+  );
 
   const items: TimelineItem[] = (result.rows ?? []).map((row) => ({
     type: row.type as TimelineItem['type'],
@@ -206,10 +214,7 @@ app.get('/v1/analytics/timeline', async (c) => {
 // ---------------------------------------------------------------------------
 
 app.notFound((c) => {
-  return c.json(
-    { error: { code: 'NOT_FOUND', message: 'Route not found' } },
-    404,
-  );
+  return c.json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, 404);
 });
 
 // ---------------------------------------------------------------------------

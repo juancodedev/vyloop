@@ -114,7 +114,7 @@ vi.mock('./drizzle-store', async (importOriginal) => {
     createDrizzleWalletStore: vi.fn(() => store),
     // Spied rather than passed through: the assertion is that the entry point never
     // calls it, which needs something to assert against.
-    openTenantSession: vi.fn(actual.openTenantSession),
+    openTenantWalletStore: vi.fn(actual.openTenantWalletStore),
   };
 });
 
@@ -249,13 +249,13 @@ describe('deactivateInactivePasses', () => {
   });
 
   it('opens no tenant session, because it enumerates tenants', async () => {
-    // `openTenantSession` sets `app.current_tenant_id`, which would hide every
+    // `openTenantWalletStore` sets `app.current_tenant_id`, which would hide every
     // other tenant's rows from the enumeration itself. The sweep omits it for the
     // same reason and that omission does not extend to the request path.
-    const { openTenantSession } = await import('./drizzle-store');
+    const { openTenantWalletStore } = await import('./drizzle-store');
     await deactivateInactivePasses(env() as never);
 
-    expect(openTenantSession).not.toHaveBeenCalled();
+    expect(openTenantWalletStore).not.toHaveBeenCalled();
   });
 
   it('still plans in demo mode, with no early return', async () => {

@@ -137,6 +137,9 @@ vi.mock('@vyloop/db', async () => {
     verifyPassword: actual.verifyPassword,
     schema: {},
     setCurrentBusinessId: vi.fn(),
+    // The real helper, so every route's tenant setting is the one production
+    // issues: `set_config` on the transaction handle, before the route's queries.
+    withTenantTransaction: actual.withTenantTransaction,
   };
 });
 
@@ -287,11 +290,10 @@ function createMockDb(): MockDb {
     execute: vi.fn().mockResolvedValue({ rows: [] }),
     transaction: vi.fn(),
   };
-  db.transaction.mockImplementation(async (cb: (tx: MockDb & { execute: MockFn }) => unknown) => {
-    const tx = createBuilder() as MockDb & { execute: MockFn };
-    tx.execute = vi.fn(() => Promise.resolve({ rows: [] }));
-    return cb(tx);
-  });
+  // The transaction handle is the same mock, so the queries a route runs on
+  // `tx` are read from the same queues as before; its first `execute` is the
+  // `set_config` that scopes the transaction to the tenant.
+  db.transaction.mockImplementation(async (cb: (tx: MockDb) => unknown) => cb(db));
   return db;
 }
 
@@ -416,6 +418,69 @@ describe('Growth Worker', () => {
       expect(json.data.min_redeem_points).toBe(200);
       expect(json.data.points_expiry_days).toBe(365);
       expect(json.data.is_active).toBe(true);
+    });
+  });
+
+  // ==========================================================================
+  // The tenant is set on the transaction the queries run on
+  // ==========================================================================
+
+  describe('the tenant scope reaches the queries', () => {
+    /**
+     * Hand the route a transaction handle of its own and record, in order, what
+     * reached it. `set_config(..., true)` is transaction-local, so a setting
+     * issued anywhere but on this handle never reaches the queries after it.
+     */
+    function recordTransaction(program: unknown[]) {
+      const calls: string[] = [];
+      const tx = {
+        execute: vi.fn((query: SQL) => {
+          const { sql: text, params } = new PgDialect().sqlToQuery(query);
+          calls.push(`execute ${text} ${JSON.stringify(params)}`);
+          return Promise.resolve({ rows: [] });
+        }),
+        select: vi.fn(() => {
+          calls.push('select');
+          return createBuilder(program);
+        }),
+        update: vi.fn(() => {
+          calls.push('update');
+          return createBuilder([{ earnRate: '2', earnBy: 'visit', earnUnitAmount: '1000.00', name: 'P' }]);
+        }),
+      };
+      mockDb.transaction.mockImplementationOnce(async (cb: (handle: typeof tx) => unknown) => cb(tx));
+      return calls;
+    }
+
+    it('GET /v1/loyalty/config sets the business on the transaction before reading', async () => {
+      const calls = recordTransaction([]);
+
+      const res = await GET('/v1/loyalty/config');
+
+      expect(res.status).toBe(200);
+      expect(calls).toEqual([
+        `execute SELECT set_config('app.current_business_id', $1, true); ["biz-1"]`,
+        'select',
+      ]);
+      // Nothing ran on the outer handle, where the setting would not apply.
+      expect(mockDb.execute).not.toHaveBeenCalled();
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+
+    it('PUT /v1/loyalty/config reads and writes inside the scoped transaction', async () => {
+      const calls = recordTransaction([{ id: 'prog-1', earnRate: '1.0' }]);
+
+      const res = await PUT('/v1/loyalty/config', { earn_rate: 2 });
+
+      expect(res.status).toBe(200);
+      expect(calls).toEqual([
+        `execute SELECT set_config('app.current_business_id', $1, true); ["biz-1"]`,
+        'select',
+        'update',
+      ]);
+      expect(mockDb.execute).not.toHaveBeenCalled();
+      expect(mockDb.select).not.toHaveBeenCalled();
+      expect(mockDb.update).not.toHaveBeenCalled();
     });
   });
 
@@ -677,7 +742,7 @@ describe('Growth Worker', () => {
 
   describe('POST /v1/loyalty/points/assign — earning by purchase', () => {
     /**
-     * `withRls` eats the first `execute`, so the ledger INSERT is the second.
+     * The tenant's `set_config` eats the first `execute`, so the ledger INSERT is the second.
      * Read back through the real dialect because the number that matters is a
      * bound parameter, not a string in the SQL.
      */
@@ -703,7 +768,7 @@ describe('Growth Worker', () => {
       if (overrides.tier) {
         mockDb.select.mockReturnValueOnce(createBuilder([overrides.tier]));
       }
-      // withRls
+      // set_config
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       mockDb.execute.mockResolvedValueOnce({
         rows: [{ id: 'tx-1', customer_id: 'cust-1', balance_after: 0, points: 0 }],
@@ -809,12 +874,12 @@ describe('Growth Worker', () => {
     });
 
     /**
-     * `withRls` opens the session before any of this is judged, so "no ledger
-     * write" means the INSERT never ran — not that the database was never touched.
+     * The tenant's `set_config` opens the transaction before any of this is
+     * judged, so "no ledger write" means the INSERT never ran — not that the
+     * database was never touched.
      */
     function expectNoLedgerWrite() {
-      // `setCurrentBusinessId` is a mock returning undefined, so the withRls call
-      // carries no compilable statement. Only the real ones are inspected.
+      // Every statement is inspected; the `set_config` names no ledger table.
       const statements = mockDb.execute.mock.calls
         .map((call) => call[0])
         .filter((arg) => arg !== undefined && arg !== null)
@@ -1510,7 +1575,7 @@ describe('Growth Worker', () => {
       mockDb.select.mockReturnValueOnce(
         createBuilder([{ id: 'tier-1', multiplier: '1.5' }]),
       );
-      // withRls consumes the first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // execute returns the transaction
       mockDb.execute.mockResolvedValueOnce({
@@ -1556,7 +1621,7 @@ describe('Growth Worker', () => {
     it('returns 409 on duplicate reference_id', async () => {
       mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'prog-1', earnRate: '1.0' }]));
       mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
-      // withRls consumes the first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // The actual insert throws duplicate error
       mockDb.execute.mockRejectedValueOnce({
@@ -1578,7 +1643,7 @@ describe('Growth Worker', () => {
     it('uses default earn_rate = 1.0 and multiplier = 1.0 when no program or customer tier', async () => {
       mockDb.select.mockReturnValueOnce(createBuilder([])); // no program
       mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: undefined }]));
-      // withRls consumes the first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       mockDb.execute.mockResolvedValueOnce({
         rows: [{ id: 'tx-1', balance_after: 50 }],
@@ -2038,7 +2103,7 @@ describe('Growth Worker', () => {
 
   describe('POST /v1/loyalty/rewards/redeem', () => {
     it('redeems points without reward_id (201)', async () => {
-      // withRls consumes first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // balance query
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] });
@@ -2081,7 +2146,7 @@ describe('Growth Worker', () => {
     });
 
     it('returns 409 on duplicate reference', async () => {
-      // withRls consumes first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // balance query
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] });
@@ -2103,7 +2168,7 @@ describe('Growth Worker', () => {
     });
 
     it('returns 409 insufficient balance', async () => {
-      // withRls consumes first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // balance query returns 50 < 100
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 50 }] });
@@ -2120,7 +2185,7 @@ describe('Growth Worker', () => {
     });
 
     it('returns 201 partial when partial:true and balance < requested', async () => {
-      // withRls consumes first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // balance query returns 30 < 100
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 30 }] });
@@ -2144,7 +2209,7 @@ describe('Growth Worker', () => {
     });
 
     it('returns 409 when balance is 0 even with partial:true', async () => {
-      // withRls consumes first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // balance query returns 0
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 0 }] });
@@ -2267,17 +2332,13 @@ describe('Growth Worker', () => {
       mockDb.select.mockReturnValueOnce(
         createBuilder([{ id: 'rw-1', stock: 10, pointsCost: 50, name: 'Gift Card' }]),
       );
-      // withRls consumes first execute
+      // The tenant's set_config consumes the first execute
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       // balance query
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] });
-
-      const txExec = vi.fn()
-        .mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: 450 }] })
-        .mockResolvedValueOnce({ rows: [] });
-      mockDb.transaction.mockImplementationOnce(async (cb: (tx: { execute: MockFn }) => unknown) => {
-        return cb({ execute: txExec });
-      });
+      // the ledger INSERT, then the stock decrement
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: 450 }] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
 
       const res = await POST('/v1/loyalty/rewards/redeem', {
         customer_id: 'cust-1',
@@ -2291,7 +2352,9 @@ describe('Growth Worker', () => {
       expect((json.data as Record<string, unknown>).id).toBe('tx-1');
       expect(json.fulfilled).toBe(100);
       expect(json.partial).toBe(false);
-      expect(txExec).toHaveBeenCalledTimes(2);
+      // One transaction holds the ledger row and the stock decrement.
+      expect(mockDb.transaction).toHaveBeenCalledOnce();
+      expect(mockDb.execute).toHaveBeenCalledTimes(4);
       expect(publish).toHaveBeenCalledOnce();
     });
   });
@@ -2619,7 +2682,7 @@ describe('Growth Worker', () => {
 
     it('refuses a customer redeeming for another customer and writes nothing', async () => {
       mockSubject();
-      // Only withRls should reach the database.
+      // Only the tenant's set_config should reach the database.
       mockDb.execute.mockResolvedValue({ rows: [] });
 
       const res = await reqAs('POST', '/v1/loyalty/rewards/redeem', CUSTOMER, {
@@ -2632,10 +2695,11 @@ describe('Growth Worker', () => {
       const raw = await res.text();
       const json = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       expect(json.error.code).toBe('CUSTOMER_ID_MISMATCH');
-      // One statement only: the RLS session variable. No balance read, no
-      // INSERT, no event — nothing was spent.
+      // One statement only: the tenant's `set_config`, in the one transaction
+      // the refusal ran in. No balance read, no INSERT, no event — nothing was
+      // spent.
       expect(mockDb.execute).toHaveBeenCalledOnce();
-      expect(mockDb.transaction).not.toHaveBeenCalled();
+      expect(mockDb.transaction).toHaveBeenCalledOnce();
       expect(publish).not.toHaveBeenCalled();
       expectNoLeakedIds(raw, ['cust-bob', '900']);
     });
@@ -2678,7 +2742,7 @@ describe('Growth Worker', () => {
 
     it('redeems a customer with no customer_id against their own balance', async () => {
       mockSubject();
-      mockDb.execute.mockResolvedValueOnce({ rows: [] }); // withRls
+      mockDb.execute.mockResolvedValueOnce({ rows: [] }); // set_config
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] }); // balance
       mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-new', balance_after: 400 }] }); // insert
 
@@ -2722,13 +2786,9 @@ describe('Growth Worker', () => {
       );
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
       mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 900 }] });
-
-      const txExec = vi.fn()
-        .mockResolvedValueOnce({ rows: [{ id: 'tx-pos', balance_after: 800 }] })
-        .mockResolvedValueOnce({ rows: [] });
-      mockDb.transaction.mockImplementationOnce(async (cb: (tx: { execute: MockFn }) => unknown) =>
-        cb({ execute: txExec }),
-      );
+      // The ledger INSERT, then the stock decrement.
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-pos', balance_after: 800 }] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
 
       const res = await POST('/v1/loyalty/rewards/redeem', {
         customer_id: 'cust-bob',
@@ -2744,7 +2804,8 @@ describe('Growth Worker', () => {
       // No subject lookup: the operator id is honoured as sent. The two reads are
       // the reward and the deleted-customer check on that same id.
       expect(mockDb.select).toHaveBeenCalledTimes(2);
-      const posStatements = txExec.mock.calls
+      const posStatements = mockDb.execute.mock.calls
+        .slice(2)
         .map((call) => dialect.sqlToQuery(call[0] as never).params)
         .flat();
       expect(posStatements).toContain('cust-bob');
@@ -2785,7 +2846,7 @@ describe('Growth Worker', () => {
       });
     }
 
-    /** The raw statements that wrote or read the ledger. `withRls` carries none. */
+    /** The raw statements that wrote or read the ledger. The tenant's `set_config` carries none. */
     function ledgerStatements(): string[] {
       return executedStatements().filter((s) => /points_transactions/.test(s));
     }
@@ -2813,7 +2874,7 @@ describe('Growth Worker', () => {
         expect(res.status).toBe(404);
         const json = (await res.json()) as Record<string, Record<string, unknown>>;
         expect(json.error.code).toBe('NOT_FOUND');
-        // Only `withRls` reached `execute`: no ledger INSERT ran.
+        // Only the tenant's `set_config` reached `execute`: no ledger INSERT ran.
         expect(mockDb.execute).toHaveBeenCalledOnce();
         expect(ledgerStatements()).toEqual([]);
         expect(mockDb.insert).not.toHaveBeenCalled();
@@ -2895,8 +2956,9 @@ describe('Growth Worker', () => {
         expect(res.status).toBe(403);
         const json = (await res.json()) as Record<string, Record<string, unknown>>;
         expect(json.error.code).toBe('CUSTOMER_SELF_NOT_FOUND');
+        // Only the tenant's `set_config`, in the one transaction the refusal ran in.
         expect(mockDb.execute).toHaveBeenCalledOnce();
-        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(mockDb.transaction).toHaveBeenCalledOnce();
         expect(publish).not.toHaveBeenCalled();
       });
 
@@ -2915,10 +2977,10 @@ describe('Growth Worker', () => {
         expect(res.status).toBe(404);
         const json = (await res.json()) as Record<string, Record<string, unknown>>;
         expect(json.error.code).toBe('NOT_FOUND');
-        // Only `withRls`: no balance read, no INSERT, no event.
+        // Only the tenant's `set_config`: no balance read, no INSERT, no event.
         expect(mockDb.execute).toHaveBeenCalledOnce();
         expect(ledgerStatements()).toEqual([]);
-        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(mockDb.transaction).toHaveBeenCalledOnce();
         expect(publish).not.toHaveBeenCalled();
       });
 
@@ -3017,7 +3079,7 @@ describe('Growth Worker', () => {
   // Two properties are asserted for every route, not just the status:
   //
   //   1. Nothing was written. The guard runs before the body is parsed, before
-  //      the program or catalog is read, and before `withRls` — so the whole
+  //      the program or catalog is read, and before the tenant transaction — so the whole
   //      database is untouched, not merely un-mutated.
   //   2. The answer is the same either way. The guard reads nothing, so a
   //      request that would have succeeded and one that would have failed get
@@ -3819,9 +3881,9 @@ describe('Growth Worker', () => {
       // customer spend points they do not have.
       //
       // The order array is the assertion: the handler's own `await
-      // performRedeem()` has to resolve before `reconcileCustomer` is called at
-      // all. A projection moved inside the transaction body puts 'reconcile'
-      // between 'ledger' and 'commit'.
+      // withTenantTransaction(...)` has to resolve before `reconcileCustomer` is
+      // called at all. A projection moved inside the transaction body puts
+      // 'reconcile' between 'ledger' and 'commit'.
       const order: string[] = [];
       const { waitUntil } = backgroundWork();
       const reconcileCustomer = vi.fn(async () => {
@@ -3829,27 +3891,39 @@ describe('Growth Worker', () => {
         return { kind: 'patched' };
       });
 
-      mockDb.execute.mockResolvedValueOnce({ rows: [] });
-      mockDb.execute.mockResolvedValueOnce({ rows: [{ balance: 500 }] });
       mockDb.select.mockReturnValueOnce(
         createBuilder([
           { id: 'rw-1', name: 'Coffee', pointsCost: 100, stock: 5, validFrom: null, validUntil: null },
         ]),
       );
       mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
-        const tx = createBuilder() as MockDb & { execute: MockFn };
-        tx.execute = vi.fn(async (statement: never) => {
-          // Two statements share this transaction — the ledger row and the
-          // stock decrement — so the order array names both. A projection fired
-          // between them would be a redemption Google knows about and the
-          // catalog does not.
-          const sqlText = new PgDialect().sqlToQuery(statement).sql;
-          order.push(sqlText.includes('points_transactions') ? 'ledger' : 'stock');
-          return { rows: [{ id: 'tx-9', balance_after: 400, customer_id: 'cust-1' }] };
-        });
-        await cb(tx);
+        const tx = {
+          ...mockDb,
+          execute: vi.fn(async (statement: never) => {
+            // The ledger row and the stock decrement share this transaction with
+            // the tenant setting and the balance read, so the order array names
+            // each. A projection fired between them would be a redemption Google
+            // knows about and the catalog does not.
+            const sqlText = new PgDialect().sqlToQuery(statement).sql;
+            if (sqlText.includes('set_config')) {
+              order.push('tenant');
+              return { rows: [] };
+            }
+            if (sqlText.trimStart().startsWith('INSERT')) {
+              order.push('ledger');
+              return { rows: [{ id: 'tx-9', balance_after: 400, customer_id: 'cust-1' }] };
+            }
+            if (sqlText.trimStart().startsWith('UPDATE')) {
+              order.push('stock');
+              return { rows: [] };
+            }
+            order.push('balance');
+            return { rows: [{ balance: 500 }] };
+          }),
+        };
+        const result = await cb(tx);
         order.push('commit');
-        return { rows: [{ id: 'tx-9', balance_after: 400, customer_id: 'cust-1' }] };
+        return result;
       });
 
       const res = await postWithWallet(
@@ -3860,7 +3934,7 @@ describe('Growth Worker', () => {
       );
 
       expect(res.status).toBe(201);
-      expect(order).toEqual(['ledger', 'stock', 'commit', 'reconcile']);
+      expect(order).toEqual(['tenant', 'balance', 'ledger', 'stock', 'commit', 'reconcile']);
     });
 
     it('projects nothing when a redemption is refused', async () => {
@@ -4006,14 +4080,23 @@ describe('Growth Worker', () => {
       );
     }
 
+    /**
+     * The ledger INSERT's result. The credit reads the rule and writes the ledger
+     * in tenant-scoped transactions of their own, and each opens with a
+     * `set_config` that consumes an `execute` before the INSERT does.
+     */
     function stubLedger(balanceAfter = 5) {
+      mockDb.execute.mockResolvedValueOnce({ rows: [] }); // set_config: the rule reads
+      mockDb.execute.mockResolvedValueOnce({ rows: [] }); // set_config: the ledger write
       mockDb.execute.mockResolvedValueOnce({ rows: [{ id: 'tx-1', balance_after: balanceAfter }] });
     }
 
-    /** The ledger INSERT the route ran. `withRls` ate the first `execute`. */
+    /** The ledger INSERT the route ran, found among the tenant's `set_config`s. */
     function ledgerStatement(): SQL {
       // `mockDb.execute` is untyped, so the statement comes back as `any`.
-      return mockDb.execute.mock.calls[1]?.[0] as SQL;
+      return mockDb.execute.mock.calls
+        .map((call) => call[0] as SQL)
+        .find((query) => /INSERT INTO points_transactions/.test(new PgDialect().sqlToQuery(query as never).sql)) as SQL;
     }
 
     /**
@@ -4054,10 +4137,9 @@ describe('Growth Worker', () => {
     }
 
     /**
-     * `withRls` opens the session before anything is judged, so "no ledger write"
-     * means the INSERT never ran — not that the database was never touched. The
-     * session statement itself carries no compilable SQL here, because
-     * `setCurrentBusinessId` is mocked to return undefined.
+     * The tenant's `set_config` opens the transaction before anything is judged,
+     * so "no ledger write" means the INSERT never ran — not that the database was
+     * never touched.
      */
     function ledgerStatements(): string[] {
       return mockDb.execute.mock.calls
@@ -4221,6 +4303,9 @@ describe('Growth Worker', () => {
       );
       stubProgram();
       mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      // The tenant's `set_config` for the rule reads, then for the ledger write.
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
+      mockDb.execute.mockResolvedValueOnce({ rows: [] });
       mockDb.execute.mockRejectedValueOnce({
         message: 'duplicate key value violates unique constraint "uq_points_tx_reference"',
         code: '23505',
@@ -4374,7 +4459,7 @@ describe('Growth Worker', () => {
       expect(json.error.code).toBe('MEMBER_CODE_NOT_FOUND');
       // Nothing is written. A sale with no member has no identity to attach to,
       // and inventing one would put points on somebody else's balance for a
-      // purchase they did not make. `withRls` has already opened the session by
+      // purchase they did not make. The tenant transaction is already open by
       // this point, so the claim is about writes rather than about contact.
       expect(mockDb.insert).not.toHaveBeenCalled();
       expect(ledgerStatements()).toEqual([]);
@@ -4399,7 +4484,7 @@ describe('Growth Worker', () => {
   // Two properties are asserted, same as the operator guard above:
   //
   //   1. Nothing was written, and nothing was read — the guard is ahead of the
-  //      body parse, ahead of `createDb` and ahead of `withRls`.
+  //      body parse, ahead of `createDb` and ahead of the tenant transaction.
   //   2. The answer does not depend on what the request would otherwise have
   //      done, so the tenant cannot be probed through the refusal.
   // ==========================================================================
@@ -5165,8 +5250,11 @@ describe('Growth Worker', () => {
 
       // The three things this endpoint must never do. Asserted structurally
       // rather than by reading the handler, so a route that starts crediting is
-      // caught by the shape of the calls it makes.
-      expect(mockDb.transaction).not.toHaveBeenCalled();
+      // caught by the shape of the calls it makes. The one transaction is the
+      // tenant-scoped one around the insert, and its only raw statement is the
+      // tenant's `set_config`: no ledger write.
+      expect(mockDb.transaction).toHaveBeenCalledOnce();
+      expect(mockDb.execute).toHaveBeenCalledOnce();
       expect(publish).not.toHaveBeenCalled();
     });
 
@@ -5574,13 +5662,14 @@ describe('Growth Worker', () => {
         await webhookRequest({ payload: PAYMENT, secret: SECRET });
 
         // `createDb` called once, and the only table written is `settled_payments`.
-        // A route that credited would also open a transaction and publish an event,
-        // because `creditCheckin` does both.
+        // A route that credited would also open further transactions, write the
+        // ledger and publish an event, because `creditCheckin` does all three.
         expect(createDb).toHaveBeenCalledTimes(1);
         expect(mockDb.insert).toHaveBeenCalledTimes(1);
         expect(tableNameOf(mockDb.insert.mock.calls[0][0])).toBe('settled_payments');
         expect(mockDb.update).not.toHaveBeenCalled();
-        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(mockDb.transaction).toHaveBeenCalledOnce();
+        expect(mockDb.execute).toHaveBeenCalledOnce();
         expect(publish).not.toHaveBeenCalled();
       });
 

@@ -1,5 +1,5 @@
 import type { Queue } from '@cloudflare/workers-types';
-import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, rewardBranches, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword, branches, customerEvents } from '@vyloop/db';
+import { createDb, loyaltyPrograms, membershipTiers, customers, rewards, rewardBranches, pointsTransactions, checkins, settledPayments, tenants, posTerminals, hashPassword, branches, customerEvents, withTenantTransaction } from '@vyloop/db';
 import { publish, createEnvelope, CUSTOMER_CHECKED_IN } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { getRequestId } from '@vyloop/request-context';
@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 
 import type { Bindings } from './helpers';
-import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, withRls, resolveEffectiveCustomer, isDeletedCustomer, isCustomerRole, requireOperatorRole, requireCounterSubject, schedulePassReconcile } from './helpers';
+import { extractAuthHeaders, buildPointsAssignedEvent, buildRewardRedeemedEvent, resolveEffectiveCustomer, isDeletedCustomer, isCustomerRole, requireOperatorRole, requireCounterSubject, schedulePassReconcile } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Router
@@ -255,13 +255,14 @@ export function computeEarnedPoints(
 router.get('/v1/loyalty/config', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  const [program] = await db
-    .select()
-    .from(loyaltyPrograms)
-    .where(eq(loyaltyPrograms.businessId, businessId))
-    .limit(1);
+  const [program] = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .select()
+      .from(loyaltyPrograms)
+      .where(eq(loyaltyPrograms.businessId, businessId))
+      .limit(1),
+  );
 
   if (!program) {
     return c.json({
@@ -372,64 +373,64 @@ router.put('/v1/loyalty/config', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(loyaltyPrograms)
+      .where(eq(loyaltyPrograms.businessId, businessId))
+      .limit(1);
 
-  const [existing] = await db
-    .select()
-    .from(loyaltyPrograms)
-    .where(eq(loyaltyPrograms.businessId, businessId))
-    .limit(1);
+    if (existing) {
+      const updateData: Record<string, unknown> = { updatedAt: new Date() };
+      if (body.earn_rate !== undefined) updateData.earnRate = String(body.earn_rate);
+      if (body.earn_by !== undefined) updateData.earnBy = body.earn_by;
+      if (body.earn_unit_amount !== undefined) {
+        updateData.earnUnitAmount = String(body.earn_unit_amount);
+      }
+      if (body.program_name !== undefined) updateData.name = body.program_name;
 
-  if (existing) {
-    const updateData: Record<string, unknown> = { updatedAt: new Date() };
-    if (body.earn_rate !== undefined) updateData.earnRate = String(body.earn_rate);
-    if (body.earn_by !== undefined) updateData.earnBy = body.earn_by;
-    if (body.earn_unit_amount !== undefined) {
-      updateData.earnUnitAmount = String(body.earn_unit_amount);
+      const [updated] = await tx
+        .update(loyaltyPrograms)
+        .set(updateData)
+        .where(and(eq(loyaltyPrograms.id, existing.id), eq(loyaltyPrograms.businessId, businessId)))
+        .returning();
+
+      return c.json({
+        data: {
+          earn_rate: updated.earnRate,
+          earn_by: updated.earnBy,
+          earn_unit_amount: updated.earnUnitAmount,
+          program_name: updated.name,
+        },
+      });
     }
-    if (body.program_name !== undefined) updateData.name = body.program_name;
 
-    const [updated] = await db
-      .update(loyaltyPrograms)
-      .set(updateData)
-      .where(and(eq(loyaltyPrograms.id, existing.id), eq(loyaltyPrograms.businessId, businessId)))
+    // Insert new program config
+    const [inserted] = await tx
+      .insert(loyaltyPrograms)
+      .values({
+        businessId,
+        name: body.program_name ?? 'Programa de beneficios',
+        earnRate: body.earn_rate !== undefined ? String(body.earn_rate) : '1.0',
+        ...(body.earn_by !== undefined ? { earnBy: body.earn_by } : {}),
+        ...(body.earn_unit_amount !== undefined
+          ? { earnUnitAmount: String(body.earn_unit_amount) }
+          : {}),
+      })
       .returning();
 
-    return c.json({
-      data: {
-        earn_rate: updated.earnRate,
-        earn_by: updated.earnBy,
-        earn_unit_amount: updated.earnUnitAmount,
-        program_name: updated.name,
+    return c.json(
+      {
+        data: {
+          earn_rate: inserted.earnRate,
+          earn_by: inserted.earnBy,
+          earn_unit_amount: inserted.earnUnitAmount,
+          program_name: inserted.name,
+        },
       },
-    });
-  }
-
-  // Insert new program config
-  const [inserted] = await db
-    .insert(loyaltyPrograms)
-    .values({
-      businessId,
-      name: body.program_name ?? 'Programa de beneficios',
-      earnRate: body.earn_rate !== undefined ? String(body.earn_rate) : '1.0',
-      ...(body.earn_by !== undefined ? { earnBy: body.earn_by } : {}),
-      ...(body.earn_unit_amount !== undefined
-        ? { earnUnitAmount: String(body.earn_unit_amount) }
-        : {}),
-    })
-    .returning();
-
-  return c.json(
-    {
-      data: {
-        earn_rate: inserted.earnRate,
-        earn_by: inserted.earnBy,
-        earn_unit_amount: inserted.earnUnitAmount,
-        program_name: inserted.name,
-      },
-    },
-    201,
-  );
+      201,
+    );
+  });
 });
 
 // ============================================================================
@@ -444,13 +445,14 @@ router.put('/v1/loyalty/config', async (c) => {
 router.get('/v1/loyalty/tiers', async (c) => {
   const { businessId } = extractAuthHeaders(c);
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  const tiers = await db
-    .select()
-    .from(membershipTiers)
-    .where(eq(membershipTiers.businessId, businessId))
-    .orderBy(membershipTiers.displayOrder);
+  const tiers = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .select()
+      .from(membershipTiers)
+      .where(eq(membershipTiers.businessId, businessId))
+      .orderBy(membershipTiers.displayOrder),
+  );
 
   return c.json({ data: tiers });
 });
@@ -580,60 +582,60 @@ router.post('/v1/loyalty/tiers', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // Find the loyalty program for this business
+    const [program] = await tx
+      .select()
+      .from(loyaltyPrograms)
+      .where(eq(loyaltyPrograms.businessId, businessId))
+      .limit(1);
 
-  // Find the loyalty program for this business
-  const [program] = await db
-    .select()
-    .from(loyaltyPrograms)
-    .where(eq(loyaltyPrograms.businessId, businessId))
-    .limit(1);
+    if (!program) {
+      return c.json(
+        { error: { code: 'NOT_FOUND', message: 'Loyalty program not found. Configure it first.' } },
+        404,
+      );
+    }
 
-  if (!program) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Loyalty program not found. Configure it first.' } },
-      404,
-    );
-  }
+    // Tenant-scoped: only this business's tiers are ever compared. The candidate
+    // is folded into that set and the whole set is validated, so the check is
+    // identical to the one PUT runs.
+    const existingTiers = await tx
+      .select()
+      .from(membershipTiers)
+      .where(eq(membershipTiers.businessId, businessId));
 
-  // Tenant-scoped: only this business's tiers are ever compared. The candidate
-  // is folded into that set and the whole set is validated, so the check is
-  // identical to the one PUT runs.
-  const existingTiers = await db
-    .select()
-    .from(membershipTiers)
-    .where(eq(membershipTiers.businessId, businessId));
+    const conflict = findTierOrderingConflict([
+      ...existingTiers,
+      {
+        name: body.name,
+        minPoints: body.min_points,
+        displayOrder: body.display_order ?? 0,
+      },
+    ]);
 
-  const conflict = findTierOrderingConflict([
-    ...existingTiers,
-    {
-      name: body.name,
-      minPoints: body.min_points,
-      displayOrder: body.display_order ?? 0,
-    },
-  ]);
+    if (conflict) {
+      return c.json(
+        { error: { code: TIER_ORDERING_CONFLICT, message: describeTierOrderingConflict(conflict) } },
+        400,
+      );
+    }
 
-  if (conflict) {
-    return c.json(
-      { error: { code: TIER_ORDERING_CONFLICT, message: describeTierOrderingConflict(conflict) } },
-      400,
-    );
-  }
+    const [inserted] = await tx
+      .insert(membershipTiers)
+      .values({
+        businessId,
+        programId: program.id,
+        name: body.name,
+        minPoints: body.min_points,
+        multiplier: String(body.multiplier),
+        benefits: body.benefits ?? [],
+        displayOrder: body.display_order ?? 0,
+      })
+      .returning();
 
-  const [inserted] = await db
-    .insert(membershipTiers)
-    .values({
-      businessId,
-      programId: program.id,
-      name: body.name,
-      minPoints: body.min_points,
-      multiplier: String(body.multiplier),
-      benefits: body.benefits ?? [],
-      displayOrder: body.display_order ?? 0,
-    })
-    .returning();
-
-  return c.json({ data: inserted }, 201);
+    return c.json({ data: inserted }, 201);
+  });
 });
 
 /**
@@ -664,63 +666,63 @@ router.put('/v1/loyalty/tiers/:id', async (c) => {
   }>();
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // Verify tier exists and belongs to this business
+    const [existing] = await tx
+      .select()
+      .from(membershipTiers)
+      .where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)))
+      .limit(1);
 
-  // Verify tier exists and belongs to this business
-  const [existing] = await db
-    .select()
-    .from(membershipTiers)
-    .where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)))
-    .limit(1);
+    if (!existing) {
+      return c.json(
+        { error: { code: 'NOT_FOUND', message: 'Tier not found' } },
+        404,
+      );
+    }
 
-  if (!existing) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Tier not found' } },
-      404,
-    );
-  }
+    const updateData: Record<string, unknown> = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.min_points !== undefined) updateData.minPoints = body.min_points;
+    if (body.multiplier !== undefined) updateData.multiplier = String(body.multiplier);
+    if (body.benefits !== undefined) updateData.benefits = body.benefits;
+    if (body.display_order !== undefined) updateData.displayOrder = body.display_order;
 
-  const updateData: Record<string, unknown> = {};
-  if (body.name !== undefined) updateData.name = body.name;
-  if (body.min_points !== undefined) updateData.minPoints = body.min_points;
-  if (body.multiplier !== undefined) updateData.multiplier = String(body.multiplier);
-  if (body.benefits !== undefined) updateData.benefits = body.benefits;
-  if (body.display_order !== undefined) updateData.displayOrder = body.display_order;
+    if (Object.keys(updateData).length === 0) {
+      return c.json({ data: existing });
+    }
 
-  if (Object.keys(updateData).length === 0) {
-    return c.json({ data: existing });
-  }
+    // Tenant-scoped, and the tier being updated is excluded: leaving it in would
+    // make a name-only PUT collide with its own threshold and fail.
+    const siblingTiers = await tx
+      .select()
+      .from(membershipTiers)
+      .where(eq(membershipTiers.businessId, businessId));
 
-  // Tenant-scoped, and the tier being updated is excluded: leaving it in would
-  // make a name-only PUT collide with its own threshold and fail.
-  const siblingTiers = await db
-    .select()
-    .from(membershipTiers)
-    .where(eq(membershipTiers.businessId, businessId));
+    const conflict = findTierOrderingConflict([
+      ...siblingTiers.filter((tier) => tier.id !== existing.id),
+      {
+        name: body.name ?? existing.name,
+        minPoints: body.min_points ?? existing.minPoints,
+        displayOrder: body.display_order ?? existing.displayOrder,
+      },
+    ]);
 
-  const conflict = findTierOrderingConflict([
-    ...siblingTiers.filter((tier) => tier.id !== existing.id),
-    {
-      name: body.name ?? existing.name,
-      minPoints: body.min_points ?? existing.minPoints,
-      displayOrder: body.display_order ?? existing.displayOrder,
-    },
-  ]);
+    if (conflict) {
+      return c.json(
+        { error: { code: TIER_ORDERING_CONFLICT, message: describeTierOrderingConflict(conflict) } },
+        400,
+      );
+    }
 
-  if (conflict) {
-    return c.json(
-      { error: { code: TIER_ORDERING_CONFLICT, message: describeTierOrderingConflict(conflict) } },
-      400,
-    );
-  }
+    const [updated] = await tx
+      .update(membershipTiers)
+      .set(updateData)
+      .where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)))
+      .returning();
 
-  const [updated] = await db
-    .update(membershipTiers)
-    .set(updateData)
-    .where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)))
-    .returning();
-
-  return c.json({ data: updated });
+    return c.json({ data: updated });
+  });
 });
 
 /**
@@ -743,46 +745,46 @@ router.delete('/v1/loyalty/tiers/:id', async (c) => {
   const id = c.req.param('id');
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // Verify tier exists and belongs to this business
+    const [existing] = await tx
+      .select()
+      .from(membershipTiers)
+      .where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)))
+      .limit(1);
 
-  // Verify tier exists and belongs to this business
-  const [existing] = await db
-    .select()
-    .from(membershipTiers)
-    .where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)))
-    .limit(1);
+    if (!existing) {
+      return c.json(
+        { error: { code: 'NOT_FOUND', message: 'Tier not found' } },
+        404,
+      );
+    }
 
-  if (!existing) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Tier not found' } },
-      404,
-    );
-  }
+    // Protect the lowest tier (min_points = 0)
+    if (existing.minPoints === 0) {
+      return c.json(
+        { error: { code: 'PROTECTED_TIER', message: 'Cannot delete the lowest tier. Set a different base tier first.' } },
+        409,
+      );
+    }
 
-  // Protect the lowest tier (min_points = 0)
-  if (existing.minPoints === 0) {
-    return c.json(
-      { error: { code: 'PROTECTED_TIER', message: 'Cannot delete the lowest tier. Set a different base tier first.' } },
-      409,
-    );
-  }
+    // Check if any customers are assigned to this tier
+    const [customerCount] = await tx
+      .select({ total: count() })
+      .from(customers)
+      .where(and(eq(customers.businessId, businessId), eq(customers.currentTierId, id)));
 
-  // Check if any customers are assigned to this tier
-  const [customerCount] = await db
-    .select({ total: count() })
-    .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.currentTierId, id)));
+    if ((customerCount?.total ?? 0) > 0) {
+      return c.json(
+        { error: { code: 'TIER_HAS_CUSTOMERS', message: 'Cannot delete tier with active members.' } },
+        409,
+      );
+    }
 
-  if ((customerCount?.total ?? 0) > 0) {
-    return c.json(
-      { error: { code: 'TIER_HAS_CUSTOMERS', message: 'Cannot delete tier with active members.' } },
-      409,
-    );
-  }
+    await tx.delete(membershipTiers).where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)));
 
-  await db.delete(membershipTiers).where(and(eq(membershipTiers.id, id), eq(membershipTiers.businessId, businessId)));
-
-  return c.body(null, 204);
+    return c.body(null, 204);
+  });
 });
 
 // ============================================================================
@@ -850,234 +852,217 @@ router.post('/v1/loyalty/points/assign', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // -----------------------------------------------------------------------
-  // Resolve the accumulation rule from loyalty program config
-  // -----------------------------------------------------------------------
-  const [program] = await db
-    .select()
-    .from(loyaltyPrograms)
-    .where(eq(loyaltyPrograms.businessId, businessId))
-    .limit(1);
-
-  const earnBy = isEarnBy(program?.earnBy) ? program.earnBy : DEFAULT_EARN_BY;
-  // Never `Number(program?.earnRate)` directly: `NaN` from a rate the write path
-  // predates would reach `points_transactions.points` and produce a balance no
-  // customer can spend and no redemption can move.
-  const earnRate = resolveEarnRate(program?.earnRate ?? '1.0');
-
-  /**
-   * What this request is worth, expressed in the program's unit and *before* the
-   * rate and the tier bonus are applied. It is the single input the shared
-   * formula below multiplies, so the two mechanics differ only in how this
-   * number is arrived at:
-   *
-   *   visit    → the caller's qualifying count, used as-is. There is no amount
-   *              to convert: with a manual scanner the honest fact is "a visit
-   *              happened", not "the customer spent $4.500".
-   *   purchase → the money amount divided by the tenant's unit, so `base` is how
-   *              many units of `earn_rate` the amount bought.
-   */
-  let base: number;
-  // Only purchase programs carry a sale amount; visits and adjustments have
-  // none. Recorded so the profile timeline can show what was spent.
-  let purchaseAmount: number | null = null;
-
-  if (earnBy === 'purchase') {
-    const amount = parseEarnUnitAmount(body.amount_pesos);
-
-    if (amount === null) {
-      return c.json(
-        {
-          error: {
-            code: body.amount_pesos === undefined ? 'AMOUNT_REQUIRED' : 'INVALID_AMOUNT',
-            message:
-              'This program earns by purchase, so amount_pesos is required and must be a number greater than 0. Points are derived from it by the program rule, not taken from the request.',
-          },
-        },
-        400,
-      );
-    }
-
-    const unit = parseEarnUnitAmount(program?.earnUnitAmount ?? '1000.00');
-    if (unit === null) {
-      // A purchase program whose unit cannot be read. Refusing the sale is the
-      // honest answer: paying out against a guessed unit pays real money's worth
-      // of points, and no fallback unit is safe by default.
-      return c.json(
-        {
-          error: {
-            code: INVALID_EARN_UNIT_AMOUNT,
-            message:
-              'This program earns by purchase but its earn_unit_amount is unusable. Set it to the money amount, in pesos, that earn_rate points are worth.',
-          },
-        },
-        409,
-      );
-    }
-
-    base = amount / unit;
-    purchaseAmount = amount;
-  } else {
-    // A visit program has no money rule. If an amount arrived alongside, silently
-    // dropping it would credit the count the caller happened to also send and
-    // report a number the merchant's own rule never produced.
-    if (body.amount_pesos !== undefined) {
-      return c.json(
-        {
-          error: {
-            code: 'VISIT_COUNT_REQUIRED',
-            message:
-              'This program earns by visit, so it has no money rule. Send the qualifying count as points, and switch the program to earn_by "purchase" to earn from a purchase amount.',
-          },
-        },
-        400,
-      );
-    }
-
-    const points = Number(body.points);
-    if (!Number.isInteger(points) || points < 1) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message:
-              'This program earns by visit, so points is required and must be a positive integer',
-          },
-        },
-        400,
-      );
-    }
-
-    base = points;
-  }
-
-  // -----------------------------------------------------------------------
-  // Resolve tier multiplier from customer's current tier
-  // -----------------------------------------------------------------------
-  let tierMultiplier = 1.0;
-
-  // Get the customer's current tier (if any)
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
-    .limit(1);
-
-  // A deleted account keeps its row and its ledger, so the INSERT below would
-  // still land on it. It is answered as not found, the way every read of a
-  // deleted customer is: nobody owns that balance any more.
-  if (customer?.deletedAt) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
-  }
-
-  if (customer?.currentTierId) {
-    const [tier] = await db
-      .select()
-      .from(membershipTiers)
-      .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
-      .limit(1);
-
-    if (tier) {
-      // Same reason as `earnRate`: `Number('N/A')` is `NaN`, and the tier bonus is
-      // multiplied straight into the ledger row.
-      tierMultiplier = resolveEarnRate(tier.multiplier);
-    }
-  }
-
-  // One formula, one place — and it is now literally one place. This route used
-  // to hold the arithmetic inline, which made it unreusable: the second caller
-  // (`POST /v1/loyalty/checkins`, for a merchant's own terminal reporting a completed
-  // sale) would have had to copy the expression, and two copies of a points rule
-  // is two rules.
-  //
-  // `earnRate` and `tierMultiplier` are both read from columns this route did not
-  // write, and `resolveEarnRate` on each keeps them finite and positive, so the
-  // guard below is the last line before a `NaN` would be stored as
-  // `points_transactions.points`. The expression itself and why it is pinned by
-  // the dashboard's contract test are documented in `computeEarnedPoints`.
-  const effectivePoints = computeEarnedPoints(base, earnRate, tierMultiplier);
-  if (!Number.isFinite(effectivePoints)) {
-    return c.json(
-      {
-        error: {
-          code: 'INTERNAL_ERROR',
-          message: 'The loyalty program rule produced a non-finite points value',
-        },
-      },
-      500,
-    );
-  }
-
-  // -----------------------------------------------------------------------
-  // Atomic insert with balance calculation
-  // -----------------------------------------------------------------------
+  // The rule, the customer and the ledger write share one tenant-scoped
+  // transaction. The event and the pass projection below follow its commit:
+  // neither may announce a credit that can still roll back.
+  let outcome: Response | { row: Record<string, unknown>; tierMultiplier: number; effectivePoints: number };
   try {
-    // `SELECT ... WHERE`, not `VALUES`: the deleted check above is a read, and a
-    // delete committing after it would otherwise still be credited. The
-    // sub-select locks the customer row `FOR SHARE`, so a concurrent
-    // anonymisation either commits first (this re-reads `deleted_at` and
-    // inserts nothing) or waits for this credit to commit. An unknown customer
-    // reads as NULL and is let through to the foreign key, as before.
-    const result = await db.execute(sql`
-      INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount)
-      SELECT
-        ${businessId}::uuid,
-        ${body.customer_id}::uuid,
-        'earn',
-        ${effectivePoints}::integer,
-        COALESCE(
-          (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
-          0
-        ) + ${effectivePoints}::integer,
-        ${body.reference_id},
-        ${body.note ?? null},
-        ${purchaseAmount}
-      WHERE (
-        SELECT deleted_at IS NULL FROM customers
-        WHERE id = ${body.customer_id}::uuid AND business_id = ${businessId}::uuid
-        FOR SHARE
-      ) IS DISTINCT FROM false
-      RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount, created_at
-    `);
+    outcome = await withTenantTransaction(db, { businessId }, async (tx) => {
+      // -----------------------------------------------------------------------
+      // Resolve the accumulation rule from loyalty program config
+      // -----------------------------------------------------------------------
+      const [program] = await tx
+        .select()
+        .from(loyaltyPrograms)
+        .where(eq(loyaltyPrograms.businessId, businessId))
+        .limit(1);
 
-    const tx = result.rows?.[0];
-    // The guarded INSERT selected nothing: the customer was deleted after the
-    // read above. Same answer as a deleted customer found by that read.
-    if (!tx && customer && !customer.deletedAt) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
-    }
-    if (!tx) {
-      return c.json(
-        { error: { code: 'INTERNAL_ERROR', message: 'Failed to create transaction' } },
-        500,
-      );
-    }
+      const earnBy = isEarnBy(program?.earnBy) ? program.earnBy : DEFAULT_EARN_BY;
+      // Never `Number(program?.earnRate)` directly: `NaN` from a rate the write path
+      // predates would reach `points_transactions.points` and produce a balance no
+      // customer can spend and no redemption can move.
+      const earnRate = resolveEarnRate(program?.earnRate ?? '1.0');
 
-    // -----------------------------------------------------------------------
-    // Publish PointsAssigned event
-    // -----------------------------------------------------------------------
-    const event = buildPointsAssignedEvent(
-      body.customer_id,
-      businessId,
-      effectivePoints,
-      tierMultiplier,
-      Number(tx.balance_after),
-      body.reference_id,
-      getRequestId(c),
-    );
+      /**
+       * What this request is worth, expressed in the program's unit and *before* the
+       * rate and the tier bonus are applied. It is the single input the shared
+       * formula below multiplies, so the two mechanics differ only in how this
+       * number is arrived at:
+       *
+       *   visit    → the caller's qualifying count, used as-is. There is no amount
+       *              to convert: with a manual scanner the honest fact is "a visit
+       *              happened", not "the customer spent $4.500".
+       *   purchase → the money amount divided by the tenant's unit, so `base` is how
+       *              many units of `earn_rate` the amount bought.
+       */
+      let base: number;
+      // Only purchase programs carry a sale amount; visits and adjustments have
+      // none. Recorded so the profile timeline can show what was spent.
+      let purchaseAmount: number | null = null;
 
-    await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+      if (earnBy === 'purchase') {
+        const amount = parseEarnUnitAmount(body.amount_pesos);
 
-    // The balance moved, so the pass has to learn that it moved. Handed off here
-    // rather than awaited, and placed after the event publish so the only thing
-    // between the customer and the 201 is the work being *given away* — never a
-    // Google round trip. Before the INSERT it would project a number the ledger
-    // does not hold yet, and that number is the one a cashier reads aloud.
-    schedulePassReconcile(c, { tenantId: businessId, customerId: body.customer_id });
+        if (amount === null) {
+          return c.json(
+            {
+              error: {
+                code: body.amount_pesos === undefined ? 'AMOUNT_REQUIRED' : 'INVALID_AMOUNT',
+                message:
+                  'This program earns by purchase, so amount_pesos is required and must be a number greater than 0. Points are derived from it by the program rule, not taken from the request.',
+              },
+            },
+            400,
+          );
+        }
 
-    return c.json({ data: tx }, 201);
+        const unit = parseEarnUnitAmount(program?.earnUnitAmount ?? '1000.00');
+        if (unit === null) {
+          // A purchase program whose unit cannot be read. Refusing the sale is the
+          // honest answer: paying out against a guessed unit pays real money's worth
+          // of points, and no fallback unit is safe by default.
+          return c.json(
+            {
+              error: {
+                code: INVALID_EARN_UNIT_AMOUNT,
+                message:
+                  'This program earns by purchase but its earn_unit_amount is unusable. Set it to the money amount, in pesos, that earn_rate points are worth.',
+              },
+            },
+            409,
+          );
+        }
+
+        base = amount / unit;
+        purchaseAmount = amount;
+      } else {
+        // A visit program has no money rule. If an amount arrived alongside, silently
+        // dropping it would credit the count the caller happened to also send and
+        // report a number the merchant's own rule never produced.
+        if (body.amount_pesos !== undefined) {
+          return c.json(
+            {
+              error: {
+                code: 'VISIT_COUNT_REQUIRED',
+                message:
+                  'This program earns by visit, so it has no money rule. Send the qualifying count as points, and switch the program to earn_by "purchase" to earn from a purchase amount.',
+              },
+            },
+            400,
+          );
+        }
+
+        const points = Number(body.points);
+        if (!Number.isInteger(points) || points < 1) {
+          return c.json(
+            {
+              error: {
+                code: 'VALIDATION_ERROR',
+                message:
+                  'This program earns by visit, so points is required and must be a positive integer',
+              },
+            },
+            400,
+          );
+        }
+
+        base = points;
+      }
+
+      // -----------------------------------------------------------------------
+      // Resolve tier multiplier from customer's current tier
+      // -----------------------------------------------------------------------
+      let tierMultiplier = 1.0;
+
+      // Get the customer's current tier (if any)
+      const [customer] = await tx
+        .select()
+        .from(customers)
+        .where(and(eq(customers.businessId, businessId), eq(customers.id, body.customer_id)))
+        .limit(1);
+
+      // A deleted account keeps its row and its ledger, so the INSERT below would
+      // still land on it. It is answered as not found, the way every read of a
+      // deleted customer is: nobody owns that balance any more.
+      if (customer?.deletedAt) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
+      }
+
+      if (customer?.currentTierId) {
+        const [tier] = await tx
+          .select()
+          .from(membershipTiers)
+          .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
+          .limit(1);
+
+        if (tier) {
+          // Same reason as `earnRate`: `Number('N/A')` is `NaN`, and the tier bonus is
+          // multiplied straight into the ledger row.
+          tierMultiplier = resolveEarnRate(tier.multiplier);
+        }
+      }
+
+      // One formula, one place — and it is now literally one place. This route used
+      // to hold the arithmetic inline, which made it unreusable: the second caller
+      // (`POST /v1/loyalty/checkins`, for a merchant's own terminal reporting a completed
+      // sale) would have had to copy the expression, and two copies of a points rule
+      // is two rules.
+      //
+      // `earnRate` and `tierMultiplier` are both read from columns this route did not
+      // write, and `resolveEarnRate` on each keeps them finite and positive, so the
+      // guard below is the last line before a `NaN` would be stored as
+      // `points_transactions.points`. The expression itself and why it is pinned by
+      // the dashboard's contract test are documented in `computeEarnedPoints`.
+      const effectivePoints = computeEarnedPoints(base, earnRate, tierMultiplier);
+      if (!Number.isFinite(effectivePoints)) {
+        return c.json(
+          {
+            error: {
+              code: 'INTERNAL_ERROR',
+              message: 'The loyalty program rule produced a non-finite points value',
+            },
+          },
+          500,
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // Atomic insert with balance calculation
+      // -----------------------------------------------------------------------
+      // `SELECT ... WHERE`, not `VALUES`: the deleted check above is a read, and a
+      // delete committing after it would otherwise still be credited. The
+      // sub-select locks the customer row `FOR SHARE`, so a concurrent
+      // anonymisation either commits first (this re-reads `deleted_at` and
+      // inserts nothing) or waits for this credit to commit. An unknown customer
+      // reads as NULL and is let through to the foreign key, as before.
+      const result = await tx.execute(sql`
+        INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount)
+        SELECT
+          ${businessId}::uuid,
+          ${body.customer_id}::uuid,
+          'earn',
+          ${effectivePoints}::integer,
+          COALESCE(
+            (SELECT balance_after FROM points_transactions WHERE customer_id = ${body.customer_id}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
+            0
+          ) + ${effectivePoints}::integer,
+          ${body.reference_id},
+          ${body.note ?? null},
+          ${purchaseAmount}
+        WHERE (
+          SELECT deleted_at IS NULL FROM customers
+          WHERE id = ${body.customer_id}::uuid AND business_id = ${businessId}::uuid
+          FOR SHARE
+        ) IS DISTINCT FROM false
+        RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, purchase_amount, created_at
+      `);
+
+      const row = result.rows?.[0];
+      // The guarded INSERT selected nothing: the customer was deleted after the
+      // read above. Same answer as a deleted customer found by that read.
+      if (!row && customer && !customer.deletedAt) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
+      }
+      if (!row) {
+        return c.json(
+          { error: { code: 'INTERNAL_ERROR', message: 'Failed to create transaction' } },
+          500,
+        );
+      }
+
+      return { row, tierMultiplier, effectivePoints };
+    });
   } catch (err: unknown) {
     const error = err as { message?: string; code?: string };
     // Detect unique constraint violation on (customer_id, reference_id)
@@ -1089,6 +1074,33 @@ router.post('/v1/loyalty/points/assign', async (c) => {
     }
     throw err;
   }
+
+  if (outcome instanceof Response) return outcome;
+  const { row, tierMultiplier, effectivePoints } = outcome;
+
+  // -----------------------------------------------------------------------
+  // Publish PointsAssigned event
+  // -----------------------------------------------------------------------
+  const event = buildPointsAssignedEvent(
+    body.customer_id,
+    businessId,
+    effectivePoints,
+    tierMultiplier,
+    Number(row.balance_after),
+    body.reference_id,
+    getRequestId(c),
+  );
+
+  await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+
+  // The balance moved, so the pass has to learn that it moved. Handed off here
+  // rather than awaited, and placed after the event publish so the only thing
+  // between the customer and the 201 is the work being *given away* — never a
+  // Google round trip. Before the INSERT it would project a number the ledger
+  // does not hold yet, and that number is the one a cashier reads aloud.
+  schedulePassReconcile(c, { tenantId: businessId, customerId: body.customer_id });
+
+  return c.json({ data: row }, 201);
 });
 
 // ============================================================================
@@ -1115,62 +1127,65 @@ router.get('/v1/loyalty/points/transactions', async (c) => {
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') ?? '20', 10) || 20));
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    const effective = await resolveEffectiveCustomer(tx, auth, c.req.query('customer_id'));
+    if (!effective.ok) {
+      return c.json({ error: { code: effective.code, message: effective.message } }, effective.status);
+    }
+    const customerId = effective.customerId;
 
-  const effective = await resolveEffectiveCustomer(db, auth, c.req.query('customer_id'));
-  if (!effective.ok) {
-    return c.json({ error: { code: effective.code, message: effective.message } }, effective.status);
-  }
-  const customerId = effective.customerId;
+    // Build WHERE conditions
+    const conditions: ReturnType<typeof and>[] = [
+      eq(pointsTransactions.businessId, businessId),
+    ];
 
-  // Build WHERE conditions
-  const conditions: ReturnType<typeof and>[] = [
-    eq(pointsTransactions.businessId, businessId),
-  ];
+    if (customerId) {
+      conditions.push(eq(pointsTransactions.customerId, customerId));
+    }
 
-  if (customerId) {
-    conditions.push(eq(pointsTransactions.customerId, customerId));
-  }
+    if (typeFilter === 'earn' || typeFilter === 'redeem') {
+      conditions.push(eq(pointsTransactions.type, typeFilter));
+    }
 
-  if (typeFilter === 'earn' || typeFilter === 'redeem') {
-    conditions.push(eq(pointsTransactions.type, typeFilter));
-  }
+    const where = and(...conditions);
 
-  const where = and(...conditions);
+    // Count total + fetch page in parallel
+    const [totalResult, items] = await Promise.all([
+      tx.select({ total: count() }).from(pointsTransactions).where(where),
+      tx
+        .select({
+          id: pointsTransactions.id,
+          customer_id: pointsTransactions.customerId,
+          type: pointsTransactions.type,
+          points: pointsTransactions.points,
+          balance_after: pointsTransactions.balanceAfter,
+          reference_id: pointsTransactions.referenceId,
+          note: pointsTransactions.note,
+          purchase_amount: pointsTransactions.purchaseAmount,
+          created_at: pointsTransactions.createdAt,
+        })
+        .from(pointsTransactions)
+        .where(where)
+        .orderBy(desc(pointsTransactions.createdAt))
+        .limit(limit)
+        .offset((page - 1) * limit),
+    ]);
 
-  // Count total + fetch page in parallel
-  const [totalResult, items] = await Promise.all([
-    db.select({ total: count() }).from(pointsTransactions).where(where),
-    db
-      .select({
-        id: pointsTransactions.id,
-        customer_id: pointsTransactions.customerId,
-        type: pointsTransactions.type,
-        points: pointsTransactions.points,
-        balance_after: pointsTransactions.balanceAfter,
-        reference_id: pointsTransactions.referenceId,
-        note: pointsTransactions.note,
-        purchase_amount: pointsTransactions.purchaseAmount,
-        created_at: pointsTransactions.createdAt,
-      })
-      .from(pointsTransactions)
-      .where(where)
-      .orderBy(desc(pointsTransactions.createdAt))
-      .limit(limit)
-      .offset((page - 1) * limit),
-  ]);
+    const total = Number(totalResult[0]?.total ?? 0);
 
-  const total = Number(totalResult[0]?.total ?? 0);
-
-  return c.json({
-    data: items,
-    meta: { total, page, per_page: limit },
+    return c.json({
+      data: items,
+      meta: { total, page, per_page: limit },
+    });
   });
 });
 
 // ============================================================================
 // Rewards Catalog CRUD
 // ============================================================================
+
+/** The handle a tenant-scoped transaction runs its queries on. */
+type TenantTx = Parameters<Parameters<ReturnType<typeof createDb>['transaction']>[0]>[0];
 
 /**
  * Validate a `branch_ids` body field against the caller's own venues.
@@ -1184,7 +1199,7 @@ router.get('/v1/loyalty/points/transactions', async (c) => {
  * as omitting the field: the reward is available everywhere.
  */
 async function resolveBranchScope(
-  db: ReturnType<typeof createDb>,
+  db: TenantTx,
   businessId: string,
   branchIds: unknown,
 ): Promise<{ ok: true; ids: string[] } | { ok: false; message: string }> {
@@ -1217,7 +1232,7 @@ async function resolveBranchScope(
  * business. This order can only ever leave a superset, which is still scoped.
  */
 async function replaceBranchScope(
-  db: ReturnType<typeof createDb>,
+  db: TenantTx,
   businessId: string,
   rewardId: string,
   ids: string[],
@@ -1243,7 +1258,7 @@ async function replaceBranchScope(
 
 /** The venue scope of many rewards, in one read rather than one per reward. */
 async function branchScopeByReward(
-  db: ReturnType<typeof createDb>,
+  db: TenantTx,
   rewardIds: string[],
 ): Promise<Map<string, string[]>> {
   const scopes = new Map<string, string[]>();
@@ -1305,70 +1320,67 @@ router.post('/v1/loyalty/rewards', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
-
-  // Before the duplicate-name read: a request with a foreign venue is refused
-  // without telling the caller which names are taken.
-  let scope: string[] = [];
-  if (body.branch_ids !== undefined) {
-    const resolved = await resolveBranchScope(db, businessId, body.branch_ids);
-    if (!resolved.ok) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: resolved.message } }, 422);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // Before the duplicate-name read: a request with a foreign venue is refused
+    // without telling the caller which names are taken.
+    let scope: string[] = [];
+    if (body.branch_ids !== undefined) {
+      const resolved = await resolveBranchScope(tx, businessId, body.branch_ids);
+      if (!resolved.ok) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: resolved.message } }, 422);
+      }
+      scope = resolved.ids;
     }
-    scope = resolved.ids;
-  }
 
-  // Check duplicate name
-  const [existing] = await db
-    .select({ id: rewards.id })
-    .from(rewards)
-    .where(and(eq(rewards.businessId, businessId), eq(rewards.name, body.name)))
-    .limit(1);
+    // Check duplicate name
+    const [existing] = await tx
+      .select({ id: rewards.id })
+      .from(rewards)
+      .where(and(eq(rewards.businessId, businessId), eq(rewards.name, body.name)))
+      .limit(1);
 
-  if (existing) {
-    return c.json(
-      { error: { code: 'DUPLICATE_REWARD_NAME', message: 'A reward with this name already exists' } },
-      409,
-    );
-  }
+    if (existing) {
+      return c.json(
+        { error: { code: 'DUPLICATE_REWARD_NAME', message: 'A reward with this name already exists' } },
+        409,
+      );
+    }
 
-  // The id is generated here rather than by the column default so the scope
-  // rows can be written in the same request without a second round trip to read
-  // the generated id back.
-  const rewardId = crypto.randomUUID();
+    // The id is generated here rather than by the column default so the scope
+    // rows can be written in the same request without a second round trip to read
+    // the generated id back.
+    const rewardId = crypto.randomUUID();
 
-  const [inserted] = await db
-    .insert(rewards)
-    .values({
-      id: rewardId,
-      businessId,
-      name: body.name,
-      description: body.description ?? null,
-      pointsCost: body.points_cost,
-      category: body.category ?? null,
-      stock: body.stock ?? null,
-      autoGrantThreshold: body.auto_grant_threshold ?? null,
-      validFrom: body.valid_from ? new Date(body.valid_from) : null,
-      validUntil: body.valid_until ? new Date(body.valid_until) : null,
-      imageUrl: body.image_url ?? null,
-    })
-    .returning();
+    const [inserted] = await tx
+      .insert(rewards)
+      .values({
+        id: rewardId,
+        businessId,
+        name: body.name,
+        description: body.description ?? null,
+        pointsCost: body.points_cost,
+        category: body.category ?? null,
+        stock: body.stock ?? null,
+        autoGrantThreshold: body.auto_grant_threshold ?? null,
+        validFrom: body.valid_from ? new Date(body.valid_from) : null,
+        validUntil: body.valid_until ? new Date(body.valid_until) : null,
+        imageUrl: body.image_url ?? null,
+      })
+      .returning();
 
-  if (scope.length > 0) {
-    try {
-      await db
+    // Without the scope the reward would read as "available everywhere", which is
+    // a different promise to the one the caller asked for. Both inserts share the
+    // transaction, so a failed scope insert rolls the reward back with it and
+    // nothing is created. A compensating delete here would itself fail: the
+    // failed statement has already aborted the transaction.
+    if (scope.length > 0) {
+      await tx
         .insert(rewardBranches)
         .values(scope.map((branchId) => ({ rewardId, branchId, businessId })));
-    } catch (error) {
-      // Without the scope the reward would read as "available everywhere",
-      // which is a different promise to the one the caller asked for. Removing
-      // the row is the only way back to "nothing was created".
-      await db.delete(rewards).where(and(eq(rewards.id, rewardId), eq(rewards.businessId, businessId)));
-      throw error;
     }
-  }
 
-  return c.json({ data: { ...inserted, branch_ids: scope } }, 201);
+    return c.json({ data: { ...inserted, branch_ids: scope } }, 201);
+  });
 });
 
 /**
@@ -1386,61 +1398,61 @@ router.get('/v1/loyalty/rewards', async (c) => {
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20', 10) || 20));
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // Build where conditions
+    const conditions: ReturnType<typeof and>[] = [eq(rewards.businessId, businessId)];
 
-  // Build where conditions
-  const conditions: ReturnType<typeof and>[] = [eq(rewards.businessId, businessId)];
+    if (category) {
+      conditions.push(eq(rewards.category, category));
+    }
 
-  if (category) {
-    conditions.push(eq(rewards.category, category));
-  }
+    if (active === 'true') {
+      conditions.push(
+        or(
+          isNull(rewards.validFrom),
+          lte(rewards.validFrom, sql`now()`),
+        ),
+        or(
+          isNull(rewards.validUntil),
+          gte(rewards.validUntil, sql`now()`),
+        ),
+        or(
+          isNull(rewards.stock),
+          gt(rewards.stock, 0),
+        ),
+      );
+    }
 
-  if (active === 'true') {
-    conditions.push(
-      or(
-        isNull(rewards.validFrom),
-        lte(rewards.validFrom, sql`now()`),
-      ),
-      or(
-        isNull(rewards.validUntil),
-        gte(rewards.validUntil, sql`now()`),
-      ),
-      or(
-        isNull(rewards.stock),
-        gt(rewards.stock, 0),
-      ),
+    const where = and(...conditions);
+
+    // Count total
+    const [totalResult] = await tx
+      .select({ total: count() })
+      .from(rewards)
+      .where(where);
+
+    const total = Number(totalResult?.total ?? 0);
+
+    // Fetch page
+    const items = await tx
+      .select()
+      .from(rewards)
+      .where(where)
+      .orderBy(desc(rewards.createdAt))
+      .limit(perPage)
+      .offset((page - 1) * perPage);
+
+    // One read for the whole page. A query per reward would turn a 20-item page
+    // into 21 round trips, which on a Worker is 21 chances to be slow.
+    const scopes = await branchScopeByReward(
+      tx,
+      items.map((item) => item.id),
     );
-  }
 
-  const where = and(...conditions);
-
-  // Count total
-  const [totalResult] = await db
-    .select({ total: count() })
-    .from(rewards)
-    .where(where);
-
-  const total = Number(totalResult?.total ?? 0);
-
-  // Fetch page
-  const items = await db
-    .select()
-    .from(rewards)
-    .where(where)
-    .orderBy(desc(rewards.createdAt))
-    .limit(perPage)
-    .offset((page - 1) * perPage);
-
-  // One read for the whole page. A query per reward would turn a 20-item page
-  // into 21 round trips, which on a Worker is 21 chances to be slow.
-  const scopes = await branchScopeByReward(
-    db,
-    items.map((item) => item.id),
-  );
-
-  return c.json({
-    data: items.map((item) => ({ ...item, branch_ids: scopes.get(item.id) ?? [] })),
-    meta: { total, page, per_page: perPage },
+    return c.json({
+      data: items.map((item) => ({ ...item, branch_ids: scopes.get(item.id) ?? [] })),
+      meta: { total, page, per_page: perPage },
+    });
   });
 });
 
@@ -1454,24 +1466,24 @@ router.get('/v1/loyalty/rewards/:id', async (c) => {
   const id = c.req.param('id');
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    const [reward] = await tx
+      .select()
+      .from(rewards)
+      .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
+      .limit(1);
 
-  const [reward] = await db
-    .select()
-    .from(rewards)
-    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
-    .limit(1);
+    if (!reward) {
+      return c.json(
+        { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
+        404,
+      );
+    }
 
-  if (!reward) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
-      404,
-    );
-  }
+    const scopes = await branchScopeByReward(tx, [reward.id]);
 
-  const scopes = await branchScopeByReward(db, [reward.id]);
-
-  return c.json({ data: { ...reward, branch_ids: scopes.get(reward.id) ?? [] } });
+    return c.json({ data: { ...reward, branch_ids: scopes.get(reward.id) ?? [] } });
+  });
 });
 
 /**
@@ -1504,90 +1516,90 @@ router.put('/v1/loyalty/rewards/:id', async (c) => {
   }>();
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
-
-  // Validate before the reward is even looked up, so an unknown reward and a
-  // foreign venue both come back as the same 422/404 pair the caller expects
-  // and no write can happen after a rejected scope.
-  let scope: string[] | undefined;
-  if (body.branch_ids !== undefined) {
-    const resolved = await resolveBranchScope(db, businessId, body.branch_ids);
-    if (!resolved.ok) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: resolved.message } }, 422);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // Validate before the reward is even looked up, so an unknown reward and a
+    // foreign venue both come back as the same 422/404 pair the caller expects
+    // and no write can happen after a rejected scope.
+    let scope: string[] | undefined;
+    if (body.branch_ids !== undefined) {
+      const resolved = await resolveBranchScope(tx, businessId, body.branch_ids);
+      if (!resolved.ok) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: resolved.message } }, 422);
+      }
+      scope = resolved.ids;
     }
-    scope = resolved.ids;
-  }
 
-  // Verify reward exists and belongs to this business
-  const [existing] = await db
-    .select()
-    .from(rewards)
-    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
-    .limit(1);
-
-  if (!existing) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
-      404,
-    );
-  }
-
-  // Name uniqueness check (if name changed)
-  if (body.name !== undefined && body.name !== existing.name) {
-    const [nameCollision] = await db
-      .select({ id: rewards.id })
+    // Verify reward exists and belongs to this business
+    const [existing] = await tx
+      .select()
       .from(rewards)
-      .where(and(eq(rewards.businessId, businessId), eq(rewards.name, body.name)))
+      .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
       .limit(1);
 
-    if (nameCollision) {
+    if (!existing) {
       return c.json(
-        { error: { code: 'DUPLICATE_REWARD_NAME', message: 'A reward with this name already exists' } },
-        409,
+        { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
+        404,
       );
     }
-  }
 
-  const updateData: Record<string, unknown> = {};
-  if (body.name !== undefined) updateData.name = body.name;
-  if (body.description !== undefined) updateData.description = body.description;
-  if (body.points_cost !== undefined) updateData.pointsCost = body.points_cost;
-  if (body.category !== undefined) updateData.category = body.category;
-  if (body.stock !== undefined) updateData.stock = body.stock;
-  if (body.auto_grant_threshold !== undefined) updateData.autoGrantThreshold = body.auto_grant_threshold;
-  if (body.valid_from !== undefined) updateData.validFrom = body.valid_from ? new Date(body.valid_from) : null;
-  if (body.valid_until !== undefined) updateData.validUntil = body.valid_until ? new Date(body.valid_until) : null;
-  if (body.image_url !== undefined) updateData.imageUrl = body.image_url;
+    // Name uniqueness check (if name changed)
+    if (body.name !== undefined && body.name !== existing.name) {
+      const [nameCollision] = await tx
+        .select({ id: rewards.id })
+        .from(rewards)
+        .where(and(eq(rewards.businessId, businessId), eq(rewards.name, body.name)))
+        .limit(1);
 
-  // A request that only changes the venue scope is a valid update: it must not
-  // be swallowed by the "nothing to update" shortcut.
-  if (Object.keys(updateData).length === 0 && scope === undefined) {
-    // Same shape as every other branch: the caller reads `branch_ids` off this
-    // response, and a no-op must not be the one reply that lacks it.
-    const scopes = await branchScopeByReward(db, [id]);
-    return c.json({ data: { ...existing, branch_ids: scopes.get(id) ?? [] } });
-  }
+      if (nameCollision) {
+        return c.json(
+          { error: { code: 'DUPLICATE_REWARD_NAME', message: 'A reward with this name already exists' } },
+          409,
+        );
+      }
+    }
 
-  if (scope !== undefined) {
-    await replaceBranchScope(db, businessId, id, scope);
-  }
+    const updateData: Record<string, unknown> = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.description !== undefined) updateData.description = body.description;
+    if (body.points_cost !== undefined) updateData.pointsCost = body.points_cost;
+    if (body.category !== undefined) updateData.category = body.category;
+    if (body.stock !== undefined) updateData.stock = body.stock;
+    if (body.auto_grant_threshold !== undefined) updateData.autoGrantThreshold = body.auto_grant_threshold;
+    if (body.valid_from !== undefined) updateData.validFrom = body.valid_from ? new Date(body.valid_from) : null;
+    if (body.valid_until !== undefined) updateData.validUntil = body.valid_until ? new Date(body.valid_until) : null;
+    if (body.image_url !== undefined) updateData.imageUrl = body.image_url;
 
-  if (Object.keys(updateData).length === 0) {
-    const scopes = await branchScopeByReward(db, [id]);
-    return c.json({ data: { ...existing, branch_ids: scopes.get(id) ?? [] } });
-  }
+    // A request that only changes the venue scope is a valid update: it must not
+    // be swallowed by the "nothing to update" shortcut.
+    if (Object.keys(updateData).length === 0 && scope === undefined) {
+      // Same shape as every other branch: the caller reads `branch_ids` off this
+      // response, and a no-op must not be the one reply that lacks it.
+      const scopes = await branchScopeByReward(tx, [id]);
+      return c.json({ data: { ...existing, branch_ids: scopes.get(id) ?? [] } });
+    }
 
-  updateData.updatedAt = new Date();
+    if (scope !== undefined) {
+      await replaceBranchScope(tx, businessId, id, scope);
+    }
 
-  const [updated] = await db
-    .update(rewards)
-    .set(updateData)
-    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
-    .returning();
+    if (Object.keys(updateData).length === 0) {
+      const scopes = await branchScopeByReward(tx, [id]);
+      return c.json({ data: { ...existing, branch_ids: scopes.get(id) ?? [] } });
+    }
 
-  const scopes = await branchScopeByReward(db, [id]);
+    updateData.updatedAt = new Date();
 
-  return c.json({ data: { ...updated, branch_ids: scopes.get(id) ?? [] } });
+    const [updated] = await tx
+      .update(rewards)
+      .set(updateData)
+      .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
+      .returning();
+
+    const scopes = await branchScopeByReward(tx, [id]);
+
+    return c.json({ data: { ...updated, branch_ids: scopes.get(id) ?? [] } });
+  });
 });
 
 /**
@@ -1607,28 +1619,28 @@ router.delete('/v1/loyalty/rewards/:id', async (c) => {
   const id = c.req.param('id');
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // Verify reward exists and belongs to this business
+    const [existing] = await tx
+      .select()
+      .from(rewards)
+      .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
+      .limit(1);
 
-  // Verify reward exists and belongs to this business
-  const [existing] = await db
-    .select()
-    .from(rewards)
-    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)))
-    .limit(1);
+    if (!existing) {
+      return c.json(
+        { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
+        404,
+      );
+    }
 
-  if (!existing) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Reward not found' } },
-      404,
-    );
-  }
+    await tx
+      .update(rewards)
+      .set({ deletedAt: new Date() })
+      .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)));
 
-  await db
-    .update(rewards)
-    .set({ deletedAt: new Date() })
-    .where(and(eq(rewards.id, id), eq(rewards.businessId, businessId)));
-
-  return c.json({ data: { id } });
+    return c.json({ data: { id } });
+  });
 });
 
 // ============================================================================
@@ -1687,160 +1699,141 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
-
-  // Ownership before anything is read about a reward or written about a
-  // balance: the reward catalog is tenant-scoped, but the balance is not, and
-  // a 403 here must leave no transaction behind.
-  const effective = await resolveEffectiveCustomer(db, auth, body.customer_id);
-  if (!effective.ok) {
-    return c.json({ error: { code: effective.code, message: effective.message } }, effective.status);
-  }
-  // Non-null by construction: an operator who named no customer was rejected
-  // above, and a customer always resolves to their own row.
-  const customerId = effective.customerId as string;
-
-  // -----------------------------------------------------------------------
-  // Validate reward catalog (if reward_id provided)
-  // -----------------------------------------------------------------------
-  let resolvedRewardId: string | undefined;
-  let resolvedRewardName: string | undefined = body.reward_name;
-
-  if (body.reward_id) {
-    const [reward] = await db
-      .select()
-      .from(rewards)
-      .where(and(eq(rewards.id, body.reward_id), eq(rewards.businessId, businessId)))
-      .limit(1);
-
-    if (!reward || reward.deletedAt) {
-      return c.json(
-        { error: { code: 'REWARD_NOT_FOUND', message: 'Reward not found' } },
-        404,
-      );
-    }
-
-    // Validate active dates
-    if (reward.validFrom && new Date(reward.validFrom) > new Date()) {
-      return c.json(
-        { error: { code: 'REWARD_INACTIVE', message: 'Reward is not yet active' } },
-        409,
-      );
-    }
-    if (reward.validUntil && new Date(reward.validUntil) < new Date()) {
-      return c.json(
-        { error: { code: 'REWARD_INACTIVE', message: 'Reward has expired' } },
-        409,
-      );
-    }
-
-    // Validate stock
-    if (reward.stock !== null && reward.stock <= 0) {
-      return c.json(
-        { error: { code: 'REWARD_OUT_OF_STOCK', message: 'Reward is out of stock' } },
-        409,
-      );
-    }
-
-    // Validate points match
-    if (body.points < reward.pointsCost) {
-      return c.json(
-        { error: { code: 'INSUFFICIENT_POINTS', message: `This reward requires ${reward.pointsCost} points` } },
-        409,
-      );
-    }
-
-    resolvedRewardId = reward.id;
-    resolvedRewardName = reward.name;
-  }
-
-  // An operator names the customer by id and is honoured as sent, so a deleted
-  // account — whose row and ledger stay — would otherwise still be spendable from
-  // the POS. A customer token never reaches this: `resolveOwnCustomer` already
-  // excludes a deleted row and answered 403 above.
-  if (!isCustomerRole(auth) && (await isDeletedCustomer(db, businessId, customerId))) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
-  }
-
-  // -----------------------------------------------------------------------
-  // Get current balance
-  // -----------------------------------------------------------------------
-  const balanceResult = await db.execute(sql`
-    SELECT COALESCE(
-      (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
-      0
-    ) AS balance
-  `);
-
-  const currentBalance = Number(balanceResult.rows?.[0]?.balance ?? 0);
-
-  // -----------------------------------------------------------------------
-  // Determine actual redeem amount
-  // -----------------------------------------------------------------------
-  let redeemPoints: number;
-  let isPartial = false;
-
-  if (body.points <= currentBalance) {
-    redeemPoints = body.points;
-  } else if (body.partial === true) {
-    redeemPoints = currentBalance;
-    isPartial = true;
-  } else {
-    return c.json(
-      {
-        error: {
-          code: 'INSUFFICIENT_BALANCE',
-          message: `Customer has ${currentBalance} points but ${body.points} are required`,
-        },
-      },
-      409,
-    );
-  }
-
-  // If balance is already zero and partial, there's nothing to redeem
-  if (redeemPoints <= 0) {
-    return c.json(
-      { error: { code: 'INSUFFICIENT_BALANCE', message: 'Customer has no points to redeem' } },
-      409,
-    );
-  }
-
-  // -----------------------------------------------------------------------
-  // Atomic insert with balance deduction (+ stock deduction if reward_id)
-  // -----------------------------------------------------------------------
+  // Ownership, the reward, the balance and the ledger write (with the stock
+  // decrement when a reward is named) share one tenant-scoped transaction. The
+  // event and the pass projection below follow its commit.
+  let outcome:
+    | Response
+    | {
+        row: Record<string, unknown>;
+        customerId: string;
+        redeemPoints: number;
+        isPartial: boolean;
+        resolvedRewardId: string | undefined;
+        resolvedRewardName: string | undefined;
+      };
   try {
-    // When reward_id is provided, wrap both ops in a transaction
-    const performRedeem = async () => {
-      if (resolvedRewardId) {
-        return await db.transaction(async (tx) => {
-          const txResult = await tx.execute(sql`
-            INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
-            VALUES (
-              ${businessId}::uuid,
-              ${customerId}::uuid,
-              'redeem',
-              ${redeemPoints}::integer,
-              COALESCE(
-                (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
-                0
-              ) - ${redeemPoints}::integer,
-              ${body.reference_id},
-              ${resolvedRewardName ?? null}
-            )
-            RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
-          `);
+    outcome = await withTenantTransaction(db, { businessId }, async (tx) => {
+      // Ownership before anything is read about a reward or written about a
+      // balance: the reward catalog is tenant-scoped, but the balance is not, and
+      // a 403 here must leave no transaction behind.
+      const effective = await resolveEffectiveCustomer(tx, auth, body.customer_id);
+      if (!effective.ok) {
+        return c.json({ error: { code: effective.code, message: effective.message } }, effective.status);
+      }
+      // Non-null by construction: an operator who named no customer was rejected
+      // above, and a customer always resolves to their own row.
+      const customerId = effective.customerId as string;
 
-          // Atomic stock decrement — no-op if already out of stock
-          await tx.execute(sql`
-            UPDATE rewards SET stock = stock - 1 WHERE id = ${resolvedRewardId}::uuid AND business_id = ${businessId}::uuid AND stock > 0
-          `);
+      // -----------------------------------------------------------------------
+      // Validate reward catalog (if reward_id provided)
+      // -----------------------------------------------------------------------
+      let resolvedRewardId: string | undefined;
+      let resolvedRewardName: string | undefined = body.reward_name;
 
-          return txResult;
-        });
+      if (body.reward_id) {
+        const [reward] = await tx
+          .select()
+          .from(rewards)
+          .where(and(eq(rewards.id, body.reward_id), eq(rewards.businessId, businessId)))
+          .limit(1);
+
+        if (!reward || reward.deletedAt) {
+          return c.json(
+            { error: { code: 'REWARD_NOT_FOUND', message: 'Reward not found' } },
+            404,
+          );
+        }
+
+        // Validate active dates
+        if (reward.validFrom && new Date(reward.validFrom) > new Date()) {
+          return c.json(
+            { error: { code: 'REWARD_INACTIVE', message: 'Reward is not yet active' } },
+            409,
+          );
+        }
+        if (reward.validUntil && new Date(reward.validUntil) < new Date()) {
+          return c.json(
+            { error: { code: 'REWARD_INACTIVE', message: 'Reward has expired' } },
+            409,
+          );
+        }
+
+        // Validate stock
+        if (reward.stock !== null && reward.stock <= 0) {
+          return c.json(
+            { error: { code: 'REWARD_OUT_OF_STOCK', message: 'Reward is out of stock' } },
+            409,
+          );
+        }
+
+        // Validate points match
+        if (body.points < reward.pointsCost) {
+          return c.json(
+            { error: { code: 'INSUFFICIENT_POINTS', message: `This reward requires ${reward.pointsCost} points` } },
+            409,
+          );
+        }
+
+        resolvedRewardId = reward.id;
+        resolvedRewardName = reward.name;
       }
 
-      // No reward_id — keep existing simple flow
-      return await db.execute(sql`
+      // An operator names the customer by id and is honoured as sent, so a deleted
+      // account — whose row and ledger stay — would otherwise still be spendable from
+      // the POS. A customer token never reaches this: `resolveOwnCustomer` already
+      // excludes a deleted row and answered 403 above.
+      if (!isCustomerRole(auth) && (await isDeletedCustomer(tx, businessId, customerId))) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
+      }
+
+      // -----------------------------------------------------------------------
+      // Get current balance
+      // -----------------------------------------------------------------------
+      const balanceResult = await tx.execute(sql`
+        SELECT COALESCE(
+          (SELECT balance_after FROM points_transactions WHERE customer_id = ${customerId}::uuid AND business_id = ${businessId}::uuid ORDER BY created_at DESC LIMIT 1),
+          0
+        ) AS balance
+      `);
+
+      const currentBalance = Number(balanceResult.rows?.[0]?.balance ?? 0);
+
+      // -----------------------------------------------------------------------
+      // Determine actual redeem amount
+      // -----------------------------------------------------------------------
+      let redeemPoints: number;
+      let isPartial = false;
+
+      if (body.points <= currentBalance) {
+        redeemPoints = body.points;
+      } else if (body.partial === true) {
+        redeemPoints = currentBalance;
+        isPartial = true;
+      } else {
+        return c.json(
+          {
+            error: {
+              code: 'INSUFFICIENT_BALANCE',
+              message: `Customer has ${currentBalance} points but ${body.points} are required`,
+            },
+          },
+          409,
+        );
+      }
+
+      // If balance is already zero and partial, there's nothing to redeem
+      if (redeemPoints <= 0) {
+        return c.json(
+          { error: { code: 'INSUFFICIENT_BALANCE', message: 'Customer has no points to redeem' } },
+          409,
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // Atomic insert with balance deduction (+ stock deduction if reward_id)
+      // -----------------------------------------------------------------------
+      const result = await tx.execute(sql`
         INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
         VALUES (
           ${businessId}::uuid,
@@ -1856,64 +1849,25 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
         )
         RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
       `);
-    };
 
-    const result = await performRedeem();
-    const tx = result.rows?.[0];
-    if (!tx) {
-      return c.json(
-        { error: { code: 'INTERNAL_ERROR', message: 'Failed to create transaction' } },
-        500,
-      );
-    }
+      // When reward_id is provided, the stock decrement shares the ledger
+      // write's transaction. Atomic — no-op if already out of stock.
+      if (resolvedRewardId) {
+        await tx.execute(sql`
+          UPDATE rewards SET stock = stock - 1 WHERE id = ${resolvedRewardId}::uuid AND business_id = ${businessId}::uuid AND stock > 0
+        `);
+      }
 
-    const balanceAfter = Number(tx.balance_after);
+      const row = result.rows?.[0];
+      if (!row) {
+        return c.json(
+          { error: { code: 'INTERNAL_ERROR', message: 'Failed to create transaction' } },
+          500,
+        );
+      }
 
-    // -----------------------------------------------------------------------
-    // Publish RewardRedeemed event
-    // -----------------------------------------------------------------------
-    const event = buildRewardRedeemedEvent(
-      customerId,
-      businessId,
-      redeemPoints,
-      balanceAfter,
-      body.reference_id,
-      isPartial,
-      resolvedRewardName,
-      resolvedRewardId,
-      getRequestId(c),
-    );
-
-    await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
-
-    // Same shape as the earn path, and placed for the same reasons — with one
-    // extra constraint this route has and the earn route does not: the ledger
-    // write above may have run inside `db.transaction`, and it is this line's
-    // job to sit strictly *after* it. A projection fired from inside that
-    // transaction would ask the wallet to read a balance the transaction can
-    // still roll back, so a redemption that fails to commit would leave Google's
-    // pass holding a number the ledger never agreed to — and unlike a stale
-    // balance, that one is wrong in the direction that lets a customer spend
-    // points they no longer have. `await performRedeem()` above has already
-    // resolved, so this is after the commit on both branches: the transactional
-    // one and the plain one.
-    //
-    // Redemption is also where an over-limit balance must stop being pushed, and
-    // the reason is the earn path's reason inverted: spending is the only
-    // operation that can drive a balance to a number no pass can render, and
-    // that refusal belongs to the wallet's `reconcilePass`, which is why this
-    // hands it a customer id and nothing else.
-    schedulePassReconcile(c, { tenantId: businessId, customerId });
-
-    return c.json(
-      {
-        data: tx,
-        partial: isPartial,
-        fulfilled: redeemPoints,
-        requested: body.points,
-      },
-      201,
-    );
+      return { row, customerId, redeemPoints, isPartial, resolvedRewardId, resolvedRewardName };
+    });
   } catch (err: unknown) {
     const error = err as { message?: string; code?: string };
     // Detect unique constraint violation on (customer_id, reference_id)
@@ -1925,6 +1879,56 @@ router.post('/v1/loyalty/rewards/redeem', async (c) => {
     }
     throw err;
   }
+
+  if (outcome instanceof Response) return outcome;
+  const { row, customerId, redeemPoints, isPartial, resolvedRewardId, resolvedRewardName } = outcome;
+  const balanceAfter = Number(row.balance_after);
+
+  // -----------------------------------------------------------------------
+  // Publish RewardRedeemed event
+  // -----------------------------------------------------------------------
+  const event = buildRewardRedeemedEvent(
+    customerId,
+    businessId,
+    redeemPoints,
+    balanceAfter,
+    body.reference_id,
+    isPartial,
+    resolvedRewardName,
+    resolvedRewardId,
+    getRequestId(c),
+  );
+
+  await publish(c.env.DOMAIN_EVENTS_QUEUE, event);
+
+  // Same shape as the earn path, and placed for the same reasons — with one
+  // extra constraint this route has and the earn route does not: the ledger
+  // write above runs inside the tenant transaction, together with the stock
+  // decrement when a reward is named, and it is this line's job to sit strictly
+  // *after* it. A projection fired from inside that transaction would ask the
+  // wallet to read a balance the transaction can still roll back, so a
+  // redemption that fails to commit would leave Google's pass holding a number
+  // the ledger never agreed to — and unlike a stale balance, that one is wrong
+  // in the direction that lets a customer spend points they no longer have.
+  // `await withTenantTransaction(...)` above has already resolved, so this is
+  // after the commit, with or without a reward.
+  //
+  // Redemption is also where an over-limit balance must stop being pushed, and
+  // the reason is the earn path's reason inverted: spending is the only
+  // operation that can drive a balance to a number no pass can render, and
+  // that refusal belongs to the wallet's `reconcilePass`, which is why this
+  // hands it a customer id and nothing else.
+  schedulePassReconcile(c, { tenantId: businessId, customerId });
+
+  return c.json(
+    {
+      data: row,
+      partial: isPartial,
+      fulfilled: redeemPoints,
+      requested: body.points,
+    },
+    201,
+  );
 });
 
 // ============================================================================
@@ -2013,8 +2017,7 @@ function buildCustomerCheckedInEvent(
  * row is the record, and the event is the notification about it.
  */
 async function recordVenueInteraction(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
+  db: ReturnType<typeof createDb>,
   c: Context<{ Bindings: GrowthEnv }>,
   args: {
     businessId: string;
@@ -2025,13 +2028,17 @@ async function recordVenueInteraction(
 ): Promise<void> {
   const { businessId, customer, branchId, checkinId } = args;
 
-  await db.insert(customerEvents).values({
-    businessId,
-    // The internal id: `customer_events.customer_id` references `customers.id`.
-    customerId: customer.id,
-    eventType: 'customer.checked_in',
-    branchId,
-    payload: { checkin_id: checkinId },
+  // Committed before the event is published, so the event never announces a
+  // row that can still roll back.
+  await withTenantTransaction(db, { businessId }, async (tx) => {
+    await tx.insert(customerEvents).values({
+      businessId,
+      // The internal id: `customer_events.customer_id` references `customers.id`.
+      customerId: customer.id,
+      eventType: 'customer.checked_in',
+      branchId,
+      payload: { checkin_id: checkinId },
+    });
   });
 
   const queue = c.env?.DELIVERY_QUEUE;
@@ -2142,32 +2149,34 @@ router.post('/v1/loyalty/passes/resolve', async (c) => {
   if (typeof body.member_code !== 'string' || body.member_code.length === 0) {
     return c.json({ data: { known: false } });
   }
+  // Narrowed above; held in a const so the narrowing reaches the callback below.
+  const memberCode = body.member_code;
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    const customer = await resolveMemberCode(tx, businessId, memberCode);
 
-  const customer = await resolveMemberCode(db, businessId, body.member_code);
+    if (!customer) {
+      return c.json({ data: { known: false } });
+    }
 
-  if (!customer) {
-    return c.json({ data: { known: false } });
-  }
+    // `fullName` is the real column, not an invented `display_name`. It is
+    // nullable, so the field is passed through as-is rather than defaulted: a
+    // customer with no name on file is a gap in our data, and papering over it with
+    // a placeholder the cashier reads aloud is worse than an empty field.
+    const [profile] = await tx
+      .select({ fullName: customers.fullName })
+      .from(customers)
+      .where(and(eq(customers.businessId, businessId), eq(customers.id, customer.id)))
+      .limit(1);
 
-  // `fullName` is the real column, not an invented `display_name`. It is
-  // nullable, so the field is passed through as-is rather than defaulted: a
-  // customer with no name on file is a gap in our data, and papering over it with
-  // a placeholder the cashier reads aloud is worse than an empty field.
-  const [profile] = await db
-    .select({ fullName: customers.fullName })
-    .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.id, customer.id)))
-    .limit(1);
-
-  return c.json({
-    data: {
-      known: true,
-      customer_id: customer.id,
-      display_name: profile?.fullName ?? null,
-    },
+    return c.json({
+      data: {
+        known: true,
+        customer_id: customer.id,
+        display_name: profile?.fullName ?? null,
+      },
+    });
   });
 });
 
@@ -2202,8 +2211,7 @@ router.post('/v1/loyalty/passes/resolve', async (c) => {
  * unique, so the ledger row is attributable rather than anonymous.
  */
 async function creditCheckin(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
+  db: ReturnType<typeof createDb>,
   c: Context<{ Bindings: Bindings }>,
   args: {
     businessId: string;
@@ -2224,28 +2232,34 @@ async function creditCheckin(
   // -----------------------------------------------------------------------
   // The tenant's accumulation rule
   // -----------------------------------------------------------------------
-  const [program] = await db
-    .select()
-    .from(loyaltyPrograms)
-    .where(eq(loyaltyPrograms.businessId, businessId))
-    .limit(1);
+  // Read in a tenant-scoped transaction of its own. The ledger write and the
+  // checkin update below get one each, for the reasons given at each.
+  const { program, tier } = await withTenantTransaction(db, { businessId }, async (tx) => {
+    const [program] = await tx
+      .select()
+      .from(loyaltyPrograms)
+      .where(eq(loyaltyPrograms.businessId, businessId))
+      .limit(1);
 
-  const earnBy = isEarnBy(program?.earnBy) ? program.earnBy : DEFAULT_EARN_BY;
-  const earnRate = resolveEarnRate(program?.earnRate ?? '1.0');
+    if (!customer.currentTierId) return { program, tier: undefined };
 
-  let tierMultiplier = 1.0;
-  if (customer.currentTierId) {
-    const [tier] = await db
+    const [tier] = await tx
       .select()
       .from(membershipTiers)
       .where(and(eq(membershipTiers.id, customer.currentTierId), eq(membershipTiers.businessId, businessId)))
       .limit(1);
 
-    // Same reason as `earnRate`: `Number('N/A')` is `NaN`, and the tier bonus is
-    // multiplied straight into the ledger row.
-    if (tier) {
-      tierMultiplier = resolveEarnRate(tier.multiplier);
-    }
+    return { program, tier };
+  });
+
+  const earnBy = isEarnBy(program?.earnBy) ? program.earnBy : DEFAULT_EARN_BY;
+  const earnRate = resolveEarnRate(program?.earnRate ?? '1.0');
+
+  let tierMultiplier = 1.0;
+  // Same reason as `earnRate`: `Number('N/A')` is `NaN`, and the tier bonus is
+  // multiplied straight into the ledger row.
+  if (tier) {
+    tierMultiplier = resolveEarnRate(tier.multiplier);
   }
 
   /**
@@ -2303,10 +2317,14 @@ async function creditCheckin(
   // why `balanceAfter` is declared here and read after the `try`: it stays `null`
   // on that path, because this attempt did not observe a balance and reporting one
   // we did not read is the same defect as reporting points we did not earn.
+  //
+  // The INSERT runs in a transaction of its own for the same reason: a failed
+  // statement aborts the transaction it runs in, so the checkin update below
+  // could not share it with an INSERT that is allowed to fail.
   let balanceAfter: number | null = null;
 
   try {
-    const result = await db.execute(sql`
+    const result = await withTenantTransaction(db, { businessId }, (tx) => tx.execute(sql`
       INSERT INTO points_transactions (business_id, customer_id, type, points, balance_after, reference_id, note)
       VALUES (
         ${businessId}::uuid,
@@ -2321,10 +2339,10 @@ async function creditCheckin(
         ${args.note}
       )
       RETURNING id, business_id, customer_id, type, points, balance_after, reference_id, note, created_at
-    `);
+    `));
 
-    const tx = result.rows?.[0];
-    if (!tx) {
+    const row = result.rows?.[0];
+    if (!row) {
       console.error(
         `[growth] The ledger insert for checkin ${checkinId} returned no row. ` +
           `The checkin keeps points NULL and the credit is pending.`,
@@ -2332,7 +2350,7 @@ async function creditCheckin(
       return { points: null, balanceAfter: null };
     }
 
-    balanceAfter = Number(tx.balance_after);
+    balanceAfter = Number(row.balance_after);
 
     await publish(
       c.env.DOMAIN_EVENTS_QUEUE,
@@ -2373,10 +2391,12 @@ async function creditCheckin(
   // is what turns "pending" into "done", and it is deliberately a separate
   // statement from the insert above: this one is idempotent by nature — writing
   // the same points twice changes nothing — whereas the ledger row is not.
-  await db
-    .update(checkins)
-    .set({ points })
-    .where(eq(checkins.id, checkinId));
+  await withTenantTransaction(db, { businessId }, async (tx) => {
+    await tx
+      .update(checkins)
+      .set({ points })
+      .where(eq(checkins.id, checkinId));
+  });
 
   return { points, balanceAfter };
 }
@@ -2429,7 +2449,7 @@ async function creditCheckin(
  */
 router.post('/v1/loyalty/checkins', async (c) => {
   const auth = extractAuthHeaders(c);
-  // Before the body, before `createDb`, before `withRls`. Without this the route
+  // Before the body, before `createDb`, before the tenant transaction. Without this the route
   // had no guard at all: the public customer token could report a completed sale
   // for any `member_code` and have the tenant's earn rule turn `amount_cents` into
   // spendable points. An operator is refused here too — the manual path it would
@@ -2500,85 +2520,131 @@ router.post('/v1/loyalty/checkins', async (c) => {
   const paymentId =
     typeof body.payment_id === 'string' && body.payment_id.length > 0 ? body.payment_id : null;
 
+  // Narrowed above; held in consts so the narrowing reaches the transaction
+  // callback below.
+  const memberCode = body.member_code;
+  const amountCents = body.amount_cents;
+
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  // The venue has to belong to this tenant. The answer for a venue of another
-  // business is the same as the answer for a venue that does not exist: a 403
-  // would say "it exists, and it is not yours", and the existence of another
-  // tenant's venue is not this caller's to learn.
-  let branch: { id: string } | undefined;
+  // The venue, the member and the checkin row share one tenant-scoped
+  // transaction, and it commits before anything is credited: the row with
+  // `points IS NULL` is the "credit pending" record a retry finishes, so it has
+  // to survive a failure in the credit that follows. The venue interaction and
+  // the credit run in transactions of their own, after this one.
+  const recorded = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // The venue has to belong to this tenant. The answer for a venue of another
+    // business is the same as the answer for a venue that does not exist: a 403
+    // would say "it exists, and it is not yours", and the existence of another
+    // tenant's venue is not this caller's to learn.
+    let branch: { id: string } | undefined;
 
-  if (branchId.value !== null) {
-    const [found] = await db
-      .select({ id: branches.id })
-      .from(branches)
-      .where(and(eq(branches.id, branchId.value), eq(branches.businessId, businessId)))
-      .limit(1);
+    if (branchId.value !== null) {
+      const [found] = await tx
+        .select({ id: branches.id })
+        .from(branches)
+        .where(and(eq(branches.id, branchId.value), eq(branches.businessId, businessId)))
+        .limit(1);
 
-    if (!found) {
+      if (!found) {
+        return c.json(
+          {
+            error: {
+              code: BRANCH_NOT_FOUND,
+              message: 'No branch with that id belongs to this business.',
+            },
+          },
+          404,
+        );
+      }
+
+      branch = found;
+    }
+
+    const customer = await resolveMemberCode(tx, businessId, memberCode);
+
+    if (!customer) {
+      // Nothing written. A sale with no member has no identity to attach to, and
+      // guessing one would credit somebody else's balance.
       return c.json(
         {
           error: {
-            code: BRANCH_NOT_FOUND,
-            message: 'No branch with that id belongs to this business.',
+            code: MEMBER_CODE_NOT_FOUND,
+            message: 'No active customer in this business has that member_code.',
           },
         },
         404,
       );
     }
 
-    branch = found;
-  }
+    // -----------------------------------------------------------------------
+    // The insert, idempotent at the database
+    // -----------------------------------------------------------------------
+    // `ON CONFLICT DO NOTHING` rather than a read-then-write: the check has to be
+    // the unique index's, decided by Postgres in the same statement, or two
+    // concurrent retries of one payment would both insert and the second would fail
+    // as an unhandled error rather than answering 200.
+    const [inserted] = await tx
+      .insert(checkins)
+      .values({
+        businessId,
+        customerId: customer.id,
+        // The venue the sale happened at, when the caller said so. NULL when it
+        // did not: the column is nullable, and a sale without a venue is a sale.
+        branchId: branch?.id ?? null,
+        // The scanned string, kept verbatim even though `customerId` is resolved
+        // from it: it is the audit trail of what the terminal actually received, and
+        // the only thing that can still answer that question once a code is
+        // reassigned.
+        memberCode: memberCode,
+        paymentId,
+        amountCents: amountCents,
+        items: (body.items ?? null) as never,
+        note: body.note ?? null,
+        // Explicitly NULL: this is the "credit pending" signal a retry reads, and
+        // `creditCheckin` is what fills it in.
+        points: null,
+      })
+      .onConflictDoNothing({ target: [checkins.businessId, checkins.paymentId] })
+      .returning();
 
-  const customer = await resolveMemberCode(db, businessId, body.member_code);
+    if (inserted) return { inserted, customer, branch };
 
-  if (!customer) {
-    // Nothing written. A sale with no member has no identity to attach to, and
-    // guessing one would credit somebody else's balance.
-    return c.json(
-      {
-        error: {
-          code: MEMBER_CODE_NOT_FOUND,
-          message: 'No active customer in this business has that member_code.',
+    // -----------------------------------------------------------------------
+    // The insert lost. Read back the row that is already there.
+    // -----------------------------------------------------------------------
+    // Only reachable when `payment_id` is present — with a NULL it cannot collide,
+    // and the row above always exists.
+    const [existing] = await tx
+      .select()
+      .from(checkins)
+      .where(and(eq(checkins.businessId, businessId), eq(checkins.paymentId, paymentId!)))
+      .limit(1);
+
+    if (!existing) {
+      // The insert conflicted and the row is somehow unreadable. Reported rather
+      // than treated as success, because answering 200 here would tell the terminal
+      // its sale is recorded when we cannot say that.
+      return c.json(
+        {
+          error: {
+            code: 'CONFLICT_WITHOUT_ROW',
+            message: 'A checkin already exists for this payment_id but could not be read back.',
+          },
         },
-      },
-      404,
-    );
-  }
+        500,
+      );
+    }
 
-  // -----------------------------------------------------------------------
-  // The insert, idempotent at the database
-  // -----------------------------------------------------------------------
-  // `ON CONFLICT DO NOTHING` rather than a read-then-write: the check has to be
-  // the unique index's, decided by Postgres in the same statement, or two
-  // concurrent retries of one payment would both insert and the second would fail
-  // as an unhandled error rather than answering 200.
-  const [inserted] = await db
-    .insert(checkins)
-    .values({
-      businessId,
-      customerId: customer.id,
-      // The venue the sale happened at, when the caller said so. NULL when it
-      // did not: the column is nullable, and a sale without a venue is a sale.
-      branchId: branch?.id ?? null,
-      // The scanned string, kept verbatim even though `customerId` is resolved
-      // from it: it is the audit trail of what the terminal actually received, and
-      // the only thing that can still answer that question once a code is
-      // reassigned.
-      memberCode: body.member_code,
-      paymentId,
-      amountCents: body.amount_cents,
-      items: (body.items ?? null) as never,
-      note: body.note ?? null,
-      // Explicitly NULL: this is the "credit pending" signal a retry reads, and
-      // `creditCheckin` is what fills it in.
-      points: null,
-    })
-    .onConflictDoNothing({ target: [checkins.businessId, checkins.paymentId] })
-    .returning();
+    return { existing, customer };
+  });
 
-  if (inserted) {
+  if (recorded instanceof Response) return recorded;
+  const { customer } = recorded;
+
+  if ('inserted' in recorded) {
+    const { inserted, branch } = recorded;
+
     // -----------------------------------------------------------------------
     // The interaction with the venue
     // -----------------------------------------------------------------------
@@ -2617,31 +2683,7 @@ router.post('/v1/loyalty/checkins', async (c) => {
     return c.json({ data: { ...inserted, points: credited.points } }, 201);
   }
 
-  // -----------------------------------------------------------------------
-  // The insert lost. Read back the row that is already there.
-  // -----------------------------------------------------------------------
-  // Only reachable when `payment_id` is present — with a NULL it cannot collide,
-  // and the row above always exists.
-  const [existing] = await db
-    .select()
-    .from(checkins)
-    .where(and(eq(checkins.businessId, businessId), eq(checkins.paymentId, paymentId!)))
-    .limit(1);
-
-  if (!existing) {
-    // The insert conflicted and the row is somehow unreadable. Reported rather
-    // than treated as success, because answering 200 here would tell the terminal
-    // its sale is recorded when we cannot say that.
-    return c.json(
-      {
-        error: {
-          code: 'CONFLICT_WITHOUT_ROW',
-          message: 'A checkin already exists for this payment_id but could not be read back.',
-        },
-      },
-      500,
-    );
-  }
+  const { existing } = recorded;
 
   if (existing.points !== null) {
     // Already credited. Untouched — not re-credited, not re-published, not
@@ -2814,21 +2856,22 @@ router.post('/v1/loyalty/terminals', async (c) => {
   const keyHash = await hashPassword(secret);
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
   // Named columns in the RETURNING clause as well as in the response: the row that
   // comes back from the database should not even hold the hash for the mapping
   // below to have to remember to skip.
-  const [inserted] = await db
-    .insert(posTerminals)
-    .values({ businessId, name, keyHash })
-    .returning({
-      id: posTerminals.id,
-      name: posTerminals.name,
-      lastSeenAt: posTerminals.lastSeenAt,
-      revokedAt: posTerminals.revokedAt,
-      createdAt: posTerminals.createdAt,
-    });
+  const [inserted] = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .insert(posTerminals)
+      .values({ businessId, name, keyHash })
+      .returning({
+        id: posTerminals.id,
+        name: posTerminals.name,
+        lastSeenAt: posTerminals.lastSeenAt,
+        revokedAt: posTerminals.revokedAt,
+        createdAt: posTerminals.createdAt,
+      }),
+  );
 
   return c.json(
     {
@@ -2874,19 +2917,20 @@ router.get('/v1/loyalty/terminals', async (c) => {
   const { businessId } = auth;
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
 
-  const items = await db
-    .select({
-      id: posTerminals.id,
-      name: posTerminals.name,
-      lastSeenAt: posTerminals.lastSeenAt,
-      revokedAt: posTerminals.revokedAt,
-      createdAt: posTerminals.createdAt,
-    })
-    .from(posTerminals)
-    .where(eq(posTerminals.businessId, businessId))
-    .orderBy(desc(posTerminals.createdAt));
+  const items = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .select({
+        id: posTerminals.id,
+        name: posTerminals.name,
+        lastSeenAt: posTerminals.lastSeenAt,
+        revokedAt: posTerminals.revokedAt,
+        createdAt: posTerminals.createdAt,
+      })
+      .from(posTerminals)
+      .where(eq(posTerminals.businessId, businessId))
+      .orderBy(desc(posTerminals.createdAt)),
+  );
 
   return c.json({ data: items.map(terminalResponse) });
 });
@@ -2931,39 +2975,39 @@ router.post('/v1/loyalty/terminals/:id/revoke', async (c) => {
   const id = c.req.param('id');
 
   const db = createDb(c.env.DATABASE_URL);
-  await withRls(db, businessId);
+  return withTenantTransaction(db, { businessId }, async (tx) => {
+    // **404, and not a refusal** — the same answer `PUT /v1/loyalty/tiers/:id` and
+    // `PUT /v1/loyalty/rewards/:id` give, and for the same reason. `POST
+    // /v1/auth/pos/token` collapses three failures into one 401 because it is
+    // *public*: an attacker there is probing ids from outside the system entirely,
+    // and the id space is not theirs to enumerate. This route is not public, and
+    // its caller is already an operator of one tenant — so the risk being managed
+    // is not "can a stranger learn that id exists" but "can one merchant learn that
+    // another merchant has a till with that id", which the tenant predicate answers
+    // completely: a row that is not this business's never matches, so the 404 is
+    // byte-for-byte what an id nobody has produces. A 403 here would add a second
+    // answer to say *more* about a row we deliberately cannot see.
+    const [updated] = await tx
+      .update(posTerminals)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(posTerminals.id, id), eq(posTerminals.businessId, businessId)))
+      .returning({
+        id: posTerminals.id,
+        name: posTerminals.name,
+        lastSeenAt: posTerminals.lastSeenAt,
+        revokedAt: posTerminals.revokedAt,
+        createdAt: posTerminals.createdAt,
+      });
 
-  // **404, and not a refusal** — the same answer `PUT /v1/loyalty/tiers/:id` and
-  // `PUT /v1/loyalty/rewards/:id` give, and for the same reason. `POST
-  // /v1/auth/pos/token` collapses three failures into one 401 because it is
-  // *public*: an attacker there is probing ids from outside the system entirely,
-  // and the id space is not theirs to enumerate. This route is not public, and
-  // its caller is already an operator of one tenant — so the risk being managed
-  // is not "can a stranger learn that id exists" but "can one merchant learn that
-  // another merchant has a till with that id", which the tenant predicate answers
-  // completely: a row that is not this business's never matches, so the 404 is
-  // byte-for-byte what an id nobody has produces. A 403 here would add a second
-  // answer to say *more* about a row we deliberately cannot see.
-  const [updated] = await db
-    .update(posTerminals)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(posTerminals.id, id), eq(posTerminals.businessId, businessId)))
-    .returning({
-      id: posTerminals.id,
-      name: posTerminals.name,
-      lastSeenAt: posTerminals.lastSeenAt,
-      revokedAt: posTerminals.revokedAt,
-      createdAt: posTerminals.createdAt,
-    });
+    if (!updated) {
+      return c.json(
+        { error: { code: 'NOT_FOUND', message: 'Terminal not found' } },
+        404,
+      );
+    }
 
-  if (!updated) {
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: 'Terminal not found' } },
-      404,
-    );
-  }
-
-  return c.json({ data: { ...terminalResponse(updated), business_id: businessId } });
+    return c.json({ data: { ...terminalResponse(updated), business_id: businessId } });
+  });
 });
 
 // ============================================================================
@@ -3389,67 +3433,71 @@ router.post(PAYMENT_WEBHOOK_PATH, async (c) => {
     );
   }
 
-  await withRls(db, tenant.id);
+  // Narrowed above; held in consts so the narrowing reaches the callback below.
+  const paymentId = body.payment_id;
+  const amountCents = body.amount_cents;
 
-  // Idempotent at the database, decided by the primary key in the same statement
-  // — the same arrangement as `POST /v1/loyalty/checkins`, and for the same
-  // reason: a rail retries with backoff, and a read-then-write would let two
-  // concurrent retries of one settlement both proceed.
-  const [recorded] = await db
-    .insert(settledPayments)
-    .values({
-      paymentId: body.payment_id,
-      businessId: tenant.id,
-      amountCents: body.amount_cents,
-    })
-    .onConflictDoNothing({ target: settledPayments.paymentId })
-    .returning();
+  return withTenantTransaction(db, { businessId: tenant.id }, async (tx) => {
+    // Idempotent at the database, decided by the primary key in the same statement
+    // — the same arrangement as `POST /v1/loyalty/checkins`, and for the same
+    // reason: a rail retries with backoff, and a read-then-write would let two
+    // concurrent retries of one settlement both proceed.
+    const [recorded] = await tx
+      .insert(settledPayments)
+      .values({
+        paymentId: paymentId,
+        businessId: tenant.id,
+        amountCents: amountCents,
+      })
+      .onConflictDoNothing({ target: settledPayments.paymentId })
+      .returning();
 
-  // Snake_case on the way out, because this is a wire contract for a third party
-  // and every other route on this worker answers with the database's own column
-  // names. Drizzle's `.returning()` keys the row by the *camelCase property* names,
-  // so a bare `data: row` would make this the only endpoint on the platform that
-  // renames its columns in the response -- and the caller would have to know which
-  // endpoint it is talking to.
-  const asWire = (row: typeof recorded) =>
-    row === undefined
-      ? undefined
-      : {
-          payment_id: row.paymentId,
-          business_id: row.businessId,
-          amount_cents: row.amountCents,
-          received_at: row.receivedAt,
-        };
+    // Snake_case on the way out, because this is a wire contract for a third party
+    // and every other route on this worker answers with the database's own column
+    // names. Drizzle's `.returning()` keys the row by the *camelCase property* names,
+    // so a bare `data: row` would make this the only endpoint on the platform that
+    // renames its columns in the response -- and the caller would have to know which
+    // endpoint it is talking to.
+    const asWire = (row: typeof recorded) =>
+      row === undefined
+        ? undefined
+        : {
+            payment_id: row.paymentId,
+            business_id: row.businessId,
+            amount_cents: row.amountCents,
+            received_at: row.receivedAt,
+          };
 
-  // 200 rather than 201 on a duplicate, and the body is the row we already have.
-  // A retry must be able to tell "recorded" from "I am recorded", and must not
-  // have to distinguish them.
-  if (!recorded) {
-    const [existing] = await db
-      .select()
-      .from(settledPayments)
-      .where(eq(settledPayments.paymentId, body.payment_id))
-      .limit(1);
+    // 200 rather than 201 on a duplicate, and the body is the row we already have.
+    // A retry must be able to tell "recorded" from "I am recorded", and must not
+    // have to distinguish them.
+    if (!recorded) {
+      const [existing] = await tx
+        .select()
+        .from(settledPayments)
+        .where(eq(settledPayments.paymentId, paymentId))
+        .limit(1);
 
-    if (!existing) {
-      // The insert conflicted and the row is unreadable. Reported rather than
-      // claimed as success: a 200 here would tell the rail a settlement is recorded
-      // when we cannot say that.
-      return c.json(
-        {
-          error: {
-            code: 'CONFLICT_WITHOUT_ROW',
-            message: 'A settled payment already exists for this payment_id but could not be read back.',
+      if (!existing) {
+        // The insert conflicted and the row is unreadable. Reported rather than
+        // claimed as success: a 200 here would tell the rail a settlement is recorded
+        // when we cannot say that.
+        return c.json(
+          {
+            error: {
+              code: 'CONFLICT_WITHOUT_ROW',
+              message: 'A settled payment already exists for this payment_id but could not be read back.',
+            },
           },
-        },
-        500,
-      );
+          500,
+        );
+      }
+
+      return c.json({ data: asWire(existing) }, 200);
     }
 
-    return c.json({ data: asWire(existing) }, 200);
-  }
-
-  return c.json({ data: asWire(recorded) }, 201);
+    return c.json({ data: asWire(recorded) }, 201);
+  });
 });
 
 export default router;

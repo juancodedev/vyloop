@@ -1,12 +1,12 @@
 import type { Message } from '@cloudflare/workers-types';
-import { createDb, customers, workflows, readConsentMap } from '@vyloop/db';
+import { createDb, customers, workflows, readConsentMap, withTenantTransaction } from '@vyloop/db';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import { WHATSAPP_OUTBOUND_REQUESTED, createEnvelope, publish } from '@vyloop/event-bus';
 import { logPrefix } from '@vyloop/request-context';
 import { eq, and } from 'drizzle-orm';
 
 import type { Bindings, Condition } from './helpers';
-import { withRls, evaluateConditions, buildWorkflowTriggeredEvent } from './helpers';
+import { evaluateConditions, buildWorkflowTriggeredEvent } from './helpers';
 
 /**
  * Log prefix for a queued event. The id travels in the envelope, so a failure
@@ -146,59 +146,65 @@ async function handleCustomerRegistered(
   const customerGlobalId = payload.customer_id;
 
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
+  // The tenant's rows are read in one transaction scoped to the business;
+  // the queue publishes below stay outside it.
+  const reads = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // Resolve internal customer id
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(and(eq(customers.businessId, businessId), eq(customers.globalId, customerGlobalId)))
+      .limit(1);
 
-  // Resolve internal customer id
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.globalId, customerGlobalId)))
-    .limit(1);
+    if (!customer) {
+      console.warn(
+        `${tag(event)} Customer ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
+      );
+      return null;
+    }
 
-  if (!customer) {
-    console.warn(
-      `${tag(event)} Customer ${customerGlobalId} not found in business ${businessId} — skipping CustomerRegistered`,
-    );
-    return;
-  }
+    // Read active workflows
+    const activeWorkflows = await tx
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.businessId, businessId),
+          eq(workflows.isActive, true),
+          eq(workflows.triggerEvent, 'customer_registered'),
+        ),
+      );
 
-  // Read active workflows
-  const activeWorkflows = await db
-    .select()
-    .from(workflows)
-    .where(
-      and(
-        eq(workflows.businessId, businessId),
-        eq(workflows.isActive, true),
-        eq(workflows.triggerEvent, 'customer_registered'),
-      ),
-    );
+    if (activeWorkflows.length === 0) {
+      console.log(`${tag(event)} No active customer_registered workflows for business ${businessId}`);
+      return null;
+    }
 
-  if (activeWorkflows.length === 0) {
-    console.log(`${tag(event)} No active customer_registered workflows for business ${businessId}`);
-    return;
-  }
+    // The customer's consents, from the authoritative store. The gate and the
+    // context are built from the same read, so they cannot disagree.
+    const consents = await readConsentMap(tx, {
+      businessId,
+      customerId: customer.id as string,
+    });
 
-  // The customer's consents, from the authoritative store. The gate and the
-  // context are built from the same read, so they cannot disagree.
-  const consents = await readConsentMap(db, {
-    businessId,
-    customerId: customer.id as string,
+    // Consent check.
+    //
+    // This path had no gate, and it is the one that needed it most: the
+    // registration flow is where a customer says whether they agree to be
+    // contacted, and the workflow it usually triggers is the welcome message. A
+    // welcome sent to someone who declined is the failure the consent is
+    // supposed to prevent.
+    if (!hasWhatsAppConsent(consents)) {
+      console.log(
+        `${tag(event)} Customer ${customerGlobalId} has no WhatsApp consent — skipping CustomerRegistered`,
+      );
+      return null;
+    }
+
+    return { customer, consents, activeWorkflows };
   });
-
-  // Consent check.
-  //
-  // This path had no gate, and it is the one that needed it most: the
-  // registration flow is where a customer says whether they agree to be
-  // contacted, and the workflow it usually triggers is the welcome message. A
-  // welcome sent to someone who declined is the failure the consent is
-  // supposed to prevent.
-  if (!hasWhatsAppConsent(consents)) {
-    console.log(
-      `${tag(event)} Customer ${customerGlobalId} has no WhatsApp consent — skipping CustomerRegistered`,
-    );
-    return;
-  }
+  if (!reads) return;
+  const { customer, consents, activeWorkflows } = reads;
 
   const customerData = buildCustomerData(customer as unknown as Record<string, unknown>, consents);
   const customerInternalId = customer.id;
@@ -300,46 +306,52 @@ async function handlePointsAssigned(
   const customerId = payload.customer_id;
 
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
+  // The tenant's rows are read in one transaction scoped to the business;
+  // the queue publishes below stay outside it.
+  const reads = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // Read customer data
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
+      .limit(1);
 
-  // Read customer data
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
-    .limit(1);
+    if (!customer) {
+      console.warn(`${tag(event)} Customer ${customerId} not found — skipping PointsAssigned`);
+      return null;
+    }
 
-  if (!customer) {
-    console.warn(`${tag(event)} Customer ${customerId} not found — skipping PointsAssigned`);
-    return;
-  }
+    // The customer's consents, from the authoritative store.
+    const consents = await readConsentMap(tx, { businessId, customerId: customer.id as string });
 
-  // The customer's consents, from the authoritative store.
-  const consents = await readConsentMap(db, { businessId, customerId: customer.id as string });
+    // Consent check
+    if (!hasWhatsAppConsent(consents)) {
+      console.log(
+        `${tag(event)} Customer ${customerId} has no WhatsApp consent — skipping PointsAssigned`,
+      );
+      return null;
+    }
 
-  // Consent check
-  if (!hasWhatsAppConsent(consents)) {
-    console.log(
-      `${tag(event)} Customer ${customerId} has no WhatsApp consent — skipping PointsAssigned`,
-    );
-    return;
-  }
+    // Read active workflows
+    const activeWorkflows = await tx
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.businessId, businessId),
+          eq(workflows.isActive, true),
+          eq(workflows.triggerEvent, 'points_milestone'),
+        ),
+      );
 
-  // Read active workflows
-  const activeWorkflows = await db
-    .select()
-    .from(workflows)
-    .where(
-      and(
-        eq(workflows.businessId, businessId),
-        eq(workflows.isActive, true),
-        eq(workflows.triggerEvent, 'points_milestone'),
-      ),
-    );
+    if (activeWorkflows.length === 0) {
+      return null;
+    }
 
-  if (activeWorkflows.length === 0) {
-    return;
-  }
+    return { customer, consents, activeWorkflows };
+  });
+  if (!reads) return;
+  const { customer, consents, activeWorkflows } = reads;
 
   const customerData = buildCustomerData(customer as unknown as Record<string, unknown>, consents);
   // Add points data for condition evaluation
@@ -440,46 +452,52 @@ async function handleRewardRedeemed(
   const customerId = payload.customer_id;
 
   const db = createDb(env.DATABASE_URL);
-  await withRls(db, businessId);
+  // The tenant's rows are read in one transaction scoped to the business;
+  // the queue publishes below stay outside it.
+  const reads = await withTenantTransaction(db, { businessId }, async (tx) => {
+    // Read customer data
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
+      .limit(1);
 
-  // Read customer data
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.businessId, businessId), eq(customers.id, customerId)))
-    .limit(1);
+    if (!customer) {
+      console.warn(`${tag(event)} Customer ${customerId} not found — skipping RewardRedeemed`);
+      return null;
+    }
 
-  if (!customer) {
-    console.warn(`${tag(event)} Customer ${customerId} not found — skipping RewardRedeemed`);
-    return;
-  }
+    // The customer's consents, from the authoritative store.
+    const consents = await readConsentMap(tx, { businessId, customerId: customer.id as string });
 
-  // The customer's consents, from the authoritative store.
-  const consents = await readConsentMap(db, { businessId, customerId: customer.id as string });
+    // Consent check
+    if (!hasWhatsAppConsent(consents)) {
+      console.log(
+        `${tag(event)} Customer ${customerId} has no WhatsApp consent — skipping RewardRedeemed`,
+      );
+      return null;
+    }
 
-  // Consent check
-  if (!hasWhatsAppConsent(consents)) {
-    console.log(
-      `${tag(event)} Customer ${customerId} has no WhatsApp consent — skipping RewardRedeemed`,
-    );
-    return;
-  }
+    // Read active workflows
+    const activeWorkflows = await tx
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.businessId, businessId),
+          eq(workflows.isActive, true),
+          eq(workflows.triggerEvent, 'reward_redeemed'),
+        ),
+      );
 
-  // Read active workflows
-  const activeWorkflows = await db
-    .select()
-    .from(workflows)
-    .where(
-      and(
-        eq(workflows.businessId, businessId),
-        eq(workflows.isActive, true),
-        eq(workflows.triggerEvent, 'reward_redeemed'),
-      ),
-    );
+    if (activeWorkflows.length === 0) {
+      return null;
+    }
 
-  if (activeWorkflows.length === 0) {
-    return;
-  }
+    return { customer, consents, activeWorkflows };
+  });
+  if (!reads) return;
+  const { customer, consents, activeWorkflows } = reads;
 
   const customerData = buildCustomerData(customer as unknown as Record<string, unknown>, consents);
   customerData.reward_name = payload.reward_name;
