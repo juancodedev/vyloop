@@ -14,9 +14,9 @@ interface DeleteAccountProps {
 
 function failureFor(err: unknown): string {
   if (err instanceof ApiError && err.code === 'AUTH_SCOPE_MISSING') {
-    return 'Para eliminar tu cuenta, cerrá sesión y volvé a entrar.';
+    return 'Para eliminar tu cuenta, cierra sesión y vuelve a entrar.';
   }
-  return 'No pudimos eliminar tu cuenta. Intentá de nuevo.';
+  return 'No pudimos eliminar tu cuenta. Intenta de nuevo.';
 }
 
 /**

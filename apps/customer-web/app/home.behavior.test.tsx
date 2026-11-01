@@ -71,9 +71,9 @@ describe('entry actions', () => {
   it('explains the QR flow in text, with the icon marked decorative', () => {
     renderEntry();
 
-    expect(screen.getByText('Escaneá el QR')).toBeTruthy();
-    expect(screen.getByText('Creá tu cuenta')).toBeTruthy();
-    expect(screen.getByText('Mostrá tu código')).toBeTruthy();
+    expect(screen.getByText('Escanea el QR')).toBeTruthy();
+    expect(screen.getByText('Crea tu cuenta')).toBeTruthy();
+    expect(screen.getByText('Muestra tu código')).toBeTruthy();
 
     // The stamp pairs a lucide icon with the words "En el mostrador". The icon
     // is decoration and must stay out of the accessibility tree, otherwise a

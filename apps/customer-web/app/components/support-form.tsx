@@ -95,7 +95,7 @@ const SITE_KEY = resolveSiteKey(SUPPORT_SITE_KEY);
  * form rather than accompanying it.
  *
  * It says what is true and what still works, because the sentence this replaces
- * ("contale al comercio") remains the correct advice whatever we do here.
+ * ("cuéntale al comercio") remains the correct advice whatever we do here.
  */
 export function SupportForm({ failure, siteKey }: SupportFormProps) {
   const [state, setState] = useState<SupportState>({ kind: 'idle' });
@@ -119,7 +119,7 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
       setState({
         kind: 'failed',
         message: tooShort
-          ? 'Escribí un poco más, para que sepamos qué pasó.'
+          ? 'Escribe un poco más, para que sepamos qué pasó.'
           : 'El mensaje es demasiado largo.',
       });
       return;
@@ -159,7 +159,7 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
       const text =
         typeof carried?.message === 'string' && carried.message.trim() !== ''
           ? carried.message
-          : 'No pudimos enviar el mensaje. Probá otra vez.';
+          : 'No pudimos enviar el mensaje. Prueba otra vez.';
 
       setState({ kind: 'failed', message: text });
 
@@ -191,7 +191,7 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
           before they wait for a reply that is not coming.
         */}
         <p className="support-form__aside">
-          No guardamos tu nombre ni tu correo, así que no te podemos responder por acá.
+          No guardamos tu nombre ni tu correo, así que no te podemos responder por aquí.
         </p>
       </div>
     );
@@ -203,7 +203,7 @@ export function SupportForm({ failure, siteKey }: SupportFormProps) {
         <p className="club-status__description">
           El canal de soporte no está disponible en este momento.
         </p>
-        <p className="support-form__aside">Contale al comercio y lo resuelven.</p>
+        <p className="support-form__aside">Cuéntale al comercio y lo resuelven.</p>
       </div>
     );
   }

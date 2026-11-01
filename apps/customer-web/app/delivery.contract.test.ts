@@ -113,7 +113,7 @@ describe('delivery gate: claims the customer web must never make', () => {
     //   a) the UI exists — asserted positively, so this cannot pass on an app
     //      that quietly dropped the feature again;
     //   b) every `WALLET_*` code and every refusal message lives in
-    //      `lib/wallet.ts` alone. A component cannot grow its own "no tenés
+    //      `lib/wallet.ts` alone. A component cannot grow its own "no tienes
     //      tarjeta" branch, and cannot add a code the mapping does not know,
     //      because both would put a code somewhere but there.
     //
@@ -151,7 +151,7 @@ describe('delivery gate: claims the customer web must never make', () => {
   it('never tells a customer their account is why there is no pass', () => {
     // The precise failure the retired guard was reaching for, stated as the
     // thing it was actually afraid of. A ban on the words "Google Wallet" could
-    // never have caught a 409 rendered as "no tenés tarjeta" — it caught the
+    // never have caught a 409 rendered as "no tienes tarjeta" — it caught the
     // feature instead. These are the phrasings that do the damage, enumerated
     // because each one is a specific way of blaming the customer.
     const blaming = [

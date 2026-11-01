@@ -148,7 +148,7 @@ describe('history, no customer id anywhere', () => {
     await screen.findByRole('list', { name: 'Tus movimientos de puntos' });
 
     expect(screen.queryByText(/No se encontró el perfil del cliente/)).toBeNull();
-    expect(screen.queryByText(/Volvé a la página de perfil/)).toBeNull();
+    expect(screen.queryByText(/Vuelve a la página de perfil/)).toBeNull();
   });
 });
 

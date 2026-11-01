@@ -25,7 +25,7 @@ interface RegisterFormValues {
  *
  * `email` is a **visible field** in the main group, next to the name and the
  * phone, and it is optional. That used to be true in name only: it existed, but
- * inside a collapsed `<details>` under "¿Querés completar algo más ahora?" with
+ * inside a collapsed `<details>` under "¿Quieres completar algo más ahora?" with
  * the helper "Solo si te resulta cómodo". A merchant who needs to be able to
  * reach their customer was asking for a channel and the form hid it.
  *
@@ -76,7 +76,7 @@ function buildBusinessHref(pathname: string, businessSlug: string | null) {
 
 function getClientErrorMessage(status: number, serverMessage: string | null) {
   if (status === 404) {
-    return 'No encontramos este programa. Volvé al inicio y elegí el comercio correcto.';
+    return 'No encontramos este programa. Vuelve al inicio y elige el comercio correcto.';
   }
 
   if (serverMessage) {
@@ -84,7 +84,7 @@ function getClientErrorMessage(status: number, serverMessage: string | null) {
     if (safeMessage && safeMessage.length <= 180) return safeMessage;
   }
 
-  return 'No pudimos completar el registro con estos datos. Revisá los campos e intentá de nuevo.';
+  return 'No pudimos completar el registro con estos datos. Revisa los campos e intenta de nuevo.';
 }
 
 function isNetworkError(error: unknown) {
@@ -157,8 +157,8 @@ function RegisterContent() {
 
   function validate(): FormErrors {
     const nextErrors: FormErrors = {};
-    if (!form.fullName.trim()) nextErrors.fullName = 'Ingresá tu nombre completo.';
-    if (!form.phone.trim()) nextErrors.phone = 'Ingresá tu teléfono.';
+    if (!form.fullName.trim()) nextErrors.fullName = 'Ingresa tu nombre completo.';
+    if (!form.phone.trim()) nextErrors.phone = 'Ingresa tu teléfono.';
     return nextErrors;
   }
 
@@ -168,7 +168,7 @@ function RegisterContent() {
 
     if (!businessSlug) {
       setServerError(
-        'Falta el contexto del comercio. Volvé al inicio para abrir el enlace correcto.',
+        'Falta el contexto del comercio. Vuelve al inicio para abrir el enlace correcto.',
       );
       return;
     }
@@ -238,10 +238,10 @@ function RegisterContent() {
         setServerError(error.message);
       } else if (isNetworkError(error)) {
         setServerError(
-          'No pudimos conectar con el gateway local. Revisá que esté disponible e intentá de nuevo.',
+          'No pudimos conectar con el gateway local. Revisa que esté disponible e intenta de nuevo.',
         );
       } else {
-        setServerError('No pudimos completar el registro. Revisá los datos e intentá de nuevo.');
+        setServerError('No pudimos completar el registro. Revisa los datos e intenta de nuevo.');
       }
     } finally {
       setSubmitting(false);
@@ -257,10 +257,10 @@ function RegisterContent() {
         <div className="club-register__intro">
           <p className="club-register__eyebrow">Club del barrio</p>
           <h1 id="club-register-title" className="club-register__title">
-            Entrá a tu club
+            Entra a tu club
           </h1>
           <p className="club-register__summary">
-            Con tu nombre y teléfono ya podés seguir con este programa.
+            Con tu nombre y teléfono ya puedes seguir con este programa.
           </p>
         </div>
 
@@ -281,7 +281,7 @@ function RegisterContent() {
             aria-atomic="true"
           >
             <strong>Falta el contexto del comercio.</strong>
-            <p>Volvé al inicio y abrí el enlace del club que querés visitar.</p>
+            <p>Vuelve al inicio y abre el enlace del club que quieres visitar.</p>
             <Link className="btn btn--outline club-register__status-action" href={homeHref}>
               Volver al inicio
             </Link>
@@ -323,7 +323,7 @@ function RegisterContent() {
           >
             <strong>Tu cuenta fue creada.</strong>
             <p>
-              No pudimos iniciar sesión automáticamente. Ingresá con tu teléfono para continuar.
+              No pudimos iniciar sesión automáticamente. Ingresa con tu teléfono para continuar.
             </p>
             <Link className="btn btn--outline club-register__status-action" href={loginHref}>
               Ir a ingresar
@@ -362,7 +362,7 @@ function RegisterContent() {
                 value={form.phone}
                 onChange={(event) => updateField('phone', event)}
                 autoComplete="tel"
-                helperText="Incluí el código de país. Por ejemplo, +56 9..."
+                helperText="Incluye el código de país. Por ejemplo, +56 9..."
                 error={errors.phone}
                 required
                 inputRef={phoneRef}
@@ -389,10 +389,10 @@ function RegisterContent() {
 
             <details className="club-register__optional">
               <summary className="club-register__optional-summary">
-                ¿Querés completar algo más ahora?
+                ¿Quieres completar algo más ahora?
               </summary>
               <p className="club-register__optional-copy">
-                Estos datos son opcionales y podés dejarlos para más adelante.
+                Estos datos son opcionales y puedes dejarlos para más adelante.
               </p>
               <div className="club-register__optional-fields">
                 <FormField

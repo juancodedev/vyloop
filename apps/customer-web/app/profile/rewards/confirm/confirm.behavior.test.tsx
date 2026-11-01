@@ -401,7 +401,7 @@ describe('confirm, server refusals keep their meaning', () => {
       'Customer has 200 points but 400 are required',
     );
 
-    expect(alert.textContent).toContain('No tenés puntos suficientes');
+    expect(alert.textContent).toContain('No tienes puntos suficientes');
     expect(alert.textContent).toContain('200');
     expect(alert.textContent).toContain('400');
   });
@@ -411,7 +411,7 @@ describe('confirm, server refusals keep their meaning', () => {
     // reward's own cost, which is a different refusal from a short balance.
     const alert = await refuseWith('INSUFFICIENT_POINTS', 'This reward requires 400 points');
 
-    expect(alert.textContent).toContain('No tenés puntos suficientes');
+    expect(alert.textContent).toContain('No tienes puntos suficientes');
     expect(alert.textContent).toContain('This reward requires 400 points');
   });
 
@@ -481,7 +481,7 @@ describe('confirm, server refusals keep their meaning', () => {
     button.focus();
     fireEvent.click(button);
 
-    await screen.findByText('No tenés puntos suficientes');
+    await screen.findByText('No tienes puntos suficientes');
 
     await waitFor(() => {
       expect(document.activeElement).toBe(document.querySelector('.confirm-outcome'));
@@ -494,7 +494,7 @@ describe('confirm, server refusals keep their meaning', () => {
 
     const button = await renderConfirm();
     fireEvent.click(button);
-    await screen.findByText('No tenés puntos suficientes');
+    await screen.findByText('No tienes puntos suficientes');
 
     expect(screen.queryByText('Saldo restante')).toBeNull();
   });

@@ -93,7 +93,7 @@ describe('registration behavior', () => {
 
     await submitForm();
 
-    expect(await screen.findByText('Ingresá tu nombre completo.')).toBeTruthy();
+    expect(await screen.findByText('Ingresa tu nombre completo.')).toBeTruthy();
     expect(document.activeElement).toBe(getInput(/^Nombre completo/));
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(0);
   });
@@ -103,7 +103,7 @@ describe('registration behavior', () => {
 
     await submitForm();
 
-    expect(await screen.findByText('Ingresá tu teléfono.')).toBeTruthy();
+    expect(await screen.findByText('Ingresa tu teléfono.')).toBeTruthy();
     expect(document.activeElement).toBe(getInput(/^Teléfono/));
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(0);
   });
@@ -137,7 +137,7 @@ describe('registration behavior', () => {
   it('normalizes surrounding whitespace in the request payload', async () => {
     vi.mocked(fetch).mockResolvedValue(createResponse(200));
     setRequiredFields('  Ada Lovelace  ', '  +56 9 1234 5678  ');
-    fireEvent.click(screen.getByText('¿Querés completar algo más ahora?'));
+    fireEvent.click(screen.getByText('¿Quieres completar algo más ahora?'));
     fireEvent.change(getInput(/^Email/), { target: { value: '  ada@example.com  ' } });
 
     await submitForm();
@@ -173,7 +173,7 @@ describe('registration behavior', () => {
 
     expect(
       await screen.findByText(
-        'No pudimos conectar con el gateway local. Revisá que esté disponible e intentá de nuevo.',
+        'No pudimos conectar con el gateway local. Revisa que esté disponible e intenta de nuevo.',
       ),
     ).toBeTruthy();
     expect(mocks.loginCustomer).not.toHaveBeenCalled();
@@ -198,7 +198,7 @@ describe('registration behavior', () => {
 // ─── The email field ──────────────────────────────────────────────────
 //
 // It always existed and was always optional. What was wrong was that it was
-// inside a collapsed `<details>` under "¿Querés completar algo más ahora?",
+// inside a collapsed `<details>` under "¿Quieres completar algo más ahora?",
 // with "Solo si te resulta cómodo" as its only justification — so a business
 // asking for a way to reach its customer had to know to go looking for it.
 //

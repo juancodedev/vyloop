@@ -3,19 +3,19 @@ import { QrCode, ScanLine, UserPlus } from 'lucide-react';
 const steps = [
   {
     number: '01',
-    title: 'Escaneá el QR',
+    title: 'Escanea el QR',
     description: 'En el mostrador de tu local.',
     icon: QrCode,
   },
   {
     number: '02',
-    title: 'Creá tu cuenta',
+    title: 'Crea tu cuenta',
     description: 'Desde el teléfono.',
     icon: UserPlus,
   },
   {
     number: '03',
-    title: 'Mostrá tu código',
+    title: 'Muestra tu código',
     description: 'Para seguir con tu programa.',
     icon: ScanLine,
   },
@@ -58,7 +58,7 @@ export function ClubQrExplainer() {
         })}
       </ol>
 
-      <p className="club-qr-explainer__note">No necesitás descargar una aplicación para empezar.</p>
+      <p className="club-qr-explainer__note">No necesitas descargar una aplicación para empezar.</p>
     </section>
   );
 }

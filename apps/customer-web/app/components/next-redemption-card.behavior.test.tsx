@@ -59,6 +59,37 @@ describe('the next redemption card', () => {
     expect(all.getAttribute('href')).toBe('/profile/rewards');
   });
 
+  it('writes point amounts the way they are read in Chile', () => {
+    // Every other balance on the profile uses `es-CL`; a raw 1240 next to a
+    // formatted 1.240 reads as two different numbers.
+    render(
+      <NextRedemptionCard
+        profile={makeProfile({
+          ...PROGRESS,
+          nextReward: { id: 'r-big', name: 'Cena para dos', pointsCost: 2500, pointsMissing: 1240 },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Te faltan 1.240 puntos')).toBeTruthy();
+    expect(screen.getByText('2.500 puntos')).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: '1.260 de 2.500 puntos' })).toBeTruthy();
+  });
+
+  it('writes the cost of an affordable reward the same way', () => {
+    render(
+      <NextRedemptionCard
+        profile={makeProfile({
+          ...PROGRESS,
+          affordableReward: { id: 'r2', name: 'Torta', pointsCost: 1500, pointsMissing: 0 },
+          affordableRewardsCount: 1,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('1.500 puntos')).toBeTruthy();
+  });
+
   it('counts in the program unit, never in the reward name', () => {
     render(
       <NextRedemptionCard
@@ -82,7 +113,7 @@ describe('the next redemption card', () => {
       />,
     );
 
-    expect(screen.getByText('Ya podés canjear Papas medianas')).toBeTruthy();
+    expect(screen.getByText('Ya puedes canjear Papas medianas')).toBeTruthy();
     const redeem = screen.getByRole('link', { name: 'Canjear' });
     expect(redeem.getAttribute('href')).toBe('/profile/rewards/confirm?reward=r1');
     // The affordable state takes priority over the progress bar.

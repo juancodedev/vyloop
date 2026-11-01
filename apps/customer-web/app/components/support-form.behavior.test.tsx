@@ -86,7 +86,7 @@ function refuse(status = 502) {
     name: 'ApiError',
     code: 'SUPPORT_SEND_FAILED',
     status,
-    message: 'No llegó tu mensaje: no pudimos enviarlo. Probá otra vez o contale al comercio.',
+    message: 'No llegó tu mensaje: no pudimos enviarlo. Prueba otra vez o cuéntale al comercio.',
   });
 
   mocks.sendSupportMessage.mockRejectedValue(error);
@@ -391,12 +391,12 @@ describe('without a Turnstile widget', () => {
   });
 
   it('keeps the advice that is true either way', () => {
-    // "Contale al comercio" is what the card already says, and it remains correct
+    // "Cuéntale al comercio" is what the card already says, and it remains correct
     // whatever this component does. An unavailable channel must not remove the one
     // route to a human that demonstrably works.
     render(<SupportForm failure={REFUSAL} />);
 
-    expect(screen.getByText(/contale al comercio/i)).toBeTruthy();
+    expect(screen.getByText(/cuéntale al comercio/i)).toBeTruthy();
   });
 
   it('never shows a confirmation, having sent nothing', () => {

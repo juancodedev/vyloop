@@ -12,7 +12,7 @@ import { useAuth } from '../../../lib/auth';
 
 const NOT_FOUND_TITLE = 'No encontramos esa recompensa';
 const NOT_FOUND_DESCRIPTION =
-  'Puede que ya no esté disponible. Volvé al catálogo a ver las que hay ahora.';
+  'Puede que ya no esté disponible. Vuelve al catálogo a ver las que hay ahora.';
 
 /**
  * A reference id per attempt.
@@ -65,7 +65,7 @@ function describeRedeemFailure(err: unknown): { title: string; description: stri
     case 'INSUFFICIENT_BALANCE':
     case 'INSUFFICIENT_POINTS':
       return {
-        title: 'No tenés puntos suficientes',
+        title: 'No tienes puntos suficientes',
         description: serverMessage,
       };
 
@@ -85,13 +85,13 @@ function describeRedeemFailure(err: unknown): { title: string; description: stri
       return {
         title: 'Este canje ya estaba registrado',
         description:
-          'Lo procesamos una sola vez, así que no se descontó ningún punto dos veces. Revisá tu historial.',
+          'Lo procesamos una sola vez, así que no se descontó ningún punto dos veces. Revisa tu historial.',
       };
 
     case 'FORBIDDEN':
       return {
         title: 'No pudimos identificar tu cuenta',
-        description: 'Tu sesión no habilita este canje. Volvé a iniciar sesión e intentá de nuevo.',
+        description: 'Tu sesión no habilita este canje. Vuelve a iniciar sesión e intenta de nuevo.',
       };
 
     default:

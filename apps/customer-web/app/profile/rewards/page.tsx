@@ -11,7 +11,7 @@ import { useAuth } from '../../lib/auth';
 
 const ERROR_TITLE = 'No pudimos cargar las recompensas';
 const ERROR_DESCRIPTION =
-  'Hubo un problema al traer el catálogo. Podés reintentar; no gastamos ningún punto.';
+  'Hubo un problema al traer el catálogo. Puedes reintentar; no gastamos ningún punto.';
 
 const CATALOG_LABEL = 'Catálogo de recompensas';
 
@@ -97,7 +97,7 @@ export default function RewardsPage() {
   return (
     <ClubShell backLink={{ href: '/profile', label: 'Volver a mi pase' }}>
       <h1 className="title title--sm">Recompensas</h1>
-      <p className="subtitle">Canjéa tus puntos por lo que quieras</p>
+      <p className="subtitle">Canjea tus puntos por lo que quieras</p>
 
       {rewards.length === 0 ? (
         // An empty catalog is a real answer, not a failure. It is announced as
@@ -105,7 +105,7 @@ export default function RewardsPage() {
         <ClubStatus variant="empty">
           <p className="club-status__title">No hay recompensas disponibles</p>
           <p className="club-status__description">
-            Cuando el local active recompensas, las vas a ver acá.
+            Cuando el local active recompensas, las vas a ver aquí.
           </p>
         </ClubStatus>
       ) : (

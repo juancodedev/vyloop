@@ -19,7 +19,7 @@ import { useAuth } from '../lib/auth';
 
 const ERROR_TITLE = 'No pudimos cargar tu pase';
 const ERROR_DESCRIPTION =
-  'Hubo un problema al traer tus datos. Podés reintentar; no modificamos nada en tu cuenta.';
+  'Hubo un problema al traer tus datos. Puedes reintentar; no modificamos nada en tu cuenta.';
 
 /**
  * The shape of the page while it loads: the identity card, the redemption card

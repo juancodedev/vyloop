@@ -10,7 +10,7 @@
  * response is otherwise identical to a new issuance: same link, same fields,
  * same `200`. The only thing separating "just created" from "you already had
  * that" is `already_existed` plus `pass_state`, so a spelling disagreement on
- * either side of the wire does not throw — it silently renders "Agregala una vez"
+ * either side of the wire does not throw — it silently renders "Agrégala una vez"
  * to someone whose card has been in their phone for a year. A type error would be
  * loud; this is the version that is not.
  *
@@ -42,7 +42,7 @@
  *
  * That is a stronger pair than the one it replaced. The version that only checked
  * the component would have passed a card that branched correctly in JSX and
- * spelled its own "Agregala una vez" alongside, which is precisely the failure
+ * spelled its own "Agrégala una vez" alongside, which is precisely the failure
  * `delivery.contract.test.ts` exists to make impossible.
  */
 
@@ -127,7 +127,7 @@ describe('the pass response says whether the pass already existed', () => {
     // The first-add sentence, verbatim. `wallet.test.ts` walks every state of
     // `walletPassCopyFor`; this half holds the component from growing a fourth
     // place the same wording could live and disagree.
-    expect(cardCode).not.toMatch(/agreg[áa]la una vez/i);
+    expect(cardCode).not.toMatch(/agr[eé]g[aá]la una vez/i);
     expect(cardCode).not.toMatch(/vuelve a agregar|volver a agregar/i);
   });
 

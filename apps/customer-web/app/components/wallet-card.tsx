@@ -42,7 +42,7 @@ import { SupportForm } from './support-form';
  * meaning "this customer has no card", because **that is not something a refusal
  * means**. Every refusal `GET /v1/wallet/pass` can produce is about the
  * merchant's class, about Google, or about this deployment — never about the
- * customer's record. Rendering them as one flat "no tenés tarjeta" tells someone
+ * customer's record. Rendering them as one flat "no tienes tarjeta" tells someone
  * with a perfectly good account that their account is the problem, and hides the
  * one piece of information they can act on.
  *
@@ -240,7 +240,7 @@ export function WalletCard({ onPass }: { onPass?: (pass: WalletPass) => void } =
             rendering for two genuinely different situations — a card just
             created and a card that has been in the customer's phone for a year —
             and only `already_existed` plus `pass_state` can tell them apart.
-            Choosing between "Agregala una vez" and "esta tarjeta ya está" is a
+            Choosing between "Agrégala una vez" and "esta tarjeta ya está" is a
             decision about a real person's wallet, and a decision that has to be
             testable across every state rather than read off one branch of JSX.
           */}

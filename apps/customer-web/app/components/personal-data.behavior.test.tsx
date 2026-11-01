@@ -165,7 +165,7 @@ describe('editing personal data', () => {
     type('Correo', 'nuevo@');
     save();
 
-    expect(screen.getByText('Ingresá un email válido, por ejemplo nombre@dominio.cl')).toBeTruthy();
+    expect(screen.getByText('Ingresa un email válido, por ejemplo nombre@dominio.cl')).toBeTruthy();
     expect(mocks.updateProfile).not.toHaveBeenCalled();
   });
 
@@ -176,7 +176,7 @@ describe('editing personal data', () => {
     type('Nombre', '   ');
     save();
 
-    expect(screen.getByText('Ingresá tu nombre.')).toBeTruthy();
+    expect(screen.getByText('Ingresa tu nombre.')).toBeTruthy();
     expect(mocks.updateProfile).not.toHaveBeenCalled();
   });
 
@@ -187,7 +187,7 @@ describe('editing personal data', () => {
     type('Fecha de nacimiento', '2999-01-01');
     save();
 
-    expect(screen.getByText('Ingresá una fecha de nacimiento que ya haya pasado.')).toBeTruthy();
+    expect(screen.getByText('Ingresa una fecha de nacimiento que ya haya pasado.')).toBeTruthy();
     expect(mocks.updateProfile).not.toHaveBeenCalled();
   });
 
@@ -234,7 +234,7 @@ describe('editing personal data', () => {
     save();
 
     await waitFor(() =>
-      expect(screen.getByText('Para editar tus datos, cerrá sesión y volvé a entrar.')).toBeTruthy(),
+      expect(screen.getByText('Para editar tus datos, cierra sesión y vuelve a entrar.')).toBeTruthy(),
     );
   });
 
@@ -247,7 +247,7 @@ describe('editing personal data', () => {
     save();
 
     await waitFor(() =>
-      expect(screen.getByText('No pudimos guardar los cambios. Intentá de nuevo.')).toBeTruthy(),
+      expect(screen.getByText('No pudimos guardar los cambios. Intenta de nuevo.')).toBeTruthy(),
     );
   });
 

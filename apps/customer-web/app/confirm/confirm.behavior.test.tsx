@@ -176,7 +176,7 @@ describe('the success indicator', () => {
     expect(text).not.toMatch(/con tus compras/i);
     expect(text).not.toMatch(/puntos/i);
     // What it says instead is a thing the customer can do next.
-    expect(text).toContain('Ingresá con tu teléfono para ver tu pase.');
+    expect(text).toContain('Ingresa con tu teléfono para ver tu pase.');
   });
 
   it('offers exactly one action, back to the entry page', () => {

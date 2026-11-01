@@ -5,7 +5,7 @@
  *
  * This module is the whole point of the wallet UI, and it is the part that is
  * easiest to get wrong in a way nobody notices. A 409 and a 500 are both "an
- * error", and the tempting rendering for both is "no tenés tarjeta" — which
+ * error", and the tempting rendering for both is "no tienes tarjeta" — which
  * tells a customer with a perfectly good account that their account is the
  * problem, and sends them to support instead of to the merchant who has to
  * finish configuring something.
@@ -78,6 +78,7 @@ const CUSTOMER_BLAMING = [
   /no sos (un |una )?(cliente|socio|miembro)/i,
   /no eres (un |una )?(cliente|socio|miembro)/i,
   /(no|sin) (una |tu )?(tarjeta|pase) para vos/i,
+  /(no|sin) (una |tu )?(tarjeta|pase) para ti/i,
 ];
 
 describe('wallet refusals never blame the customer', () => {
@@ -132,7 +133,7 @@ describe('wallet refusals never blame the customer', () => {
     // **The no-answer case is no longer one of them**, and this assertion is the
     // record of why. It used to read
     // `expect(render('', 0)).toBe(render('WALLET_SOMETHING_NEW', 409))`, holding a
-    // single fallback that promised "podés reintentar en un momento" for a request
+    // single fallback that promised "puedes reintentar en un momento" for a request
     // that never arrived *and* for a server that answered with a stable code this
     // build does not know. Those want opposite answers, and the constant could not
     // tell them apart, so it made the promise on behalf of the permanent case too.
@@ -206,10 +207,10 @@ describe('the specific refusals worth naming', () => {
       const failure = walletFailureFor(code, status);
       const text = `${failure.title} ${failure.message}`;
 
-      expect(text, code).not.toMatch(/ya (va a estar|está|la tenés|tenés la)/i);
+      expect(text, code).not.toMatch(/ya (va a estar|está|la tienes|tienes la)/i);
       expect(text, code).not.toMatch(/pr[óo]ximamente|very soon|en breve|coming soon/i);
       expect(text, code).not.toMatch(/agreg[áa] la (tarjeta|pase)/i);
-      // "más pronto" is a promise about the card; "reintentá más tarde" is an
+      // "más pronto" is a promise about the card; "reintenta más tarde" is an
       // instruction to the customer and says nothing about when the card lands.
       expect(text, code).not.toMatch(/m[áa]s pronto/i);
     }
@@ -228,7 +229,7 @@ describe('the specific refusals worth naming', () => {
     // (`routes.ts:524`) and a member code that could not be derived
     // (`routes.ts:906`) — neither of which a second request changes.
     //
-    // So the sentence lost "podés reintentar más tarde" with the button. The
+    // So the sentence lost "puedes reintentar más tarde" with the button. The
     // negative is the assertion now: a deployment fault must not send a customer
     // away to do something that cannot work.
     const failure = walletFailureFor('WALLET_NOT_CONFIGURED', 500);
@@ -300,7 +301,7 @@ it('falls back to naming us for a status it does not recognise', () => {
 // worker reuses a pass that already exists, and the response is otherwise
 // identical, so the page has to be able to tell a card it just created from one
 // that has been in the customer's phone for a year. Getting that wrong does not
-// throw — it says "Agregala una vez" to somebody who did it a year ago.
+// throw — it says "Agrégala una vez" to somebody who did it a year ago.
 // ============================================================================
 
 /**
@@ -356,7 +357,7 @@ describe('the wording for a returned pass never claims a card the customer lacks
     for (const already_existed of [false, true]) {
       for (const pass_state of PASS_STATES) {
         const copy = walletPassCopyFor(returnedPass(already_existed, pass_state));
-        const saysFirstAdd = /agreg[áa]la una vez/i.test(copy.note);
+        const saysFirstAdd = /agr[eé]g[aá]la una vez/i.test(copy.note);
 
         expect(saysFirstAdd, `${already_existed}/${pass_state}`).toBe(
           !knowsTheCardIsThere(already_existed, pass_state),
@@ -429,7 +430,7 @@ describe('the wording for a returned pass never claims a card the customer lacks
 // The retry promise
 //
 // A comensal of `cafe-prueba-0117` or `sonda-a2-1116` was told: "Google no pudo
-// generar el pase en este momento. Tu cuenta está bien y podés reintentar en un
+// generar el pase en este momento. Tu cuenta está bien y puedes reintentar en un
 // rato." That sentence was wrong twice over.
 //
 // Once, because the cause was not a bad minute at Google. The class had never
@@ -455,7 +456,7 @@ describe('the class_not_approved copy', () => {
     // The load-bearing assertion, and the one that fails the day somebody
     // "softens" the wording. Every phrasing a customer could read as "ask again
     // and it will work" is listed, because a single word is what makes the
-    // promise: "reintentá", "probá de nuevo", "en un rato", "vuelve a intentar".
+    // promise: "reintenta", "probá de nuevo", "en un rato", "vuelve a intentar".
     //
     // A comensal who retries gets the same 409, reads the same sentence, and
     // concludes the problem is them.
@@ -558,7 +559,7 @@ describe('the class_not_approved copy', () => {
  *
  * ## One entry did move, on purpose, and this is the record of it
  *
- * `WALLET_NOT_CONFIGURED` lost "podés reintentar más tarde". Not a reword: the
+ * `WALLET_NOT_CONFIGURED` lost "puedes reintentar más tarde". Not a reword: the
  * retry button was removed from every refusal whose cause does not change
  * between two taps, and this one was in that set — `routes.ts:524` (an empty
  * `WALLET_ALLOWED_ORIGINS`) and `routes.ts:906` (a member code that could not be
@@ -575,7 +576,7 @@ describe('the rest of the refusal copy did not change', () => {
       'WALLET_CLASS_NOT_PROVISIONED',
       409,
       'Este comercio todav\u00eda no tiene tarjeta',
-      'Google Wallet todav\u00eda no est\u00e1 configurado para este comercio. Tu cuenta est\u00e1 bien y no ten\u00e9s ' +
+      'Google Wallet todav\u00eda no est\u00e1 configurado para este comercio. Tu cuenta est\u00e1 bien y no tienes ' +
         'que hacer nada: es algo que el comercio tiene que terminar de configurar.',
     ],
     [
@@ -589,7 +590,7 @@ describe('the rest of the refusal copy did not change', () => {
       'WALLET_PASS_NOT_CREATABLE',
       409,
       'Google no pudo crear la tarjeta ahora',
-      'Google no pudo generar el pase en este momento. Tu cuenta est\u00e1 bien y pod\u00e9s reintentar en un ' +
+      'Google no pudo generar el pase en este momento. Tu cuenta est\u00e1 bien y puedes reintentar en un ' +
         'rato.',
     ],
     [
@@ -597,7 +598,7 @@ describe('the rest of the refusal copy did not change', () => {
       409,
       'Tu saldo es m\u00e1s grande de lo que la tarjeta puede mostrar',
       'Este programa todav\u00eda no tiene una forma de mostrar saldos tan grandes en Google Wallet. Tus ' +
-        'puntos est\u00e1n intactos y los pod\u00e9s usar en el local; el comercio necesita configurar otra ' +
+        'puntos est\u00e1n intactos y los puedes usar en el local; el comercio necesita configurar otra ' +
         'presentaci\u00f3n.',
     ],
     [
@@ -605,7 +606,7 @@ describe('the rest of the refusal copy did not change', () => {
       409,
       'Esta tarjeta ya no se puede volver a usar',
       'Google ya no permite reutilizar esta tarjeta porque su vigencia termin\u00f3. Tu cuenta y tus ' +
-        'puntos est\u00e1n bien y los pod\u00e9s seguir usando en el local. Contale al comercio para que lo ' +
+        'puntos est\u00e1n bien y los puedes seguir usando en el local. Cuéntale al comercio para que lo ' +
         'resuelvan.',
     ],
     [
@@ -633,7 +634,7 @@ describe('the rest of the refusal copy did not change', () => {
       WALLET_RESPONSE_MALFORMED,
       200,
       'La tarjeta lleg\u00f3 incompleta',
-      'La respuesta que nos lleg\u00f3 no tra\u00eda una tarjeta. Tu cuenta est\u00e1 bien y pod\u00e9s reintentar en un ' +
+      'La respuesta que nos lleg\u00f3 no tra\u00eda una tarjeta. Tu cuenta est\u00e1 bien y puedes reintentar en un ' +
         'momento.',
     ],
   ];

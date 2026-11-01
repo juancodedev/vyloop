@@ -94,14 +94,14 @@ function todayIso(): string {
 
 function validate(draft: Draft): FieldErrors {
   const errors: FieldErrors = {};
-  if (draft.fullName.trim() === '') errors.fullName = 'Ingresá tu nombre.';
+  if (draft.fullName.trim() === '') errors.fullName = 'Ingresa tu nombre.';
   const email = draft.email.trim();
   if (email !== '' && !EMAIL_PATTERN.test(email)) {
-    errors.email = 'Ingresá un email válido, por ejemplo nombre@dominio.cl';
+    errors.email = 'Ingresa un email válido, por ejemplo nombre@dominio.cl';
   }
   // The server refuses it too; caught here so the message lands on the field.
   if (draft.birthDate !== '' && draft.birthDate > todayIso()) {
-    errors.birthDate = 'Ingresá una fecha de nacimiento que ya haya pasado.';
+    errors.birthDate = 'Ingresa una fecha de nacimiento que ya haya pasado.';
   }
   return errors;
 }
@@ -112,9 +112,9 @@ function failureFor(err: unknown): { field?: keyof Draft; message: string } {
     return { field: 'email', message: 'Ese email ya lo usa otra persona en este club.' };
   }
   if (err instanceof ApiError && err.code === 'AUTH_SCOPE_MISSING') {
-    return { message: 'Para editar tus datos, cerrá sesión y volvé a entrar.' };
+    return { message: 'Para editar tus datos, cierra sesión y vuelve a entrar.' };
   }
-  return { message: 'No pudimos guardar los cambios. Intentá de nuevo.' };
+  return { message: 'No pudimos guardar los cambios. Intenta de nuevo.' };
 }
 
 export function PersonalData({ profile, onSaved }: PersonalDataProps) {
@@ -244,7 +244,7 @@ export function PersonalData({ profile, onSaved }: PersonalDataProps) {
             onChange={(event) => update('birthDate', event.target.value)}
             error={errors.birthDate}
           />
-          <p className="club-personal-data__note">Para cambiar tu teléfono, pedilo en el local.</p>
+          <p className="club-personal-data__note">Para cambiar tu teléfono, pídelo en el local.</p>
           {formError ? (
             <p className="error-text" role="alert">
               {formError}

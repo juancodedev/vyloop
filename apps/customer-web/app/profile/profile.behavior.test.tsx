@@ -443,7 +443,7 @@ describe('profile pass behavior', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Mostrar mi código' }));
 
-    expect(screen.getByRole('dialog', { name: 'Mostrale esto en caja' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Muéstrale esto en caja' })).toBeTruthy();
     await waitFor(() => expect(mocks.toDataURL).toHaveBeenCalledTimes(1));
     expect(mocks.toDataURL.mock.calls[0][0]).toBe(`/c/${GLOBAL_ID}`);
 

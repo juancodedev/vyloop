@@ -21,7 +21,7 @@
  * - this deployment is missing configuration it cannot invent,
  * - the issuer is still in demo mode, so a pass only reaches test accounts.
  *
- * Collapsing those into "no tenés tarjeta" is the specific failure this file
+ * Collapsing those into "no tienes tarjeta" is the specific failure this file
  * exists to make impossible. It tells a customer with a perfectly good account
  * that their account is the problem, and it sends them to support instead of to
  * the merchant who has to finish configuring something — while making the
@@ -102,7 +102,7 @@ export interface WalletPass {
    * repeated request idempotent. And `save_url` differs only in its `iat` claim,
    * so comparing two of them tells you a request happened, not what it did.
    *
-   * Without this field the page says "Agregala una vez" to a customer whose card
+   * Without this field the page says "Agrégala una vez" to a customer whose card
    * has been in their phone for a year, which is a small lie that a merchant
    * support question is built on top of.
    */
@@ -184,7 +184,7 @@ export type WalletRemedy =
  * would not have helped, and who the next step belongs to.
  */
 const WAIT_NOTE = 'No hace falta que hagas nada mientras tanto.';
-const TELL_ANYONE_NOTE = 'Contale al comercio y lo resuelven.';
+const TELL_ANYONE_NOTE = 'Cuéntale al comercio y lo resuelven.';
 const OURS_NOTE = 'Esto lo tenemos que corregir nosotros.';
 
 /** One refusal, rendered. Both halves are customer-facing copy. */
@@ -275,7 +275,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
   WALLET_CLASS_NOT_PROVISIONED: {
     title: 'Este comercio todavía no tiene tarjeta',
     message:
-      'Google Wallet todavía no está configurado para este comercio. Tu cuenta está bien y no tenés ' +
+      'Google Wallet todavía no está configurado para este comercio. Tu cuenta está bien y no tienes ' +
       'que hacer nada: es algo que el comercio tiene que terminar de configurar.',
     remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
@@ -302,7 +302,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
    * ## Why it does not mention retrying
    *
    * The review is Google's and takes days. No number of retries from a phone
-   * changes that, so "reintentá en un rato" is advice that cannot work — and a
+   * changes that, so "reintenta en un rato" is advice that cannot work — and a
    * comensal who follows it comes back to the same answer and concludes their own
    * account is the problem, which is the inversion this whole module refuses.
    *
@@ -320,7 +320,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
     message:
       'La clase del pase de este comercio todavía no fue aprobada por Google, y sin esa aprobación no ' +
       'se puede crear ninguna tarjeta. Es el comercio quien tiene que enviarla a revisión: esa revisión ' +
-      'la hace Google, demora días y no depende de vos. Tu cuenta está bien y seguís acumulando y ' +
+      'la hace Google, demora días y no depende de ti. Tu cuenta está bien y sigues acumulando y ' +
       'usando tus puntos en el local.',
     remedy: { kind: 'wait', note: WAIT_NOTE },
   },
@@ -372,7 +372,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
   WALLET_PASS_NOT_CREATABLE: {
     title: 'Google no pudo crear la tarjeta ahora',
     message:
-      'Google no pudo generar el pase en este momento. Tu cuenta está bien y podés reintentar en un ' +
+      'Google no pudo generar el pase en este momento. Tu cuenta está bien y puedes reintentar en un ' +
       'rato.',
     remedy: { kind: 'retry' },
   },
@@ -392,7 +392,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
     title: 'Tu saldo es más grande de lo que la tarjeta puede mostrar',
     message:
       'Este programa todavía no tiene una forma de mostrar saldos tan grandes en Google Wallet. Tus ' +
-      'puntos están intactos y los podés usar en el local; el comercio necesita configurar otra ' +
+      'puntos están intactos y los puedes usar en el local; el comercio necesita configurar otra ' +
       'presentación.',
     remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
@@ -423,7 +423,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
     title: 'Esta tarjeta ya no se puede volver a usar',
     message:
       'Google ya no permite reutilizar esta tarjeta porque su vigencia terminó. Tu cuenta y tus ' +
-      'puntos están bien y los podés seguir usando en el local. Contale al comercio para que lo ' +
+      'puntos están bien y los puedes seguir usando en el local. Cuéntale al comercio para que lo ' +
       'resuelvan.',
     remedy: { kind: 'tell-anyone', note: TELL_ANYONE_NOTE },
   },
@@ -449,7 +449,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
    *
    * ## The verdict here used to be the opposite, and the reason was wrong
    *
-   * This entry said "reintentá" on the grounds that the cause could be
+   * This entry said "reintenta" on the grounds that the cause could be
    * transient. The worker says otherwise about its own code: `routes.ts:57` —
    * "this means this deployment is broken and no pass will ever work".
    *
@@ -459,7 +459,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
    * `routes.ts:897` says reaching it "means something is wrong with the pepper or
    * the row, not that the customer is unready".
    *
-   * So the sentence lost its "podés reintentar más tarde" too, and that is the
+   * So the sentence lost its "puedes reintentar más tarde" too, and that is the
    * only copy in this map that moved. It had to: with the button gone, keeping the
    * sentence would have left the page promising exactly what it now refuses to
    * offer, which is the same defect in the other layer.
@@ -497,7 +497,7 @@ const FAILURES: Readonly<Record<string, WalletFailureCopy>> = {
   [WALLET_RESPONSE_MALFORMED]: {
     title: 'La tarjeta llegó incompleta',
     message:
-      'La respuesta que nos llegó no traía una tarjeta. Tu cuenta está bien y podés reintentar en un ' +
+      'La respuesta que nos llegó no traía una tarjeta. Tu cuenta está bien y puedes reintentar en un ' +
       'momento.',
     // Retry, and the strongest case for it in the file. This is not a server
     // state at all: `api.getWalletPass` throws it when a 200 arrived carrying no
@@ -524,7 +524,7 @@ export const WALLET_FAILURE_CODES: readonly string[] = Object.freeze(Object.keys
  *
  * ## Why this was one branch and is now three
  *
- * It was one constant, and it promised "podés reintentar en un momento" for
+ * It was one constant, and it promised "puedes reintentar en un momento" for
  * everything: a code added after this file was written, a gateway that answered
  * with a body this system does not produce, and a request that never arrived at
  * all. Those are not one condition. A 500 of a dropped connection is transient. A
@@ -565,7 +565,7 @@ const NO_ANSWER: WalletFailureCopy = {
   title: 'No pudimos preparar tu tarjeta',
   message:
     'No pudimos comunicarnos con el servicio al preparar tu tarjeta. Tu cuenta y tus puntos están ' +
-    'bien; podés reintentar en un momento.',
+    'bien; puedes reintentar en un momento.',
   remedy: { kind: 'retry' },
 };
 
@@ -631,7 +631,7 @@ export interface WalletPassCopy {
  */
 const FIRST_ADD: WalletPassCopy = {
   note:
-    'Tu tarjeta vive en Google Wallet. Agregala una vez y después usala en el local junto con tu ' +
+    'Tu tarjeta vive en Google Wallet. Agrégala una vez y después úsala en el local junto con tu ' +
     'código de socio.',
   label: 'Agregar a Google Wallet',
 };
@@ -668,8 +668,8 @@ export function walletPassCopyFor(pass: WalletPass): WalletPassCopy {
   if (pass.already_existed && pass.pass_state === 'issued') {
     return {
       note:
-        'Esta tarjeta ya está en tu Google Wallet. Usala en el local junto con tu código de socio; ' +
-        'si la borraste, podés agregarla de nuevo.',
+        'Esta tarjeta ya está en tu Google Wallet. Úsala en el local junto con tu código de socio; ' +
+        'si la borraste, puedes agregarla de nuevo.',
       label: 'Volver a agregar a Google Wallet',
     };
   }
@@ -677,7 +677,7 @@ export function walletPassCopyFor(pass: WalletPass): WalletPassCopy {
   if (pass.already_existed && pass.pass_state === 'inactive') {
     return {
       note:
-        'Esta tarjeta está desactivada en tu Google Wallet. Volvé a agregarla para usarla en el ' +
+        'Esta tarjeta está desactivada en tu Google Wallet. Vuelve a agregarla para usarla en el ' +
         'local junto con tu código de socio.',
       label: 'Volver a agregar a Google Wallet',
     };
