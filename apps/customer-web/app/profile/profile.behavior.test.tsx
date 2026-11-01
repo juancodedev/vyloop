@@ -208,9 +208,11 @@ describe('profile pass behavior', () => {
     const order = [
       screen.getByText('Café del Barrio'),
       screen.getByRole('region', { name: 'Tu identidad' }),
+      // Saving the pass is the one step a new customer must take; below the
+      // activity list it was off screen on a phone.
+      screen.getByRole('region', { name: 'Tu tarjeta en Google Wallet' }),
       screen.getByRole('region', { name: 'Tu próximo canje' }),
       screen.getByRole('region', { name: 'Actividad reciente' }),
-      screen.getByRole('region', { name: 'Tu tarjeta en Google Wallet' }),
       screen.getByRole('button', { name: 'Cerrar sesión' }),
     ];
 

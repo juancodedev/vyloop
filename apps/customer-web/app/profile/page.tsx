@@ -109,9 +109,11 @@ export default function ProfilePage() {
       <div className="club-profile">
         <ProfileTopBar business={profile.business} />
         <IdentityCard profile={profile} />
+        {/* Right under the balance: saving the pass is the step a new customer
+            must take, and further down it sat below the fold on a phone. */}
+        <WalletCard onPass={handlePass} />
         <NextRedemptionCard profile={profile} />
         <PurchaseTimeline profile={profile} />
-        <WalletCard onPass={handlePass} />
         <PersonalData profile={profile} onSaved={handleSaved} />
         <ConsentList />
         <button
