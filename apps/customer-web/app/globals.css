@@ -1383,6 +1383,18 @@ a {
   white-space: nowrap;
 }
 
+.club-register__legal {
+  margin: var(--space-3) 0 0;
+  color: var(--club-ink-soft);
+  font-size: 0.875rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.club-register__legal a {
+  color: var(--club-cherry-dark);
+}
+
 .club-register__status {
   min-width: 0;
   padding: var(--space-4);

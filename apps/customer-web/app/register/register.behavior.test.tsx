@@ -81,6 +81,13 @@ describe('registration behavior', () => {
     expect(fieldset.disabled).toBe(true);
   });
 
+  it('links to the privacy policy before the customer submits their data', () => {
+    // The form collects a name, a phone number and optionally an email and a
+    // birth date, so the policy that says what happens to them is one tap away.
+    const link = screen.getByRole('link', { name: 'Política de privacidad' }) as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('/privacy');
+  });
+
   it('rejects an empty name without making a network request', async () => {
     setRequiredFields('', '+56 9 1234 5678');
 
