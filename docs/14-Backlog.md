@@ -258,8 +258,9 @@ Estos ítems están en la visión del producto pero **no entran al PMV**. Se pri
         revisa como `homepageUri`.
 
       **Restricciones que siguen en pie (no son código):** el acceso de publicación es **una sola
-      aprobación para todo el emisor**, no una por clase. El worker lo declara explícito
-      con `WALLET_DEMO_MODE`, cuyo default es `true` a propósito, y las dos rutas de cliente
+      aprobación para todo el emisor**, no una por clase (otorgada el 2026-11-02). El worker lo
+      declara explícito con `WALLET_DEMO_MODE`, hoy en `"false"`; un valor ausente o no reconocido
+      se lee como `true` a propósito, y las dos rutas de cliente
       responden en negativo en vez de ofrecer un botón que falla. La fila de tier del pase se
       omite porque no hay columna que guarde su header de display (`tier_row_available` es siempre
       `false`), y un saldo sobre 9,999,999 se rechaza con `WALLET_BALANCE_NOT_DISPLAYABLE` en vez de

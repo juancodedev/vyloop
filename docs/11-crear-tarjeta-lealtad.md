@@ -170,5 +170,5 @@ Mientras sea manual, cada cliente nuevo necesita a alguien que sepa hacer esto. 
 
 ## Lo que este procedimiento no cubre
 
-- **Publicación.** Una clase `approved` sigue mostrando `[SOLO PARA PRUEBAS]` mientras el emisor no tenga acceso de publicación. Se pide en la consola de Google Pay & Wallet y lo revisa Google.
+- **Publicación.** Una clase `approved` sigue mostrando `[SOLO PARA PRUEBAS]` mientras el emisor no tenga acceso de publicación. Se pide en la consola de Google Pay & Wallet y lo revisa Google. Este emisor ya lo tiene (2026-11-02), y `WALLET_DEMO_MODE` está en `"false"`.
 - **Pruebas de escritura.** No hay tests de integración contra la API real. Cada cosa que se learnió acá — el casing del `state`, el case de los paths, los campos de imagen que no existen — salió de ejecutarla a mano.

@@ -130,7 +130,8 @@ export function objectIdFor(issuerId: string, customerGlobalId: string): string 
 /**
  * The prefix Google uses when a pass is still in Demo Mode. Demo passes only
  * reach the issuer's own Admin/Developer/test accounts; publishing access is a
- * single approval for the whole issuer, and until it lands this prefix is
- * correct. Removing it is an operational step, not a code change.
+ * single approval for the whole issuer. It was granted on 2026-11-02, and
+ * Google removes the label itself once it is; this constant only recognises
+ * class ids stored while the issuer was still in Demo Mode.
  */
 export const DEMO_MODE_NAME_PREFIX = '[TEST ONLY] ';

@@ -471,7 +471,9 @@ El mismo razonamiento aplica a `callbackOptions.url` y a `programLogo`: una clas
 
 **Una sola aprobación para todo el emisor, no una por clase ni una por negocio.** La solicitud de acceso de publicación se hace una vez, a nivel de emisor. Una vez aprobada, las clases futuras no vuelven a esperar.
 
-Esto es lo que separa "el pase funciona en el teléfono del cliente" de "el pase se puede entregar": `WALLET_DEMO_MODE` en `true` (el default en `workers/wallet/wrangler.jsonc`) antepone el prefijo `[TEST ONLY]` al pase y Google limita la entrega a las cuentas de prueba del emisor, aunque la clase esté aprobada.
+Esto es lo que separa "el pase funciona en el teléfono del cliente" de "el pase se puede entregar": mientras el emisor no tiene acceso de publicación, Google antepone `[TEST ONLY]` al pase y limita la entrega a sus cuentas de prueba, aunque la clase esté aprobada.
+
+**Estado actual:** Google otorgó el acceso de publicación a Lawen Tech Solutions el 2026-11-02 (caso 05732134), y `WALLET_DEMO_MODE` quedó en `"false"` en `workers/wallet/wrangler.jsonc`. Google quita la etiqueta `[TEST ONLY]` por su cuenta. La columna `demo_mode` de cada programa se baja aparte, desde Configuración del dashboard: el barrido de inactividad sigue sin escribir si el env o la fila dicen demo.
 
 ---
 
