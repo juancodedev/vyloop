@@ -15,12 +15,11 @@
     // against the request's own `Origin`.
     "WALLET_ALLOWED_ORIGINS": "https://vyloop-customer-web.cl-jmunoz.workers.dev,https://vyloop.juancode.dev",
     // Not a secret, and not a fact we can read from Google. Google's publishing
-    // approval is a single grant for the whole issuer account and this
-    // deployment has not been granted it, so passes minted here only reach the
-    // issuer's own test accounts. Flipping this to "false" is what an
-    // environment with publishing access declares. See `parseDemoMode`, which
-    // treats anything unrecognised as demo mode on purpose.
-    "WALLET_DEMO_MODE": "true",
+    // approval is a single grant for the whole issuer account, and it was granted
+    // on 2026-11-02 (case 05732134), so passes minted here reach real customers.
+    // An environment without that approval must set this back to "true". See
+    // `parseDemoMode`, which treats anything unrecognised as demo mode on purpose.
+    "WALLET_DEMO_MODE": "false",
     // THREE base URLs, and they have three distinct consumers. Collapsing them
     // reintroduces a class-rejection bug — Google fetches `programLogo` from
     // MEDIA, opens `homepageUri` from WEB during class review, and the pass's

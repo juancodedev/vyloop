@@ -144,10 +144,11 @@ describe('wrangler.jsonc', () => {
     }
   });
 
-  it('keeps demo mode on, because publishing access has not been granted', () => {
-    // Flipping this is how a deployment starts minting passes that only reach
-    // test accounts, or worse, claims an approval Google has not given.
-    expect(config).toMatch(/"WALLET_DEMO_MODE"\s*:\s*"true"/);
+  it('turns demo mode off, because Google granted publishing access', () => {
+    // Google approved publishing access for the issuer (Lawen Tech Solutions,
+    // case 05732134) on 2026-11-02. While this stayed "true", every customer
+    // was told the card only reached Google test accounts.
+    expect(config).toMatch(/"WALLET_DEMO_MODE"\s*:\s*"false"/);
   });
 
   it('declares no cron trigger, because the account has no room for one', () => {
