@@ -198,6 +198,13 @@ export const customers = pgTable('customers', {
   // migration; stored rather than derived on read so the algorithm can change
   // without invalidating a code a customer has already memorised.
   memberCode: text('member_code'),
+  // The scannable credential, separate from `globalId`. The token itself is
+  // derived by the wallet worker from a secret, the tenant, `globalId` and this
+  // version, and is never stored: only its SHA-256 is. Rotating is bumping the
+  // version. Both NULL means the customer has no token yet and their QR is still
+  // the uuid. See `docs/21-Hardening-Tarjetas-Wallet.md`, points 2 and 3.
+  cardTokenVersion: integer('card_token_version'),
+  cardTokenHash: text('card_token_hash'),
   metadata: jsonb('metadata').default({}),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
@@ -247,6 +254,36 @@ export const customers = pgTable('customers', {
   uniqueIndex('uq_customers_business_member_code')
     .on(sql`${table.businessId}`, sql`${table.memberCode}`)
     .where(sql`member_code IS NOT NULL`),
+
+  // The scan lookup: a resolver hashes what it read and matches it here. Partial
+  // for the reasons given on the member-code index above.
+  uniqueIndex('uq_customers_business_card_token_hash')
+    .on(sql`${table.businessId}`, sql`${table.cardTokenHash}`)
+    .where(sql`card_token_hash IS NOT NULL`),
+]);
+
+/**
+ * Who rotated a customer's scannable credential, when, and why.
+ *
+ * One row per rotation. `previous_version` is NULL when the rotation moved a
+ * customer off the legacy uuid QR. Nothing reads these rows on a hot path; they
+ * exist so a revoked card can be explained after the fact.
+ */
+export const customerCredentialRevocations = pgTable('customer_credential_revocations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  customerId: uuid('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+  actorUserId: uuid('actor_user_id').notNull(),
+  reason: text('reason').notNull(),
+  previousVersion: integer('previous_version'),
+  newVersion: integer('new_version').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  index('idx_customer_credential_revocations_customer').on(
+    sql`${table.businessId}`,
+    sql`${table.customerId}`,
+    sql`${table.createdAt} DESC`,
+  ),
 ]);
 
 export const customerEvents = pgTable('customer_events', {

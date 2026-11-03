@@ -7,7 +7,14 @@ import PgQueryModule from 'pg-query-emscripten';
 import { describe, expect, it } from 'vitest';
 
 import { allIndexes, indexByName } from './indexes';
-import { loyaltyPrograms, pointsTransactions, tenantWalletPrograms } from './schema';
+import { BUSINESS_ID_TABLES } from './rls';
+import {
+  customerCredentialRevocations,
+  customers,
+  loyaltyPrograms,
+  pointsTransactions,
+  tenantWalletPrograms,
+} from './schema';
 
 // ---------------------------------------------------------------------------
 // A migration that only fails when it is applied is a migration nobody can
@@ -449,5 +456,48 @@ describe('idx_points_balance, the index the inactivity query depends on', () => 
     // which one a given deployment chose.
     const indexes = getTableConfig(pointsTransactions).indexes.map((i) => i.config.name);
     expect(indexes).toEqual(['idx_points_balance']);
+  });
+});
+
+const CARD_CREDENTIAL_MIGRATION = '0025_card_credential.sql';
+
+describe(`${CARD_CREDENTIAL_MIGRATION} adds the rotatable card credential`, () => {
+  const sql = readMigration(CARD_CREDENTIAL_MIGRATION);
+
+  it('adds the token columns to customers nullable, so existing customers keep their uuid QR', () => {
+    // A customer with no token is a customer whose QR is still the uuid. A NOT NULL
+    // or a default would hand every existing customer a token their Google object
+    // does not carry, and the POS would stop accepting the barcode in their pocket.
+    expect(sql).toMatch(/ALTER TABLE "customers" ADD COLUMN "card_token_version" integer;/);
+    expect(sql).toMatch(/ALTER TABLE "customers" ADD COLUMN "card_token_hash" text;/);
+  });
+
+  it('keeps the token hash unique per business, and only where one exists', () => {
+    expect(sql).toMatch(
+      /CREATE UNIQUE INDEX "uq_customers_business_card_token_hash" ON "customers" \("business_id", "card_token_hash"\) WHERE card_token_hash IS NOT NULL;/,
+    );
+    expect(indexByName('uq_customers_business_card_token_hash')).toBeDefined();
+  });
+
+  it('creates the revocation audit table with who, when and why', () => {
+    expect(sql).toMatch(/CREATE TABLE "customer_credential_revocations"/);
+    for (const column of ['business_id', 'customer_id', 'actor_user_id', 'reason', 'previous_version', 'new_version', 'created_at']) {
+      expect(sql).toContain(`"${column}"`);
+    }
+    expect(sql).toMatch(/"reason" text NOT NULL/);
+    expect(sql).toMatch(/"actor_user_id" uuid NOT NULL/);
+  });
+
+  it('declares the same shape in the Drizzle schema', () => {
+    const customerColumns = getTableConfig(customers).columns.map((c) => c.name);
+    expect(customerColumns).toEqual(expect.arrayContaining(['card_token_version', 'card_token_hash']));
+    const auditColumns = getTableConfig(customerCredentialRevocations).columns.map((c) => c.name);
+    expect(auditColumns).toEqual(
+      expect.arrayContaining(['business_id', 'customer_id', 'actor_user_id', 'reason', 'previous_version', 'new_version', 'created_at']),
+    );
+  });
+
+  it('puts the audit table under the business_id isolation policy', () => {
+    expect(BUSINESS_ID_TABLES).toContain('customer_credential_revocations');
   });
 });
