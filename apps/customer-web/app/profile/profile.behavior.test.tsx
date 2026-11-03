@@ -59,6 +59,9 @@ vi.mock('../lib/api', () => ({
   api: {
     getProfile: mocks.getProfile,
     getWalletPass: mocks.getWalletPass,
+    // A legacy answer keeps the QR on `/c/<globalId>`; the token payload is
+    // asserted in `qr-dock.behavior.test.tsx`.
+    getWalletCard: vi.fn().mockResolvedValue(null),
     getCustomerConsents: vi.fn().mockResolvedValue({ consents: { promotions: false, nearby_notifications: false } }),
     updateCustomerConsent: vi.fn().mockResolvedValue({ ok: true }),
   },

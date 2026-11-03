@@ -416,6 +416,30 @@ export const api = {
   },
 
   /**
+   * The caller's OWN scannable credential, for the member QR.
+   *
+   * `GET /v1/wallet/card` resolves the customer from the token, like
+   * `getWalletPass`, so the call names nobody. It answers
+   * `{ data: { card_token: string | null } }`: a `vyc1.` token the dashboard POS
+   * resolves through `by-card-token`, or `null` for a legacy customer whose
+   * issued pass still carries the uuid, who keeps showing `/c/<globalId>`.
+   *
+   * Anything other than a string or `null` is malformed and rejects, so the
+   * caller falls back to the uuid instead of encoding `/c/undefined`.
+   */
+  async getWalletCard(): Promise<string | null> {
+    const result = (await apiFetch('/v1/wallet/card')) as {
+      data?: { card_token?: unknown } | null;
+    } | null;
+    const token = result?.data?.card_token;
+
+    if (token === null) return null;
+    if (typeof token === 'string' && token.length > 0) return token;
+
+    throw new ApiError(200, WALLET_RESPONSE_MALFORMED, 'The wallet response had no card token in it.');
+  },
+
+  /**
    * The caller's OWN points history. Readable by a customer; no role check.
    *
    * `customer_id` is deliberately absent from the filter type. The server

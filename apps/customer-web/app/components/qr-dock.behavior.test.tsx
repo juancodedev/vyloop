@@ -12,13 +12,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { QrDock } from './qr-dock';
 
-const mocks = vi.hoisted(() => ({ toDataURL: vi.fn() }));
+const mocks = vi.hoisted(() => ({ toDataURL: vi.fn(), getWalletCard: vi.fn() }));
 
 vi.mock('qrcode', () => ({
   default: { toDataURL: mocks.toDataURL },
 }));
 
+// `getWalletCard` and nothing else: the sheet asks for the scannable credential
+// and no other call belongs to it.
+vi.mock('../lib/api', () => ({
+  api: { getWalletCard: mocks.getWalletCard },
+}));
+
 const GLOBAL_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+const CARD_TOKEN = `vyc1.${'Zx9_-'.repeat(8)}abc`;
 const NOT_MINTED_COPY = 'Tu código aparece cuando agregas la tarjeta a Wallet';
 
 type WakeLockStub = { request: ReturnType<typeof vi.fn> } | undefined;
@@ -47,6 +54,8 @@ let release: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   mocks.toDataURL.mockReset();
   mocks.toDataURL.mockResolvedValue('data:image/png;base64,SEVMTE8=');
+  mocks.getWalletCard.mockReset();
+  mocks.getWalletCard.mockResolvedValue(null);
   release = vi.fn().mockResolvedValue(undefined);
   setWakeLock({ request: vi.fn().mockResolvedValue({ release }) });
 });
@@ -63,6 +72,98 @@ describe('the QR dock', () => {
     expect(dockButton()).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(mocks.toDataURL).not.toHaveBeenCalled();
+    expect(mocks.getWalletCard).not.toHaveBeenCalled();
+  });
+});
+
+describe('the QR payload', () => {
+  it('encodes /c/<card_token> when the wallet returns a token', async () => {
+    mocks.getWalletCard.mockResolvedValue(CARD_TOKEN);
+    renderDock('K7F2QX');
+    await openSheet();
+
+    const image = await screen.findByRole('img');
+    expect(mocks.getWalletCard).toHaveBeenCalledTimes(1);
+    expect(mocks.toDataURL).toHaveBeenCalledTimes(1);
+    expect(mocks.toDataURL.mock.calls[0][0]).toBe(`/c/${CARD_TOKEN}`);
+    // The alt must not claim the code carries the uuid, nor read the token aloud.
+    expect(image.getAttribute('alt')).not.toContain(GLOBAL_ID);
+    expect(image.getAttribute('alt')).not.toContain(CARD_TOKEN);
+  });
+
+  it('encodes /c/<globalId> when the wallet returns null (legacy pass)', async () => {
+    mocks.getWalletCard.mockResolvedValue(null);
+    renderDock('K7F2QX');
+    await openSheet();
+
+    await screen.findByRole('img');
+    expect(mocks.toDataURL).toHaveBeenCalledTimes(1);
+    expect(mocks.toDataURL.mock.calls[0][0]).toBe(`/c/${GLOBAL_ID}`);
+  });
+
+  it('encodes /c/<globalId> when the wallet call fails, so the counter still has a code', async () => {
+    mocks.getWalletCard.mockRejectedValue(new Error('network down'));
+    renderDock('K7F2QX');
+    await openSheet();
+
+    await screen.findByRole('img');
+    expect(mocks.toDataURL).toHaveBeenCalledTimes(1);
+    expect(mocks.toDataURL.mock.calls[0][0]).toBe(`/c/${GLOBAL_ID}`);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows a pending state, not a uuid QR, while the credential is on its way', async () => {
+    mocks.getWalletCard.mockReturnValue(new Promise(() => {}));
+    renderDock('K7F2QX');
+    await openSheet();
+
+    expect(screen.getByText('Generando tu código…')).toBeTruthy();
+    expect(screen.queryByRole('img')).toBeNull();
+    expect(mocks.toDataURL).not.toHaveBeenCalled();
+  });
+
+  it('keeps the uuid, never the token, as the readable fallback when the QR cannot be drawn', async () => {
+    mocks.getWalletCard.mockResolvedValue(CARD_TOKEN);
+    mocks.toDataURL.mockRejectedValueOnce(new Error('canvas unavailable'));
+    renderDock(null);
+    await openSheet();
+
+    expect(await screen.findByText(/No pudimos generar el código QR/)).toBeTruthy();
+    expect(screen.getByText(GLOBAL_ID)).toBeTruthy();
+    expect(screen.queryByText(CARD_TOKEN)).toBeNull();
+    expect(document.body.textContent).not.toContain(CARD_TOKEN);
+  });
+
+  it('asks again on the next open after a failed call', async () => {
+    mocks.getWalletCard.mockRejectedValueOnce(new Error('network down')).mockResolvedValue(CARD_TOKEN);
+    renderDock('K7F2QX');
+    await openSheet();
+    await screen.findByRole('img');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Listo' }));
+    });
+    await openSheet();
+
+    await waitFor(() => expect(mocks.toDataURL).toHaveBeenCalledTimes(2));
+    expect(mocks.getWalletCard).toHaveBeenCalledTimes(2);
+    expect(mocks.toDataURL.mock.calls[1][0]).toBe(`/c/${CARD_TOKEN}`);
+  });
+
+  it('reuses a resolved credential when the sheet is opened again', async () => {
+    mocks.getWalletCard.mockResolvedValue(CARD_TOKEN);
+    renderDock('K7F2QX');
+    await openSheet();
+    await screen.findByRole('img');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Listo' }));
+    });
+    await openSheet();
+
+    await waitFor(() => expect(mocks.toDataURL).toHaveBeenCalledTimes(2));
+    expect(mocks.getWalletCard).toHaveBeenCalledTimes(1);
+    expect(mocks.toDataURL.mock.calls[1][0]).toBe(`/c/${CARD_TOKEN}`);
   });
 });
 
