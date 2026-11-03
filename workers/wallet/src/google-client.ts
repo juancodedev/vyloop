@@ -29,8 +29,14 @@ import { SignJWT, importPKCS8 } from 'jose';
 import type { LoyaltyClass } from './class';
 import type { LoyaltyObject, LoyaltyObjectMessage } from './object';
 
-/** Fields Google accepts in a class `patch`. */
-export type LoyaltyClassPatch = Partial<Omit<LoyaltyClass, 'id'>>;
+/**
+ * The array-valued fields an object patch can carry.
+ *
+ * Every one of them is replaced **wholesale** by a patch, never merged. That is
+ * Google's documented semantics, not a quirk: patching `textModulesData` with
+ * one rebuilt row deletes every other row rather than refreshing it.
+ */
+type LoyaltyObjectArrayField = 'textModulesData' | 'pushNotifications' | 'merchantLocations';
 
 /**
  * Fields Google accepts in an object `patch`.
@@ -42,10 +48,90 @@ export type LoyaltyClassPatch = Partial<Omit<LoyaltyClass, 'id'>>;
  * value, so Google would store and render a blank name rather than remove it.
  * See `EXPIRED_PASS_PATCH` in `expire.ts`. `JSON.stringify` keeps a `null`
  * property, so the client sends it as written.
+ *
+ * ## Why the array fields are a separate variant
+ *
+ * `reconcile.ts` documents the rule this type enforces: `accountName`, `barcode`
+ * and `textModulesData` are omitted from the balance patch on purpose, because
+ * patching an array replaces it. The type used to admit every array field, so
+ * the rule lived only in a comment — and the one place that does send arrays
+ * (the full-object patch on a `409`) looked exactly like the one place that
+ * must not.
+ *
+ * Now sending an array requires writing `replaceArrays: true`, which is a
+ * deliberate claim that the caller means to replace the whole list. The flag
+ * never reaches Google: `patchObject` strips it before the body is serialised,
+ * and throws if arrays arrive without it — which is what a `as never` cast in a
+ * test would produce.
  */
-export type LoyaltyObjectPatch = Partial<Omit<LoyaltyObject, 'id' | 'classId' | 'accountName'>> & {
+export type LoyaltyObjectPatch = LoyaltyObjectMinimalPatch | LoyaltyObjectArrayReplacingPatch;
+
+type LoyaltyObjectMinimalPatch = Partial<
+  Omit<LoyaltyObject, 'id' | 'classId' | 'accountName' | LoyaltyObjectArrayField>
+> & {
   accountName?: string | null;
 };
+
+type LoyaltyObjectArrayReplacingPatch = Partial<
+  Omit<LoyaltyObject, 'id' | 'classId' | 'accountName'>
+> & {
+  accountName?: string | null;
+  /** Explicit acknowledgement that the arrays in this patch replace whole lists. */
+  replaceArrays: true;
+};
+
+/** The array fields, in the order a refusal names them. */
+const OBJECT_ARRAY_FIELDS: readonly LoyaltyObjectArrayField[] = [
+  'textModulesData',
+  'pushNotifications',
+  'merchantLocations',
+];
+
+/**
+ * A patch carried array fields without declaring `replaceArrays: true`.
+ *
+ * A type error at the call site in every ordinary case; this class exists for the
+ * calls the compiler cannot see, which in this repository means `as never` in a
+ * fake and any future dynamic patch. Google would accept a silent list
+ * replacement, so nothing else would report it.
+ */
+export class GoogleWalletPatchArrayError extends Error {
+  readonly fields: readonly string[];
+
+  constructor(resource: string, fields: readonly string[]) {
+    super(
+      `A ${resource} patch carries the array field(s) ${fields.join(', ')} without ` +
+        '`replaceArrays: true`. Google replaces a patched array wholesale, so a patch built ' +
+        'from a partial list deletes the rows it does not mention. Declare the variant when ' +
+        'replacing the whole list is what you mean.',
+    );
+    this.name = 'GoogleWalletPatchArrayError';
+    this.fields = fields;
+  }
+}
+
+/**
+ * Strip the declaration and send only fields Google knows.
+ *
+ * `replaceArrays` is this repository's word, not Google's: sending it would be
+ * an unknown field on the resource. The guard runs here rather than at the type
+ * boundary because a cast moves the boundary.
+ */
+function prepareObjectPatch(patch: LoyaltyObjectPatch): Record<string, unknown> {
+  const { replaceArrays, ...fields } = patch as LoyaltyObjectPatch & {
+    replaceArrays?: boolean;
+  };
+
+  const present = OBJECT_ARRAY_FIELDS.filter(
+    (field) => (fields as Record<string, unknown>)[field] !== undefined,
+  );
+
+  if (present.length > 0 && replaceArrays !== true) {
+    throw new GoogleWalletPatchArrayError('loyaltyObject', present);
+  }
+
+  return fields as Record<string, unknown>;
+}
 
 /**
  * An error carrying Google's HTTP status and its structured error body.
@@ -93,8 +179,6 @@ export interface GoogleWalletClient {
   getClass(classId: string): Promise<LoyaltyClass | null>;
   /** `loyaltyclass.insert`. */
   insertClass(loyaltyClass: LoyaltyClass): Promise<LoyaltyClass>;
-  /** `loyaltyclass.patch`. */
-  patchClass(classId: string, patch: LoyaltyClassPatch): Promise<LoyaltyClass>;
   /** `loyaltyobject.get`. */
   getObject(objectId: string): Promise<LoyaltyObject | null>;
   /** `loyaltyobject.insert`. */
@@ -177,7 +261,6 @@ export function createUnimplementedGoogleWalletClient(): GoogleWalletClient {
   return {
     getClass: () => Promise.reject(new GoogleWalletClientNotImplementedError('getClass')),
     insertClass: () => Promise.reject(new GoogleWalletClientNotImplementedError('insertClass')),
-    patchClass: () => Promise.reject(new GoogleWalletClientNotImplementedError('patchClass')),
     getObject: () => Promise.reject(new GoogleWalletClientNotImplementedError('getObject')),
     insertObject: () => Promise.reject(new GoogleWalletClientNotImplementedError('insertObject')),
     patchObject: () => Promise.reject(new GoogleWalletClientNotImplementedError('patchObject')),
@@ -591,16 +674,6 @@ export function createGoogleWalletRestClient(
       );
     },
 
-    async patchClass(classId, patch) {
-      const id = requireId(classId, 'patchClass');
-      return callForResource<LoyaltyClass>(
-        'PATCH',
-        `/loyaltyClass/${encodeURIComponent(id)}`,
-        'loyaltyclass.patch',
-        patch,
-      );
-    },
-
     async getObject(objectId) {
       const id = requireId(objectId, 'getObject');
       return call<LoyaltyObject>(
@@ -711,7 +784,7 @@ export function createGoogleWalletRestClient(
         'PATCH',
         `/loyaltyObject/${encodeURIComponent(id)}`,
         'loyaltyobject.patch',
-        patch,
+        prepareObjectPatch(patch),
       );
     },
 

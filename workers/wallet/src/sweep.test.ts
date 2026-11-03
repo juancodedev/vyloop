@@ -618,7 +618,6 @@ type FakeClient = {
   patchObject: Mock;
   getClass: Mock;
   insertClass: Mock;
-  patchClass: Mock;
   insertObject: Mock;
   saveUriForJwt: Mock;
   addMessage: Mock;
@@ -704,9 +703,6 @@ function fakeGoogle(opts: {
       }
       created.add(loyaltyClass.id);
       return loyaltyClass as never;
-    }),
-    patchClass: vi.fn(async () => {
-      throw new Error('not used');
     }),
     insertObject: vi.fn(async () => {
       throw new Error('not used');

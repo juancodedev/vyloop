@@ -276,9 +276,6 @@ function fakeClient(
       return loyaltyClass as never;
     }),
     getClass: vi.fn(async (id: string) => (exists ? ({ id } as never) : null)),
-    patchClass: vi.fn(async (): Promise<never> => {
-      throw new Error('patchClass is not part of provisioning');
-    }),
     getObject: vi.fn(async (): Promise<never> => {
       throw new Error('getObject is not part of provisioning');
     }),

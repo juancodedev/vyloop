@@ -58,7 +58,7 @@ describe('syncCustomerLocations', () => {
     const outcome = await syncCustomerLocations(deps, { tenantId: 'tenant-1', customerId: 'cust-1' });
 
     expect(outcome).toEqual({ kind: 'synced', objectId: 'obj-1', count: 2 });
-    expect(patchSpy).toHaveBeenCalledWith('obj-1', { merchantLocations: positions });
+    expect(patchSpy).toHaveBeenCalledWith('obj-1', { merchantLocations: positions, replaceArrays: true });
     // No notifyPreference on the patch — that would be a push.
     expect((patchSpy.mock.calls[0] as unknown[])?.[1]).not.toHaveProperty('notifyPreference');
   });
@@ -87,7 +87,7 @@ describe('syncCustomerLocations', () => {
     const outcome = await syncCustomerLocations(deps, { tenantId: 'tenant-1', customerId: 'cust-1' });
 
     expect(outcome).toEqual({ kind: 'synced', objectId: 'obj-1', count: 0 });
-    expect(patchSpy).toHaveBeenCalledWith('obj-1', { merchantLocations: [] });
+    expect(patchSpy).toHaveBeenCalledWith('obj-1', { merchantLocations: [], replaceArrays: true });
   });
 
   it('throws when Google does not echo the positions', async () => {

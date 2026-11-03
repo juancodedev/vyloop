@@ -10,6 +10,7 @@ import {
   WALLETOBJECTS_BASE_URL,
   GoogleWalletApiError,
   GoogleWalletAuthError,
+  GoogleWalletPatchArrayError,
   GoogleWalletResponseError,
   createGoogleWalletRestClient,
   createUnimplementedGoogleWalletClient,
@@ -350,16 +351,6 @@ describe('class operations', () => {
     expect(JSON.parse(call.body!)).toEqual(loyaltyClass);
   });
 
-  it('patches a class at its own path', async () => {
-    const transport = fakeGoogle();
-
-    await client(transport).patchClass(CLASS_ID, { programName: 'Puntos Renombrados' });
-
-    const call = transport.apiCalls()[0]!;
-    expect(call.method).toBe('PATCH');
-    expect(call.url).toBe(`${WALLETOBJECTS_BASE_URL}/loyaltyClass/${CLASS_ID}`);
-    expect(JSON.parse(call.body!)).toEqual({ programName: 'Puntos Renombrados' });
-  });
 });
 
 describe('object operations', () => {
@@ -394,6 +385,54 @@ describe('object operations', () => {
     expect(JSON.parse(call.body!)).toEqual(loyaltyObject);
   });
 
+  it('strips the array declaration before the body is sent', async () => {
+    const transport = fakeGoogle();
+    const positions = [{ latitude: -12.05, longitude: -77.04 }];
+
+    await client(transport).patchObject(OBJECT_ID, {
+      merchantLocations: positions,
+      replaceArrays: true,
+    });
+
+    // `replaceArrays` is this repository's word, not Google's. Sending it would be
+    // an unknown field on the resource, and the patch would fail for a reason that
+    // has nothing to do with what the caller meant.
+    const call = transport.apiCalls()[0]!;
+    expect(call.method).toBe('PATCH');
+    expect(JSON.parse(call.body!)).toEqual({ merchantLocations: positions });
+  });
+
+  it('refuses a patch that carries an array without declaring the replacement', async () => {
+    const transport = fakeGoogle();
+
+    // A cast is the only way to reach this call with the array fields, and that is
+    // exactly what the runtime guard is for: a type error covers the honest
+    // callers, and Google would accept this body while deleting every
+    // `textModulesData` row the list does not mention.
+    await expect(
+      client(transport).patchObject(OBJECT_ID, {
+        textModulesData: [{ header: 'Nivel', body: 'Oro', id: 'REWARDS_TIER' }],
+      } as never),
+    ).rejects.toBeInstanceOf(GoogleWalletPatchArrayError);
+
+    // Nothing was sent: the refusal happens before the request, so a mistake of
+    // this shape cannot reach Google at all.
+    expect(transport.apiCalls()).toHaveLength(0);
+  });
+
+  it('sends a minimal patch exactly as written', async () => {
+    const transport = fakeGoogle();
+
+    await client(transport).patchObject(OBJECT_ID, {
+      loyaltyPoints: { label: 'puntos', balance: { string: '120' } },
+    });
+
+    const call = transport.apiCalls()[0]!;
+    expect(JSON.parse(call.body!)).toEqual({
+      loyaltyPoints: { label: 'puntos', balance: { string: '120' } },
+    });
+  });
+
   it('spells every path the way Google does, because the URLs are case-sensitive', async () => {
     // The assertions above compare URL strings, and that is exactly why this
     // survived so long: the test asserted whatever the code was written with, so
@@ -407,7 +446,6 @@ describe('object operations', () => {
     const google = client(transport);
 
     await google.getClass(CLASS_ID);
-    await google.patchClass(CLASS_ID, { programName: 'x' });
     await google.getObject(OBJECT_ID);
     await google.patchObject(OBJECT_ID, { state: 'ACTIVE' });
 
@@ -569,7 +607,6 @@ describe('error mapping', () => {
         countryCode: 'CL',
       }),
     ).rejects.toThrow(expected);
-    await expect(google.patchClass(CLASS_ID, { programName: 'x' })).rejects.toThrow(expected);
     await expect(
       google.insertObject({
         id: OBJECT_ID,
@@ -591,7 +628,6 @@ describe('input validation', () => {
 
     await expect(google.getClass('  ')).rejects.toThrow(/empty resource id/i);
     await expect(google.getObject('')).rejects.toThrow(/empty resource id/i);
-    await expect(google.patchClass(' ', {})).rejects.toThrow(/empty resource id/i);
     await expect(google.insertObject({ id: '' } as never)).rejects.toThrow(/empty resource id/i);
   });
 

@@ -50,7 +50,7 @@ export interface GoogleImage {
  * limits, which is what makes a limit checkable before the insert rather than
  * after it.
  *
- * `id` is stable per row so a later `patchClass` replaces that row rather than
+ * `id` is stable per row so a class rewritten later replaces that row rather than
  * appending a second copy of it. The same reason `REWARDS_TIER_MODULE_ID`
  * exists on the object side.
  *
@@ -266,7 +266,7 @@ export interface BuildLoyaltyClassInput {
 /**
  * The row id of the merchant's promo copy.
  *
- * Stable, so a later `patchClass` replaces that row rather than appending a
+ * Stable, so a class rewritten later replaces that row rather than appending a
  * second copy. Same reason `REWARDS_TIER_MODULE_ID` exists on the object side.
  */
 export const PROMO_COPY_MODULE_ID = 'PROMO_COPY';
