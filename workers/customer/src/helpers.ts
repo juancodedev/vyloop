@@ -24,8 +24,25 @@ export interface Bindings {
    */
   WALLET?: {
     expireCustomerPass(input: { tenantId: string; customerId: string }): Promise<unknown>;
+    rotateCardToken(input: RotateCardTokenInput): Promise<RotateCardTokenResult>;
   };
 }
+
+/** Wallet RPC input: revoke the customer's scannable card token. */
+export interface RotateCardTokenInput {
+  tenantId: string;
+  customerId: string;
+  actorUserId: string;
+  reason: string;
+}
+
+/**
+ * Wallet RPC result. `PASS_UPDATE_FAILED` means the version moved but Google
+ * did not confirm the new barcode; a retry is another audited rotation.
+ */
+export type RotateCardTokenResult =
+  | { ok: true; version: number; pass: 'updated' | 'none' }
+  | { ok: false; code: 'CUSTOMER_NOT_FOUND' | 'PASS_UPDATE_FAILED'; message: string };
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: AuthHeaders } };
 

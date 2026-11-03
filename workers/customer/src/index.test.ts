@@ -334,6 +334,8 @@ vi.mock('@vyloop/db', async () => {
     memberCode: text('member_code'),
     metadata: jsonb('metadata'),
     currentTierId: uuid('current_tier_id'),
+    cardTokenVersion: integer('card_token_version'),
+    cardTokenHash: text('card_token_hash'),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }),
     updatedAt: timestamp('updated_at', { withTimezone: true }),
@@ -3297,6 +3299,25 @@ describe('POS lookup (GET /v1/customers/lookup)', () => {
       expect(body.data.points).toBe(320);
     });
 
+    it('does not resolve the uuid of a customer who has a card token', async () => {
+      // Once a customer has a card token, the uuid is no longer their credential.
+      // The search box must agree with the scan route, or a revoked uuid QR still
+      // works by pasting it here.
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      await request('GET', lookupPath('globalId', LOOKUP_CUSTOMER.globalId));
+
+      const where = lookupCustomerWhere();
+      expect(where.sql).toMatch(/"customers"\."card_token_hash" is null/);
+    });
+
+    it('keeps phone lookups independent of the card token', async () => {
+      seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
+      await request('GET', lookupPath('phone', LOOKUP_CUSTOMER.phone));
+
+      const where = lookupCustomerWhere();
+      expect(where.sql).not.toContain('card_token_hash');
+    });
+
     it('still resolves a globalId through the new route too', async () => {
       seedLookup({ pass: [{ state: 'issued', lastSyncedAt: null }] });
       const res = await request('GET', lookupPath('globalId', LOOKUP_CUSTOMER.globalId));
@@ -3811,5 +3832,267 @@ describe('Tenant context (set_config on the transaction handle)', () => {
 
     expect(res.status).toBe(200);
     expectScopedBeforeQueries(scope, 'biz-1');
+  });
+});
+
+// ===========================================================================
+// Card token credential (S3, S5, S7, S10)
+// ===========================================================================
+
+describe('Card token credential', () => {
+  // A syntactically valid token: `vyc1.` + 43 base64url characters.
+  const TOKEN = `vyc1.${'A'.repeat(20)}_-${'b'.repeat(21)}`;
+  // Lowercase hex SHA-256 of TOKEN (UTF-8, prefix included), computed out of band.
+  const TOKEN_HASH = '8d65352be5779df50b926a8fcdb67c090c2c52a9e037892c122645ed366c2113';
+
+  const UNTOKENED = {
+    id: 'cust-qr',
+    globalId: 'a0000000-0000-4000-8000-000000000009',
+    businessId: 'biz-1',
+    fullName: 'Ana Ruiz',
+    phone: '+56911111111',
+    currentTierId: 'tier-oro',
+    cardTokenVersion: null,
+    cardTokenHash: null,
+    deletedAt: null,
+  };
+  const TOKENED = { ...UNTOKENED, cardTokenVersion: 2, cardTokenHash: TOKEN_HASH };
+
+  function seedQrCustomer(customer: Record<string, unknown> | null) {
+    setTableResults({
+      [key('customers')]: customer ? [customer] : [],
+      [key('pointsTransactions', { balance_after: 1 })]: [{ balance_after: 320 }],
+      [key('membershipTiers')]: [LOOKUP_TIER],
+    });
+  }
+
+  const EXPECTED_BODY = {
+    data: {
+      id: UNTOKENED.id,
+      globalId: UNTOKENED.globalId,
+      fullName: UNTOKENED.fullName,
+      phone: UNTOKENED.phone,
+      points: 320,
+      currentTier: 'Oro',
+      tier: { id: 'tier-oro', name: 'Oro', multiplier: 1.5 },
+    },
+  };
+
+  const NOT_FOUND_BODY = { error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' } };
+
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  describe('GET /v1/customers/by-card-token/:token', () => {
+    it('answers a hit with exactly the by-global-id body', async () => {
+      seedQrCustomer(UNTOKENED);
+      const byGlobalId = await request('GET', `/v1/customers/by-global-id/${UNTOKENED.globalId}`);
+      expect(byGlobalId.status).toBe(200);
+      const globalBody = await byGlobalId.json();
+
+      resetMocks();
+      seedQrCustomer(TOKENED);
+      const res = await request('GET', `/v1/customers/by-card-token/${TOKEN}`);
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual(EXPECTED_BODY);
+      expect(body).toEqual(globalBody);
+    });
+
+    it('looks the customer up by the SHA-256 of the token, in the caller business, live rows only', async () => {
+      seedQrCustomer(TOKENED);
+      await request('GET', `/v1/customers/by-card-token/${TOKEN}`);
+
+      const where = wheresFor('customers')[0]!;
+      expect(where.sql).toContain('"customers"."card_token_hash" = $');
+      expect(where.sql).toContain('"customers"."business_id" = $');
+      expect(where.sql).toMatch(/"customers"\."deleted_at" is null/);
+      expect(where.params).toEqual(expect.arrayContaining([TOKEN_HASH, 'biz-1']));
+      expect(where.params).not.toContain(TOKEN);
+    });
+
+    it('answers an unknown or rotated token with the same 404 as by-global-id', async () => {
+      seedQrCustomer(null);
+      const globalMiss = await request('GET', `/v1/customers/by-global-id/${UNTOKENED.globalId}`);
+      const tokenMiss = await request('GET', `/v1/customers/by-card-token/${TOKEN}`);
+
+      expect(tokenMiss.status).toBe(404);
+      expect(globalMiss.status).toBe(404);
+      expect(await tokenMiss.json()).toEqual(await globalMiss.json());
+    });
+
+    it.each([
+      ['a uuid', UNTOKENED.globalId],
+      ['a short token', `vyc1.${'A'.repeat(42)}`],
+      ['a long token', `vyc1.${'A'.repeat(44)}`],
+      ['a wrong prefix', `vyc2.${'A'.repeat(43)}`],
+      ['padding', `vyc1.${'A'.repeat(42)}=`],
+    ])('answers a malformed token (%s) with the same 404 and reads nothing', async (_label, token) => {
+      seedQrCustomer(TOKENED);
+      const res = await request('GET', `/v1/customers/by-card-token/${encodeURIComponent(token)}`);
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual(NOT_FOUND_BODY);
+      expect(callsFor('customers')).toHaveLength(0);
+    });
+
+    it('refuses a customer token before reading anything', async () => {
+      const res = await request('GET', `/v1/customers/by-card-token/${TOKEN}`, {
+        headers: { 'X-User-Role': 'customer' },
+      });
+
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as any).error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /v1/customers/by-global-id/:globalId with tokens', () => {
+    it('no longer accepts the uuid of a tokened customer', async () => {
+      seedQrCustomer(TOKENED);
+      const res = await request('GET', `/v1/customers/by-global-id/${TOKENED.globalId}`);
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual(NOT_FOUND_BODY);
+    });
+
+    it('still resolves an untokened (legacy) customer exactly as before', async () => {
+      seedQrCustomer(UNTOKENED);
+      const res = await request('GET', `/v1/customers/by-global-id/${UNTOKENED.globalId}`);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(EXPECTED_BODY);
+    });
+  });
+
+  describe('POST /v1/customers/:id/card-token/rotate', () => {
+    const env = TEST_ENV as Record<string, unknown>;
+    const rotateCardToken = vi.fn();
+    const ROTATE_PATH = `/v1/customers/${UNTOKENED.id}/card-token/rotate`;
+
+    beforeEach(() => {
+      rotateCardToken.mockReset();
+      rotateCardToken.mockResolvedValue({ ok: true, version: 3, pass: 'updated' });
+      env.WALLET = { expireCustomerPass: vi.fn(), rotateCardToken };
+      setTableResults({ [key('customers', { id: 1 })]: [{ id: UNTOKENED.id }] });
+    });
+
+    afterEach(() => {
+      delete env.WALLET;
+    });
+
+    function rotate(body: Record<string, unknown> | undefined, headers: Record<string, string> = {}) {
+      return request('POST', ROTATE_PATH, { ...(body ? { body } : {}), headers });
+    }
+
+    it('calls the wallet RPC with the exact arguments and answers its version and pass', async () => {
+      const res = await rotate({ reason: '  Lost phone  ' });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ data: { version: 3, pass: 'updated' } });
+      expect(rotateCardToken).toHaveBeenCalledTimes(1);
+      expect(rotateCardToken).toHaveBeenCalledWith({
+        tenantId: 'biz-1',
+        customerId: UNTOKENED.id,
+        actorUserId: 'user-1',
+        reason: 'Lost phone',
+      });
+    });
+
+    it('passes through pass "none"', async () => {
+      rotateCardToken.mockResolvedValue({ ok: true, version: 1, pass: 'none' });
+      const res = await rotate({ reason: 'Leaked QR' });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ data: { version: 1, pass: 'none' } });
+    });
+
+    it('confirms the customer belongs to the caller business', async () => {
+      await rotate({ reason: 'Leaked QR' });
+
+      const where = wheresFor('customers')[0]!;
+      expect(where.sql).toContain('"customers"."id" = $');
+      expect(where.sql).toContain('"customers"."business_id" = $');
+      expect(where.sql).toMatch(/"customers"\."deleted_at" is null/);
+      expect(where.params).toEqual(expect.arrayContaining([UNTOKENED.id, 'biz-1']));
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['empty', { reason: '' }],
+      ['whitespace only', { reason: '     ' }],
+      ['too short after trimming', { reason: ' ab ' }],
+      ['too long', { reason: 'x'.repeat(501) }],
+      ['not a string', { reason: 1234 }],
+    ])('answers 400 CARD_TOKEN_REASON_REQUIRED for a reason that is %s', async (_label, body) => {
+      const res = await rotate(body);
+
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error.code).toBe('CARD_TOKEN_REASON_REQUIRED');
+      expect(rotateCardToken).not.toHaveBeenCalled();
+    });
+
+    it('accepts a reason of exactly 3 and exactly 500 characters', async () => {
+      expect((await rotate({ reason: 'abc' })).status).toBe(200);
+      expect((await rotate({ reason: 'x'.repeat(500) })).status).toBe(200);
+    });
+
+    it('refuses a customer token before reading or rotating', async () => {
+      const res = await rotate({ reason: 'Leaked QR' }, { 'X-User-Role': 'customer' });
+
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as any).error.code).toBe('OPERATOR_ROLE_REQUIRED');
+      expect(mockDb.select).not.toHaveBeenCalled();
+      expect(rotateCardToken).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 CUSTOMER_NOT_FOUND for a customer of another business, without calling the wallet', async () => {
+      setTableResults({});
+      const res = await rotate({ reason: 'Leaked QR' });
+
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as any).error.code).toBe('CUSTOMER_NOT_FOUND');
+      expect(rotateCardToken).not.toHaveBeenCalled();
+    });
+
+    it('maps the wallet CUSTOMER_NOT_FOUND to 404', async () => {
+      rotateCardToken.mockResolvedValue({ ok: false, code: 'CUSTOMER_NOT_FOUND', message: 'x' });
+      const res = await rotate({ reason: 'Leaked QR' });
+
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as any).error.code).toBe('CUSTOMER_NOT_FOUND');
+    });
+
+    it('maps the wallet PASS_UPDATE_FAILED to 502 with that code', async () => {
+      rotateCardToken.mockResolvedValue({
+        ok: false,
+        code: 'PASS_UPDATE_FAILED',
+        message: `Google refused vyc1.secret for ${UNTOKENED.globalId}`,
+      });
+      const res = await rotate({ reason: 'Leaked QR' });
+
+      expect(res.status).toBe(502);
+      const body = (await res.json()) as any;
+      expect(body.error.code).toBe('PASS_UPDATE_FAILED');
+      expect(JSON.stringify(body)).not.toContain('vyc1.');
+      expect(JSON.stringify(body)).not.toContain(UNTOKENED.globalId);
+    });
+
+    it.each([
+      ['rejects', () => rotateCardToken.mockRejectedValue(new Error(`boom vyc1.x ${UNTOKENED.globalId}`))],
+      ['throws synchronously', () => rotateCardToken.mockImplementation(() => { throw new Error('not a worker'); })],
+      ['is missing', () => { delete env.WALLET; }],
+    ])('answers 502 WALLET_UNAVAILABLE when the wallet RPC %s', async (_label, arrange) => {
+      arrange();
+      const res = await rotate({ reason: 'Leaked QR' });
+
+      expect(res.status).toBe(502);
+      const body = (await res.json()) as any;
+      expect(body.error.code).toBe('WALLET_UNAVAILABLE');
+      expect(JSON.stringify(body)).not.toContain('vyc1.');
+      expect(JSON.stringify(body)).not.toContain(UNTOKENED.globalId);
+    });
   });
 });
