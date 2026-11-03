@@ -100,15 +100,17 @@ La inspección se realizó sobre el repositorio actual. No se modificó código 
 
 ### Tokens
 
+> **Actualizado (2026-11-03):** la web de cliente adopta la paleta del dashboard y la landing (`apps/dashboard/src/app/globals.css`), así el producto tiene una sola marca. La paleta cereza y dorado queda retirada. Los nombres `--club-*` se mantienen; `--club-cherry*` y `--club-gold*` pasaron a `--club-primary*` y `--club-accent*`.
+
 | Área | Contrato |
 |---|---|
-| Tinta | `#27201d` para texto principal y bordes fuertes; `#6f625b` para texto secundario. |
-| Papel | `#f3eee5` como fondo de página; `#fffdf7` como superficie elevada y zonas de contenido. |
-| Cereza | `#a9362b` para CTA, acción principal y estados enfáticos; `#74231d` para texto cereza sobre leche. |
-| Dorado | `#c38a35` reservado exclusivamente para sello, marca de comercio o estado de recompensa; no como segundo CTA. |
-| Línea | `rgba(39, 32, 29, .16)` para bordes estándar; `.09` para separadores. |
-| Foco | Azul `#1e67b1` con anillo visible de 3 px, porque el foco no debe depender del color de la marca. |
-| Éxito/advertencia | Tokens semánticos existentes (`--success`, `--warning`, `--error`) para estados, sin inventar una paleta paralela. |
+| Tinta | `#15191b` para texto principal y bordes fuertes; `#3d4744` para texto secundario. |
+| Papel | `#fafaf7` como fondo de página; `#ffffff` como superficie elevada y zonas de contenido. |
+| Primario | Verde `#1f4d3a` para CTA, acción principal y estados enfáticos; `#163a2b` para hover y texto fuerte. |
+| Acento | Amarillo `#f2c230` solo como relleno o decoración (sello); mide 1.60:1 sobre el papel y nunca va como texto ni como indicador. Lo que comunica estado (escalón alcanzado, barra de progreso) usa el ámbar `#8a5a00` (5.67:1). |
+| Línea | `rgba(21, 25, 27, .16)` para bordes estándar; `.09` para separadores. Radio de tarjeta 14 px. |
+| Foco | Azul `#1e67b1` con anillo visible de 3 px, porque el foco no debe depender del color de la marca (el amarillo del dashboard no alcanza 3:1). |
+| Estados | Capa semántica completa remapeada en `.customer-web` con los valores del dashboard; error `#a8341f` y éxito `#1c6b45`, un paso más oscuros para pasar 4.5:1 sobre sus propios tintes. |
 | Proveedor | Esmeralda, menta e imagen de Google Wallet quedan reservados para una futura superficie de proveedor; no se agregan a las rutas actuales. |
 
 ### Tipografía
