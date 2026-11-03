@@ -26,7 +26,12 @@
  * data, not with a text box.
  */
 
-export type LookupIdentifier = 'phone' | 'email' | 'globalId';
+/**
+ * `cardToken` is not a `/v1/customers/lookup` parameter: it resolves through
+ * `GET /v1/customers/by-card-token/:token`, so callers must branch on it before
+ * building a lookup query.
+ */
+export type LookupIdentifier = 'phone' | 'email' | 'globalId' | 'cardToken';
 
 export interface LookupTarget {
   identifier: LookupIdentifier;
@@ -45,12 +50,26 @@ const UUID_ANYWHERE = new RegExp(UUID, 'i');
 const UUID_EXACT = new RegExp(`^${UUID}$`, 'i');
 
 /**
+ * A card token, bare or as `/c/<token>`. Same pattern as `lib/pass-code.ts`
+ * (`pass-code.contract.test.ts` checks they agree). Case-sensitive, and never
+ * lower-cased: base64url tells `a` from `A`.
+ */
+const CARD_TOKEN = /^(?:\/[cC]\/)?(vyc1\.[A-Za-z0-9_-]{43})$/;
+
+/**
  * Resolve one typed string to one identifier, or `null` when there is nothing
  * to search by.
  */
 export function resolveLookupTarget(raw: string): LookupTarget | null {
   const trimmed = raw.trim();
   if (trimmed === '') return null;
+
+  // First, and exact: a token is unambiguous, and left to fall through it would
+  // be searched as a phone number and miss.
+  const token = trimmed.match(CARD_TOKEN);
+  if (token) {
+    return { identifier: 'cardToken', value: token[1]! };
+  }
 
   // Checked before the email test because a QR link can contain an `@`, and a
   // uuid is unambiguous: nothing else a cashier types looks like one.
