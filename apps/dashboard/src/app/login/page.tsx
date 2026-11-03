@@ -326,7 +326,7 @@ function LoginCard() {
             id="email"
             type="email"
             className="form-control"
-            placeholder="demo@cafecentral.com"
+            placeholder="hola@tucomercio.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
@@ -361,8 +361,6 @@ function LoginCard() {
           {isLoading ? 'Iniciando sesión…' : 'Iniciar sesión'}
         </button>
       </form>
-
-      <p className="login-demo">Demo: demo@cafecentral.com / demo123</p>
     </LoginShell>
   );
 }

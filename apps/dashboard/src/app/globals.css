@@ -209,15 +209,6 @@ h2 {
   font-size: 1.125rem;
 }
 
-.login-demo {
-  margin-top: 1.5rem;
-  padding: 0.75rem 1rem;
-  border-radius: 12px;
-  background: var(--border-light);
-  font-size: 0.9375rem;
-  color: var(--text-secondary);
-}
-
 .login-aside {
   flex: 1 1 420px;
   display: flex;

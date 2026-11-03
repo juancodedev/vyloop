@@ -38,6 +38,12 @@ export function Header() {
         <a href="#que-incluye" className={styles.navLink} onClick={close}>
           Qué incluye
         </a>
+        <a href="#precios" className={styles.navLink} onClick={close}>
+          Precios
+        </a>
+        <a href="#preguntas" className={styles.navLink} onClick={close}>
+          Preguntas
+        </a>
         <Link href="/login" className={styles.navLink}>
           Iniciar sesión
         </Link>

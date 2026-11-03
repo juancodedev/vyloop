@@ -437,6 +437,173 @@
   color: var(--text-secondary);
 }
 
+/* Paper card versus vyloop */
+
+.compare {
+  border-top: 2px solid var(--ink);
+  background: var(--bg-subtle);
+}
+
+.compareTable {
+  width: 100%;
+  margin-top: 3rem;
+  border-collapse: collapse;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+}
+
+.compareTable th {
+  padding: 0 1rem 1rem 0;
+  text-align: left;
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+.compareTable td {
+  width: 50%;
+  padding: 1.25rem 1rem 1.25rem 0;
+  vertical-align: top;
+  border-top: 1px solid var(--border-strong);
+}
+
+.comparePaper {
+  color: var(--text-secondary);
+}
+
+.compareVyloop {
+  font-weight: 600;
+  color: var(--green);
+}
+
+/* Pricing */
+
+.planList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-top: 3rem;
+  align-items: stretch;
+}
+
+.plan {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 2rem 1.75rem;
+  border: 2px solid var(--ink);
+  border-radius: 20px;
+  background: var(--bg-white);
+}
+
+.planRecommended {
+  background: var(--yellow-soft);
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.planBadge {
+  position: absolute;
+  top: -0.875rem;
+  left: 1.75rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: var(--yellow);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 0.875rem;
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.planName {
+  font-weight: 700;
+  font-size: 1.375rem;
+}
+
+.planPrice {
+  font-weight: 800;
+  font-size: 2.5rem;
+  line-height: 1;
+}
+
+.planPeriod {
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 1rem;
+  color: var(--text-secondary);
+}
+
+.planPitch {
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.planItems {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 0.625rem;
+  padding: 0;
+  list-style: none;
+  font-size: 1.0625rem;
+}
+
+.planItems li::before {
+  content: '✓';
+  margin-right: 0.5rem;
+  font-weight: 700;
+  color: var(--green);
+}
+
+/* FAQ */
+
+.faqList {
+  max-width: 48rem;
+  margin-top: 3rem;
+}
+
+.faqItem {
+  border-top: 1px solid var(--border-strong);
+  padding: 1.25rem 0;
+}
+
+.faqItem:last-child {
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.faqQuestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1.25rem;
+  list-style: none;
+}
+
+.faqQuestion::-webkit-details-marker {
+  display: none;
+}
+
+.faqQuestion::after {
+  content: '+';
+  flex-shrink: 0;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  color: var(--green);
+}
+
+.faqItem[open] .faqQuestion::after {
+  content: '−';
+}
+
+.faqQuestion:focus-visible {
+  outline: 3px solid var(--yellow);
+  outline-offset: 4px;
+}
+
 /* Closing call to action */
 
 .closing {
@@ -507,6 +674,18 @@
   .sign,
   .closingSign {
     padding: 2rem 1.5rem;
+  }
+
+  .compareTable {
+    font-size: 1rem;
+  }
+
+  .compareTable th {
+    font-size: 1.0625rem;
+  }
+
+  .faqQuestion {
+    font-size: 1.125rem;
   }
 }
 

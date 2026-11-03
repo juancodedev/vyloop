@@ -1,10 +1,13 @@
 import Link from 'next/link';
 
 import { CashierPreview } from './(landing)/components/CashierPreview';
+import { Comparison } from './(landing)/components/Comparison';
+import { Faq } from './(landing)/components/Faq';
 import { Features } from './(landing)/components/Features';
 import { Header } from './(landing)/components/Header';
 import { Hero } from './(landing)/components/Hero';
 import { HowItWorks } from './(landing)/components/HowItWorks';
+import { Pricing } from './(landing)/components/Pricing';
 import styles from './(landing)/landing.module.css';
 
 export default function LandingPage() {
@@ -15,7 +18,10 @@ export default function LandingPage() {
         <Hero />
         <HowItWorks />
         <CashierPreview />
+        <Comparison />
         <Features />
+        <Pricing />
+        <Faq />
         <section className={`${styles.wrap} ${styles.closing}`}>
           <div className={styles.closingSign}>
             <h2 className={`${styles.display} ${styles.closingTitle}`}>

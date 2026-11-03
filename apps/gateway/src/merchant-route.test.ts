@@ -37,6 +37,8 @@ const TENANT_ROWS: Record<string, MerchantPageData> = {
     promoCopy: '¡Cada 10 cafés, uno gratis!',
     pointsCurrency: 'puntos',
     earnRate: '1.0',
+    earnBy: 'visit',
+    earnUnitAmount: '1000.00',
     minRedeemPoints: 100,
   },
   // The two merchant-authored strings, carrying markup. A page that rendered
@@ -49,6 +51,8 @@ const TENANT_ROWS: Record<string, MerchantPageData> = {
     promoCopy: `<img src=x onerror="alert('1')">`,
     pointsCurrency: 'puntos',
     earnRate: '1.0',
+    earnBy: 'visit',
+    earnUnitAmount: '1000.00',
     minRedeemPoints: 50,
   },
 };

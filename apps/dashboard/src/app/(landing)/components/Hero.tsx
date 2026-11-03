@@ -14,7 +14,7 @@ export function Hero() {
         </div>
         <p className={styles.lead}>
           Un programa de puntos para tu café o almacén. Tus clientes suman puntos según lo que
-          compran, y los ven en Google Wallet, sin bajar otra app.
+          compran: quien compra más, suma más. Y los ven en Google Wallet, sin bajar otra app.
         </p>
         <div className={styles.ctas}>
           <Link href="/login?signup=true" className={styles.pill}>

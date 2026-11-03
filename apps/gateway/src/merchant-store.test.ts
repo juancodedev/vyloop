@@ -28,6 +28,8 @@ vi.mock('@vyloop/db', async () => {
       promoCopy: text('promo_copy'),
       pointsCurrency: text('points_currency'),
       earnRate: numeric('earn_rate', { precision: 10, scale: 4 }),
+      earnBy: text('earn_by'),
+      earnUnitAmount: numeric('earn_unit_amount', { precision: 12, scale: 2 }),
       minRedeemPoints: integer('min_redeem_points'),
     }),
     // Real statement builders, not `vi.fn()`: the ordering test below asserts on
@@ -190,6 +192,8 @@ function twoMerchants() {
           promo_copy: '¡Cada 10 cafés, uno gratis!',
           points_currency: 'puntos',
           earn_rate: '1.0',
+          earn_by: 'visit',
+          earn_unit_amount: '1000.00',
           min_redeem_points: 100,
         },
         {
@@ -198,6 +202,8 @@ function twoMerchants() {
           promo_copy: null,
           points_currency: 'puntos',
           earn_rate: '1.0',
+          earn_by: 'visit',
+          earn_unit_amount: '1000.00',
           min_redeem_points: 50,
         },
       ],
@@ -239,6 +245,8 @@ describe('the merchant page read', () => {
       promoCopy: '¡Cada 10 cafés, uno gratis!',
       pointsCurrency: 'puntos',
       earnRate: '1.0',
+      earnBy: 'visit',
+      earnUnitAmount: '1000.00',
       minRedeemPoints: 100,
     });
   });
@@ -386,6 +394,8 @@ describe('blank values are read as absent', () => {
             promo_copy: '   ',
             points_currency: '',
             earn_rate: '1.0',
+            earn_by: 'visit',
+            earn_unit_amount: '1000.00',
             min_redeem_points: 100,
           },
         ],
@@ -417,6 +427,8 @@ describe('blank values are read as absent', () => {
             promo_copy: null,
             points_currency: 'puntos',
             earn_rate: '2.5000',
+            earn_by: 'visit',
+            earn_unit_amount: '1000.00',
             min_redeem_points: 100,
           },
         ],

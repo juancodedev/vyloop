@@ -39,6 +39,8 @@ function merchant(overrides: Partial<MerchantPageData> = {}): MerchantPageData {
     promoCopy: '¡Cada 10 cafés, uno gratis!',
     pointsCurrency: 'puntos',
     earnRate: '1.0',
+    earnBy: 'visit',
+    earnUnitAmount: '1000.00',
     minRedeemPoints: 100,
     ...overrides,
   };
@@ -388,6 +390,38 @@ describe('renderMerchantPage', () => {
     expect(html).toContain('puntos');
   });
 
+  // The sentence used to be "Por cada peso gastado acumulas {earnRate}", which
+  // was false under both mechanics: per visit it is not per peso, and per
+  // purchase the rate is per `earnUnitAmount` pesos, not per peso.
+  it('states a purchase rule per its unit amount, in es-CL pesos', () => {
+    const html = render(
+      merchant({ earnBy: 'purchase', earnRate: '1.0000', earnUnitAmount: '1000.00' }),
+    );
+
+    expect(html).toContain('Por cada $1.000 de compra acumulas <strong>1 punto</strong>.');
+    expect(html).not.toContain('peso gastado');
+  });
+
+  it('invites the customer in neutral Spanish, never voseo', () => {
+    const html = render(merchant());
+
+    expect(html).toContain('Únete al club');
+    expect(html).not.toMatch(/Sumate|Registrate|pedí|Entrá/);
+  });
+
+  it('states a visit rule without mentioning money', () => {
+    const html = render(merchant({ earnBy: 'visit', earnRate: '2.5000' }));
+
+    expect(html).toContain('Por cada visita acumulas <strong>2,5 puntos</strong>.');
+    expect(html).not.toMatch(/peso|\$/);
+  });
+
+  it('says nothing about earning for a mechanic it does not know', () => {
+    const html = render(merchant({ earnBy: 'stamps' }));
+
+    expect(html).not.toContain('Por cada');
+  });
+
   it('omits the promo block entirely when the merchant wrote none', () => {
     // Omitted, never substituted — the same rule `findPromoCopy` follows and the
     // class builder follows. A default sentence here is a merchant's page
@@ -405,6 +439,8 @@ describe('renderMerchantPage', () => {
         promoCopy: null,
         pointsCurrency: null,
         earnRate: null,
+        earnBy: null,
+        earnUnitAmount: null,
         minRedeemPoints: null,
       }),
     );
@@ -471,7 +507,7 @@ describe('the call to action on the merchant page', () => {
   });
 
   it('escapes merchant-authored text in the link, because the link text is the merchant name', () => {
-    // The CTA reads "Entrá al club de {name}". That name is written by the
+    // The CTA reads "Entra al club de {name}". That name is written by the
     // merchant at signup and this route is public and unauthenticated, so an
     // unescaped one here is stored XSS on a route anyone on the internet can
     // load — the same class as the `<h1>`, one attribute closer to a breakout.

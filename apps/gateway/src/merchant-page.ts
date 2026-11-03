@@ -78,6 +78,13 @@ export interface MerchantPageData {
   pointsCurrency: string | null;
   /** `loyalty_programs.earn_rate`. Kept as the string Postgres returns for `numeric`. */
   earnRate: string | null;
+  /**
+   * `loyalty_programs.earn_by`: `'visit'` or `'purchase'`. Typed as a string
+   * because the column carries no CHECK, so an unknown value must be survivable.
+   */
+  earnBy: string | null;
+  /** `loyalty_programs.earn_unit_amount`: pesos per `earnRate` under `'purchase'`. */
+  earnUnitAmount: string | null;
   /** `loyalty_programs.min_redeem_points`. */
   minRedeemPoints: number | null;
 }
@@ -302,13 +309,7 @@ export function renderMerchantPage(
   const logoUrl = `/brand/${escapeHtml(merchant.tenantId)}.jpg`;
   const title = escapeHtml(merchant.name);
 
-  // "Earn" is only stated when there is a rate to state. A page claiming you
-  // earn 1 punto per peso when no rate is configured is a promise the database
-  // does not support.
-  const earnSentence =
-    merchant.earnRate !== null && merchant.pointsCurrency !== null
-      ? `<p class="rule">Por cada peso gastado acumulas <strong>${escapeHtml(merchant.earnRate)} ${escapeHtml(merchant.pointsCurrency)}</strong>.</p>`
-      : '';
+  const earnSentence = earnSentenceFor(merchant);
 
   const redeemSentence =
     merchant.minRedeemPoints !== null && merchant.pointsCurrency !== null
@@ -342,9 +343,9 @@ export function renderMerchantPage(
     registerHref === null
       ? ''
       : `<section class="join">
-<h2>Sumate al club</h2>
-<p>Registrate una vez y pedí tu pase desde el teléfono.</p>
-<a class="cta" href="${escapeHtml(registerHref)}">Entrá al club de <strong>${escapeHtml(merchant.name)}</strong></a>
+<h2>Únete al club</h2>
+<p>Regístrate una vez y pide tu pase desde el teléfono.</p>
+<a class="cta" href="${escapeHtml(registerHref)}">Entra al club de <strong>${escapeHtml(merchant.name)}</strong></a>
 </section>
 `;
 
@@ -373,6 +374,50 @@ ${redeemSentence}
 </body>
 </html>
 `;
+}
+
+/** A `numeric` string as a positive finite number, or `null`. */
+function positiveNumber(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * How a customer earns, in the terms of the mechanic the program runs.
+ *
+ * "Earn" is only stated when there is a rule to state: no rate, no currency, an
+ * unknown mechanic, or a purchase program without a usable unit amount all omit
+ * the sentence, because a page promising points the database does not back is
+ * worse than a page that says nothing.
+ *
+ * The currency is merchant-authored and plural ("puntos", "estrellas"). For a
+ * rate of exactly 1 its trailing "s" is dropped, which covers the Spanish plurals
+ * a merchant writes; anything else is shown as written.
+ */
+function earnSentenceFor(merchant: MerchantPageData): string {
+  const rate = positiveNumber(merchant.earnRate);
+  if (rate === null || merchant.pointsCurrency === null) return '';
+
+  const currency =
+    rate === 1 && merchant.pointsCurrency.endsWith('s')
+      ? merchant.pointsCurrency.slice(0, -1)
+      : merchant.pointsCurrency;
+  const amount = `${rate.toLocaleString('es-CL', { maximumFractionDigits: 4 })} ${currency}`;
+  const points = `<strong>${escapeHtml(amount)}</strong>`;
+
+  if (merchant.earnBy === 'visit') {
+    return `<p class="rule">Por cada visita acumulas ${points}.</p>`;
+  }
+
+  if (merchant.earnBy === 'purchase') {
+    const unit = positiveNumber(merchant.earnUnitAmount);
+    if (unit === null) return '';
+    const pesos = `$${unit.toLocaleString('es-CL', { maximumFractionDigits: 2 })}`;
+    return `<p class="rule">Por cada ${escapeHtml(pesos)} de compra acumulas ${points}.</p>`;
+  }
+
+  return '';
 }
 
 /**
