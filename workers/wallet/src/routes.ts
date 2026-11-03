@@ -4,6 +4,8 @@ import { and, desc, eq, gte } from 'drizzle-orm';
 import { Hono } from 'hono';
 
 import { BalanceNotDisplayableError, balanceDisplayFailure } from './balance';
+import { confirmObjectBindings, describeBindingDefects, isUnconfirmed } from './bindings';
+import type { BindingsConfirmation } from './bindings';
 import { applyVerifiedCallback } from './callback-handler';
 import type { VerifiedCallbackOutcome } from './callback-handler';
 import {
@@ -43,7 +45,12 @@ import {
   reasonCodeFor,
   TIER_HEADER_UNAVAILABLE } from './issuance';
 import type { PushNotification } from './object';
-import { reconcilePass, updatePassPushNotifications } from './reconcile';
+import {
+  PassPatchNotAppliedError,
+  balanceStringOf,
+  reconcilePass,
+  updatePassPushNotifications,
+} from './reconcile';
 
 // One message per business per day (decided Q3).
 const WALLET_DAILY_MESSAGE_LIMIT = 1;
@@ -98,6 +105,21 @@ const WALLET_DEMO_MODE = 'WALLET_DEMO_MODE';
  * row, a text module, or a custom layout).
  */
 const WALLET_BALANCE_NOT_DISPLAYABLE = 'WALLET_BALANCE_NOT_DISPLAYABLE';
+
+/**
+ * Google accepted the write, and the resource it echoed back is not the pass that
+ * was sent.
+ *
+ * Distinct from `WALLET_PASS_NOT_CREATABLE` on purpose, and the distinction is the
+ * whole point of the check: "nothing exists" and "something exists and it is not
+ * the card we promised" send an operator to different places. The second one is
+ * the invisible failure — the object is there, the pass is recorded as `issued`,
+ * and the barcode at the counter matches nobody.
+ *
+ * The message names fields and categories, never values: `barcode.value` is
+ * `customers.global_id`, and a response body is as public as a log line.
+ */
+const WALLET_PASS_BINDINGS_NOT_CONFIRMED = 'WALLET_PASS_BINDINGS_NOT_CONFIRMED';
 
 /**
  * The customer's pass reached a state Google will not undo.
@@ -721,8 +743,49 @@ router.get('/v1/wallet/pass', async (c) => {
       // failure, and the swallow below is right for the first and wrong for this
       // one. A stale balance is a cosmetic problem a later sync fixes; a missing
       // object is a promise we cannot keep.
+      //
+      // Both write paths below answer with the resource Google stored, and both
+      // end in a delivered link, so both share this refusal. It logs field names
+      // and categories only: the values include `customers.global_id` and the
+      // member code, and neither belongs in a log line.
+      const refuseUnconfirmed = (
+        confirmation: Extract<BindingsConfirmation, { kind: 'unconfirmed' }>,
+      ) => {
+        console.error(
+          `[wallet] Google did not store the pass as sent for customer ${customer.id} in tenant ` +
+            `${tenantId}: ${describeBindingDefects(confirmation.defects)}` +
+            (confirmation.readFailed ? ' (the confirming read failed)' : ''),
+        );
+        return c.json(
+          {
+            error: {
+              code: WALLET_PASS_BINDINGS_NOT_CONFIRMED,
+              message:
+                'Google accepted this pass but did not store the object that was sent, so a ' +
+                'working link cannot be produced. The fields that did not match: ' +
+                `${describeBindingDefects(confirmation.defects)}.`,
+            },
+          },
+          409,
+        );
+      };
+
       try {
-        await client.insertObject(issued.loyaltyObject);
+        const created = await client.insertObject(issued.loyaltyObject);
+
+        // Confirm the resource Google stored is the pass that was sent, before a
+        // link naming it exists. This is the only moment where the answer can
+        // still change anything: the link is not promised yet, and after this
+        // line it reaches a customer who will save a card that may match nobody
+        // at the counter.
+        //
+        // `create` is the write Google echoes, and the echo is information this
+        // route already paid for and used to throw away.
+        const confirmed = await confirmObjectBindings(issued.loyaltyObject, created, {
+          getObject: (objectId) => client.getObject(objectId),
+        });
+        if (isUnconfirmed(confirmed)) return refuseUnconfirmed(confirmed);
+
         console.log(`[wallet] Created pass object ${issued.objectId} at Google.`);
       } catch (err: unknown) {
         if (err instanceof GoogleWalletApiError && err.status === 409) {
@@ -732,7 +795,39 @@ router.get('/v1/wallet/pass', async (c) => {
           // customer goes through — the pass row is — but it is still the only
           // thing that catches the race, so it stays.
           try {
-            await client.patchObject(issued.objectId, issued.loyaltyObject);
+            // The full projection, and the one place in this worker that patches
+            // arrays on purpose: the object already exists because another request
+            // won the race, and this request's job is to make it carry *this*
+            // balance and tier rather than a stale one. `replaceArrays` is the
+            // explicit claim the type demands; without it the fields below would
+            // not compile, which is the point.
+            const patched = await client.patchObject(issued.objectId, {
+              ...issued.loyaltyObject,
+              replaceArrays: true,
+            });
+
+            // Same rule as the insert above, and for a reason that is easy to
+            // miss: this branch also ends in a delivered link. A patch that Google
+            // stored differently leaves the customer holding a card whose barcode
+            // or short code is not the one the rest of the system believes in.
+            const confirmed = await confirmObjectBindings(issued.loyaltyObject, patched, {
+              getObject: (objectId) => client.getObject(objectId),
+            });
+            if (isUnconfirmed(confirmed)) return refuseUnconfirmed(confirmed);
+
+            // And the balance, the way reconciliation already confirms its own
+            // patch. The echo is free, and a patch that landed a different number
+            // is recorded as `issued` all the same: the row would say the pass
+            // agrees with the ledger while the member reads another figure.
+            const applied = balanceStringOf(patched);
+            const sent = issued.loyaltyObject.loyaltyPoints.balance.string;
+            if (applied !== sent) {
+              // Thrown into the `catch` below rather than answered here, so both
+              // "Google refused the update" and "Google applied something else"
+              // reach the operator through one message.
+              throw new PassPatchNotAppliedError(issued.objectId, sent, applied);
+            }
+
             console.log(
               `[wallet] Pass object ${issued.objectId} already existed at Google; patched it instead.`,
             );

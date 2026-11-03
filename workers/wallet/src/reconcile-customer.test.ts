@@ -181,9 +181,6 @@ function fakeClient(remote: LoyaltyObject | null, options: { echoPatch?: boolean
     insertClass: vi.fn(async () => {
       throw new Error('not used');
     }),
-    patchClass: vi.fn(async () => {
-      throw new Error('not used');
-    }),
     getObject: vi.fn(async () => current),
     insertObject: vi.fn(async () => {
       throw new Error('not used');

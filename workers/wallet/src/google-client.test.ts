@@ -10,7 +10,6 @@ import type { GoogleWalletClient } from './google-client';
 const METHODS = [
   'getClass',
   'insertClass',
-  'patchClass',
   'getObject',
   'insertObject',
   'patchObject',

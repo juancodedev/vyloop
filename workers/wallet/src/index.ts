@@ -265,7 +265,6 @@ export {
   GoogleWalletAuthError,
   GoogleWalletResponseError,
   googleReviewStatusFor,
-  type LoyaltyClassPatch,
   type LoyaltyObjectPatch,
   type FetchLike,
   storedReviewStatusFor,

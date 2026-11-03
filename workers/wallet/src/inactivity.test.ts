@@ -33,7 +33,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LoyaltyClass } from './class';
-import type { GoogleWalletClient, LoyaltyClassPatch, LoyaltyObjectPatch } from './google-client';
+import type { GoogleWalletClient, LoyaltyObjectPatch } from './google-client';
 import {
   INACTIVITY_STATE,
 
@@ -406,9 +406,6 @@ class CountingClient implements GoogleWalletClient {
   }
   async insertClass(loyaltyClass: LoyaltyClass): Promise<LoyaltyClass> {
     return loyaltyClass;
-  }
-  async patchClass(_classId: string, _patch: LoyaltyClassPatch): Promise<LoyaltyClass> {
-    return {} as LoyaltyClass;
   }
   async listObjects(): Promise<{ objects: LoyaltyObject[]; nextPageToken: string | null }> {
     return { objects: [], nextPageToken: null };

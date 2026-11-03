@@ -179,7 +179,6 @@ function fakeClient(options: { failWith?: Error } = {}): FakeClient {
   return {
     getClass: notUsed('getClass'),
     insertClass: notUsed('insertClass'),
-    patchClass: notUsed('patchClass'),
     getObject: notUsed('getObject'),
     insertObject: notUsed('insertObject'),
     listObjects: notUsed('listObjects'),

@@ -334,8 +334,12 @@ export async function reconcilePass(
  * object with no `loyaltyPoints` at all is an object whose balance we have
  * certainly not projected onto, so the correct response is to send the balance,
  * not to shrug and record it as in sync.
+ *
+ * Exported because the issuance route confirms the patch it sends on a `409` the
+ * same way, and a second implementation of "which string did Google store" would
+ * be a second answer to the question this function exists to answer once.
  */
-function balanceStringOf(object: LoyaltyObject | null): string | null {
+export function balanceStringOf(object: LoyaltyObject | null): string | null {
   const balance = object?.loyaltyPoints?.balance?.string;
   return typeof balance === 'string' ? balance : null;
 }

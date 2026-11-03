@@ -311,6 +311,12 @@ let fakeClientHandle: {
   // What `insertObject` does next, so a test can make Google refuse the create.
   let insertFails: { status: number; code: string } | null = null;
 
+  // Applied to the resource a write echoes back, and only to the echo: the
+  // object Google is pretending to hold is still the one it was sent. That is
+  // the difference between "Google answered a partial body" and "Google stored a
+  // different object", and the route has to tell them apart.
+  let echoTransform: ((echo: Record<string, unknown>) => Record<string, unknown>) | null = null;
+
   // Whether Google holds the object yet. Tracked separately from `remoteObject`
   // so `insertObject` can answer 409 for a customer who already holds the pass,
   // which is what Google does and what the route's fallback exists for. Without
@@ -351,12 +357,14 @@ let fakeClientHandle: {
       // The object now exists at Google, which is what a second visit must see.
       objectExistsAtGoogle = true;
       remoteObject = { ...remoteObject, ...object } as never;
-      return object as never;
+      // The echo, not the stored truth. A partial response body is not a partial
+      // object: Google holds what it was sent, and one read says so.
+      return (echoTransform ? echoTransform({ ...object }) : object) as never;
     }),
     patchObject: vi.fn(async (id: string, patch: Record<string, unknown>) => {
       googleCalls.push({ method: 'patchObject', args: [id, patch] });
       remoteObject = { ...(remoteObject ?? {}), ...patch };
-      return remoteObject as never;
+      return (echoTransform ? echoTransform({ ...remoteObject }) : remoteObject) as never;
     }),
     addMessage: vi.fn(async (objectId: string, classId: string, message: unknown) => {
       googleCalls.push({ method: 'addMessage', args: [objectId, classId, message] });
@@ -366,9 +374,6 @@ let fakeClientHandle: {
   vi.mocked(googleWalletClientFor).mockReturnValue({
     getClass: fakeClientHandle.getClass,
     insertClass: vi.fn(async () => {
-      throw new Error('not used');
-    }),
-    patchClass: vi.fn(async () => {
       throw new Error('not used');
     }),
 getObject: fakeClientHandle.getObject,
@@ -651,6 +656,7 @@ getObjectFails = false;
     getClassFails = false;
     insertFails = null;
     objectExistsAtGoogle = false;
+    echoTransform = null;
   // Restored every test, because the demo-mode block deliberately removes it and
   // a test that ran after that one would otherwise inherit demo mode.
   env.WALLET_DEMO_MODE = 'false';
@@ -1322,6 +1328,120 @@ describe('GET /v1/wallet/pass: creating the object at Google', () => {
 
     expect(res.status).toBe(409);
     expect(googleCalls.filter((call) => call.method === 'patchObject')).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Confirming the write landed as sent
+  //
+  // `insertObject` answers with the resource Google stored, and that answer is
+  // the only evidence any of these fields arrived intact. Discarding it means a
+  // pass can be marked `issued`, be saved on a phone, and match nobody at the
+  // counter without a single error on either side.
+  // -------------------------------------------------------------------------
+
+  it('refuses the link when Google echoes a different member code', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    echoTransform = (echo) => ({ ...echo, accountId: 'K7M2Q' });
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: { code: string; message: string }; data?: unknown };
+    // Its own code, not `WALLET_PASS_NOT_CREATABLE`: the object exists, and it is
+    // not the card that was promised. An operator has to be sent to a different
+    // place by each of those answers.
+    expect(json.error.code).toBe('WALLET_PASS_BINDINGS_NOT_CONFIRMED');
+    expect(json.error.message).toContain('accountId (different)');
+    expect(json.data).toBeUndefined();
+
+    error.mockRestore();
+  });
+
+  it('keeps the values out of the log, naming only the field and the category', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    echoTransform = (echo) => ({ ...echo, barcode: { type: 'QR_CODE', value: 'stored-somewhere-else' } });
+
+    await GET('/v1/wallet/pass');
+
+    const logged = error.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+    expect(logged).toContain('barcode.value (different)');
+    // `barcode.value` is `customers.global_id`, and the callback route already
+    // documents the rule that it does not belong in a log line.
+    expect(logged).not.toContain(CUSTOMER_GLOBAL_ID);
+    expect(logged).not.toContain('stored-somewhere-else');
+
+    error.mockRestore();
+  });
+
+  it('re-reads a partial echo and returns the link once Google confirms the object', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    echoTransform = (echo) => {
+      const partial = { ...echo };
+      delete partial.barcode;
+      return partial;
+    };
+
+    const res = await GET('/v1/wallet/pass');
+
+    // A partial insert response is not a partial object. Rejecting here would
+    // cost the customer a pass that works, which is why the retry exists.
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { save_url: string } };
+    expect(body.data.save_url.startsWith(SAVE_TO_WALLET_URL_PREFIX)).toBe(true);
+
+    // One read to confirm, one for the reconciliation that follows the insert.
+    expect(googleCalls.filter((call) => call.method === 'getObject')).toHaveLength(2);
+
+    error.mockRestore();
+  });
+
+  it('refuses the link when the patch of an existing object echoes a different member code', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The customer already holds the pass, so the create answers 409 and the
+    // route falls back to patching. That branch hands back a link too.
+    objectExistsAtGoogle = true;
+    echoTransform = (echo) => ({ ...echo, accountId: 'K7M2Q' });
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe('WALLET_PASS_BINDINGS_NOT_CONFIRMED');
+    expect(json.error.message).toContain('accountId (different)');
+
+    error.mockRestore();
+  });
+
+  it('refuses the link when the patch of an existing object does not carry the balance sent', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    objectExistsAtGoogle = true;
+    // Google reports a different number than the one the patch carried. The
+    // reconciliation that follows would fix it, but the route must not hand out a
+    // link on the strength of a write it already saw land wrong.
+    echoTransform = (echo) => ({
+      ...echo,
+      loyaltyPoints: { label: 'puntos', balance: { string: '1' } },
+    });
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: { code: string }; data?: unknown };
+    // Same code as "Google refused the update", because from the operator's side
+    // both mean the object could not be brought to the state this route asked for.
+    expect(json.error.code).toBe('WALLET_PASS_NOT_CREATABLE');
+    expect(json.data).toBeUndefined();
+
+    error.mockRestore();
+  });
+
+  it('adds no extra read when the insert echo is faithful', async () => {
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    // Exactly one `getObject`, and it belongs to the reconciliation that follows
+    // the insert. The confirmation itself costs nothing on the happy path.
+    expect(googleCalls.filter((call) => call.method === 'getObject')).toHaveLength(1);
   });
 });
 

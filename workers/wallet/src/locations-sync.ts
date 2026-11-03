@@ -187,7 +187,14 @@ async function applyLocations(
   objectId: string,
   positions: MerchantLocation[],
 ): Promise<void> {
-  const patched = await deps.client.patchObject(objectId, { merchantLocations: positions });
+  // `replaceArrays` is declared because this is the one caller that genuinely
+  // replaces the whole list: the sync computes the customer's complete set of
+  // eligible positions, so a merge would leave a withdrawn venue on the pass.
+  // Every other patch in this worker omits arrays on purpose.
+  const patched = await deps.client.patchObject(objectId, {
+    merchantLocations: positions,
+    replaceArrays: true,
+  });
 
   // Post-condition, not optimism. The same rule `reconcilePass` applies to the
   // balance: Google echoes the stored resource, so a mismatch here means the

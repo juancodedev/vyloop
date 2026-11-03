@@ -76,9 +76,6 @@ class CountingClient {
   async insertClass(loyaltyClass: never) {
     return loyaltyClass;
   }
-  async patchClass() {
-    return {} as never;
-  }
   async listObjects() {
     return { objects: [], nextPageToken: null };
   }
