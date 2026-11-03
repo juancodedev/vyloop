@@ -4,6 +4,7 @@ import { QrCode } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '../lib/api';
+import { readCachedCardToken, writeCachedCardToken } from '../lib/card-credential-cache';
 import { formatMemberCode } from '../lib/format';
 
 import { MemberQrCode } from './member-qr';
@@ -147,7 +148,14 @@ export function QrSheet({
           Muéstrale esto en caja
         </h2>
 
-        <MemberQrCode globalId={globalId} cardToken={cardToken} fullName={fullName} showIdOnFailure={!code} />
+        {/* The uuid is only worth dictating to a customer without a token: the
+            counter refuses it once a token exists. */}
+        <MemberQrCode
+          globalId={globalId}
+          cardToken={cardToken}
+          fullName={fullName}
+          showIdOnFailure={!code && !cardToken}
+        />
 
         {code ? (
           <>
@@ -183,7 +191,7 @@ type CardCredential =
  * `undefined` means "still resolving"; the QR waits for it rather than drawing
  * the uuid first and swapping it for the token a moment later.
  */
-function useCardCredential() {
+function useCardCredential(globalId: string) {
   const [credential, setCredential] = useState<CardCredential>({ status: 'idle' });
   const live = useRef(true);
 
@@ -201,13 +209,20 @@ function useCardCredential() {
     setCredential({ status: 'loading' });
     api.getWalletCard().then(
       (token) => {
+        writeCachedCardToken(globalId, token);
         if (live.current) setCredential({ status: 'resolved', token, failed: false });
       },
       () => {
-        if (live.current) setCredential({ status: 'resolved', token: null, failed: true });
+        // A failed call falls back to the last answer this browser saw, not to the
+        // uuid: a customer who already has a token would get a code the counter
+        // refuses. With nothing remembered, the uuid is the best there is.
+        const remembered = readCachedCardToken(globalId);
+        if (live.current) {
+          setCredential({ status: 'resolved', token: remembered ?? null, failed: true });
+        }
       },
     );
-  }, [credential]);
+  }, [credential, globalId]);
 
   const cardToken = credential.status === 'resolved' ? credential.token : undefined;
 
@@ -221,7 +236,7 @@ function useCardCredential() {
 export function QrDock({ globalId, fullName, memberCode }: QrProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const { cardToken, request } = useCardCredential();
+  const { cardToken, request } = useCardCredential(globalId);
 
   const close = useCallback(() => {
     setOpen(false);

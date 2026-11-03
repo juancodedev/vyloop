@@ -56,6 +56,7 @@ beforeEach(() => {
   mocks.toDataURL.mockResolvedValue('data:image/png;base64,SEVMTE8=');
   mocks.getWalletCard.mockReset();
   mocks.getWalletCard.mockResolvedValue(null);
+  localStorage.clear();
   release = vi.fn().mockResolvedValue(undefined);
   setWakeLock({ request: vi.fn().mockResolvedValue({ release }) });
 });
@@ -122,16 +123,62 @@ describe('the QR payload', () => {
     expect(mocks.toDataURL).not.toHaveBeenCalled();
   });
 
-  it('keeps the uuid, never the token, as the readable fallback when the QR cannot be drawn', async () => {
+  it('shows neither the uuid nor the token as a readable fallback for a tokened customer', async () => {
+    // The counter refuses the uuid of a customer who has a token, so offering it
+    // to dictate would be a code that fails at the till. The token is a bearer
+    // credential and is never printed as text.
     mocks.getWalletCard.mockResolvedValue(CARD_TOKEN);
     mocks.toDataURL.mockRejectedValueOnce(new Error('canvas unavailable'));
     renderDock(null);
     await openSheet();
 
     expect(await screen.findByText(/No pudimos generar el código QR/)).toBeTruthy();
-    expect(screen.getByText(GLOBAL_ID)).toBeTruthy();
-    expect(screen.queryByText(CARD_TOKEN)).toBeNull();
+    expect(document.body.textContent).not.toContain(GLOBAL_ID);
     expect(document.body.textContent).not.toContain(CARD_TOKEN);
+  });
+
+  it('keeps the uuid as the readable fallback for a legacy customer when the QR cannot be drawn', async () => {
+    mocks.getWalletCard.mockResolvedValue(null);
+    mocks.toDataURL.mockRejectedValueOnce(new Error('canvas unavailable'));
+    renderDock(null);
+    await openSheet();
+
+    expect(await screen.findByText(/No pudimos generar el código QR/)).toBeTruthy();
+    expect(screen.getByText(GLOBAL_ID)).toBeTruthy();
+  });
+
+  it('uses the last known token when the wallet call fails, never falling back to the uuid', async () => {
+    // First visit: the token arrives and is remembered.
+    mocks.getWalletCard.mockResolvedValue(CARD_TOKEN);
+    renderDock('K7F2QX');
+    await openSheet();
+    await screen.findByRole('img');
+    cleanup();
+
+    // Later visit, offline: the remembered token is what the counter can scan.
+    mocks.toDataURL.mockClear();
+    mocks.getWalletCard.mockRejectedValue(new Error('network down'));
+    renderDock('K7F2QX');
+    await openSheet();
+
+    await screen.findByRole('img');
+    expect(mocks.toDataURL.mock.calls[0][0]).toBe(`/c/${CARD_TOKEN}`);
+  });
+
+  it('remembers a legacy answer too, so a failed call keeps the uuid QR', async () => {
+    mocks.getWalletCard.mockResolvedValue(null);
+    renderDock('K7F2QX');
+    await openSheet();
+    await screen.findByRole('img');
+    cleanup();
+
+    mocks.toDataURL.mockClear();
+    mocks.getWalletCard.mockRejectedValue(new Error('network down'));
+    renderDock('K7F2QX');
+    await openSheet();
+
+    await screen.findByRole('img');
+    expect(mocks.toDataURL.mock.calls[0][0]).toBe(`/c/${GLOBAL_ID}`);
   });
 
   it('asks again on the next open after a failed call', async () => {
