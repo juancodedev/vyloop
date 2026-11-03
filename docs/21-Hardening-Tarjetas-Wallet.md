@@ -310,8 +310,8 @@ Dos de los cuatro puntos que originaron este documento ya estaban resueltos en e
 
 Ninguno bloquea; todos son baratos.
 
-1. **Drift en los comentarios de ruta.** `object.ts:13` y `member-code.ts:13` dicen `GET /v1/customers/n/:globalId`. La ruta real es `/v1/customers/by-global-id/:globalId` (`workers/customer/src/routes.ts:956`). Un comentario que nombra una ruta inexistente manda al lector equivocado.
+1. **Drift en los comentarios de ruta.** Resuelto: los comentarios se reescribieron con la credencial rotable. Era así: `object.ts:13` y `member-code.ts:13` dicen `GET /v1/customers/n/:globalId`. La ruta real es `/v1/customers/by-global-id/:globalId` (`workers/customer/src/routes.ts:956`). Un comentario que nombra una ruta inexistente manda al lector equivocado.
 2. **`patchClass` sin caller.** Resuelto: se borró. Ver [5.2](#52-dónde-se-rompe-la-disciplina).
 3. **Sin throttle de aplicación** en `resolve`, `checkins` y `by-global-id`. Ver [6.2](#62-lo-que-falta).
-4. **El `409` del insert no confirma el patch.** `reconcile` sí lo hace y lanza `PassPatchNotAppliedError`; el `409` no.
-5. **Los `getObject` de `reconcile` no leen los bindings.** Es la razón por la que el punto 4 no se detecta nunca, ni siquiera por el sweep.
+4. **El `409` del insert no confirma el patch.** Resuelto: el `409` confirma el balance y los bindings (punto 5).
+5. **Los `getObject` de `reconcile` no leen los bindings.** Resuelto: cada reconcile compara `id`, `classId`, `accountId` y el barcode con la base. El barcode de un cliente con token se compara hasheando lo que tiene Google contra `card_token_hash`, sin necesitar el secreto. Una diferencia se loguea como `[wallet] pass_binding_drift` con los nombres de los campos, nunca con los valores, y no corrige nada: la reparación es una rotación que decide un operador.
