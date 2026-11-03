@@ -252,28 +252,36 @@ function classesInUse(): Set<string> {
  */
 const UNSTYLED_BY_DESIGN: string[] = [];
 
-describe('Stage 0 club-barrio CSS contract', () => {
+describe('Stage 0 club CSS contract', () => {
   it('defines the approved semantic tokens', () => {
-    expect(css).toMatch(/--club-ink:\s*#27201d/);
-    expect(css).toMatch(/--club-ink-soft:\s*#6f625b/);
-    expect(css).toMatch(/--club-paper:\s*#f3eee5/);
-    expect(css).toMatch(/--club-surface:\s*#fffdf7/);
-    expect(css).toMatch(/--club-cherry:\s*#a9362b/);
-    expect(css).toMatch(/--club-cherry-dark:\s*#74231d/);
-    expect(css).toMatch(/--club-gold:\s*#c38a35/);
+    // The dashboard and landing palette: one brand across the product.
+    expect(css).toMatch(/--club-ink:\s*#15191b/);
+    expect(css).toMatch(/--club-ink-soft:\s*#3d4744/);
+    expect(css).toMatch(/--club-paper:\s*#fafaf7/);
+    expect(css).toMatch(/--club-surface:\s*#ffffff/);
+    expect(css).toMatch(/--club-primary:\s*#1f4d3a/);
+    expect(css).toMatch(/--club-primary-strong:\s*#163a2b/);
+    expect(css).toMatch(/--club-accent:\s*#f2c230/);
     expect(css).toMatch(/--club-focus:\s*#1e67b1/);
-    expect(css).toMatch(/--club-line:\s*rgba\(39, 32, 29, 0\.16\)/);
-    expect(css).toMatch(/--club-line-soft:\s*rgba\(39, 32, 29, 0\.09\)/);
-    expect(css).toMatch(/--club-radius:\s*18px/);
+    expect(css).toMatch(/--club-line:\s*rgba\(21, 25, 27, 0\.16\)/);
+    expect(css).toMatch(/--club-line-soft:\s*rgba\(21, 25, 27, 0\.09\)/);
+    expect(css).toMatch(/--club-radius:\s*14px/);
     expect(css).toMatch(/--club-space-unit:\s*var\(--space-1\)/);
     expect(css).toMatch(/--club-shadow-quiet:/);
     expect(css).toMatch(/--club-transition-fast:\s*var\(--transition-fast\)/);
     expect(css).toMatch(/--club-ease-out:\s*var\(--ease-out\)/);
     expect(css).toMatch(/--club-font-display:\s*var\(--font-body\), system-ui, sans-serif/);
-    // Stage 6 added two tones, both measured against the club surfaces rather
-    // than chosen by eye. See the contrast floor suite below.
-    expect(css).toMatch(/--club-gold-strong:\s*#8a5f1f/);
+    // Tones measured against the club surfaces rather than chosen by eye. See
+    // the contrast floor suite below.
+    expect(css).toMatch(/--club-accent-strong:\s*#8a5a00/);
     expect(css).toMatch(/--club-success:\s*#1c6b45/);
+    expect(css).toMatch(/--club-error:\s*#a8341f/);
+  });
+
+  it('keeps no tone of the retired cherry-and-gold palette', () => {
+    expect(css).not.toMatch(/--club-(cherry|gold)/);
+    expect(css).not.toMatch(/#(a9362b|74231d|c38a35|8a5f1f|27201d|f3eee5|fffdf7)\b/i);
+    expect(css).not.toMatch(/rgba\(39, 32, 29/);
   });
 
   it('provides focus, reduced motion, and transition safeguards', () => {
@@ -321,8 +329,10 @@ const AA_TEXT = 4.5;
 /** The threshold for large text and for graphical objects. WCAG 1.4.11. */
 const AA_LARGE = 3;
 
-const CLUB_PAPER = '#f3eee5';
-const CLUB_SURFACE = '#fffdf7';
+const CLUB_PAPER = '#fafaf7';
+const CLUB_SURFACE = '#ffffff';
+const ERROR_TINT = '#fbeae6';
+const SUCCESS_TINT = '#e4f1e8';
 
 /**
  * The declarations of every rule whose selector list contains `selector`.
@@ -348,19 +358,22 @@ function ruleBody(selector: string): string {
   return bodies.join('\n');
 }
 
-describe('Stage 6 club-barrio contrast floor', () => {
+describe('Stage 6 club contrast floor', () => {
   it.each([
-    ['club ink on the card surface', '#27201d', CLUB_SURFACE, AA_TEXT],
-    ['club ink on the page', '#27201d', CLUB_PAPER, AA_TEXT],
-    ['club secondary ink on the card surface', '#6f625b', CLUB_SURFACE, AA_TEXT],
-    ['club secondary ink on the page', '#6f625b', CLUB_PAPER, AA_TEXT],
-    ['cherry on the card surface, the primary label', '#a9362b', CLUB_SURFACE, AA_TEXT],
-    ['cherry on the page', '#a9362b', CLUB_PAPER, AA_TEXT],
-    ['cherry-dark, the outline button and the error text', '#74231d', CLUB_SURFACE, AA_TEXT],
-    ['cherry-dark on the page', '#74231d', CLUB_PAPER, AA_TEXT],
-    // The two tones Stage 6 added, measured rather than eyeballed.
-    ['club success, the earned amount and the stock badge', '#1c6b45', CLUB_SURFACE, AA_TEXT],
-    ['club success-strong gold, the reached rung marker', '#8a5f1f', CLUB_SURFACE, AA_LARGE],
+    ['club ink on the card surface', '#15191b', CLUB_SURFACE, AA_TEXT],
+    ['club ink on the page', '#15191b', CLUB_PAPER, AA_TEXT],
+    ['club secondary ink on the card surface', '#3d4744', CLUB_SURFACE, AA_TEXT],
+    ['club secondary ink on the page', '#3d4744', CLUB_PAPER, AA_TEXT],
+    ['primary green on the card surface, the primary label', '#1f4d3a', CLUB_SURFACE, AA_TEXT],
+    ['primary green on the page', '#1f4d3a', CLUB_PAPER, AA_TEXT],
+    ['primary-strong, the outline button label', '#163a2b', CLUB_SURFACE, AA_TEXT],
+    ['primary-strong on the page', '#163a2b', CLUB_PAPER, AA_TEXT],
+    ['club error, the field error text', '#a8341f', CLUB_SURFACE, AA_TEXT],
+    ['club error on the page', '#a8341f', CLUB_PAPER, AA_TEXT],
+    ['club error on its tint, the empty stock badge', '#a8341f', ERROR_TINT, AA_TEXT],
+    ['club success, the earned amount', '#1c6b45', CLUB_SURFACE, AA_TEXT],
+    ['club success on its tint, the stock badge', '#1c6b45', SUCCESS_TINT, AA_TEXT],
+    ['club accent-strong amber, the reached rung marker', '#8a5a00', CLUB_SURFACE, AA_LARGE],
     // The focus ring, measured on both backgrounds it can land on.
     ['club focus ring on the card surface', '#1e67b1', CLUB_SURFACE, AA_LARGE],
     ['club focus ring on the page', '#1e67b1', CLUB_PAPER, AA_LARGE],
@@ -381,6 +394,9 @@ describe('Stage 6 club-barrio contrast floor', () => {
     expect(contrastRatio('#9e9994', CLUB_SURFACE)).toBeLessThan(AA_TEXT);
     expect(contrastRatio('#9e9994', CLUB_PAPER)).toBeLessThan(AA_TEXT);
     expect(contrastRatio('#299236', CLUB_SURFACE)).toBeLessThan(AA_TEXT);
+    // And the dashboard's yellow, which is why it is a fill and never a
+    // foreground or the focus ring here.
+    expect(contrastRatio('#f2c230', CLUB_PAPER)).toBeLessThan(AA_LARGE);
 
     // And so `.customer-web` must actually remap all four. Amber was a text
     // colour in three rules — the active history filter, the reward cost and the
@@ -388,15 +404,16 @@ describe('Stage 6 club-barrio contrast floor', () => {
     // decide something.
     const scope = /\.customer-web\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
 
-    expect(scope).toMatch(/--brand-500:\s*var\(--club-cherry\)/);
+    expect(scope).toMatch(/--brand-500:\s*var\(--club-primary\)/);
+    expect(scope).toMatch(/--error:\s*var\(--club-error\)/);
     expect(scope).toMatch(/--brand-50:\s*var\(--club-paper\)/);
     expect(scope).toMatch(/--text-muted:\s*var\(--club-ink-soft\)/);
     expect(scope).toMatch(/--success:\s*var\(--club-success\)/);
   });
 
   it('reaches 3:1 for a disabled button label rather than 2:1', () => {
-    // `.btn:disabled` was 0.5 alpha over the page, which composited the cherry
-    // label down to 2.25:1 — the "Registrando…" and "Entrando…" labels were
+    // `.btn:disabled` was 0.5 alpha over the page, which composited the primary
+    // fill down to near the page — the "Registrando…" and "Entrando…" labels were
     // unreadable while the request they describe was in flight. Inactive
     // controls are exempt from 1.4.3, but a label nobody can read is not a
     // working affordance, so the floor is asserted anyway.
@@ -404,9 +421,9 @@ describe('Stage 6 club-barrio contrast floor', () => {
 
     expect(opacity).toBeGreaterThanOrEqual(0.7);
 
-    // Cherry at that alpha, over the page background.
+    // The primary green at that alpha, over the page background.
     const paper = [1, 3, 5].map((offset) => parseInt(CLUB_PAPER.slice(offset, offset + 2), 16));
-    const composited = `#${[169, 54, 43]
+    const composited = `#${[31, 77, 58]
       .map((channel, index) =>
         Math.round(channel * opacity + paper[index] * (1 - opacity))
           .toString(16)
@@ -416,6 +433,20 @@ describe('Stage 6 club-barrio contrast floor', () => {
 
     expect(contrastRatio(composited, CLUB_PAPER)).toBeGreaterThanOrEqual(AA_LARGE);
   });
+});
+
+describe('club button shape', () => {
+  it.each(['.btn', '.club-qr-dock__button', '.club-profile__logout'])(
+    '%s is a pill, like the dashboard buttons',
+    (selector) => {
+      const radii = [...ruleBody(selector).matchAll(/border-radius:\s*([^;]+);/g)].map(
+        (match) => match[1].trim(),
+      );
+
+      expect(radii.length, `${selector} sets no border-radius`).toBeGreaterThan(0);
+      expect(radii.every((radius) => radius === 'var(--radius-full)')).toBe(true);
+    },
+  );
 });
 
 describe('Stage 6 club-barrio responsive floor', () => {

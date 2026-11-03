@@ -99,7 +99,8 @@ a {
   padding: 14px 0;
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
-  border-radius: var(--radius-lg);
+  /* A pill, the dashboard's button shape: one brand, one button. */
+  border-radius: var(--radius-full);
   border: none;
   cursor: pointer;
   font-family: inherit;
@@ -116,12 +117,12 @@ a {
 /**
  * Disabled, at 0.7 rather than the usual 0.5.
  *
- * A disabled primary button is a cherry fill on the paper background, so the
- * label's contrast is whatever survives the alpha compositing. At 0.5 it
- * measures 2.25:1 — the "Registrando…" and "Entrando…" labels were
- * effectively unreadable while the request was in flight, which is the one
- * moment the user most needs to read them. At 0.7 the same label measures
- * 3.25:1, clearing the 3:1 bar for a non-text indicator and legible in
+ * A disabled primary button is a green fill on the paper background, so the
+ * label's contrast is whatever survives the alpha compositing. At 0.5 the
+ * fill measures 2.55:1 against the page — the "Registrando…" and "Entrando…"
+ * buttons all but vanish while the request is in flight, which is the one
+ * moment the user most needs to read them. At 0.7 it measures 4.10:1,
+ * clearing the 3:1 bar for a non-text indicator and legible in
  * practice. The state itself is never carried by this alpha alone: every
  * disabled button also changes its own label.
  */
@@ -333,13 +334,10 @@ a {
   margin-top: 8px;
 }
 
-/* The club's own dark red rather than the legacy `--error`. Both clear AA here
-   (cherry-dark is 9.08:1 on the paper, `--error` is 4.89:1), so this is palette
-   consistency, not a contrast fix: the hover on the one button that sits
-   directly on the page background should not be the only design-system red on
-   screen. */
+/* The primary's strong tone (11.99:1 on the paper). Logging out is not an
+   error, so the hover does not borrow the error red. */
 .logout-btn:hover {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
 }
 
 /* --- Loading --- */
@@ -656,24 +654,46 @@ a {
 }
 
 /* ========================================
-   Stage 0 — Club Barrio Foundation
+   Stage 0 — Club Foundation
    ======================================== */
+
+/**
+ * One brand across the product.
+ *
+ * The values are the dashboard's and the landing page's own palette
+ * (`apps/dashboard/src/app/globals.css`): green primary, yellow accent, ink on
+ * paper. The `--club-*` names stay because ~190 rules read them; only the four
+ * names that described a colour (cherry, gold) were renamed to their role.
+ *
+ * Two deliberate departures from the dashboard, both measured:
+ *
+ *   - Focus stays blue. The dashboard's yellow ring measures 1.60:1 on the
+ *     paper, under the 3:1 a focus indicator needs; `#1e67b1` is 5.53:1.
+ *   - Yellow is a fill, never a foreground. Anything that carries information
+ *     as colour (the reached rung, the progress bar) uses `--club-accent-strong`,
+ *     the dashboard's own `--warning` amber, at 5.67:1 on the paper.
+ *   - Status text is one step darker. The dashboard's `#c8412e` and `#2e7d4f`
+ *     fall to 4.24:1 and 4.34:1 on their own tints, and the stock badges put
+ *     text there. The error is the dashboard's `--error-hover` (5.67:1 on its
+ *     tint); success keeps `#1c6b45` (5.57:1).
+ */
 .customer-web {
-  --club-ink: #27201d;
-  --club-ink-soft: #6f625b;
-  --club-paper: #f3eee5;
-  --club-surface: #fffdf7;
-  --club-cherry: #a9362b;
-  --club-cherry-dark: #74231d;
-  --club-gold: #c38a35;
-  --club-gold-strong: #8a5f1f;
+  --club-ink: #15191b;
+  --club-ink-soft: #3d4744;
+  --club-paper: #fafaf7;
+  --club-surface: #ffffff;
+  --club-primary: #1f4d3a;
+  --club-primary-strong: #163a2b;
+  --club-accent: #f2c230;
+  --club-accent-strong: #8a5a00;
   --club-success: #1c6b45;
-  --club-line: rgba(39, 32, 29, 0.16);
-  --club-line-soft: rgba(39, 32, 29, 0.09);
+  --club-error: #a8341f;
+  --club-line: rgba(21, 25, 27, 0.16);
+  --club-line-soft: rgba(21, 25, 27, 0.09);
   --club-focus: #1e67b1;
-  --club-radius: 18px;
+  --club-radius: 14px;
   --club-space-unit: var(--space-1);
-  --club-shadow-quiet: 0 8px 24px rgba(39, 32, 29, 0.08);
+  --club-shadow-quiet: 0 8px 24px rgba(21, 25, 27, 0.08);
   --club-transition-fast: var(--transition-fast);
   --club-ease-out: var(--ease-out);
   --club-font-body: var(--font-body), system-ui, sans-serif;
@@ -682,23 +702,11 @@ a {
   --font-display: var(--club-font-display);
 
   /**
-   * The three design-system neutrals that cannot carry text on the club
-   * surfaces, remapped to the club ink scale rather than to a darker shade of
-   * their own. Measured against `--club-surface` / `--club-paper`:
-   *
-   *   --text-muted     2.78:1 / 2.49:1   FAIL  movement date, balance, logout
-   *   --success        3.93:1 / 3.68:1   FAIL  earned points, the stock badge
-   *   --text-secondary 5.65:1            pass  kept anyway, see below
-   *
-   * The first two fail WCAG AA's 4.5:1 for body text, and both are ordinary
-   * text: a movement's date is 12px, the balance under it is 11px, and the
-   * logout label is a button. `--text-secondary` clears the bar on its own and
-   * is remapped only so the site has exactly one secondary ink instead of two
-   * near-identical ones.
-   *
-   * Remapping the token, rather than writing a club override per rule, is what
-   * fixes the legacy `.movement-*` classes that survived the redesign and keeps
-   * the next component from having to know any of this.
+   * The design-system neutrals that cannot carry text here, remapped to the
+   * club ink scale. The design system's muted stone measures 2.78:1 on white
+   * and its success green 3.93:1, both under WCAG AA's 4.5:1 for body text, and
+   * both are ordinary text: a movement's date, the balance, the earned amount.
+   * `--text-secondary` is remapped only so the site has one secondary ink.
    */
   --text-muted: var(--club-ink-soft);
   --text-secondary: var(--club-ink-soft);
@@ -707,19 +715,36 @@ a {
   /**
    * No design-system amber survives in the customer web.
    *
-   * `--brand-500` resolves to `#cf8a00`, which measures 2.83:1 on the club
-   * surface, 2.49:1 on the paper and 2.77:1 on its own `--brand-50` tint. As
-   * body text that is a failure three times over, and it is used as text three
-   * times: the active history filter, the reward's cost and the remaining
-   * balance. All three are figures a customer reads to make a decision.
-   *
-   * Mapping the amber onto the club's own cherry (6.35:1) fixes the contrast
-   * and the palette leak together. The two rules that were already overridden in
-   * club colours — the primary and the outline button — are unaffected.
+   * `--brand-500` resolves to `#cf8a00`, 2.83:1 on white, and it is a text
+   * colour in three rules: the active history filter, the reward's cost and the
+   * remaining balance. Mapping it onto the primary green (9.21:1 on the paper)
+   * fixes the contrast and keeps the brand single.
    */
-  --brand-500: var(--club-cherry);
-  --brand-600: var(--club-cherry-dark);
+  --brand-500: var(--club-primary);
+  --brand-600: var(--club-primary-strong);
   --brand-50: var(--club-paper);
+
+  /**
+   * The rest of the semantic layer, so no status colour falls through to the
+   * design system's oklch set and becomes a red or a green that exists in
+   * neither brand. Values are the dashboard's.
+   */
+  --error: var(--club-error);
+  --error-bg: #fbeae6;
+  --error-border: #f0c2b8;
+  --border-error: var(--club-error);
+  --success-bg: #e4f1e8;
+  --success-border: #b7d9c3;
+  --warning: var(--club-accent-strong);
+  --warning-bg: #fdf4d3;
+  --warning-border: #e8cf72;
+  --border: #dce0d8;
+  --border-light: #eef1ec;
+  --border-input: #c9cfc6;
+  --border-focus: var(--club-focus);
+  --surface-page: var(--club-paper);
+  --surface-card: var(--club-surface);
+  --surface-input: var(--club-surface);
 
   color: var(--club-ink);
   background: var(--club-paper);
@@ -770,16 +795,16 @@ a {
 
 .customer-web .btn--primary {
   color: var(--club-surface);
-  background: var(--club-cherry);
+  background: var(--club-primary);
 }
 
 .customer-web .btn--primary:hover {
-  background: var(--club-cherry-dark);
+  background: var(--club-primary-strong);
 }
 
 .customer-web .btn--outline {
-  color: var(--club-cherry-dark);
-  border-color: var(--club-cherry);
+  color: var(--club-primary-strong);
+  border-color: var(--club-primary);
 }
 
 .customer-web :where(a, button, input, select, textarea):focus-visible {
@@ -808,7 +833,7 @@ a {
  * site's own colour.
  */
 .customer-web .input:focus {
-  border-color: var(--club-cherry);
+  border-color: var(--club-primary);
 }
 
 .customer-web .input:focus-visible,
@@ -846,7 +871,7 @@ a {
 }
 
 .club-back-link:hover {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
 }
 
 .club-status {
@@ -862,7 +887,7 @@ a {
 
 .club-status--error {
   border: 1px solid var(--club-line);
-  border-left: 3px solid var(--club-cherry);
+  border-left: 3px solid var(--error);
   border-radius: var(--club-radius);
   background: var(--club-surface);
 }
@@ -871,7 +896,7 @@ a {
   width: 1.5rem;
   height: 1.5rem;
   border: 2px solid var(--club-line);
-  border-top-color: var(--club-cherry);
+  border-top-color: var(--club-primary);
   border-radius: var(--radius-full);
   animation: club-status-spin 800ms linear infinite;
 }
@@ -968,7 +993,7 @@ a {
   align-items: center;
   gap: var(--space-3);
   margin: 0 0 var(--space-4);
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-sm);
   font-weight: var(--font-bold);
   letter-spacing: 0.02em;
@@ -977,7 +1002,7 @@ a {
 .club-entry__eyebrow::before {
   width: var(--space-6);
   height: 2px;
-  background: var(--club-cherry);
+  background: var(--club-primary);
   content: '';
   flex: 0 0 auto;
 }
@@ -1065,9 +1090,9 @@ a {
   flex-direction: column;
   gap: var(--space-2);
   margin: var(--space-6) auto;
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   background: var(--club-paper);
-  border: 2px solid var(--club-cherry);
+  border: 2px solid var(--club-primary);
   border-radius: var(--radius-full);
   transform: rotate(-3deg);
 }
@@ -1075,7 +1100,7 @@ a {
 .club-qr-explainer__stamp::before {
   position: absolute;
   inset: var(--space-2);
-  border: 1px solid var(--club-gold);
+  border: 1px solid var(--club-accent);
   border-radius: inherit;
   content: '';
 }
@@ -1108,7 +1133,7 @@ a {
 }
 
 .club-qr-explainer__step-number {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-xs);
   font-weight: var(--font-bold);
 }
@@ -1134,7 +1159,7 @@ a {
 }
 
 .club-qr-explainer__step-icon {
-  color: var(--club-cherry);
+  color: var(--club-primary);
 }
 
 .club-qr-explainer__note {
@@ -1210,7 +1235,7 @@ a {
 
 .club-register__eyebrow {
   margin: 0 0 var(--space-3);
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-sm);
   font-weight: var(--font-bold);
   letter-spacing: 0.02em;
@@ -1242,7 +1267,7 @@ a {
   color: var(--club-ink);
   background: var(--club-surface);
   border: 1px solid var(--club-line);
-  border-left: 3px solid var(--club-cherry);
+  border-left: 3px solid var(--club-primary);
   border-radius: var(--club-radius);
   box-shadow: var(--club-shadow-quiet);
 }
@@ -1337,7 +1362,7 @@ a {
 
 .club-register__field .error-text {
   margin-top: var(--space-1);
-  color: var(--club-cherry-dark);
+  color: var(--error);
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
 }
@@ -1353,7 +1378,7 @@ a {
   display: flex;
   min-height: 44px;
   align-items: center;
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   cursor: pointer;
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
@@ -1392,7 +1417,7 @@ a {
 }
 
 .club-register__legal a {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
 }
 
 .club-register__status {
@@ -1408,7 +1433,7 @@ a {
 .club-register__status--error,
 .club-register__status--partial,
 .club-register__status--missing {
-  border-left-color: var(--club-cherry);
+  border-left-color: var(--error);
 }
 
 .club-register__status strong {
@@ -1480,7 +1505,7 @@ a {
   width: 1.15rem;
   height: 1.15rem;
   margin: 0;
-  accent-color: var(--club-cherry);
+  accent-color: var(--club-primary);
 }
 
 .club-consent__copy {
@@ -1559,7 +1584,7 @@ a {
 
 .club-login__eyebrow {
   margin: 0 0 var(--space-3);
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-sm);
   font-weight: var(--font-bold);
   letter-spacing: 0.02em;
@@ -1591,7 +1616,7 @@ a {
   color: var(--club-ink);
   background: var(--club-surface);
   border: 1px solid var(--club-line);
-  border-left: 3px solid var(--club-cherry);
+  border-left: 3px solid var(--club-primary);
   border-radius: var(--club-radius);
   box-shadow: var(--club-shadow-quiet);
 }
@@ -1661,7 +1686,7 @@ a {
 }
 
 .club-login__status--error {
-  border-left-color: var(--club-cherry);
+  border-left-color: var(--error);
 }
 
 .club-login__status strong {
@@ -1696,7 +1721,7 @@ a {
 }
 
 .club-login__switch a {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-weight: var(--font-semibold);
 }
 
@@ -1821,7 +1846,7 @@ a {
 /* A step below the balance. */
 .club-pass__tier {
   margin: 0 0 var(--space-4);
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-base);
   font-weight: var(--font-bold);
   text-wrap: balance;
@@ -1961,29 +1986,29 @@ a {
    label carries it for assistive tech, so nothing depends on colour alone. */
 
 /**
- * `--club-gold-strong`, not `--club-gold`.
+ * `--club-accent-strong`, not `--club-accent`.
  *
- * The plain gold measures 2.95:1 on the club surface, under the 3:1 a
- * graphical indicator needs. The stronger tone is 5.52:1 and keeps the same
- * hue, so a reached rung still reads as gold. `--club-gold` itself is now only
- * used for decoration that carries no information — the stamp's inner ring.
+ * The yellow accent measures 1.68:1 on the club surface, under the 3:1 a
+ * graphical indicator needs. The strong amber is 5.93:1 and stays in the same
+ * warm family. `--club-accent` itself is only used for decoration that carries
+ * no information — the stamp's inner ring.
  */
 .club-ladder__rung--reached .club-ladder__rung-marker {
-  background: var(--club-gold-strong);
-  border-color: var(--club-gold-strong);
+  background: var(--club-accent-strong);
+  border-color: var(--club-accent-strong);
 }
 
 .club-ladder__rung--next {
-  border-color: var(--club-cherry);
+  border-color: var(--club-primary);
   border-style: dashed;
 }
 
 .club-ladder__rung--next .club-ladder__rung-marker {
-  border-color: var(--club-cherry);
+  border-color: var(--club-primary);
 }
 
 .club-ladder__rung--next .club-ladder__rung-state {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-weight: var(--font-semibold);
 }
 
@@ -1994,12 +2019,12 @@ a {
 }
 
 .club-ladder__rung--current .club-ladder__rung-marker {
-  background: var(--club-cherry);
-  border-color: var(--club-cherry);
+  background: var(--club-primary);
+  border-color: var(--club-primary);
 }
 
 .club-ladder__rung--current .club-ladder__rung-state {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-weight: var(--font-bold);
 }
 
@@ -2079,7 +2104,7 @@ a {
   width: 1.25rem;
   height: 1.25rem;
   border: 2px solid var(--club-line);
-  border-top-color: var(--club-cherry);
+  border-top-color: var(--club-primary);
   border-radius: var(--radius-full);
   animation: club-status-spin 800ms linear infinite;
 }
@@ -2144,8 +2169,8 @@ a {
   border-bottom: none;
 }
 
-/* Not gold. This glyph sits on the club surface, where `--club-gold` measures
-   2.95:1 — below AA for 16px text. The sign is decorative and already carries
+/* Not yellow. This glyph sits on the club surface, where `--club-accent`
+   measures 1.68:1 — below AA for 16px text. The sign is decorative and already carries
    the ink the rest of the row uses; the amount beside it is what states the
    direction, and the spoken label states it for a screen reader. */
 .club-activity__sign {
@@ -2157,7 +2182,7 @@ a {
 }
 
 .club-activity__sign--debit {
-  color: var(--club-cherry);
+  color: var(--club-primary);
 }
 
 .club-activity__body {
@@ -2553,28 +2578,28 @@ a {
 
 /* Customer profile redesign (Phase 1) */
 .club-profile { display: grid; gap: 1.25rem; }
-.club-identity-card { display: flex; gap: 1rem; align-items: center; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; }
+.club-identity-card { display: flex; gap: 1rem; align-items: center; padding: 1.25rem; border: 1px solid var(--club-line); border-radius: var(--club-radius); }
 .club-identity-card__body { min-width: 0; }
-.club-identity-card__avatar { width: 56px; height: 56px; border-radius: 50%; background: #f3f4f6; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 1.1rem; }
+.club-identity-card__avatar { width: 56px; height: 56px; border-radius: 50%; background: var(--club-paper); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 1.1rem; }
 .club-identity-card__name { margin: 0; font-size: 1.25rem; font-weight: 600; }
-.club-identity-card__tier { display: inline-block; font-size: 0.8rem; color: #6b7280; margin-top: 0.15rem; }
+.club-identity-card__tier { display: inline-block; font-size: 0.8rem; color: var(--club-ink-soft); margin-top: 0.15rem; }
 .club-identity-card__balance { margin: 0.5rem 0 0; font-size: 1.5rem; font-weight: 700; }
 .club-identity-card__balance-value { font-variant-numeric: tabular-nums; }
-.club-identity-card__balance-unit { font-size: 0.9rem; font-weight: 400; color: #6b7280; }
-.club-identity-card__member-since { margin: 0.25rem 0 0; font-size: 0.8rem; color: #9ca3af; }
+.club-identity-card__balance-unit { font-size: 0.9rem; font-weight: 400; color: var(--club-ink-soft); }
+.club-identity-card__member-since { margin: 0.25rem 0 0; font-size: 0.8rem; color: var(--club-ink-soft); }
 .club-purchase-timeline__title, .club-personal-data__title { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.75rem; }
 .club-purchase-timeline__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
-.club-purchase-timeline__row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid #f3f4f6; }
+.club-purchase-timeline__row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--club-line-soft); }
 .club-purchase-timeline__sign { width: 1.25rem; text-align: center; font-weight: 600; }
 .club-purchase-timeline__info { flex: 1; display: flex; flex-direction: column; }
 .club-purchase-timeline__note { font-size: 0.95rem; }
-.club-purchase-timeline__date { font-size: 0.8rem; color: #9ca3af; }
+.club-purchase-timeline__date { font-size: 0.8rem; color: var(--club-ink-soft); }
 .club-purchase-timeline__points { font-weight: 600; }
-.club-purchase-timeline__balance { font-size: 0.85rem; color: #6b7280; }
-.club-purchase-timeline__empty { color: #9ca3af; font-size: 0.9rem; }
+.club-purchase-timeline__balance { font-size: 0.85rem; color: var(--club-ink-soft); }
+.club-purchase-timeline__empty { color: var(--club-ink-soft); font-size: 0.9rem; }
 .club-personal-data__list { display: grid; gap: 0.5rem; }
-.club-personal-data__row { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid #f3f4f6; }
-.club-personal-data__row dt { color: #6b7280; font-size: 0.9rem; }
+.club-personal-data__row { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid var(--club-line-soft); }
+.club-personal-data__row dt { color: var(--club-ink-soft); font-size: 0.9rem; }
 .club-personal-data__row dd { margin: 0; font-weight: 500; }
 .club-personal-data__header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
 .club-personal-data__header .club-personal-data__title { margin: 0; }
@@ -2585,7 +2610,7 @@ a {
 .club-personal-data__actions .btn { width: auto; flex: 1 1 10rem; }
 .club-personal-data__toast { margin: 0.5rem 0 0; color: var(--success); font-weight: 600; }
 .club-personal-data__toast:empty { display: none; }
-.club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; cursor: pointer; }
+.club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid var(--club-line); border-radius: var(--radius-full); background: var(--club-surface); cursor: pointer; }
 .club-delete-account__open { margin-top: 0.5rem; min-height: 44px; padding: 0.5rem 0; border: 0; background: none; color: var(--error); font-weight: 600; text-decoration: underline; cursor: pointer; }
 .club-delete-account { margin-top: 1rem; padding: 1rem; border: 1px solid var(--error-border); border-radius: 12px; background: var(--error-bg); }
 .club-delete-account__title { margin: 0 0 0.5rem; font-size: 1.05rem; }
@@ -2619,7 +2644,7 @@ a {
   color: var(--club-surface);
   background: var(--club-ink);
   border: 0;
-  border-radius: var(--club-radius);
+  border-radius: var(--radius-full);
   font-family: inherit;
   font-size: var(--text-base);
   font-weight: var(--font-bold);
@@ -2651,7 +2676,7 @@ a {
   padding: var(--space-3) var(--space-5) calc(var(--space-6) + env(safe-area-inset-bottom));
   color: var(--club-ink);
   text-align: center;
-  background: #ffffff;
+  background: var(--club-surface);
   border-radius: calc(var(--club-radius) + 8px) calc(var(--club-radius) + 8px) 0 0;
   animation: club-qr-sheet-rise 220ms var(--club-ease-out) both;
 }
@@ -2722,7 +2747,7 @@ a {
 }
 
 .club-redemption__all {
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
 }
@@ -2773,12 +2798,12 @@ a {
 }
 
 .club-redemption__bar::-webkit-progress-value {
-  background: var(--club-cherry);
+  background: var(--club-primary);
   border-radius: var(--radius-full);
 }
 
 .club-redemption__bar::-moz-progress-bar {
-  background: var(--club-cherry);
+  background: var(--club-primary);
   border-radius: var(--radius-full);
 }
 
@@ -2793,7 +2818,7 @@ a {
   min-width: 5.5rem;
   margin: 0;
   padding: var(--space-4) var(--space-3);
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-base);
   font-weight: var(--font-bold);
   font-variant-numeric: tabular-nums;
@@ -2804,9 +2829,9 @@ a {
 .club-purchase-timeline__nudge {
   margin: var(--space-3) 0 0;
   padding: var(--space-2) var(--space-3);
-  color: var(--club-cherry-dark);
+  color: var(--club-primary-strong);
   font-size: var(--text-sm);
-  background: color-mix(in srgb, var(--club-cherry) 8%, transparent);
+  background: color-mix(in srgb, var(--club-primary) 8%, transparent);
   border-radius: calc(var(--club-radius) - 8px);
 }
 
@@ -2874,12 +2899,12 @@ a {
 }
 
 .club-identity-card__bar::-webkit-progress-value {
-  background: var(--club-gold);
+  background: var(--club-accent-strong);
   border-radius: var(--radius-full);
 }
 
 .club-identity-card__bar::-moz-progress-bar {
-  background: var(--club-gold);
+  background: var(--club-accent-strong);
   border-radius: var(--radius-full);
 }
 
