@@ -41,6 +41,17 @@
   // instead. See `schedulePassReconcile` for why the projection must not sit on
   // the response's critical path, and the feature's own notes for why a consumer
   // is still the better long-term shape if the account allows one.
+  // Bounds `POST /v1/loyalty/passes/resolve` per tenant and terminal, so a
+  // compromised terminal cannot walk member codes to learn who is a member. A
+  // real till scans a few cards a minute; over the limit the route answers
+  // `known: false` and the sale goes on. See `allowResolveLookup`.
+  "ratelimits": [
+    {
+      "name": "RESOLVE_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
   "services": [
     {
       "binding": "WALLET",
