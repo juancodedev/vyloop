@@ -49,6 +49,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { createLocationsSource } from './locations-source';
 import type { LocationsSource } from './locations-source';
 import type {
+  CardTokenRotationWrite,
   ConsentingPassRow,
   InactivityCandidateRow,
   PassCallbackClaim,
@@ -59,6 +60,7 @@ import type {
   PassReconciliationUpdate,
   PassTrackingUpdate,
   ProgramInsert,
+  StoredCardToken,
   WalletCustomerRow,
   WalletPassRow,
   WalletProgramRow,
@@ -130,6 +132,8 @@ const CUSTOMER_COLUMNS = {
   fullName: customers.fullName,
   memberCode: customers.memberCode,
   currentTierId: customers.currentTierId,
+  cardTokenVersion: customers.cardTokenVersion,
+  cardTokenHash: customers.cardTokenHash,
 };
 
 const PROGRAM_COLUMNS = {
@@ -445,6 +449,78 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
       const rows = (result as { rows?: Array<{ member_code?: string | null }> }).rows ?? [];
       const stored = rows[0]?.member_code;
       return typeof stored === 'string' && stored !== '' ? stored : null;
+    },
+
+    /**
+     * The card-token compare-and-set, the same shape as `claimMemberCode`.
+     *
+     * Version 1 lands only while both columns are NULL, so a lazy assignment can
+     * never overwrite a rotated version. `RETURNING` gives the post-condition.
+     * The partial unique index on `(business_id, card_token_hash)` is the
+     * backstop against two customers ever sharing a hash.
+     */
+    async claimCardToken(
+      customerId: string,
+      tenantId: string,
+      hash: string,
+    ): Promise<StoredCardToken | null> {
+      const result = await db.execute(sql`
+        UPDATE customers
+           SET card_token_version = 1, card_token_hash = ${hash}, updated_at = now()
+         WHERE id = ${customerId}::uuid
+           AND business_id = ${tenantId}::uuid
+           AND deleted_at IS NULL
+           AND card_token_version IS NULL
+           AND card_token_hash IS NULL
+        RETURNING card_token_version, card_token_hash
+      `);
+
+      const rows =
+        (result as { rows?: Array<{ card_token_version?: unknown; card_token_hash?: unknown }> })
+          .rows ?? [];
+      const version = Number(rows[0]?.card_token_version);
+      const stored = rows[0]?.card_token_hash;
+      if (!Number.isInteger(version) || version < 1) return null;
+      if (typeof stored !== 'string' || stored === '') return null;
+      return { version, hash: stored };
+    },
+
+    /**
+     * Rotate and audit in **one statement**.
+     *
+     * A data-modifying CTE: the `UPDATE` and the audit `INSERT` commit or fail
+     * together, inside the tenant transaction `createTenantWalletStore` opens,
+     * so a rotation can never move the version without its audit row or leave
+     * an audit row for a rotation that did not happen.
+     *
+     * `card_token_version IS NOT DISTINCT FROM expected` makes it a
+     * compare-and-set (NULL-safe for a legacy customer): two concurrent
+     * rotations cannot both claim the same next version. The `SET` list names
+     * only the two token columns and `updated_at` — never the tier, the
+     * identity or anything the ledger owns.
+     */
+    async rotateCardToken(write: CardTokenRotationWrite): Promise<boolean> {
+      const result = await db.execute(sql`
+        WITH rotated AS (
+          UPDATE customers
+             SET card_token_version = ${write.newVersion},
+                 card_token_hash = ${write.newHash},
+                 updated_at = now()
+           WHERE id = ${write.customerId}::uuid
+             AND business_id = ${write.tenantId}::uuid
+             AND deleted_at IS NULL
+             AND card_token_version IS NOT DISTINCT FROM ${write.expectedVersion}::integer
+          RETURNING id, business_id
+        )
+        INSERT INTO customer_credential_revocations
+          (business_id, customer_id, actor_user_id, reason, previous_version, new_version)
+        SELECT business_id, id, ${write.actorUserId}::uuid, ${write.reason},
+               ${write.expectedVersion}::integer, ${write.newVersion}
+          FROM rotated
+        RETURNING new_version
+      `);
+
+      return countRows(result) > 0;
     },
 
     /**

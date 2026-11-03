@@ -82,8 +82,9 @@ describe('Database schema', () => {
     // the consent uniqueness, the three push subscription indexes, the two
     // the proximity work added (the venue interaction index and the
     // subscription freshness index), the pos_terminals listing index, and the
-    // reward_branches venue index, plus the two wallet-message indexes.
-    expect(db.allIndexes.length).toBe(27);
+    // reward_branches venue index, plus the two wallet-message indexes, plus the
+    // card-token lookup and the credential revocation audit index.
+    expect(db.allIndexes.length).toBe(29);
   });
 
   it('should export the wallet domain tables', async () => {
@@ -130,6 +131,8 @@ describe('Database schema', () => {
       idxWalletMessageDeliveriesMessage: 'idx_wallet_message_deliveries_message',
       idxPosTerminalsBusiness: 'idx_pos_terminals_business',
       idxPushCampaignsBusiness: 'idx_push_campaigns_business',
+      idxCustomersCardTokenHash: 'uq_customers_business_card_token_hash',
+      idxCustomerCredentialRevocationsCustomer: 'idx_customer_credential_revocations_customer',
     };
 
     for (const [binding, sqlName] of Object.entries(expectedNames)) {
@@ -370,6 +373,7 @@ describe('Database schema', () => {
       'churnPredictions',
       'consents',
       'crossLoyaltyAlliances',
+      'customerCredentialRevocations',
       'customerEvents',
       'customerWalletPasses',
       'customers',

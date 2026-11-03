@@ -29,11 +29,11 @@ import {
   type ParsedConsent,
 } from '@vyloop/types';
 import { eq, and, isNull, like, or, count, desc, asc, sum, gt, sql, type SQL } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 // import { HTTPException } from 'hono/http-exception';
 
 import { deleteCustomerAccount } from './account-deletion';
-import type { Bindings } from './helpers';
+import type { Bindings, RotateCardTokenResult } from './helpers';
 import {
   extractAuthHeaders,
   buildCustomerRegisteredEvent,
@@ -949,34 +949,57 @@ router.delete('/v1/customers/me', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Lookup by globalId: GET /v1/customers/by-global-id/:globalId
-// Used by POS to resolve QR scan data. Must be registered BEFORE :id.
+// Scanned credential lookups (POS camera)
+//
+//   GET /v1/customers/by-global-id/:globalId   legacy uuid barcode
+//   GET /v1/customers/by-card-token/:token     opaque, rotatable card token
+//
+// Both answer the same body on a hit and the same 404 on a miss, so a scanner
+// cannot tell a malformed, unknown or rotated credential apart. Must be
+// registered BEFORE :id.
 // ---------------------------------------------------------------------------
 
-router.get('/v1/customers/by-global-id/:globalId', async (c) => {
-  const auth = extractAuthHeaders(c);
-  const gate = requireOperatorRole(auth);
-  if (!gate.ok) {
-    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
-  }
-  const { businessId } = auth;
-  const globalId = c.req.param('globalId');
+/** The one not-found every scanned-credential lookup answers. */
+const SCANNED_CUSTOMER_NOT_FOUND = {
+  error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' },
+} as const;
+
+/** `vyc1.` + base64url (no padding) of a 32-byte HMAC. */
+const CARD_TOKEN_PATTERN = /^vyc1\.[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Lowercase hex SHA-256 of the full token string, prefix included. The
+ * database stores only this hash; the secret that derives tokens lives in the
+ * wallet worker, never here.
+ */
+async function hashCardToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+type CustomerRow = typeof customers.$inferSelect;
+
+/**
+ * Load the live customer that `match` names in `businessId`, with its balance
+ * and tier, and answer it in the POS shape. `accept` refuses a found row as if
+ * it did not exist.
+ */
+async function respondWithScannedCustomer(
+  c: Context<{ Bindings: Bindings }>,
+  businessId: string,
+  match: SQL,
+  accept: (customer: CustomerRow) => boolean = () => true,
+) {
   const db = createDb(c.env.DATABASE_URL);
 
   const loaded = await withTenantTransaction(db, { businessId }, async (tx) => {
     const [customer] = await tx
       .select()
       .from(customers)
-      .where(
-        and(
-          eq(customers.globalId, globalId),
-          eq(customers.businessId, businessId),
-          isNull(customers.deletedAt),
-        ),
-      )
+      .where(and(match, eq(customers.businessId, businessId), isNull(customers.deletedAt)))
       .limit(1);
 
-    if (!customer) return null;
+    if (!customer || !accept(customer)) return null;
 
     // Fetch current balance
     const [balanceRow] = await tx
@@ -999,20 +1022,14 @@ router.get('/v1/customers/by-global-id/:globalId', async (c) => {
   });
 
   if (!loaded) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Cliente no encontrado' } }, 404);
+    return c.json(SCANNED_CUSTOMER_NOT_FOUND, 404);
   }
 
   const { customer, balanceRow, tierRow } = loaded;
 
-  // Resolve tier
-  let tier: { id: string; name: string; multiplier: number } | null = null;
-  if (tierRow) {
-    tier = {
-      id: tierRow.id,
-      name: tierRow.name,
-      multiplier: Number(tierRow.multiplier),
-    };
-  }
+  const tier = tierRow
+    ? { id: tierRow.id, name: tierRow.name, multiplier: Number(tierRow.multiplier) }
+    : null;
 
   return c.json({
     data: {
@@ -1025,6 +1042,159 @@ router.get('/v1/customers/by-global-id/:globalId', async (c) => {
       tier,
     },
   });
+}
+
+router.get('/v1/customers/by-global-id/:globalId', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  // A customer who holds a card token is scanned by the token only: their uuid
+  // is no longer a credential, so it answers exactly like an unknown one.
+  return respondWithScannedCustomer(
+    c,
+    auth.businessId,
+    eq(customers.globalId, c.req.param('globalId')),
+    (customer) => !customer.cardTokenHash,
+  );
+});
+
+router.get('/v1/customers/by-card-token/:token', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+
+  const token = c.req.param('token');
+  if (!CARD_TOKEN_PATTERN.test(token)) {
+    return c.json(SCANNED_CUSTOMER_NOT_FOUND, 404);
+  }
+
+  return respondWithScannedCustomer(
+    c,
+    auth.businessId,
+    eq(customers.cardTokenHash, await hashCardToken(token)),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Revoke the scannable credential: POST /v1/customers/:id/card-token/rotate
+//
+// Bumps the card token through the wallet worker, which owns the secret and
+// the Google object. global_id and object_id are untouched.
+// ---------------------------------------------------------------------------
+
+const CARD_TOKEN_REASON_MIN = 3;
+const CARD_TOKEN_REASON_MAX = 500;
+
+router.post('/v1/customers/:id/card-token/rotate', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId, userId } = auth;
+  const customerId = c.req.param('id');
+
+  // Validated before the customer is looked up, so the answer to a bad reason
+  // says nothing about whether the customer exists.
+  let parsed: unknown = null;
+  try {
+    parsed = await c.req.json();
+  } catch {
+    parsed = null;
+  }
+  const rawReason =
+    parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as { reason?: unknown }).reason
+      : undefined;
+  const reason = typeof rawReason === 'string' ? rawReason.trim() : '';
+  if (reason.length < CARD_TOKEN_REASON_MIN || reason.length > CARD_TOKEN_REASON_MAX) {
+    return c.json(
+      {
+        error: {
+          code: 'CARD_TOKEN_REASON_REQUIRED',
+          message: `A reason of ${CARD_TOKEN_REASON_MIN} to ${CARD_TOKEN_REASON_MAX} characters is required to revoke the QR.`,
+        },
+      },
+      400,
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+  const owned = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(
+        and(
+          eq(customers.id, customerId),
+          eq(customers.businessId, businessId),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .limit(1),
+  );
+
+  const notFound = () =>
+    c.json({ error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' } }, 404);
+
+  if (owned.length === 0) return notFound();
+
+  const walletUnavailable = () =>
+    c.json(
+      {
+        error: {
+          code: 'WALLET_UNAVAILABLE',
+          message: 'The wallet service could not rotate the QR. Try again.',
+        },
+      },
+      502,
+    );
+
+  // The error from the binding is logged without its message: it may carry
+  // the customer identifiers, and none of it reaches the response.
+  let result: RotateCardTokenResult;
+  try {
+    const wallet = c.env.WALLET;
+    if (!wallet) {
+      console.error(`[customer] No WALLET service binding; card token for ${customerId} not rotated.`);
+      return walletUnavailable();
+    }
+    result = await wallet.rotateCardToken({
+      tenantId: businessId,
+      customerId,
+      actorUserId: userId,
+      reason,
+    });
+  } catch (err: unknown) {
+    console.error(
+      `[customer] Wallet rotateCardToken failed for customer ${customerId}:`,
+      err instanceof Error ? err.name : typeof err,
+    );
+    return walletUnavailable();
+  }
+
+  if (result.ok) {
+    return c.json({ data: { version: result.version, pass: result.pass } });
+  }
+  if (result.code === 'CUSTOMER_NOT_FOUND') return notFound();
+  if (result.code === 'PASS_UPDATE_FAILED') {
+    return c.json(
+      {
+        error: {
+          code: 'PASS_UPDATE_FAILED',
+          message:
+            'The QR was revoked, but the Wallet pass could not be confirmed. Revoke it again to retry.',
+        },
+      },
+      502,
+    );
+  }
+  return walletUnavailable();
 });
 
 // ---------------------------------------------------------------------------
@@ -1169,7 +1339,10 @@ router.get('/v1/customers/lookup', async (c) => {
       ? eq(customers.phone, value)
       : identifier === 'email'
         ? eq(customers.email, value)
-        : eq(customers.globalId, value);
+        : // A customer with a card token no longer answers to their uuid: the token
+          // is the credential, and the search box must agree with the scan route
+          // (`by-global-id`) or a revoked uuid QR keeps working when pasted here.
+          and(eq(customers.globalId, value), isNull(customers.cardTokenHash));
 
   const db = createDb(c.env.DATABASE_URL);
 

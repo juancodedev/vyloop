@@ -196,6 +196,42 @@
   color: var(--green);
 }
 
+/* Revoke QR */
+
+.revokeBox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: var(--bg-subtle);
+}
+
+.revokeLabel {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.revokeReason {
+  min-height: 4.5rem;
+  padding: 0.625rem 0.875rem;
+  resize: vertical;
+}
+
+.revokeHint {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.revokeActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .passBox {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border-light);

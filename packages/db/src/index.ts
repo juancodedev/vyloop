@@ -47,6 +47,7 @@ export {
   walletMessageDeliveries,
   tenantWalletPrograms,
   customerWalletPasses,
+  customerCredentialRevocations,
 } from './schema';
 
 // Re-export all type exports
@@ -194,6 +195,8 @@ export {
   idxWalletMessageDeliveriesMessage,
   idxPosTerminalsBusiness,
   idxPushCampaignsBusiness,
+  idxCustomersCardTokenHash,
+  idxCustomerCredentialRevocationsCustomer,
   indexByName,
   allIndexes,
 } from './indexes';

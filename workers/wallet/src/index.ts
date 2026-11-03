@@ -42,6 +42,8 @@ import { provisionTenantClass } from './provision';
 import type { ProvisionOutcome } from './provision';
 import { reconcilePass } from './reconcile';
 import type { ReconcileOutcome } from './reconcile';
+import { rotateCustomerCardToken } from './rotate-card-token';
+import type { RotateCardTokenInput, RotateCardTokenResult } from './rotate-card-token';
 import router, { WALLET_CALLBACK_PATH } from './routes';
 import { runScheduledSweep } from './sweep';
 
@@ -274,6 +276,8 @@ export * from './ids';
 export * from './issuance';
 export * from './jwt';
 export * from './member-code';
+export * from './card-token';
+export * from './rotate-card-token';
 export * from './object';
 export * from './provision';
 export * from './reconcile';
@@ -569,6 +573,40 @@ export async function expireCustomerPass(
 }
 
 // ---------------------------------------------------------------------------
+// Card-token rotation
+// ---------------------------------------------------------------------------
+
+/**
+ * Rotate a customer's scannable card token: the operator's "Revocar QR".
+ *
+ * ## Why a service binding, like `reconcileCustomer`
+ *
+ * The caller is the customer worker's operator route, and the rotation needs
+ * this worker's `CARD_TOKEN_SECRET` and Google service account. Only this worker
+ * holds the secret, so the derivation and the barcode patch both run here.
+ *
+ * ## Errors
+ *
+ * The two answers a caller can act on are typed: `CUSTOMER_NOT_FOUND`, and
+ * `PASS_UPDATE_FAILED`, which means the database already rotated (and audited)
+ * but Google did not confirm the new barcode. A database failure or a missing
+ * secret throws, before anything is written, like `reconcileCustomer`.
+ */
+export async function rotateCardToken(
+  input: RotateCardTokenInput,
+  env: WalletBindings,
+): Promise<RotateCardTokenResult> {
+  return rotateCustomerCardToken(
+    {
+      store: openTenantWalletStore(env.DATABASE_URL, input.tenantId),
+      client: googleWalletClientFor(env),
+      cardTokenSecret: env.CARD_TOKEN_SECRET,
+    },
+    input,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Nearby-locations sync trigger
 // ---------------------------------------------------------------------------
 
@@ -730,6 +768,7 @@ export default {
   scheduled,
   reconcileCustomer,
   expireCustomerPass,
+  rotateCardToken,
   syncLocations,
   provisionClass,
   deactivateInactivePasses,

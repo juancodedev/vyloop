@@ -57,11 +57,13 @@ describe('Stage 4 club-barrio pass contract', () => {
   });
 
   it('keeps the QR payload the POS scanner can actually read', () => {
-    // The dashboard matches /\/\c\/([a-f0-9-]+)\/i and resolves the captured
-    // id through /v1/customers/by-global-id/:globalId. A full URL or a
-    // custom scheme would scan as something and fail silently at the counter.
-    expect(qr).toMatch(/return `\/c\/\$\{globalId\}`;/);
-    expect(qr).not.toMatch(/https?:\/\/[^`]*\$\{globalId\}/);
+    // Exactly `/c/<card_token>` (resolved by the POS through
+    // /v1/customers/by-card-token/:token) or, for a legacy customer or a failed
+    // card call, `/c/<globalId>` (through /v1/customers/by-global-id/:globalId).
+    // A full URL or a custom scheme would scan as something and fail silently
+    // at the counter.
+    expect(qr).toMatch(/return `\/c\/\$\{cardToken \?\? globalId\}`;/);
+    expect(qr).not.toMatch(/https?:\/\/[^`]*\$\{(?:cardToken|globalId)/);
   });
 
   it('names the truth of the wallet state instead of staying silent about it', () => {

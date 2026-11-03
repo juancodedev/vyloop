@@ -299,6 +299,14 @@ class CountingStore implements WalletStore {
     this.calls.push('claimMemberCode');
     return null;
   }
+  async claimCardToken(): Promise<null> {
+    this.calls.push('claimCardToken');
+    return null;
+  }
+  async rotateCardToken(): Promise<boolean> {
+    this.calls.push('rotateCardToken');
+    return false;
+  }
   async recordPass(update: PassTrackingUpdate): Promise<void> {
     this.calls.push('recordPass');
     this.writes.push({ method: 'recordPass', value: update });

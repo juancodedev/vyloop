@@ -49,8 +49,22 @@ const posSource = readFileSync(
 function globalIdOf(decoded: string): string {
   const result: PassCodeResult = parsePassCode(decoded);
   expect(result.ok, `expected ${JSON.stringify(decoded)} to resolve`).toBe(true);
-  return result.ok ? result.globalId : '';
+  // Every uuid form is a `global-id`, never a card token: the two go to
+  // different endpoints, and a uuid sent as a token is a guaranteed miss.
+  expect(result.ok && result.kind).toBe('global-id');
+  return result.ok && result.kind === 'global-id' ? result.globalId : '';
 }
+
+/** The card token, or a thrown expectation if the parse refused. */
+function cardTokenOf(decoded: string): string {
+  const result: PassCodeResult = parsePassCode(decoded);
+  expect(result.ok, `expected ${JSON.stringify(decoded)} to resolve`).toBe(true);
+  expect(result.ok && result.kind).toBe('card-token');
+  return result.ok && result.kind === 'card-token' ? result.token : '';
+}
+
+/** A token of the shape `^vyc1\.[A-Za-z0-9_-]{43}$`, mixed case on purpose. */
+const TOKEN = `vyc1.${'Ab9_-'.repeat(8)}xYz`;
 
 const UUID = '879e76de-1f50-4afe-8b93-11949e9a9ae4';
 /** Built the way `objectIdFor` in `workers/wallet/src/ids.ts` builds it. */
@@ -67,10 +81,10 @@ describe('the barcode on the new pass', () => {
     // The issuer is 19 digits and the id is a uuid after `.member-`. A pattern
     // loose enough to grab the wrong side sends a real lookup for a number that
     // is not a customer.
-    const result = parsePassCode(`${ISSUER}.member-${UUID}`);
+    const globalId = globalIdOf(`${ISSUER}.member-${UUID}`);
 
-    expect(result.ok && result.globalId).not.toContain(ISSUER);
-    expect(result.ok && result.globalId).toHaveLength(36);
+    expect(globalId).not.toContain(ISSUER);
+    expect(globalId).toHaveLength(36);
   });
 
   it('survives a scanner that reads it in a different case', () => {
@@ -94,6 +108,43 @@ describe('the QR printed on cards that already exist', () => {
   it('resolves a bare id, which is what a pasted link reduces to', () => {
     expect(globalIdOf(UUID)).toBe(UUID);
   });
+});
+
+describe('the card token on new passes and the customer-web QR', () => {
+  it('resolves a bare token as a card token, not as a globalId', () => {
+    expect(cardTokenOf(TOKEN)).toBe(TOKEN);
+    expect(parsePassCode(TOKEN)).not.toHaveProperty('globalId');
+  });
+
+  it('resolves the /c/ link carrying a token', () => {
+    expect(cardTokenOf(`/c/${TOKEN}`)).toBe(TOKEN);
+    expect(cardTokenOf(`  /c/${TOKEN}  `)).toBe(TOKEN);
+  });
+
+  it('keeps the token case exactly as scanned', () => {
+    // base64url is case-sensitive: lowercasing it, as the uuid path does,
+    // would turn a valid token into an unknown one.
+    expect(cardTokenOf(TOKEN)).toMatch(/[A-Z]/);
+  });
+
+  const malformed = [
+    ['a token one character short', TOKEN.slice(0, -1)],
+    ['a token one character long', `${TOKEN}A`],
+    ['a token with padding', `${TOKEN.slice(0, -1)}=`],
+    ['a token with a character outside base64url', `${TOKEN.slice(0, -1)}+`],
+    ['another version prefix', TOKEN.replace('vyc1.', 'vyc2.')],
+    ['an upper-case prefix', TOKEN.replace('vyc1.', 'VYC1.')],
+    ['a token link with trailing junk', `/c/${TOKEN}/x`],
+    ['the prefix alone', 'vyc1.'],
+  ] as const;
+
+  for (const [label, decoded] of malformed) {
+    it(`refuses ${label}`, () => {
+      const result = parsePassCode(decoded);
+      expect(result.ok).toBe(false);
+      expect(Object.keys(result).sort()).toEqual(['ok', 'reason']);
+    });
+  }
 });
 
 describe('a code that is neither format', () => {
@@ -153,6 +204,20 @@ describe('the scanner and the search box agree', () => {
       expect(typed?.value).toBe(globalIdOf(code));
     });
   }
+
+  const tokenCodes: ReadonlyArray<readonly [string, string]> = [
+    ['a bare card token', TOKEN],
+    ['a token link', `/c/${TOKEN}`],
+  ];
+
+  for (const [label, code] of tokenCodes) {
+    it(`resolves ${label} to the same card token either way`, () => {
+      const typed = resolveLookupTarget(code);
+
+      expect(typed?.identifier).toBe('cardToken');
+      expect(typed?.value).toBe(cardTokenOf(code));
+    });
+  }
 });
 
 describe('what the page does with a decoded code', () => {
@@ -176,6 +241,11 @@ describe('what the page does with a decoded code', () => {
 
   it('sends the id the parser returned', () => {
     expect(posSource).toContain('parsed.globalId');
+  });
+
+  it('sends a scanned card token to the token route, not the globalId one', () => {
+    expect(posSource).toContain('getCustomerByCardToken');
+    expect(posSource).not.toMatch(/getCustomerByGlobalId\(\s*parsed\.token/);
   });
 
   it('says the code could not be read when the parser refuses', () => {

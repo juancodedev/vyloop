@@ -99,6 +99,7 @@ El `.dev.vars` no se commitea, pero **sí contiene credenciales reales**, así q
 | `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL` | El `client_email` de la clave JSON de la service account. Su email debe estar invitado a la cuenta de emisor en la consola de Google Pay & Wallet, con rol `Developer` |
 | `GOOGLE_WALLET_PRIVATE_KEY` | El `private_key` de esa misma clave, PEM-encoded. Firma el JWT de guardado del pase con RS256 |
 | `MEMBER_CODE_PEPPER` | Secret servidor para derivar el member code del pase. Ver la regla crítica abajo |
+| `CARD_TOKEN_SECRET` | Secret servidor para derivar la credencial escaneable (`vyc1.…`) que va en el QR del pase y de customer-web. Ver la regla crítica abajo |
 
 En dev local, `.dev.vars` (gitignored) es la excepción habitual, porque `wrangler dev` no lee secrets del remoto. La regla de "nunca en el repositorio" sigue valiendo: `.dev.vars` no se commitea.
 
@@ -118,6 +119,15 @@ En dev local, `.dev.vars` (gitignored) es la excepción habitual, porque `wrangl
 El member code del pase se deriva como un HMAC con salt por tenant, usando `MEMBER_CODE_PEPPER`. **El pepper tiene que ser el mismo en dev, staging y producción.** Si un entorno tiene un pepper distinto, el mismo cliente recibe un member code distinto en cada despliegue, y cualquier código que un cliente ya haya memorizado deja de funcionar.
 
 Es la razón por la que el pepper es un secret y no una constante en el código, y también la razón por la que no se puede "generar uno nuevo para cada entorno" siguiendo la costumbre de separar los entornos. Si el pepper se pierde, los códigos existentes no se pueden recuperar ni regenerar igual: habría que backfillearlos.
+
+### Regla operativa: `CARD_TOKEN_SECRET` no se cambia nunca
+
+La credencial escaneable se deriva con un HMAC sobre `CARD_TOKEN_SECRET`, el tenant, el `global_id` y `customers.card_token_version`. A diferencia del member code, **el token no se guarda**: en la base solo quedan la versión y su SHA-256, y el wallet lo vuelve a derivar cada vez que dibuja el QR de customer-web o firma el link de guardado del pase.
+
+Por eso cambiar el secret rompe a todos los clientes con token: el QR que se dibuja deja de coincidir con el hash guardado y el POS responde "no encontrado". Lo mismo pasa si un entorno tiene un secret distinto al que emitió los tokens de su base.
+
+- Cada entorno tiene su propio secret, fijo desde el primer token emitido.
+- Si el secret se filtra, cambiarlo es un incidente: todos los clientes con token quedan sin QR válido hasta que se rote su credencial ("Revocar QR" en el POS, o el RPC `rotateCardToken`). Cada rotación queda auditada en `customer_credential_revocations`.
 
 ---
 

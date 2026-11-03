@@ -30,7 +30,10 @@
 export interface WalletCustomerRow {
   /** `customers.id`. */
   id: string;
-  /** `customers.global_id`. Derives the pass id and carries the barcode. */
+  /**
+   * `customers.global_id`. Derives the pass id. It is the barcode only for a
+   * legacy customer who has no card token yet; see `card-token.ts`.
+   */
   globalId: string;
   /** `customers.full_name`. Nullable. */
   fullName: string | null;
@@ -38,6 +41,44 @@ export interface WalletCustomerRow {
   memberCode: string | null;
   /** `customers.current_tier_id`. Nullable. */
   currentTierId: string | null;
+  /**
+   * `customers.card_token_version`. NULL until a token is assigned. Optional in
+   * the type so a fixture that predates the column reads as NULL; the Drizzle
+   * store always selects it.
+   */
+  cardTokenVersion?: number | null | undefined;
+  /** `customers.card_token_hash`: SHA-256 hex of the current token, or NULL. */
+  cardTokenHash?: string | null | undefined;
+}
+
+/** The post-condition of `claimCardToken`: what the row now stores. */
+export interface StoredCardToken {
+  version: number;
+  hash: string;
+}
+
+/**
+ * One rotation of a customer's card token, written atomically with its audit
+ * row. See `WalletStore.rotateCardToken`.
+ */
+export interface CardTokenRotationWrite {
+  customerId: string;
+  /** `customers.business_id`, which is also the audit row's `business_id`. */
+  tenantId: string;
+  /**
+   * The version this rotation read. The write applies only while the row still
+   * holds it, so two concurrent rotations cannot both claim the same next
+   * version. NULL for a legacy customer.
+   */
+  expectedVersion: number | null;
+  /** `expectedVersion + 1`, or 1 from NULL. */
+  newVersion: number;
+  /** SHA-256 hex of the token for `newVersion`. */
+  newHash: string;
+  /** The operator who asked for it (`customer_credential_revocations.actor_user_id`). */
+  actorUserId: string;
+  /** Why (`customer_credential_revocations.reason`). */
+  reason: string;
 }
 
 /** The slice of `tenant_wallet_programs` the pass needs. */
@@ -551,6 +592,29 @@ export interface WalletStore {
    * winner's code rather than this request's discarded candidate.
    */
   claimMemberCode(customerId: string, tenantId: string, code: string): Promise<string | null>;
+
+  /**
+   * Assign card token version 1 with `hash` **only if the customer has neither a
+   * version nor a hash yet**, and return what is now stored.
+   *
+   * The same compare-and-set as `claimMemberCode`: two concurrent first requests
+   * derive the same token for version 1 anyway, but the guard is what keeps a
+   * request from overwriting a rotated version with 1. `null` means no row
+   * matched — someone else assigned first, or the customer is gone — and the
+   * caller re-reads rather than assuming its own write won.
+   */
+  claimCardToken(customerId: string, tenantId: string, hash: string): Promise<StoredCardToken | null>;
+
+  /**
+   * Rotate a customer's card token and audit it, in one tenant transaction.
+   *
+   * Bumps `card_token_version` from `expectedVersion` to `newVersion`, sets
+   * `card_token_hash`, and inserts the `customer_credential_revocations` row,
+   * as one statement. Touches nothing else: not the balance, the tier, the
+   * ledger, `global_id` or the pass row. Returns `false` when the version moved
+   * under the caller (or the customer is gone) and nothing was written.
+   */
+  rotateCardToken(write: CardTokenRotationWrite): Promise<boolean>;
 
   /**
    * Record that this customer has a pass planned for this tenant.

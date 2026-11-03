@@ -240,6 +240,17 @@
           "name": "points_transactions.purchase_amount"
         }
       ]
+    },
+    {
+      "tag": "0025_card_credential",
+      "when": 1793000000000,
+      "hash": "e06496f5feb696f230e867fffb1165f47dd2544f4ce5f1053abbdff759074044",
+      "evidence": [
+        {
+          "kind": "column",
+          "name": "customers.card_token_version"
+        }
+      ]
     }
   ]
 }

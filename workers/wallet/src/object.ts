@@ -9,10 +9,12 @@
  *
  * - `accountId` is the short member code, because Google's recommended maximum
  *   is 20 characters and `globalId` is 36. See `member-code.ts`.
- * - `barcode.value` is the **full** `globalId`, because the POS resolves
- *   customers only by `globalId` (`GET /v1/customers/n/:globalId`). Moving the
- *   short code into the barcode would have forced a change to the POS contract
- *   for no gain.
+ * - `barcode.value` is the customer's **card token** (`card-token.ts`), a
+ *   revocable credential the POS resolves by hash. A legacy customer whose pass
+ *   was issued before tokens existed has none, and their barcode stays the full
+ *   `globalId` until a rotation rewrites it (docs/21 §2.5). The object `id` is
+ *   always derived from `globalId`, never from the token, so rotating the token
+ *   never changes `object_id`.
  */
 
 import { formatBalance } from './balance';
@@ -248,8 +250,16 @@ export interface BuildLoyaltyObjectInput {
   classId: string;
   /** `customers.id`, used only for the error message. */
   customerId: string;
-  /** `customers.global_id`. The pass id and the barcode both derive from this. */
+  /**
+   * `customers.global_id`. The pass id derives from this; it is the barcode only
+   * when there is no `cardToken`.
+   */
   customerGlobalId: string;
+  /**
+   * The customer's current card token, or `null`/absent for a legacy customer.
+   * When present it is the barcode; otherwise the barcode is `customerGlobalId`.
+   */
+  cardToken?: string | null | undefined;
   /**
    * `customers.full_name`. Optional: a customer may have no name on file.
    *
@@ -312,7 +322,13 @@ export function buildLoyaltyObject(input: BuildLoyaltyObjectInput): LoyaltyObjec
       label: input.pointsCurrency,
       balance: { string: formatBalance(input.balancePoints) },
     },
-    barcode: { type: 'QR_CODE', value: input.customerGlobalId },
+    barcode: {
+      type: 'QR_CODE',
+      value:
+        input.cardToken !== null && input.cardToken !== undefined && input.cardToken !== ''
+          ? input.cardToken
+          : input.customerGlobalId,
+    },
   };
 
   // Omitted, never substituted. A customer with no name on file gets a pass

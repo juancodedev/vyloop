@@ -176,6 +176,13 @@
       "when": 1792900000000,
       "tag": "0024_purchase_amount",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793000000000,
+      "tag": "0025_card_credential",
+      "breakpoints": true
     }
   ]
 }

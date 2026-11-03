@@ -3,6 +3,7 @@
 import { QrCode } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { api } from '../lib/api';
 import { formatMemberCode } from '../lib/format';
 
 import { MemberQrCode } from './member-qr';
@@ -75,7 +76,13 @@ function useScreenWakeLock() {
  * Focus moves to the heading on open and is held inside the sheet; Escape and
  * "Listo" close it, and the dock returns focus to its own button.
  */
-export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & { onClose: () => void }) {
+export function QrSheet({
+  globalId,
+  fullName,
+  memberCode,
+  cardToken,
+  onClose,
+}: QrProps & { cardToken: string | null | undefined; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const code = formatMemberCode(memberCode);
@@ -140,7 +147,7 @@ export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & {
           Muéstrale esto en caja
         </h2>
 
-        <MemberQrCode globalId={globalId} fullName={fullName} showIdOnFailure={!code} />
+        <MemberQrCode globalId={globalId} cardToken={cardToken} fullName={fullName} showIdOnFailure={!code} />
 
         {code ? (
           <>
@@ -159,6 +166,54 @@ export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & {
   );
 }
 
+type CardCredential =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'resolved'; token: string | null; failed: boolean };
+
+/**
+ * The scannable credential from `GET /v1/wallet/card`, asked for on demand.
+ *
+ * `request` is called when the customer opens the sheet, never on mount: the
+ * route may mint the token, and a profile view is not a request for the code.
+ * A token or `null` is kept for later opens. A failed call resolves to `null`
+ * so the sheet still draws the uuid QR — the customer is at the counter and a
+ * scannable code beats an error — and is asked again on the next open.
+ *
+ * `undefined` means "still resolving"; the QR waits for it rather than drawing
+ * the uuid first and swapping it for the token a moment later.
+ */
+function useCardCredential() {
+  const [credential, setCredential] = useState<CardCredential>({ status: 'idle' });
+  const live = useRef(true);
+
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+
+  const request = useCallback(() => {
+    if (credential.status === 'loading') return;
+    if (credential.status === 'resolved' && !credential.failed) return;
+
+    setCredential({ status: 'loading' });
+    api.getWalletCard().then(
+      (token) => {
+        if (live.current) setCredential({ status: 'resolved', token, failed: false });
+      },
+      () => {
+        if (live.current) setCredential({ status: 'resolved', token: null, failed: true });
+      },
+    );
+  }, [credential]);
+
+  const cardToken = credential.status === 'resolved' ? credential.token : undefined;
+
+  return { cardToken, request };
+}
+
 /**
  * The "Mostrar mi código" button, fixed at the bottom of the viewport so the
  * QR is one tap away from any scroll position.
@@ -166,6 +221,7 @@ export function QrSheet({ globalId, fullName, memberCode, onClose }: QrProps & {
 export function QrDock({ globalId, fullName, memberCode }: QrProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const { cardToken, request } = useCardCredential();
 
   const close = useCallback(() => {
     setOpen(false);
@@ -180,14 +236,25 @@ export function QrDock({ globalId, fullName, memberCode }: QrProps) {
           type="button"
           className="club-qr-dock__button"
           aria-haspopup="dialog"
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            request();
+            setOpen(true);
+          }}
         >
           <QrCode size={20} strokeWidth={1.75} aria-hidden="true" />
           <span>Mostrar mi código</span>
         </button>
       </div>
 
-      {open ? <QrSheet globalId={globalId} fullName={fullName} memberCode={memberCode} onClose={close} /> : null}
+      {open ? (
+        <QrSheet
+          globalId={globalId}
+          fullName={fullName}
+          memberCode={memberCode}
+          cardToken={cardToken}
+          onClose={close}
+        />
+      ) : null}
     </>
   );
 }

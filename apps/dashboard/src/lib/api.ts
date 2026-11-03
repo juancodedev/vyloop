@@ -55,6 +55,36 @@ interface ApiTierRecord {
   displayOrder: number;
 }
 
+/** A customer as a scan resolves it: by globalId or by card token. */
+export interface ScannedCustomer {
+  id: string;
+  globalId: string;
+  fullName: string;
+  phone: string;
+  points: number;
+  currentTier: string | null;
+  tier?: { id: string; name: string; multiplier: number } | null;
+}
+
+/** What `POST /v1/customers/:id/card-token/rotate` answers on success. */
+export interface CardTokenRotation {
+  version: number;
+  /** `none`: the customer has no Wallet pass to update. */
+  pass: 'updated' | 'none';
+}
+
+function toScannedCustomer(d: Record<string, unknown>): ScannedCustomer {
+  return {
+    id: d.id as string,
+    globalId: d.globalId as string,
+    fullName: d.fullName as string,
+    phone: d.phone as string,
+    points: Number(d.points ?? 0),
+    currentTier: d.currentTier as string | null,
+    tier: d.tier ? (d.tier as { id: string; name: string; multiplier: number }) : null,
+  };
+}
+
 /**
  * An API failure that still knows *which* failure it was.
  *
@@ -788,26 +818,39 @@ export const api = {
     };
   },
 
-  async getCustomerByGlobalId(globalId: string): Promise<{
-    id: string;
-    globalId: string;
-    fullName: string;
-    phone: string;
-    points: number;
-    currentTier: string | null;
-    tier?: { id: string; name: string; multiplier: number } | null;
-  }> {
+  async getCustomerByGlobalId(globalId: string): Promise<ScannedCustomer> {
     const result = await apiFetch(`/v1/customers/by-global-id/${globalId}`) as { data: Record<string, unknown> };
-    const d = result.data;
-    return {
-      id: d.id as string,
-      globalId: d.globalId as string,
-      fullName: d.fullName as string,
-      phone: d.phone as string,
-      points: Number(d.points ?? 0),
-      currentTier: d.currentTier as string | null,
-      tier: d.tier ? d.tier as { id: string; name: string; multiplier: number } : null,
-    };
+    return toScannedCustomer(result.data);
+  },
+
+  /**
+   * Resolve the opaque card token a new pass or the customer-web QR carries.
+   *
+   * Same body as `getCustomerByGlobalId` on a hit; the server answers malformed,
+   * unknown and rotated tokens with the same 404, so a revoked QR reads as
+   * "not found" without revealing that the customer exists. The token is scanned
+   * text going into a path, so it is encoded.
+   */
+  async getCustomerByCardToken(token: string): Promise<ScannedCustomer> {
+    const result = (await apiFetch(
+      `/v1/customers/by-card-token/${encodeURIComponent(token)}`,
+    )) as { data: Record<string, unknown> };
+    return toScannedCustomer(result.data);
+  },
+
+  /**
+   * Revoke the customer's current scannable QR by rotating its card token.
+   *
+   * `reason` is required by the server (trimmed, 3–500 characters) and audited.
+   * A 502 `PASS_UPDATE_FAILED` means the old QR is already invalid but the Wallet
+   * pass was not confirmed updated; retrying is another audited rotation.
+   */
+  async rotateCardToken(customerId: string, reason: string): Promise<CardTokenRotation> {
+    const result = (await apiFetch(
+      `/v1/customers/${encodeURIComponent(customerId)}/card-token/rotate`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    )) as { data: CardTokenRotation };
+    return { version: result.data.version, pass: result.data.pass };
   },
 
   async getKpis(): Promise<KpiResponse> {

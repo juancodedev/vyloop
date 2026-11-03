@@ -89,11 +89,13 @@ Si se elige C por costo, entonces la decisión tiene que quedar escrita acá y n
 
 ### 2.5 Criterios de aceptación
 
-- [ ] Un pase emitido antes del cambio sigue funcionando: el POS acepta `global_id` en el barcode y resuelve por la ruta actual.
-- [ ] Un pase emitido después lleva el token y resuelve por `resolve`, con el mismo `known`/`fullName` que hoy.
-- [ ] Existe una operación que rota el token de un pase, confirma el cambio leyendo el objeto, y deja el anterior inválido.
-- [ ] Un token rotado devuelve `known: false` sin revelar si el pase existe.
-- [ ] `object_id` no cambia al rotar (test explícito).
+- [x] Un pase emitido antes del cambio sigue funcionando: el POS acepta `global_id` en el barcode y resuelve por la ruta actual. Un cliente cuyo objeto en Google ya tiene el uuid no recibe token hasta que se rote.
+- [x] Un pase emitido después lleva el token. **Corrección:** no resuelve por `passes/resolve`, porque esa ruta solo acepta terminales `pos:` y hoy no existe ninguna. El único lector del QR es la cámara del POS del dashboard, así que el token resuelve por `GET /v1/customers/by-card-token/:token` (operador), con la misma respuesta que `by-global-id`.
+- [x] Existe una operación que rota el token: `rotateCardToken` en el wallet, disparada por "Revocar QR" en el POS (`POST /v1/customers/:id/card-token/rotate`). Sube la versión, hace un patch solo del barcode, lo confirma con `confirmObjectBindings`, y el token anterior deja de coincidir con el hash.
+- [x] Un token rotado responde el mismo 404 que uno desconocido o malformado, sin revelar si el pase existe.
+- [x] `object_id` no cambia al rotar (`workers/wallet/src/rotate-card-token.test.ts`).
+
+Diseño final: el token es `vyc1.` + HMAC-SHA256(`CARD_TOKEN_SECRET`, tenant, `global_id`, `card_token_version`). Se **deriva**, no se guarda: la base tiene la versión y el SHA-256. Así el wallet vuelve a dibujar el QR de customer-web y el link de guardado sin almacenar la credencial. La contracara es que `CARD_TOKEN_SECRET` no se puede cambiar (ver `docs/17-Developer-Onboarding.md`). El QR de customer-web muestra el mismo token, y el POS deja de aceptar el uuid de un cliente que ya tiene token, tanto al escanear como en el buscador.
 
 ---
 
@@ -123,9 +125,9 @@ Es decir: la postura del sistema es que el valor escaneable es semi-privado. Un 
 
 ### 3.3 Criterios de aceptación
 
-- [ ] Existe al menos un camino de revocación de la credencial escaneable que no toque `global_id` ni `object_id`.
-- [ ] La revocación queda auditada (quién, cuándo, por qué).
-- [ ] Un test verifica que revocar no altera el saldo, el tier ni el historial.
+- [x] Existe al menos un camino de revocación de la credencial escaneable que no toque `global_id` ni `object_id`: "Revocar QR" en el POS, con motivo obligatorio.
+- [x] La revocación queda auditada en `customer_credential_revocations` (operador, fecha, motivo, versión anterior y nueva), en la misma sentencia que cambia la versión.
+- [x] Un test verifica que revocar no escribe en `points_transactions`, en el tier ni en el pase, y que el patch no lleva `loyaltyPoints`.
 
 ---
 
@@ -273,7 +275,7 @@ Lo caro de una filtración no es rotar, sino que los códigos ya emitidos **sigu
 | 1 | [4 — Bindings](#4-confirmar-bindings-antes-de-decir-issued) | Único fallo silencioso. Sin migración. Se paga solo. | Hecho |
 | 2 | [5 — Guardrail de arrays](#5-nada-impide-que-un-patch-futuro-mande-arrays) | Barato y protege el camino que el punto 1 del orden va a tocar. | Hecho |
 | 3 | [6 — Throttle y pepper](#6-passesresolve-throttle-y-oráculo) | No requiere migración de datos. La versión de pepper resultó innecesaria (ver 6.2c). | Hecho |
-| 4 | [2 y 3 — Credencial rotable](#2-el-qr-lleva-global_id) | El más caro. Necesita el paso 2 de esta lista ya hecho. | Pendiente |
+| 4 | [2 y 3 — Credencial rotable](#2-el-qr-lleva-global_id) | El más caro. Necesita el paso 2 de esta lista ya hecho. | Hecho |
 
 El punto 1 de la ejecución se puede cerrar en una sesión y no toca ningún contrato externo.
 

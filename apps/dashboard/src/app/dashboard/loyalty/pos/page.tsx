@@ -5,8 +5,9 @@ import { Camera, ScanLine } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 
 import styles from './pos.module.css';
+import { RevokeQr } from './revoke-qr';
 
-import { ApiError, api } from '@/lib/api';
+import { ApiError, api, type ScannedCustomer } from '@/lib/api';
 import {
   classifyCameraError,
   presentCameraFailure,
@@ -67,8 +68,9 @@ export default function PosPage() {
     /**
      * The pass state, when the customer was identified through the search box.
      *
-     * Null for a QR scan: `GET /v1/customers/by-global-id` does not report pass
-     * state, so there is nothing to show and nothing to guess. Rendering a badge
+     * Null for a QR scan or a card token: neither `by-global-id` nor
+     * `by-card-token` reports pass state, so there is nothing to show and nothing
+     * to guess. Rendering a badge
      * we did not earn is how a screen starts lying.
      */
     pass: { state: WirePassState; lastSyncedAt: string | null } | null;
@@ -179,6 +181,40 @@ export default function PosPage() {
   const discount = redeemResult?.discount ?? 0;
   const total = Math.max(0, subtotal - discount);
 
+  // ─── Scanned credential ───────────────────────────────────────────
+
+  /**
+   * Put a customer resolved by globalId or card token on screen.
+   *
+   * Both routes answer the same shape and neither reports pass state, so a token
+   * scan and a uuid scan produce the same view. Any failure, including the 404
+   * the server gives for unknown and revoked tokens alike, is "not found".
+   */
+  const identifyScanned = useCallback(async (resolve: () => Promise<ScannedCustomer>) => {
+    setStatus('identifying');
+    setErrorMsg('');
+    setLookupFailure(null);
+
+    try {
+      const data = await resolve();
+      setCustomer({
+        id: data.id,
+        globalId: data.globalId,
+        fullName: data.fullName,
+        points: data.points,
+        currentTier: data.currentTier,
+        multiplier: data.tier?.multiplier ?? 1,
+        pass: null,
+      });
+      setRedeemInput('');
+      setRedeemResult(null);
+      setStatus('idle');
+    } catch {
+      setErrorMsg('Cliente no encontrado');
+      setStatus('idle');
+    }
+  }, []);
+
   // ─── Search box ───────────────────────────────────────────────────
 
   const handleLookup = useCallback(
@@ -189,6 +225,14 @@ export default function PosPage() {
       // value cannot be sent under the wrong parameter.
       const target = resolveLookupTarget(lookupInput);
       if (!target) return;
+
+      // A pasted card token is not a lookup parameter: it has its own route, the
+      // same one a scan of it takes.
+      if (target.identifier === 'cardToken') {
+        const token = target.value;
+        await identifyScanned(() => api.getCustomerByCardToken(token));
+        return;
+      }
 
       setStatus('identifying');
       setErrorMsg('');
@@ -226,7 +270,7 @@ export default function PosPage() {
         }
       }
     },
-    [lookupInput],
+    [identifyScanned, lookupInput],
   );
 
   // ─── QR Scanner ───────────────────────────────────────────────────
@@ -270,37 +314,24 @@ export default function PosPage() {
           setShowScanner(false);
 
           // Which customer this code is for, decided in `lib/pass-code.ts`.
-          // Three formats are live -- the `/c/<id>` link printed on cards that
-          // already exist, the Google Wallet `<issuerId>.member-<id>` barcode,
-          // and a bare id -- and anything else is reported rather than guessed.
+          // Live formats: the `/c/<id>` link printed on older cards, the Google
+          // Wallet object id, a bare id, and the card token (bare or as
+          // `/c/<token>`) that new passes and the web QR carry. Anything else is
+          // reported rather than guessed.
           const parsed = parsePassCode(decodedText);
           if (!parsed.ok) {
             setErrorMsg('No se pudo leer el código QR');
             return;
           }
 
-          setStatus('identifying');
-          setErrorMsg('');
-
-          try {
-            const data = await api.getCustomerByGlobalId(parsed.globalId);
-            setCustomer({
-              id: data.id,
-              globalId: data.globalId,
-              fullName: data.fullName,
-              points: data.points,
-              currentTier: data.currentTier,
-              multiplier: data.tier?.multiplier ?? 1,
-              // The QR endpoint does not report pass state. Left null rather than
-              // guessed, so no badge appears for something nobody asked Google.
-              pass: null,
-            });
-            setRedeemInput('');
-            setRedeemResult(null);
-            setStatus('idle');
-          } catch {
-            setErrorMsg('Cliente no encontrado');
-            setStatus('idle');
+          // A token and a globalId go to different routes; sending one as the
+          // other is a guaranteed miss.
+          if (parsed.kind === 'card-token') {
+            const token = parsed.token;
+            await identifyScanned(() => api.getCustomerByCardToken(token));
+          } else {
+            const globalId = parsed.globalId;
+            await identifyScanned(() => api.getCustomerByGlobalId(globalId));
           }
         },
         () => {},
@@ -310,7 +341,7 @@ export default function PosPage() {
       // the reader is where the explanation belongs.
       setCameraFailure(classifyCameraError(err));
     }
-  }, []);
+  }, [identifyScanned]);
 
   const stopScanner = useCallback(async () => {
     if (scannerRef.current) {
@@ -519,6 +550,10 @@ export default function PosPage() {
                       </div>
                     );
                   })()}
+
+                {/* Keyed by customer so switching customers never carries a
+                    half-typed reason or a stale result over to someone else. */}
+                <RevokeQr key={customer.id} customerId={customer.id} />
 
                 <button
                   type="button"

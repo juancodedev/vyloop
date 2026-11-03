@@ -7,13 +7,13 @@
  * `customers.global_id` is a 36-character UUID and does not fit. So
  * `accountId` carries a 6-character member code instead.
  *
- * ## Why the barcode still carries the full `globalId`
+ * ## Why the barcode does not carry the member code
  *
- * The POS resolves customers **only** by `globalId`, scanned from the barcode
- * (`workers/customer` → `GET /v1/customers/n/:globalId`). `accountId` is never
- * machine-read in this system. Keeping the full `globalId` in the barcode means
- * no POS contract changes, and `accountId` exists solely to be read aloud by a
- * person at a noisy counter — which is what a loyalty pass is for.
+ * The POS resolves customers from the barcode, which carries the customer's
+ * card token (`card-token.ts`) — or, for a legacy pass issued before tokens
+ * existed, the full `globalId`. `accountId` is never machine-read in this
+ * system: it exists solely to be read aloud by a person at a noisy counter,
+ * which is what a loyalty pass is for.
  *
  * ## Crockford Base32
  *
@@ -31,8 +31,8 @@
  *
  * ## The pepper is load-bearing
  *
- * `globalId` is printed in the barcode of every pass, and `tenantId` is not
- * secret. A code derived as `HMAC(tenantId, globalId)` without a server-side
+ * `globalId` is printed in the barcode of every legacy pass, and `tenantId` is
+ * not secret. A code derived as `HMAC(tenantId, globalId)` without a server-side
  * pepper could be recomputed by anyone who scanned one pass, then matched
  * against a second pass to confirm both belong to the same person. The pepper
  * lives in a worker secret and never enters the repository, a `.dev.vars` file
@@ -121,7 +121,7 @@ export interface MemberCodeInput {
     return Promise.reject(
       new Error(
         'MEMBER_CODE_PEPPER is empty. A member code without a pepper is derivable ' +
-          'by anyone who has scanned one pass, because globalId is printed in the barcode.',
+          'by anyone who has scanned one legacy pass, because globalId is printed in its barcode.',
       ),
     );
   }
