@@ -86,6 +86,8 @@ export function createMerchantPageReader(env: MerchantPageDbEnv): MerchantPageRe
             promoCopy: loyaltyPrograms.promoCopy,
             pointsCurrency: loyaltyPrograms.pointsCurrency,
             earnRate: loyaltyPrograms.earnRate,
+            earnBy: loyaltyPrograms.earnBy,
+            earnUnitAmount: loyaltyPrograms.earnUnitAmount,
             minRedeemPoints: loyaltyPrograms.minRedeemPoints,
           })
           .from(loyaltyPrograms)
@@ -107,6 +109,8 @@ export function createMerchantPageReader(env: MerchantPageDbEnv): MerchantPageRe
         // `numeric` arrives as a string and is rendered verbatim. Formatting it
         // here would mean inventing a locale rule for a value that has none.
         earnRate: program?.earnRate ?? null,
+        earnBy: program?.earnBy ?? null,
+        earnUnitAmount: program?.earnUnitAmount ?? null,
         minRedeemPoints: program?.minRedeemPoints ?? null,
       };
     },
