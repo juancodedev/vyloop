@@ -1497,7 +1497,7 @@ describe('ensureCardToken', () => {
 
     await expect(
       ensureCardToken(deps(store, { cardTokenSecret: '' }), tokenInput()),
-    ).rejects.toThrow(/CARD_TOKEN_SECRET is empty/);
+    ).rejects.toThrow(/CARD_TOKEN_SECRET is not configured/);
     expect(store.cardTokenClaims).toHaveLength(0);
   });
 });

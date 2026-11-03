@@ -25,6 +25,7 @@
  * barcode that arrives changed is a dead card.
  */
 
+import { hashCardToken } from './card-token';
 import type { LoyaltyObject } from './object';
 
 /**
@@ -233,4 +234,58 @@ export async function confirmObjectBindings(
   if (afterRead.length === 0) return { kind: 'confirmed', source: 'read' };
 
   return { kind: 'unconfirmed', source: 'read', defects: afterRead, readFailed: false };
+}
+
+/**
+ * What the database says a pass's object should carry, without the card token
+ * itself, which is never stored.
+ */
+export interface StoredObjectBindings {
+  objectId: string;
+  classId: string;
+  /** NULL when the customer has no member code yet; then `accountId` is not compared. */
+  memberCode: string | null;
+  globalId: string;
+  /** NULL for a legacy customer, whose barcode is expected to be `globalId`. */
+  cardTokenHash: string | null;
+}
+
+/**
+ * The binding fields on which Google's copy of an object disagrees with the
+ * database.
+ *
+ * The card token is never stored, so a tokened customer's barcode is checked by
+ * hashing what Google holds and comparing it with `card_token_hash`. That needs
+ * no secret, which is what lets the reconcile path and the sweep check it.
+ */
+export async function findStoredBindingDrift(
+  stored: StoredObjectBindings,
+  actual: unknown,
+): Promise<BindingField[]> {
+  const remoteBarcode = readBinding(actual, 'barcode.value');
+  const tokenMatches =
+    stored.cardTokenHash !== null &&
+    remoteBarcode.ok &&
+    (await hashCardToken(remoteBarcode.value)) === stored.cardTokenHash;
+
+  // For a tokened customer the expected value is "whatever Google holds" when its
+  // hash matches, and something it can never hold when it does not, so the one
+  // comparison below covers both cases.
+  const expectedBarcode =
+    stored.cardTokenHash === null
+      ? stored.globalId
+      : tokenMatches && remoteBarcode.ok
+        ? remoteBarcode.value
+        : '\u0000card-token-mismatch';
+
+  const expected: ExpectedObjectBindings = {
+    id: stored.objectId,
+    classId: stored.classId,
+    accountId: stored.memberCode ?? '',
+    barcode: { type: 'QR_CODE', value: expectedBarcode },
+  };
+
+  return findBindingDefects(expected, actual)
+    .map((defect) => defect.field)
+    .filter((field) => !(field === 'accountId' && stored.memberCode === null));
 }

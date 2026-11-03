@@ -65,6 +65,7 @@
  */
 
 import { balanceDisplayFailure, formatBalance } from './balance';
+import { findStoredBindingDrift } from './bindings';
 import type { GoogleWalletClient } from './google-client';
 import { classReadinessFor, reasonCodeFor } from './issuance';
 import type { WalletUnavailableReason } from './issuance';
@@ -268,6 +269,8 @@ export async function reconcilePass(
     return { kind: 'not_saved', objectId: pass.objectId };
   }
 
+  await reportBindingDrift(deps, input, pass.objectId, readiness.classId, remote);
+
   // Google's own word for the state, never a case-sensitive comparison against
   // the enum's spelling. A literal `!== 'ACTIVE'` reads every real response as
   // inactive, because Google answers `"active"`, and the result is a pass that
@@ -417,4 +420,55 @@ export async function updatePassPushNotifications(
   }
 
   return true;
+}
+
+/**
+ * Log, never repair, a pass whose object Google holds with different bindings
+ * than the database.
+ *
+ * Until this ran, nothing after issuance compared the barcode or the member code
+ * Google holds: `reconcile` looked at the state and the balance and nothing
+ * more, so a dead card was invisible to the sweep (doc 21, Anexo B item 5). The
+ * repair path for a barcode is a rotation, which an operator decides; this only
+ * makes the case visible as `pass_binding_drift`, named by field and never by
+ * value.
+ *
+ * Detection must never cost the balance projection: a missing customer row or a
+ * failed read skips the check and the reconcile carries on.
+ */
+async function reportBindingDrift(
+  deps: { store: WalletStore },
+  input: { tenantId: string; customerId: string },
+  objectId: string,
+  classId: string,
+  remote: LoyaltyObject,
+): Promise<void> {
+  try {
+    const customer = await deps.store.findCustomerById(input.customerId, input.tenantId);
+    if (customer === null) return;
+
+    const fields = await findStoredBindingDrift(
+      {
+        objectId,
+        classId,
+        memberCode: customer.memberCode,
+        globalId: customer.globalId,
+        cardTokenHash: customer.cardTokenHash ?? null,
+      },
+      remote,
+    );
+    if (fields.length > 0) {
+      console.warn('[wallet] pass_binding_drift', {
+        tenant_id: input.tenantId,
+        customer_id: input.customerId,
+        fields,
+      });
+    }
+  } catch (err) {
+    console.error('[wallet] Could not check pass bindings; reconciling anyway.', {
+      tenant_id: input.tenantId,
+      customer_id: input.customerId,
+      error: err instanceof Error ? err.name : 'unknown',
+    });
+  }
 }

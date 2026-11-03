@@ -18,6 +18,7 @@ import type {
   WalletProgramRow,
   WalletProgramWithBusinessRow,
   WalletStore,
+  WalletCustomerRow,
   WalletTenantBrandingRow,
 } from './store';
 
@@ -1184,5 +1185,98 @@ describe('updatePassPushNotifications', () => {
 
     expect(updated).toBe(false);
     expect(client.addMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// Binding drift: the observation also checks what the counter scans
+// ============================================================================
+
+describe('reconcilePass: binding drift', () => {
+  const GLOBAL_ID = 'c8b61954-1b6d-4dfa-9954-b7c936a9e648';
+  const TOKEN = `vyc1.${'Ab3_-'.repeat(8)}xyz`;
+
+  async function sha256Hex(value: string): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /** `readyStore`, but with the customer the pass belongs to. */
+  function storeWithCustomer(customer: Partial<WalletCustomerRow>): FakeStore {
+    const base = readyStore();
+    const row: WalletCustomerRow = {
+      id: CUSTOMER_ID,
+      globalId: GLOBAL_ID,
+      fullName: null,
+      memberCode: 'K7M2QX',
+      currentTierId: null,
+      ...customer,
+    };
+    (base as unknown as { findCustomerById: () => Promise<WalletCustomerRow> }).findCustomerById = async () => row;
+    return base;
+  }
+
+  function driftWarnings(warn: Mock): unknown[][] {
+    return warn.mock.calls.filter((call) => String(call[0]).includes('pass_binding_drift'));
+  }
+
+  it('says nothing when Google holds the uuid a legacy customer was issued', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await reconcile(storeWithCustomer({}), client);
+    expect(driftWarnings(warn as unknown as Mock)).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it('says nothing when the barcode Google holds hashes to the stored card token', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    client = fakeClient(objectWithBalance('0', { barcode: { type: 'QR_CODE', value: TOKEN } }));
+
+    await reconcile(storeWithCustomer({ cardTokenVersion: 1, cardTokenHash: await sha256Hex(TOKEN) }), client);
+
+    expect(driftWarnings(warn as unknown as Mock)).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it('reports a barcode that no longer matches the stored token, naming the field and never the values', async () => {
+    // The dead card the sweep could never see: Google holds a barcode the counter
+    // cannot resolve. Named by field only, because the values are the credential
+    // and the identity.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    client = fakeClient(objectWithBalance('0', { barcode: { type: 'QR_CODE', value: GLOBAL_ID } }));
+
+    const outcome = await reconcile(
+      storeWithCustomer({ cardTokenVersion: 2, cardTokenHash: await sha256Hex(TOKEN) }),
+      client,
+    );
+
+    const drift = driftWarnings(warn as unknown as Mock);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]![1]).toEqual(
+      expect.objectContaining({ tenant_id: TENANT, customer_id: CUSTOMER_ID, fields: ['barcode.value'] }),
+    );
+    expect(JSON.stringify(drift)).not.toContain(GLOBAL_ID);
+    expect(JSON.stringify(drift)).not.toContain(TOKEN);
+    // Detection only: the balance projection carries on as before.
+    expect(outcome.kind).toBe('patched');
+    warn.mockRestore();
+  });
+
+  it('reports a member code Google no longer carries', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    client = fakeClient(objectWithBalance('0', { accountId: 'ZZZZZZ' }));
+
+    await reconcile(storeWithCustomer({}), client);
+
+    const drift = driftWarnings(warn as unknown as Mock);
+    expect(drift[0]![1]).toEqual(expect.objectContaining({ fields: ['accountId'] }));
+    warn.mockRestore();
+  });
+
+  it('skips the check, and still reconciles, when the customer row cannot be read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const outcome = await reconcile(store, client);
+    expect(driftWarnings(warn as unknown as Mock)).toEqual([]);
+    expect(outcome.kind).toBe('patched');
+    warn.mockRestore();
   });
 });

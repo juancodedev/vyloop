@@ -482,6 +482,15 @@ export async function ensureCardToken(
 }
 
 function derive(deps: EnsureCardTokenDeps, input: EnsureCardTokenInput, version: number): Promise<string> {
+  // Checked here, where a token is actually needed, so a legacy customer who
+  // gets no token still gets their pass on a deployment without the secret.
+  // Typed as this error so the routes answer it as the configuration fault it is
+  // rather than as an unclassified 500.
+  if (!deps.cardTokenSecret) {
+    return Promise.reject(
+      new CardTokenUnavailableError(input.customerId, input.tenantId, 'CARD_TOKEN_SECRET is not configured'),
+    );
+  }
   return deriveCardToken({
     secret: deps.cardTokenSecret,
     tenantId: input.tenantId,

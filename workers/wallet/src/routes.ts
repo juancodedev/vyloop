@@ -38,6 +38,7 @@ import {
 import {
   LoyaltyProgramNotConfiguredError,
   MemberCodeUnavailableError,
+  CardTokenUnavailableError,
   classReadinessFor,
   dispositionForExistingPass,
   ensureCardToken,
@@ -527,17 +528,34 @@ router.get('/v1/wallet/card', async (c) => {
   }
 
   const pass = await store.findPass(customer.id, tenantId);
-  const cardToken = await ensureCardToken(
-    { store, cardTokenSecret: c.env.CARD_TOKEN_SECRET ?? '' },
-    {
-      customerId: customer.id,
-      tenantId,
-      customerGlobalId: customer.globalId,
-      storedVersion: customer.cardTokenVersion ?? null,
-      storedHash: customer.cardTokenHash ?? null,
-      passState: pass !== null && pass.tenantId === tenantId ? pass.state : null,
-    },
-  );
+  let cardToken: string | null;
+  try {
+    cardToken = await ensureCardToken(
+      { store, cardTokenSecret: c.env.CARD_TOKEN_SECRET ?? '' },
+      {
+        customerId: customer.id,
+        tenantId,
+        customerGlobalId: customer.globalId,
+        storedVersion: customer.cardTokenVersion ?? null,
+        storedHash: customer.cardTokenHash ?? null,
+        passState: pass !== null && pass.tenantId === tenantId ? pass.state : null,
+      },
+    );
+  } catch (err) {
+    if (!(err instanceof CardTokenUnavailableError)) throw err;
+    // Same answer as `GET /v1/wallet/pass` for the same fault. Logged with ids
+    // only: the error message never carries the token or the global id.
+    console.error('[wallet] Could not obtain a card token:', err);
+    return c.json(
+      {
+        error: {
+          code: WALLET_NOT_CONFIGURED,
+          message: 'Your member card could not be shown right now. Please try again.',
+        },
+      },
+      500,
+    );
+  }
 
   return c.json({ data: { card_token: cardToken } });
 });
@@ -731,7 +749,7 @@ router.get('/v1/wallet/pass', async (c) => {
     const issueDeps = {
       store,
       pepper: c.env.MEMBER_CODE_PEPPER,
-      cardTokenSecret: c.env.CARD_TOKEN_SECRET,
+      cardTokenSecret: c.env.CARD_TOKEN_SECRET ?? '',
       serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
       privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
       origins,
@@ -1065,6 +1083,22 @@ router.get('/v1/wallet/pass', async (c) => {
           },
         },
         409,
+      );
+    }
+
+    if (err instanceof CardTokenUnavailableError) {
+      // A missing CARD_TOKEN_SECRET, or a stored hash the secret no longer
+      // reproduces. Either way a deployment fault: the pass was not built, because
+      // a barcode the counter cannot resolve is a dead card.
+      console.error('[wallet] Could not obtain a card token:', err);
+      return c.json(
+        {
+          error: {
+            code: WALLET_NOT_CONFIGURED,
+            message: 'A loyalty pass could not be issued for this account. Please try again.',
+          },
+        },
+        500,
       );
     }
 
