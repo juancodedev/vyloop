@@ -4,6 +4,7 @@ import { Cake } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
+import { useConfirm } from '@/components/ConfirmDialog';
 import { api, type CustomerDetail } from '@/lib/api';
 import {
   buildCustomerPatch,
@@ -96,6 +97,9 @@ export default function CustomerDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: string; message: string } | null>(null);
+  const [revoking, setRevoking] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [askRevokeQr, revokeDialog] = useConfirm();
 
   // --- Edit state -----------------------------------------------------------
   //
@@ -161,6 +165,31 @@ export default function CustomerDetailPage() {
       setSaveError(patchErrorFor(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleRevokeQr() {
+    if (!customer) return;
+    const confirmed = await askRevokeQr({
+      title: '¿Revocar el código QR de este cliente?',
+      message: `El código QR impreso de ${customer.fullName} dejará de funcionar en el POS. Se generará uno nuevo que el cliente verá al cargar su tarjeta en customer-web. Esta acción no se deshace.`,
+      confirmLabel: 'Revocar QR',
+    });
+    if (!confirmed) return;
+
+    setRevoking(true);
+    setRevokeError(null);
+    try {
+      await api.rotateCustomerQr(customer.id);
+      const cust = await api.getCustomer(customer.id);
+      setCustomer(cust);
+      showToast('success', 'QR renovado. El código anterior ya no funciona.');
+    } catch (err) {
+      setRevokeError(
+        err instanceof Error ? err.message : 'No se pudo renovar el QR.',
+      );
+    } finally {
+      setRevoking(false);
     }
   }
 
@@ -460,6 +489,18 @@ export default function CustomerDetailPage() {
           <button className="btn btn-primary" onClick={handleOpenModal}>
             Registrar Venta
           </button>
+          <button
+            className="btn btn-outline"
+            onClick={handleRevokeQr}
+            disabled={revoking}
+          >
+            {revoking ? 'Revocando…' : 'Revocar QR'}
+          </button>
+          {revokeError && (
+            <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.5rem' }}>
+              {revokeError}
+            </p>
+          )}
         </div>
       </div>
 
@@ -673,6 +714,8 @@ export default function CustomerDetailPage() {
           <div className={`toast toast-${toast.type}`}>{toast.message}</div>
         </div>
       )}
+
+      {revokeDialog}
     </>
   );
 }

@@ -1871,6 +1871,58 @@ router.patch('/v1/customers/:id', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Rotate QR: POST /v1/customers/:id/rotate-qr
+// Invalidates the printed QR (/c/<globalId>) by generating a new globalId.
+// Only an operator may do this; the old value stops resolving at the POS.
+// ---------------------------------------------------------------------------
+
+router.post('/v1/customers/:id/rotate-qr', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const gate = requireOperatorRole(auth);
+  if (!gate.ok) {
+    return c.json({ error: { code: gate.code, message: gate.message } }, gate.status);
+  }
+  const { businessId } = auth;
+  const id = c.req.param('id');
+  const db = createDb(c.env.DATABASE_URL);
+
+  // Verify customer exists and belongs to this business, before touching anything.
+  const existing = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .select()
+      .from(customers)
+      .where(
+        and(eq(customers.id, id), eq(customers.businessId, businessId), isNull(customers.deletedAt)),
+      )
+      .limit(1),
+  );
+
+  if (existing.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Customer not found' } }, 404);
+  }
+
+  // New uuid v4: the POS resolves `/c/<globalId>`, so the old printed code stops
+  // matching and the customer gets a fresh one on their next customer-web load.
+  const newGlobalId = crypto.randomUUID();
+
+  const [updated] = await withTenantTransaction(db, { businessId }, (tx) =>
+    tx
+      .update(customers)
+      .set({ globalId: newGlobalId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(customers.id, id),
+          eq(customers.businessId, businessId),
+          isNull(customers.deletedAt),
+        ),
+      )
+      .returning({ globalId: customers.globalId }),
+  );
+
+  return c.json({ globalId: updated.globalId }, 200);
+});
+
+// ---------------------------------------------------------------------------
 // Delete: DELETE /v1/customers/:id
 // Anonymises, the same way as DELETE /v1/customers/me.
 // ---------------------------------------------------------------------------
