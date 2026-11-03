@@ -4,8 +4,8 @@ import { Cake } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
-import { api, type CustomerDetail } from '@/lib/api';
 import { useConfirm } from '@/components/ConfirmDialog';
+import { api, type CustomerDetail } from '@/lib/api';
 import {
   buildCustomerPatch,
   draftFromCustomer,
