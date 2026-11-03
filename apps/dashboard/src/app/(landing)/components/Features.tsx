@@ -19,11 +19,11 @@ const FEATURES = [
     text: 'Un solo programa; el cliente suma en cualquiera de tus locales.',
   },
   {
-    name: 'Avisos al celular',
-    text: 'Campañas que llegan a quienes aceptaron recibirlas.',
+    name: 'Campañas cerca de tu local',
+    text: 'Un aviso al celular de los clientes cercanos a una sucursal. Solo llega a quienes aceptaron recibirlo.',
   },
   {
-    name: 'Tus clientes, a la vista',
+    name: 'Quién dejó de venir',
     text: 'Quién vino, cuánto compró y quién hace rato que no aparece.',
   },
 ];

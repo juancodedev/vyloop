@@ -45,6 +45,39 @@ describe('the landing page', () => {
     expect(screen.getAllByText(/según lo que compra/).length).toBeGreaterThan(0);
   });
 
+  it('answers the iPhone question without promising an Apple Wallet pass', () => {
+    render(<LandingPage />);
+
+    expect(screen.getByText('¿Y si mi cliente tiene iPhone?')).toBeTruthy();
+    expect(screen.queryByText(/Apple Wallet/)).toBeNull();
+  });
+
+  it('compares the paper card with vyloop, row by row', () => {
+    render(<LandingPage />);
+
+    const section = screen.getByRole('region', { name: 'La tarjeta de papel contra vyloop' });
+    expect(section.querySelectorAll('[data-row]').length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('shows the three plans in CLP, with Pro as the recommended one', () => {
+    render(<LandingPage />);
+
+    const section = screen.getByRole('region', { name: 'Precios' });
+    expect(section.textContent).toContain('$19.990');
+    expect(section.textContent).toContain('$34.990');
+    expect(section.textContent).toContain('$39.990');
+
+    const recommended = screen.getByText('Recomendado').closest('article');
+    expect(recommended?.querySelector('h3')?.textContent).toBe('Pro');
+    expect(screen.getByRole('link', { name: 'Precios' }).getAttribute('href')).toBe('#precios');
+  });
+
+  it('links the FAQ from the header', () => {
+    render(<LandingPage />);
+
+    expect(screen.getByRole('link', { name: 'Preguntas' }).getAttribute('href')).toBe('#preguntas');
+  });
+
   it('sends both sign-up buttons to the sign-up form and the login link to the login', () => {
     render(<LandingPage />);
 
