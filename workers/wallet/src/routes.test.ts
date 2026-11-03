@@ -1005,6 +1005,31 @@ describe('GET /v1/wallet/card', () => {
     expect(row.cardTokenHash).toBe(await sha256Hex(body.data.card_token!));
   });
 
+  it.each(['/v1/wallet/card', '/v1/wallet/pass'])(
+    'answers WALLET_NOT_CONFIGURED on %s when CARD_TOKEN_SECRET is missing',
+    async (path) => {
+      // A missing secret is a deployment fault, not a customer state: a 500 with
+      // the configuration code, never a token derivable without a secret, and
+      // nothing written on the way out.
+      const previous = env.CARD_TOKEN_SECRET;
+      delete env.CARD_TOKEN_SECRET;
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        const res = await GET(path);
+
+        expect(res.status).toBe(500);
+        const json = (await res.json()) as { error: { code: string } };
+        expect(json.error.code).toBe('WALLET_NOT_CONFIGURED');
+        const row = CUSTOMERS.find((c) => c.id === CUSTOMER_ID)!;
+        expect(row.cardTokenHash ?? null).toBeNull();
+      } finally {
+        env.CARD_TOKEN_SECRET = previous;
+        error.mockRestore();
+      }
+    },
+  );
+
   it('answers the same token the pass barcode then carries', async () => {
     const card = (await (await GET('/v1/wallet/card')).json()) as { data: { card_token: string } };
 

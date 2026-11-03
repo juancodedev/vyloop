@@ -600,7 +600,7 @@ export async function rotateCardToken(
     {
       store: openTenantWalletStore(env.DATABASE_URL, input.tenantId),
       client: googleWalletClientFor(env),
-      cardTokenSecret: env.CARD_TOKEN_SECRET,
+      cardTokenSecret: env.CARD_TOKEN_SECRET ?? '',
     },
     input,
   );
