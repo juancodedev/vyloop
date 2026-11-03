@@ -435,6 +435,20 @@ describe('Stage 6 club contrast floor', () => {
   });
 });
 
+describe('club button shape', () => {
+  it.each(['.btn', '.club-qr-dock__button', '.club-profile__logout'])(
+    '%s is a pill, like the dashboard buttons',
+    (selector) => {
+      const radii = [...ruleBody(selector).matchAll(/border-radius:\s*([^;]+);/g)].map(
+        (match) => match[1].trim(),
+      );
+
+      expect(radii.length, `${selector} sets no border-radius`).toBeGreaterThan(0);
+      expect(radii.every((radius) => radius === 'var(--radius-full)')).toBe(true);
+    },
+  );
+});
+
 describe('Stage 6 club-barrio responsive floor', () => {
   it('gives every action a 44px target', () => {
     // Counted from the rules, not from a browser: any rule that sizes a control

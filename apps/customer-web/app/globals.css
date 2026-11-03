@@ -99,7 +99,8 @@ a {
   padding: 14px 0;
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
-  border-radius: var(--radius-lg);
+  /* A pill, the dashboard's button shape: one brand, one button. */
+  border-radius: var(--radius-full);
   border: none;
   cursor: pointer;
   font-family: inherit;
@@ -2609,7 +2610,7 @@ a {
 .club-personal-data__actions .btn { width: auto; flex: 1 1 10rem; }
 .club-personal-data__toast { margin: 0.5rem 0 0; color: var(--success); font-weight: 600; }
 .club-personal-data__toast:empty { display: none; }
-.club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid var(--club-line); border-radius: 8px; background: var(--club-surface); cursor: pointer; }
+.club-profile__logout { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid var(--club-line); border-radius: var(--radius-full); background: var(--club-surface); cursor: pointer; }
 .club-delete-account__open { margin-top: 0.5rem; min-height: 44px; padding: 0.5rem 0; border: 0; background: none; color: var(--error); font-weight: 600; text-decoration: underline; cursor: pointer; }
 .club-delete-account { margin-top: 1rem; padding: 1rem; border: 1px solid var(--error-border); border-radius: 12px; background: var(--error-bg); }
 .club-delete-account__title { margin: 0 0 0.5rem; font-size: 1.05rem; }
@@ -2643,7 +2644,7 @@ a {
   color: var(--club-surface);
   background: var(--club-ink);
   border: 0;
-  border-radius: var(--club-radius);
+  border-radius: var(--radius-full);
   font-family: inherit;
   font-size: var(--text-base);
   font-weight: var(--font-bold);
