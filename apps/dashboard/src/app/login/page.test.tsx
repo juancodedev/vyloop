@@ -162,10 +162,12 @@ describe('the login form', () => {
     );
   });
 
-  // The owner's own test account, kept on screen on purpose for now.
-  it('keeps the test account hint visible', () => {
-    renderPage(false);
+  // A public page must not hand out credentials, nor suggest a seeded account's
+  // address as the one to type.
+  it('shows no test account credentials', () => {
+    const { container } = renderPage(false);
 
-    expect(screen.getByText('Demo: demo@cafecentral.com / demo123')).toBeTruthy();
+    expect(container.textContent).not.toMatch(/demo123|Demo:/);
+    expect(container.innerHTML).not.toContain('cafecentral');
   });
 });
