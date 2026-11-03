@@ -384,11 +384,17 @@ describe('profile pass behavior', () => {
   });
 
   it('loads consent state from the API on mount', async () => {
+    // Cleared first: the mock is shared by every test in this file, so a call
+    // left over from an earlier render would satisfy the assertion on its own.
+    const apiModule = await import('../lib/api');
+    vi.mocked(apiModule.api.getCustomerConsents).mockClear();
+
     await renderPage();
 
-    // getCustomerConsents is called to load the initial state
-    const apiModule = await import('../lib/api');
-    expect(apiModule.api.getCustomerConsents).toHaveBeenCalled();
+    // `ConsentList` loads in its own effect, which can settle after the identity
+    // region `renderPage` waits for. Asserting synchronously raced that effect
+    // and failed under CI load; waiting for the call is the actual contract.
+    await waitFor(() => expect(apiModule.api.getCustomerConsents).toHaveBeenCalled());
   });
 
   it('writes consent changes to the API', async () => {

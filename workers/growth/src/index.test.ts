@@ -328,7 +328,13 @@ const COUNTER_AUTH: TestAuth = {
   userRole: 'terminal',
 };
 
-function reqAs(method: string, path: string, auth: TestAuth, body?: unknown) {
+function reqAs(
+  method: string,
+  path: string,
+  auth: TestAuth,
+  body?: unknown,
+  extraEnv: Record<string, unknown> = {},
+) {
   const r = new Request(`http://localhost${path}`, {
     method,
     headers: {
@@ -343,6 +349,7 @@ function reqAs(method: string, path: string, auth: TestAuth, body?: unknown) {
     DATABASE_URL: 'postgres://mock',
     DOMAIN_EVENTS_QUEUE: {} as Queue,
     SCHEMA_REGISTRY: {} as KVNamespace,
+    ...extraEnv,
   } as Record<string, unknown>);
 }
 
@@ -4047,6 +4054,101 @@ describe('Growth Worker', () => {
       expect(json.data).toEqual({ known: false });
       // Nothing looked up, so nothing can leak and nothing can be written.
       expect(mockDb.select).not.toHaveBeenCalled();
+    });
+    describe('throttle', () => {
+      /** A limiter that answers `success` for every call and records the keys. */
+      function limiter(success: boolean | (() => Promise<never>)) {
+        return {
+          limit: vi.fn(
+            typeof success === 'function'
+              ? success
+              : async () => ({ success }),
+          ),
+        };
+      }
+
+      const RESOLVE = (env: Record<string, unknown>, body: unknown = { member_code: 'ABC-1234' }) =>
+        reqAs('POST', '/v1/loyalty/passes/resolve', COUNTER_AUTH, body, env);
+
+      it('keys the limit by tenant and terminal', async () => {
+        const RESOLVE_RATE_LIMITER = limiter(true);
+        mockDb.select.mockReturnValueOnce(createBuilder([]));
+
+        await RESOLVE({ RESOLVE_RATE_LIMITER });
+
+        // Per terminal, not per tenant: one busy till must not throttle its
+        // neighbour, and a compromised one must not borrow another's budget.
+        expect(RESOLVE_RATE_LIMITER.limit).toHaveBeenCalledWith({
+          key: `biz-1:${COUNTER_AUTH.userId}`,
+        });
+      });
+
+      it('still resolves a member while the terminal is under its limit', async () => {
+        mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+        mockDb.select.mockReturnValueOnce(createBuilder([{ fullName: 'Ada Lovelace' }]));
+
+        const res = await RESOLVE({ RESOLVE_RATE_LIMITER: limiter(true) });
+
+        expect(res.status).toBe(200);
+        const json = (await res.json()) as { data: Record<string, unknown> };
+        expect(json.data).toEqual({ known: true, customer_id: 'cust-1', display_name: 'Ada Lovelace' });
+      });
+
+      it('degrades to known:false over the limit, without looking the code up', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const res = await RESOLVE({ RESOLVE_RATE_LIMITER: limiter(false) });
+
+        // 200 and known:false, never a 429: a throttled terminal is told what an
+        // unknown code tells it, and the cashier keeps charging.
+        expect(res.status).toBe(200);
+        const json = (await res.json()) as { data: Record<string, unknown> };
+        expect(json.data).toEqual({ known: false });
+        // Not looked up at all, so a hit cannot leak through the throttle.
+        expect(mockDb.select).not.toHaveBeenCalled();
+        // The alert signal: one structured line naming the tenant and terminal.
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('resolve_throttled'),
+          expect.objectContaining({ business_id: 'biz-1', subject: COUNTER_AUTH.userId }),
+        );
+        warn.mockRestore();
+      });
+
+      it('fails open when the limiter itself errors', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        mockDb.select.mockReturnValueOnce(createBuilder([{ id: 'cust-1', currentTierId: null }]));
+        mockDb.select.mockReturnValueOnce(createBuilder([{ fullName: 'Ada Lovelace' }]));
+
+        const res = await RESOLVE({
+          RESOLVE_RATE_LIMITER: limiter(async () => {
+            throw new Error('limiter unavailable');
+          }),
+        });
+
+        // Our limiter breaking is our outage, and it must not become the
+        // merchant's lost attribution.
+        expect(res.status).toBe(200);
+        const json = (await res.json()) as { data: Record<string, unknown> };
+        expect(json.data.known).toBe(true);
+        error.mockRestore();
+      });
+
+      it('does not count a malformed scan, which looks nothing up', async () => {
+        const RESOLVE_RATE_LIMITER = limiter(true);
+
+        await RESOLVE({ RESOLVE_RATE_LIMITER }, { member_code: '' });
+
+        expect(RESOLVE_RATE_LIMITER.limit).not.toHaveBeenCalled();
+      });
+
+      it('never throttles checkins, even when the terminal is over its limit', async () => {
+        const RESOLVE_RATE_LIMITER = limiter(false);
+
+        await reqAs('POST', '/v1/loyalty/checkins', COUNTER_AUTH, {}, { RESOLVE_RATE_LIMITER });
+
+        // The sale is the fact; the throttle guards the question asked before it.
+        expect(RESOLVE_RATE_LIMITER.limit).not.toHaveBeenCalled();
+      });
     });
   });
 

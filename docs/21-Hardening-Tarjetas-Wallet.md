@@ -237,20 +237,34 @@ Eso está mejor resuelto que en la referencia. Lo que falta es el borde.
 
 **b) `known: true` es un oráculo.** El código reconoce el riesgo y lo mitiga con el gate de counter —correcto— pero un terminal comprometido puede enumerar el espacio de códigos y aprender qué personas son miembros del tenant. Con 1.1 × 10⁹ de espacio y sin throttle, la enumeración completa no es viable, pero la enumeración **dirigida** (probar códigos derivados de teléfonos, nombres o folios) sí lo es, y es la que importa porque el pepper hace el código determinístico.
 
-**c) El pepper es la única barrera de correlación.** Si `MEMBER_CODE_PEPPER` se filtra, todos los códigos de todos los tenants se vuelven reproducibles. No hay rotación de pepper ni versión en la fila, así que rotarlo invalidaría todos los códigos memorizados.
+**c) El pepper es la única barrera de correlación.** Si `MEMBER_CODE_PEPPER` se filtra, cualquiera que además conozca `tenants.id` y `customers.global_id` puede reproducir el código de esa persona.
+
+> **Corrección (verificada en código).** El diagnóstico inicial decía que rotar el pepper invalidaría todos los códigos memorizados. No es así: `member_code` se **guarda** en la fila y nunca se vuelve a derivar. `ensureMemberCode` devuelve el valor almacenado si es válido (`workers/wallet/src/issuance.ts:323`) y `passes/resolve` busca por igualdad de columna (`resolveMemberCode` en `workers/growth/src/routes.ts`). El pepper solo interviene cuando un cliente todavía no tiene código.
 
 ### 6.3 Qué propone
 
 - Throttle por `(business_id, subject)` en `resolve` y `checkins`, con respuesta que **no** sea un veto para la venta: el mostrador debe poder seguir cobrando, igual que hoy con `known: false`.
 - Contador de fallos que alimente una alerta, no un bloqueo del comercio.
-- Versión de pepper en la fila (`member_code_version`) para poder rotar sin invalidar: el código viejo se valida contra su versión, el nuevo se emite con la nueva. Es una columna y una migración; sin ella, rotar el pepper es un incidente.
+- ~~Versión de pepper en la fila (`member_code_version`)~~. **No hace falta**, por la corrección de 6.2c: el código guardado sigue funcionando con cualquier pepper. Ver 6.5.
 - Evaluar no devolver `fullName` en la respuesta de `resolve` salvo que el mostrador lo necesite para confirmar visualmente. Si no se necesita, es PII servida a un terminal.
 
 ### 6.4 Criterios de aceptación
 
-- [ ] `resolve` responde 429 o degrada a `known: false` tras N fallos por sujeto, sin bloquear `checkins`.
-- [ ] La degradación está testeada: el camino feliz sigue funcionando bajo throttle.
-- [ ] Existe una forma de rotar `MEMBER_CODE_PEPPER` sin invalidar códigos existentes, o está documentado por qué no.
+- [x] `resolve` degrada a `known: false` (200, sin consultar la base) cuando el terminal supera 30 consultas por minuto, sin tocar `checkins`. Binding `RESOLVE_RATE_LIMITER` en `workers/growth/wrangler.jsonc`, con clave `business_id:subject`. Cuenta **todas** las consultas y no solo los fallos: el binding no permite leer un contador sin incrementarlo, y un mostrador real escanea pocas tarjetas por minuto. Si el limiter falla o no está configurado, la consulta pasa igual.
+- [x] La degradación está testeada (`workers/growth/src/index.test.ts`, describe `throttle`): bajo el límite el miembro se resuelve, sobre el límite no se consulta la base, el limiter con error deja pasar, el body malformado no cuenta y `checkins` no consulta el limiter.
+- [x] Rotar `MEMBER_CODE_PEPPER` no invalida los códigos existentes. Procedimiento en 6.5.
+
+La alerta es la línea `[growth] resolve_throttled` con `business_id` y `subject` en los logs del worker. Falta crear la regla de alerta sobre esa línea en Cloudflare, y eso queda fuera del repo.
+
+`fullName` se sigue devolviendo: el cajero lo usa para confirmar visualmente a la persona, y el throttle limita cuántos nombres puede obtener un terminal comprometido. Si algún día el mostrador deja de mostrarlo, hay que sacarlo de la respuesta.
+
+### 6.5 Rotar `MEMBER_CODE_PEPPER`
+
+1. `wrangler secret put MEMBER_CODE_PEPPER` en `workers/wallet` con el valor nuevo.
+2. Los códigos ya guardados siguen funcionando sin cambios. Solo los clientes que todavía no tienen código reciben uno derivado con el pepper nuevo. La unicidad la garantiza `uq_customers_business_member_code`, no el pepper.
+3. Después de rotar, no hay que correr la consulta de verificación comentada en `workers/wallet/sql/member-code-backfill.sql`: compara los códigos guardados con los derivados del pepper y marcaría como distintas todas las filas anteriores a la rotación, aunque esas filas estén bien.
+
+Lo caro de una filtración no es rotar, sino que los códigos ya emitidos **siguen** siendo derivables con el pepper viejo. Para invalidarlos hay que volver a emitirlos: poner `member_code` en `NULL` para los clientes afectados y dejar que `ensureMemberCode` derive uno nuevo en la próxima emisión del pase. Eso cambia el código que el cliente memorizó, así que es una decisión de incidente y no un paso de rutina.
 
 ---
 
@@ -260,7 +274,7 @@ Eso está mejor resuelto que en la referencia. Lo que falta es el borde.
 |---|---|---|---|
 | 1 | [4 — Bindings](#4-confirmar-bindings-antes-de-decir-issued) | Único fallo silencioso. Sin migración. Se paga solo. | Hecho |
 | 2 | [5 — Guardrail de arrays](#5-nada-impide-que-un-patch-futuro-mande-arrays) | Barato y protege el camino que el punto 1 del orden va a tocar. | Hecho |
-| 3 | [6 — Throttle y pepper](#6-passesresolve-throttle-y-oráculo) | No requiere migración de datos; la versión de pepper sí, y puede ir después. | Pendiente |
+| 3 | [6 — Throttle y pepper](#6-passesresolve-throttle-y-oráculo) | No requiere migración de datos. La versión de pepper resultó innecesaria (ver 6.2c). | Hecho |
 | 4 | [2 y 3 — Credencial rotable](#2-el-qr-lleva-global_id) | El más caro. Necesita el paso 2 de esta lista ya hecho. | Hecho |
 
 El punto 1 de la ejecución se puede cerrar en una sesión y no toca ningún contrato externo.
@@ -285,7 +299,7 @@ Dos de los cuatro puntos que originaron este documento ya estaban resueltos en e
 
 | Punto inicial | Estado real | Qué queda |
 |---|---|---|
-| "Vyloop hoy depende del escaneo; el código manual debería ser ciudadano de primera" | **Incorrecto.** Ya lo es: `member_code` con unique parcial, `passes/resolve` con gate de counter y tenant scope por header. | Throttle, versión de pepper, y revisar si `fullName` debe viajar. Ver [sección 6](#6-passesresolve-throttle-y-oráculo). |
+| "Vyloop hoy depende del escaneo; el código manual debería ser ciudadano de primera" | **Incorrecto.** Ya lo es: `member_code` con unique parcial, `passes/resolve` con gate de counter y tenant scope por header. | Throttle y revisión de `fullName`: hechos. La versión de pepper no hacía falta, porque el código se guarda y no se vuelve a derivar. Ver [sección 6](#6-passesresolve-throttle-y-oráculo). |
 | "El patch de `textModulesData` reemplaza el array entero y eso es un footgun" | **Parcialmente incorrecto.** `reconcile.ts` lo omite a propósito y lo documenta; el patch manda solo el balance. | El `409` sí manda el objeto completo, y `patchClass` no tiene callers ni guardrail. Ver [sección 5](#5-nada-impide-que-un-patch-futuro-mande-arrays). |
 | "Separar credencial de identidad" | Válido. `global_id` es inmutable y el `object_id` deriva de él. | [Secciones 2](#2-el-qr-lleva-global_id) y [3](#3-separar-credencial-de-identidad). |
 | "Confirmar bindings antes de dar por emitida la card" | Válido. `insertObject` descarta la respuesta y nadie vuelve a leer los bindings. | [Sección 4](#4-confirmar-bindings-antes-de-decir-issued). |

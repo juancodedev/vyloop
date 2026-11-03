@@ -61,7 +61,18 @@ export interface DeliveryQueueEnv {
   DELIVERY_QUEUE?: Queue;
 }
 
-export type GrowthEnv = Bindings & PaymentWebhookEnv & DeliveryQueueEnv;
+/**
+ * The limiter `POST /v1/loyalty/passes/resolve` consults before it looks a code up.
+ *
+ * Optional for the reason `DeliveryQueueEnv` gives: a deployment without the
+ * binding must keep answering the till. A missing limiter means no throttle, and
+ * that is logged once per isolate rather than failing the scan.
+ */
+export interface ResolveRateLimitEnv {
+  RESOLVE_RATE_LIMITER?: RateLimit;
+}
+
+export type GrowthEnv = Bindings & PaymentWebhookEnv & DeliveryQueueEnv & ResolveRateLimitEnv;
 
 const router = new Hono<{ Bindings: GrowthEnv }>();
 
@@ -2108,6 +2119,64 @@ async function resolveMemberCode(
     | undefined;
 }
 
+let missingResolveLimiterLogged = false;
+
+/**
+ * May this terminal ask "does this code belong to someone?" right now?
+ *
+ * ## Why resolve needs a throttle at all
+ *
+ * `known: true` is an oracle. The counter gate stops a customer or a dashboard
+ * session from asking, but a compromised terminal can still walk codes derived
+ * from phone numbers, names or receipt numbers and learn who is a member of the
+ * tenant. The code space is too large to enumerate whole; targeted guessing is
+ * what this bounds.
+ *
+ * ## Why every lookup counts, not only misses
+ *
+ * The Workers rate-limit binding has no way to read a counter without bumping
+ * it, so "N misses, then refuse" would need its own store. Counting every lookup
+ * per terminal is what the binding does natively, and a real till scans a few
+ * cards a minute, far below the configured limit in `wrangler.jsonc`.
+ *
+ * ## Why it never refuses
+ *
+ * Over the limit the route answers what an unknown code answers, `known: false`
+ * with a 200, so the cashier keeps charging. A limiter that errors, or a
+ * deployment without the binding, lets the lookup through: our limiter failing is
+ * our outage, and it must not become the merchant's lost attribution.
+ *
+ * Keyed by tenant and subject, so one busy till cannot throttle its neighbour and
+ * a compromised one cannot borrow another's budget.
+ */
+async function allowResolveLookup(
+  env: ResolveRateLimitEnv,
+  businessId: string,
+  subject: string,
+): Promise<boolean> {
+  const limiter = env.RESOLVE_RATE_LIMITER;
+  if (!limiter) {
+    if (!missingResolveLimiterLogged) {
+      missingResolveLimiterLogged = true;
+      console.warn('[growth] RESOLVE_RATE_LIMITER is not bound; passes/resolve is not throttled.');
+    }
+    return true;
+  }
+
+  try {
+    const { success } = await limiter.limit({ key: `${businessId}:${subject}` });
+    if (!success) {
+      // The alert signal. A terminal that trips this repeatedly is either broken
+      // or walking codes, and either way someone should look at it.
+      console.warn('[growth] resolve_throttled', { business_id: businessId, subject });
+    }
+    return success;
+  } catch (err) {
+    console.error('[growth] RESOLVE_RATE_LIMITER failed; letting the lookup through.', err);
+    return true;
+  }
+}
+
 /**
  * POST /v1/loyalty/passes/resolve
  *
@@ -2151,6 +2220,12 @@ router.post('/v1/loyalty/passes/resolve', async (c) => {
   }
   // Narrowed above; held in a const so the narrowing reaches the callback below.
   const memberCode = body.member_code;
+
+  // After the malformed-body answer, which looks nothing up and so cannot leak,
+  // and before the lookup, so a throttled terminal learns nothing from a hit.
+  if (!(await allowResolveLookup(c.env, businessId, auth.userId))) {
+    return c.json({ data: { known: false } });
+  }
 
   const db = createDb(c.env.DATABASE_URL);
   return withTenantTransaction(db, { businessId }, async (tx) => {

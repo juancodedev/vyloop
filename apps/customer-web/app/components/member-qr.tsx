@@ -78,7 +78,7 @@ export function MemberQrCode({
       const dataUrl = await QRCode.toDataURL(payload, {
         width: QR_SIZE,
         margin: 2,
-        color: { dark: '#27201d', light: '#ffffff' },
+        color: { dark: '#15191b', light: '#ffffff' },
       });
 
       if (live.current) setState({ status: 'ready', dataUrl });
