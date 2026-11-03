@@ -68,11 +68,20 @@ describe('buildLoyaltyObject', () => {
     expect(loyaltyObject.accountId).not.toContain('U');
   });
 
-  it('carries the full globalId in the barcode, not the member code', () => {
-    // The POS resolves customers only by globalId
-    // (`GET /v1/customers/n/:globalId`). Putting the short code in the barcode
-    // would have forced a POS contract change for no gain; this way the barcode
-    // contract is untouched.
+  it('carries the card token in the barcode when the customer has one', () => {
+    const token = `vyc1.${'A'.repeat(43)}`;
+    const loyaltyObject = buildLoyaltyObject({ ...baseInput, cardToken: token });
+    expect(loyaltyObject.barcode).toEqual({ type: 'QR_CODE', value: token });
+    // The object id stays derived from the identity, never from the credential.
+    expect(loyaltyObject.id).toBe(buildLoyaltyObject(baseInput).id);
+  });
+
+  it('carries the full globalId in the barcode for a legacy customer without a token', () => {
+    // A pass issued before card tokens existed keeps its uuid barcode, which the
+    // POS still resolves (docs/21 §2.5), until a rotation rewrites it.
+    expect(buildLoyaltyObject({ ...baseInput, cardToken: null }).barcode.value).toBe(
+      CUSTOMER_GLOBAL_ID,
+    );
     const loyaltyObject = buildLoyaltyObject(baseInput);
     expect(loyaltyObject.barcode).toEqual({ type: 'QR_CODE', value: CUSTOMER_GLOBAL_ID });
     expect(loyaltyObject.barcode.value).toBe(CUSTOMER_GLOBAL_ID);

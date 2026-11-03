@@ -12,7 +12,7 @@ import type { GoogleWalletClient } from './google-client';
  * Worker bindings.
  *
  * `GOOGLE_WALLET_ISSUER_ID`, `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL`,
- * `GOOGLE_WALLET_PRIVATE_KEY` and `MEMBER_CODE_PEPPER` arrive through
+ * `GOOGLE_WALLET_PRIVATE_KEY`, `MEMBER_CODE_PEPPER` and `CARD_TOKEN_SECRET` arrive through
  * `wrangler secret put` and are absent from `wrangler.jsonc`, `.dev.vars` and
  * the repository. `DATABASE_URL` and `WALLET_ALLOWED_ORIGINS` are plain vars.
  *
@@ -51,6 +51,13 @@ export interface WalletBindings {
    * `member-code.ts`.
    */
   MEMBER_CODE_PEPPER: string;
+  /**
+   * Server-side secret for card-token derivation. Load-bearing: without it the
+   * scannable credential is recomputable by anyone who knows a customer's
+   * global id, which defeats revoking it. Only this worker holds it; resolvers
+   * hash what they scan. See `card-token.ts`.
+   */
+  CARD_TOKEN_SECRET: string;
   /**
    * Comma-separated list of origins the Add to Wallet control will be rendered
    * on. Becomes the `origins` claim of the save token, which Google requires:

@@ -177,6 +177,12 @@ class FakeStore implements WalletStore {
   async claimMemberCode(): Promise<string | null> {
     throw new Error('not used by the callback path');
   }
+  async claimCardToken(): Promise<never> {
+    throw new Error('not used by the callback path');
+  }
+  async rotateCardToken(): Promise<never> {
+    throw new Error('not used by the callback path');
+  }
   async recordPass(): Promise<void> {
     throw new Error('not used by the callback path');
   }

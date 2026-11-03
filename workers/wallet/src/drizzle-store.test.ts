@@ -29,6 +29,8 @@ vi.mock('@vyloop/db', async () => {
       fullName: text('full_name'),
       memberCode: text('member_code'),
       currentTierId: uuid('current_tier_id'),
+      cardTokenVersion: integer('card_token_version'),
+      cardTokenHash: text('card_token_hash'),
       deletedAt: timestamp('deleted_at'),
     }),
     customerWalletPasses: pgTable('customer_wallet_passes', {
@@ -589,6 +591,133 @@ describe('claimMemberCode', () => {
     const store = createDrizzleWalletStore(fake.db);
 
     expect(await store.claimMemberCode(CUSTOMER, TENANT, 'K7M2QX')).toBeNull();
+  });
+});
+
+// ============================================================================
+// The card token compare-and-set and rotation
+// ============================================================================
+
+describe('claimCardToken', () => {
+  function fakeWithExecuteRows(rows: Array<Record<string, unknown>>) {
+    const fake = createFakeDb([], 'businessId');
+    fake.db.execute = vi.fn((chunk: unknown) => {
+      fake.executed.push(dialect.sqlToQuery(chunk as never));
+      return Promise.resolve({ rows });
+    });
+    return fake;
+  }
+
+  const HASH = 'a'.repeat(64);
+
+  it('assigns version 1 only where both token columns are still null, within the tenant', async () => {
+    const fake = fakeWithExecuteRows([{ card_token_version: 1, card_token_hash: HASH }]);
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.claimCardToken(CUSTOMER, TENANT, HASH);
+
+    const { sql: statement, params } = fake.executed[0]!;
+    expect(statement).toContain('UPDATE customers');
+    expect(statement).toContain('card_token_version IS NULL');
+    expect(statement).toContain('card_token_hash IS NULL');
+    expect(statement).toContain('business_id');
+    expect(statement).toContain('deleted_at IS NULL');
+    expect(statement).toContain('RETURNING card_token_version, card_token_hash');
+    expect(params).toEqual(expect.arrayContaining([HASH, CUSTOMER, TENANT]));
+  });
+
+  it('returns the stored post-condition', async () => {
+    const fake = fakeWithExecuteRows([{ card_token_version: 1, card_token_hash: HASH }]);
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.claimCardToken(CUSTOMER, TENANT, HASH)).toEqual({ version: 1, hash: HASH });
+  });
+
+  it('returns null when the update matched no row', async () => {
+    const store = createDrizzleWalletStore(fakeWithExecuteRows([]).db);
+
+    expect(await store.claimCardToken(CUSTOMER, TENANT, HASH)).toBeNull();
+  });
+});
+
+describe('rotateCardToken', () => {
+  function fakeWithExecuteRows(rows: Array<Record<string, unknown>>) {
+    const fake = createFakeDb([], 'businessId');
+    fake.db.execute = vi.fn((chunk: unknown) => {
+      fake.executed.push(dialect.sqlToQuery(chunk as never));
+      return Promise.resolve({ rows });
+    });
+    return fake;
+  }
+
+  const write = {
+    customerId: CUSTOMER,
+    tenantId: TENANT,
+    expectedVersion: 3,
+    newVersion: 4,
+    newHash: 'b'.repeat(64),
+    actorUserId: '11111111-2222-3333-4444-555555555555',
+    reason: 'Customer reported a leaked screenshot',
+  };
+
+  it('bumps the version, sets the hash and inserts the audit row in one statement', async () => {
+    const fake = fakeWithExecuteRows([{ new_version: 4 }]);
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.rotateCardToken(write)).toBe(true);
+
+    // One statement: the update and the audit insert cannot be split by a
+    // failure between them.
+    expect(fake.executed).toHaveLength(1);
+    const { sql: statement, params } = fake.executed[0]!;
+    expect(statement).toContain('UPDATE customers');
+    expect(statement).toContain('card_token_version =');
+    expect(statement).toContain('card_token_hash =');
+    expect(statement).toContain('card_token_version IS NOT DISTINCT FROM');
+    expect(statement).toContain('business_id');
+    expect(statement).toContain('INSERT INTO customer_credential_revocations');
+    for (const column of [
+      'business_id',
+      'customer_id',
+      'actor_user_id',
+      'reason',
+      'previous_version',
+      'new_version',
+    ]) {
+      expect(statement).toContain(column);
+    }
+    expect(params).toEqual(
+      expect.arrayContaining([CUSTOMER, TENANT, 3, 4, write.newHash, write.actorUserId, write.reason]),
+    );
+  });
+
+  it('writes nothing to the balance, the tier, the ledger, the identity or the pass row (S9)', async () => {
+    const fake = fakeWithExecuteRows([{ new_version: 4 }]);
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.rotateCardToken(write);
+
+    const statement = fake.executed[0]!.sql;
+    expect(statement).not.toContain('points_transactions');
+    expect(statement).not.toContain('current_tier_id');
+    expect(statement).not.toContain('global_id');
+    expect(statement).not.toContain('customer_wallet_passes');
+    expect(statement).not.toContain('member_code');
+  });
+
+  it('carries a NULL previous version for a legacy customer', async () => {
+    const fake = fakeWithExecuteRows([{ new_version: 1 }]);
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.rotateCardToken({ ...write, expectedVersion: null, newVersion: 1 });
+
+    expect(fake.executed[0]!.params).toContain(null);
+  });
+
+  it('reports false when the version moved under the caller', async () => {
+    const store = createDrizzleWalletStore(fakeWithExecuteRows([]).db);
+
+    expect(await store.rotateCardToken(write)).toBe(false);
   });
 });
 

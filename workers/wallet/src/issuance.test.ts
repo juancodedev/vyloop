@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { BALANCE_DISPLAY_MAX } from './balance';
+import { deriveCardToken, hashCardToken, isCardToken } from './card-token';
 import { DEMO_MODE_NAME_PREFIX, classIdFor, objectIdFor } from './ids';
 import {
   LoyaltyProgramNotConfiguredError,
   MemberCodeUnavailableError,
   classReadinessFor,
   dispositionForExistingPass,
+  ensureCardToken,
   ensureMemberCode,
   issuePass,
   linkForExistingPass,
@@ -42,6 +44,8 @@ const SERVICE_ACCOUNT = 'wallet@vyloop-demo.iam.gserviceaccount.com';
 const ORIGINS = ['https://app.vyloop.app'];
 
 const PEPPER = crypto.randomUUID();
+/** Generated for this run and discarded with it. Never a real secret. */
+const CARD_TOKEN_SECRET = crypto.randomUUID() + crypto.randomUUID();
 
 let privateKeyPem: string;
 
@@ -233,6 +237,31 @@ class FakeStore implements WalletStore {
     return code;
   }
 
+  /**
+   * The card-token compare-and-set, faithfully: version 1 and the hash land only
+   * while both columns are still null, and the post-condition is returned.
+   */
+  cardTokenClaims: Array<{ customerId: string; tenantId: string; hash: string }> = [];
+
+  async claimCardToken(
+    customerId: string,
+    tenantId: string,
+    hash: string,
+  ): Promise<{ version: number; hash: string } | null> {
+    this.record('claimCardToken', tenantId);
+    this.cardTokenClaims.push({ customerId, tenantId, hash });
+    const row = (this.customersByTenant[tenantId] ?? []).find((c) => c.id === customerId);
+    if (!row) return null;
+    if ((row.cardTokenVersion ?? null) !== null || (row.cardTokenHash ?? null) !== null) return null;
+    row.cardTokenVersion = 1;
+    row.cardTokenHash = hash;
+    return { version: 1, hash };
+  }
+
+  async rotateCardToken(): Promise<boolean> {
+    throw new Error('the issuance path must not rotate a card token');
+  }
+
   recorded: PassTrackingUpdate[] = [];
 
   async recordPass(update: PassTrackingUpdate): Promise<void> {
@@ -353,6 +382,7 @@ function deps(store: WalletStore, overrides: Partial<IssuePassDeps> = {}): Issue
   return {
     store,
     pepper: PEPPER,
+    cardTokenSecret: CARD_TOKEN_SECRET,
     serviceAccountEmail: SERVICE_ACCOUNT,
     privateKeyPem,
     origins: ORIGINS,
@@ -958,8 +988,10 @@ describe('issuePass', () => {
     expect(issued.balancePoints).toBe(96942);
     expect(issued.loyaltyObject.loyaltyPoints.balance.string).toBe('96942');
     expect(issued.loyaltyObject.accountId).toBe(issued.memberCode);
-    // The barcode carries the full globalId, because that is all the POS reads.
-    expect(issued.loyaltyObject.barcode.value).toBe(CUSTOMER_GLOBAL_ID);
+    // A customer with no pass yet gets a card token, and the barcode carries it
+    // rather than the permanent globalId (docs/21 §2).
+    expect(isCardToken(issued.loyaltyObject.barcode.value)).toBe(true);
+    expect(issued.loyaltyObject.barcode.value).not.toContain(CUSTOMER_GLOBAL_ID);
   });
 
   it('copies the balance from the ledger rather than computing one', async () => {
@@ -1230,6 +1262,10 @@ describe('linkForExistingPass', () => {
     return {
       ...passInput(),
       existingObjectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+      // A reused row is one Google already holds. The default fixture customer
+      // has no card token, so this is the legacy customer: their barcode stays
+      // the globalId until a rotation rewrites it.
+      passState: 'issued',
       ...overrides,
     };
   }
@@ -1346,5 +1382,166 @@ describe('nearby locations', () => {
     const issued = await issuePass(deps(store), passInput());
 
     expect(issued.loyaltyObject).not.toHaveProperty('merchantLocations');
+  });
+});
+
+// ============================================================================
+// Card token
+// ============================================================================
+
+describe('ensureCardToken', () => {
+  function tokenInput(overrides: Partial<Parameters<typeof ensureCardToken>[1]> = {}) {
+    return {
+      customerId: CUSTOMER_ID,
+      tenantId: TENANT,
+      customerGlobalId: CUSTOMER_GLOBAL_ID,
+      storedVersion: null,
+      storedHash: null,
+      passState: null,
+      ...overrides,
+    };
+  }
+
+  it('assigns version 1 to a customer with no pass row and stores only the hash', async () => {
+    const store = readyStore();
+
+    const token = await ensureCardToken(deps(store), tokenInput());
+
+    const expected = await deriveCardToken({
+      secret: CARD_TOKEN_SECRET,
+      tenantId: TENANT,
+      customerGlobalId: CUSTOMER_GLOBAL_ID,
+      version: 1,
+    });
+    expect(token).toBe(expected);
+    expect(store.cardTokenClaims).toEqual([
+      { customerId: CUSTOMER_ID, tenantId: TENANT, hash: await hashCardToken(expected) },
+    ]);
+    const row = store.customersByTenant[TENANT]![0]!;
+    expect(row.cardTokenVersion).toBe(1);
+    expect(row.cardTokenHash).toBe(await hashCardToken(expected));
+  });
+
+  it('assigns a token while the pass row is still not_issued', async () => {
+    const store = readyStore();
+
+    const token = await ensureCardToken(deps(store), tokenInput({ passState: 'not_issued' }));
+
+    expect(isCardToken(token)).toBe(true);
+    expect(store.cardTokenClaims).toHaveLength(1);
+  });
+
+  it.each(['issued', 'not_saved', 'inactive', 'expired', 'completed'])(
+    'gives no token to a legacy customer whose pass row is %s and who has no hash',
+    async (passState) => {
+      const store = readyStore();
+
+      const token = await ensureCardToken(deps(store), tokenInput({ passState }));
+
+      expect(token).toBeNull();
+      expect(store.cardTokenClaims).toHaveLength(0);
+    },
+  );
+
+  it('re-derives the stored version without writing anything', async () => {
+    const store = readyStore();
+    const v2 = await deriveCardToken({
+      secret: CARD_TOKEN_SECRET,
+      tenantId: TENANT,
+      customerGlobalId: CUSTOMER_GLOBAL_ID,
+      version: 2,
+    });
+
+    const token = await ensureCardToken(
+      deps(store),
+      tokenInput({ storedVersion: 2, storedHash: await hashCardToken(v2), passState: 'issued' }),
+    );
+
+    expect(token).toBe(v2);
+    expect(store.cardTokenClaims).toHaveLength(0);
+  });
+
+  it('refuses a stored hash the derivation does not reproduce', async () => {
+    // A rotated secret or a corrupted row: the barcode would match nobody at the
+    // counter, so no pass is built on it.
+    const store = readyStore();
+
+    await expect(
+      ensureCardToken(
+        deps(store),
+        tokenInput({ storedVersion: 1, storedHash: 'f'.repeat(64), passState: 'issued' }),
+      ),
+    ).rejects.toThrow(/card token/i);
+  });
+
+  it('builds from the stored winner when the compare-and-set loses a race', async () => {
+    const store = readyStore();
+    const winner = await deriveCardToken({
+      secret: CARD_TOKEN_SECRET,
+      tenantId: TENANT,
+      customerGlobalId: CUSTOMER_GLOBAL_ID,
+      version: 1,
+    });
+    // Another request claimed between this request's read and its write.
+    const row = store.customersByTenant[TENANT]![0]!;
+    row.cardTokenVersion = 1;
+    row.cardTokenHash = await hashCardToken(winner);
+
+    const token = await ensureCardToken(deps(store), tokenInput());
+
+    expect(token).toBe(winner);
+  });
+
+  it('refuses an empty CARD_TOKEN_SECRET for a customer who needs a token', async () => {
+    const store = readyStore();
+
+    await expect(
+      ensureCardToken(deps(store, { cardTokenSecret: '' }), tokenInput()),
+    ).rejects.toThrow(/CARD_TOKEN_SECRET is empty/);
+    expect(store.cardTokenClaims).toHaveLength(0);
+  });
+});
+
+describe('issuance barcode', () => {
+  it('a new customer\'s pass carries the token that ensureCardToken stored', async () => {
+    const store = readyStore();
+
+    const issued = await issuePass(deps(store), passInput());
+
+    const row = store.customersByTenant[TENANT]![0]!;
+    expect(row.cardTokenVersion).toBe(1);
+    expect(await hashCardToken(issued.loyaltyObject.barcode.value)).toBe(row.cardTokenHash);
+    expect(issued.loyaltyObject.barcode.type).toBe('QR_CODE');
+  });
+
+  it('issuePass and linkForExistingPass build the same barcode for the same customer state', async () => {
+    const store = readyStore();
+    const first = await issuePass(deps(store), passInput());
+    const row = store.customersByTenant[TENANT]![0]!;
+
+    const again = await linkForExistingPass(deps(store), {
+      ...passInput({
+        storedCardTokenVersion: row.cardTokenVersion ?? null,
+        storedCardTokenHash: row.cardTokenHash ?? null,
+      }),
+      existingObjectId: first.objectId,
+      passState: 'issued',
+    });
+
+    expect(again.loyaltyObject.barcode).toEqual(first.loyaltyObject.barcode);
+    expect(again.objectId).toBe(first.objectId);
+  });
+
+  it('a legacy customer keeps the uuid barcode on a re-signed link, as before', async () => {
+    const store = readyStore();
+
+    const issued = await linkForExistingPass(deps(store), {
+      ...passInput(),
+      existingObjectId: objectIdFor(ISSUER, CUSTOMER_GLOBAL_ID),
+      passState: 'issued',
+    });
+
+    expect(issued.loyaltyObject.barcode.value).toBe(CUSTOMER_GLOBAL_ID);
+    expect(store.cardTokenClaims).toHaveLength(0);
   });
 });

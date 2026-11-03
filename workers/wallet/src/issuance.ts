@@ -20,6 +20,7 @@
  *    Nothing in this file sums, adjusts, rounds or clamps a balance.
  */
 
+import { deriveCardToken, hashCardToken } from './card-token';
 import { DEMO_MODE_NAME_PREFIX, classIdFor, objectIdFor } from './ids';
 import { createSaveToWalletUrl } from './jwt';
 import type { LocationsSource } from './locations-source';
@@ -372,10 +373,145 @@ export async function ensureMemberCode(
 }
 
 // ---------------------------------------------------------------------------
+// Card token
+// ---------------------------------------------------------------------------
+
+/** Thrown when a stored card token cannot be reproduced or could not be claimed. */
+export class CardTokenUnavailableError extends Error {
+  readonly customerId: string;
+  readonly tenantId: string;
+
+  constructor(customerId: string, tenantId: string, detail: string) {
+    super(
+      `Could not obtain a usable card token for customer ${customerId} in tenant ${tenantId}: ` +
+        `${detail}. The pass was not built: a barcode the counter cannot resolve is a dead card.`,
+    );
+    this.name = 'CardTokenUnavailableError';
+    this.customerId = customerId;
+    this.tenantId = tenantId;
+  }
+}
+
+export interface EnsureCardTokenDeps {
+  store: WalletStore;
+  /** `CARD_TOKEN_SECRET`. */
+  cardTokenSecret: string;
+}
+
+export interface EnsureCardTokenInput {
+  customerId: string;
+  tenantId: string;
+  customerGlobalId: string;
+  /** `customers.card_token_version` as read. */
+  storedVersion: number | null;
+  /** `customers.card_token_hash` as read. */
+  storedHash: string | null;
+  /**
+   * `customer_wallet_passes.state`, or `null` when the customer has no row.
+   * Decides the legacy rule below.
+   */
+  passState: string | null;
+}
+
+/**
+ * Whether a tracking state means Google already holds an object for this
+ * customer. `not_issued` is the only state that does not (L6 legacy rule).
+ */
+export function passObjectInserted(passState: string | null | undefined): boolean {
+  return passState !== null && passState !== undefined && passState !== 'not_issued';
+}
+
+/**
+ * Return the customer's current card token, assigning version 1 lazily when
+ * that is allowed, or `null` for a legacy customer.
+ *
+ * ## The legacy rule
+ *
+ * A customer whose pass row says Google already holds the object (any state
+ * other than `not_issued`) and who has no `card_token_hash` gets **no** lazy
+ * token. Their object was inserted with the uuid barcode, the POS still
+ * resolves that uuid, and assigning a token now would make the POS refuse the
+ * uuid (S10) while the card in their phone still shows it. Only a rotation,
+ * which rewrites the barcode at Google, moves them onto a token.
+ *
+ * ## Stored, then read back
+ *
+ * Like `ensureMemberCode`, the value used is the post-condition of a
+ * compare-and-set, so a lost race builds from the winner's version. The token
+ * itself is never stored: it is re-derived from the stored version and checked
+ * against the stored hash, and a hash the derivation does not reproduce (a
+ * changed secret, a corrupted row) is refused rather than shipped as a barcode
+ * that resolves to nobody.
+ */
+export async function ensureCardToken(
+  deps: EnsureCardTokenDeps,
+  input: EnsureCardTokenInput,
+): Promise<string | null> {
+  const { customerId, tenantId } = input;
+  const storedVersion = input.storedVersion ?? null;
+  const storedHash = input.storedHash ?? null;
+
+  if (storedVersion === null && storedHash === null) {
+    if (passObjectInserted(input.passState)) return null;
+
+    const candidate = await derive(deps, input, 1);
+    const claimed = await deps.store.claimCardToken(customerId, tenantId, await hashCardToken(candidate));
+    if (claimed !== null && claimed !== undefined) {
+      return reproduce(deps, input, claimed.version, claimed.hash);
+    }
+
+    // Lost the race, or the row moved. Build from whatever is genuinely stored.
+    const reread = await deps.store.findCustomerById(customerId, tenantId);
+    const version = reread?.cardTokenVersion ?? null;
+    const hash = reread?.cardTokenHash ?? null;
+    if (version === null || hash === null) {
+      throw new CardTokenUnavailableError(customerId, tenantId, 'the claim matched no row');
+    }
+    return reproduce(deps, input, version, hash);
+  }
+
+  if (storedVersion === null || storedHash === null) {
+    throw new CardTokenUnavailableError(
+      customerId,
+      tenantId,
+      'card_token_version and card_token_hash are not both set',
+    );
+  }
+
+  return reproduce(deps, input, storedVersion, storedHash);
+}
+
+function derive(deps: EnsureCardTokenDeps, input: EnsureCardTokenInput, version: number): Promise<string> {
+  return deriveCardToken({
+    secret: deps.cardTokenSecret,
+    tenantId: input.tenantId,
+    customerGlobalId: input.customerGlobalId,
+    version,
+  });
+}
+
+async function reproduce(
+  deps: EnsureCardTokenDeps,
+  input: EnsureCardTokenInput,
+  version: number,
+  hash: string,
+): Promise<string> {
+  const token = await derive(deps, input, version);
+  if ((await hashCardToken(token)) !== hash) {
+    throw new CardTokenUnavailableError(
+      input.customerId,
+      input.tenantId,
+      'the stored card_token_hash does not match the derived card token',
+    );
+  }
+  return token;
+}
+
+// ---------------------------------------------------------------------------
 // Pass issuance
 // ---------------------------------------------------------------------------
 
-export interface IssuePassDeps extends EnsureMemberCodeDeps {
+export interface IssuePassDeps extends EnsureMemberCodeDeps, EnsureCardTokenDeps {
   /** `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL`. */
   serviceAccountEmail: string;
   /** `GOOGLE_WALLET_PRIVATE_KEY`, PEM-encoded. */
@@ -408,6 +544,15 @@ export interface IssuePassInput {
   customerGlobalId: string;
   customerFullName: string | null;
   storedMemberCode: string | null;
+  /** `customers.card_token_version`. Absent reads as NULL. */
+  storedCardTokenVersion?: number | null | undefined;
+  /** `customers.card_token_hash`. Absent reads as NULL. */
+  storedCardTokenHash?: string | null | undefined;
+  /**
+   * `customer_wallet_passes.state`, or null/absent when there is no row. Decides
+   * whether a customer without a token may be given one (see `ensureCardToken`).
+   */
+  passState?: string | null | undefined;
   /**
    * The `issuerId` from a successful `classReadinessFor`.
    *
@@ -498,6 +643,18 @@ async function buildSignedPass(
     input.storedMemberCode,
   );
 
+  // The barcode. `null` for a legacy customer, whose barcode stays the uuid.
+  // Computed from the same inputs on both issuance paths, so a re-signed link
+  // carries the same barcode as the pass that was minted.
+  const cardToken = await ensureCardToken(deps, {
+    customerId: input.customerId,
+    tenantId: input.tenantId,
+    customerGlobalId: input.customerGlobalId,
+    storedVersion: input.storedCardTokenVersion ?? null,
+    storedHash: input.storedCardTokenHash ?? null,
+    passState: input.passState ?? null,
+  });
+
   // Read, never computed. This is the ledger's `balance_after`.
   const balancePoints = await deps.store.latestBalance(input.customerId, input.tenantId);
 
@@ -524,6 +681,7 @@ async function buildSignedPass(
     classId: input.classId,
     customerId: input.customerId,
     customerGlobalId: input.customerGlobalId,
+    cardToken,
     customerFullName: input.customerFullName,
     memberCode,
     balancePoints,
@@ -748,6 +906,11 @@ export interface ExistingPassInput extends IssuePassInput {
    * out.
    */
   existingObjectId: string;
+  /**
+   * The row's state. Required here: a reused row exists by definition, and its
+   * state is what the card-token legacy rule reads.
+   */
+  passState: string;
 }
 
 /**

@@ -363,6 +363,16 @@ class SweepStore implements WalletStore {
     return null;
   }
 
+  async claimCardToken(): Promise<null> {
+    this.record('claimCardToken', '');
+    return null;
+  }
+
+  async rotateCardToken(): Promise<boolean> {
+    this.record('rotateCardToken', '');
+    return false;
+  }
+
   async recordPass(): Promise<void> {
     this.record('recordPass', '');
   }
@@ -874,6 +884,7 @@ describe('the sweep in Demo Mode', () => {
       GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: 'wallet@example.invalid',
       GOOGLE_WALLET_PRIVATE_KEY: 'not-a-key',
       MEMBER_CODE_PEPPER: 'pepper',
+      CARD_TOKEN_SECRET: 'card-token-secret',
       WALLET_ALLOWED_ORIGINS: 'https://app.vyloop.app',
       WALLET_DEMO_MODE: 'true',
     });
@@ -898,6 +909,7 @@ describe('the sweep in Demo Mode', () => {
         GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: 'wallet@example.invalid',
         GOOGLE_WALLET_PRIVATE_KEY: 'not-a-key',
         MEMBER_CODE_PEPPER: 'pepper',
+        CARD_TOKEN_SECRET: 'card-token-secret',
         WALLET_ALLOWED_ORIGINS: 'https://app.vyloop.app',
         WALLET_DEMO_MODE: raw,
       });
@@ -1814,6 +1826,7 @@ describe('the schedule and the export shape', () => {
           GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: 'wallet@example.invalid',
           GOOGLE_WALLET_PRIVATE_KEY: 'not-a-key',
           MEMBER_CODE_PEPPER: 'pepper',
+          CARD_TOKEN_SECRET: 'card-token-secret',
           WALLET_ALLOWED_ORIGINS: 'https://app.vyloop.app',
           WALLET_DEMO_MODE: 'true',
         },

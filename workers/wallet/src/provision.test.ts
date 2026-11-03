@@ -219,6 +219,8 @@ function fakeStore(
     latestBalance: unused('latestBalance'),
     isMemberCodeTaken: unused('isMemberCodeTaken'),
     claimMemberCode: unused('claimMemberCode'),
+    claimCardToken: unused('claimCardToken'),
+    rotateCardToken: unused('rotateCardToken'),
     recordPass: unused('recordPass'),
     findPass: unused('findPass'),
     recordPassReconciliation: unused('recordPassReconciliation'),

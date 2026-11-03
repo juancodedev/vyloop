@@ -28,6 +28,13 @@
 import type { LoyaltyObject } from './object';
 
 /**
+ * The five values a confirmation compares, as the writer intended them. A full
+ * `LoyaltyObject` satisfies it; a barcode-only patch (card-token rotation)
+ * builds just these from the recorded pass rather than inventing the rest.
+ */
+export type ExpectedObjectBindings = Pick<LoyaltyObject, 'id' | 'classId' | 'accountId' | 'barcode'>;
+
+/**
  * The fields whose value the pass cannot survive changing.
  *
  * `barcode.type` is in the list even though this build only ever writes
@@ -111,7 +118,7 @@ function readBinding(resource: unknown, field: BindingField): ReadBinding {
 }
 
 /** The value this build sent, in the form the comparison uses. */
-function expectedBindingValue(expected: LoyaltyObject, field: BindingField): string {
+function expectedBindingValue(expected: ExpectedObjectBindings, field: BindingField): string {
   switch (field) {
     case 'id':
       return expected.id;
@@ -133,7 +140,7 @@ function expectedBindingValue(expected: LoyaltyObject, field: BindingField): str
  * decides what an empty list means; this function never throws and never logs,
  * because a value it might print is exactly what must not reach a log line.
  */
-export function findBindingDefects(expected: LoyaltyObject, actual: unknown): BindingDefect[] {
+export function findBindingDefects(expected: ExpectedObjectBindings, actual: unknown): BindingDefect[] {
   const defects: BindingDefect[] = [];
 
   for (const field of BINDING_FIELDS) {
@@ -154,8 +161,9 @@ export function findBindingDefects(expected: LoyaltyObject, actual: unknown): Bi
  * Render defects for a log line or an operator-facing message.
  *
  * Only the field name and the category. Never the value that was sent and never
- * the value that came back: `barcode.value` **is** `customers.global_id`, and the
- * callback route already documents the rule that it does not belong in a log.
+ * the value that came back: `barcode.value` is the customer's card token (a
+ * revocable credential) or, for a legacy pass, `customers.global_id`, and the
+ * callback route already documents the rule that neither belongs in a log.
  */
 export function describeBindingDefects(defects: readonly BindingDefect[]): string {
   return defects.map((defect) => `${defect.field} (${defect.kind})`).join(', ');
@@ -202,7 +210,7 @@ export function isUnconfirmed(
  * both mean no link, because a link is a promise the pass works.
  */
 export async function confirmObjectBindings(
-  expected: LoyaltyObject,
+  expected: ExpectedObjectBindings,
   written: unknown,
   deps: BindingsReadDeps,
 ): Promise<BindingsConfirmation> {

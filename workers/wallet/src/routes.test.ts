@@ -166,6 +166,8 @@ beforeAll(async () => {
     GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: 'wallet@vyloop-demo.iam.gserviceaccount.com',
     GOOGLE_WALLET_PRIVATE_KEY: privateKeyPem,
     MEMBER_CODE_PEPPER: crypto.randomUUID(),
+    // Generated for this run and discarded with it. Never a real secret.
+    CARD_TOKEN_SECRET: crypto.randomUUID() + crypto.randomUUID(),
     WALLET_ALLOWED_ORIGINS: 'https://app.vyloop.app, https://pos.vyloop.app',
     // The default is demo mode, and these tests are about what happens *after*
     // publishing access, so the environment says so explicitly. The demo-mode
@@ -201,6 +203,8 @@ const CUSTOMERS: Row[] = [
     fullName: 'Lucía Fernández',
     memberCode: null,
     currentTierId: null,
+    cardTokenVersion: null,
+    cardTokenHash: null,
   },
   {
     id: OTHER_CUSTOMER_ID,
@@ -209,6 +213,8 @@ const CUSTOMERS: Row[] = [
     fullName: 'Otra Persona',
     memberCode: null,
     currentTierId: null,
+    cardTokenVersion: null,
+    cardTokenHash: null,
   },
 ];
 
@@ -520,6 +526,19 @@ function installDb() {
       // Keyed on whichever customer the statement named, not on one hardcoded
       // id, so a test can exercise a second tenant's request the whole way
       // through rather than tripping over the fake.
+      // The card-token compare-and-set: version 1 lands only while both token
+      // columns are still null, exactly as the real statement's guard says.
+      if (query.sql.includes('UPDATE customers') && query.sql.includes('card_token_hash IS NULL')) {
+        const row = CUSTOMERS.find((c) => query.params.includes(c.id));
+        const hash = query.params.find((p) => typeof p === 'string' && /^[0-9a-f]{64}$/.test(p));
+        if (row && row.cardTokenVersion === null && row.cardTokenHash === null && hash) {
+          row.cardTokenVersion = 1;
+          row.cardTokenHash = hash;
+          return Promise.resolve({ rows: [{ card_token_version: 1, card_token_hash: hash }] });
+        }
+        return Promise.resolve({ rows: [] });
+      }
+
       if (query.sql.includes('UPDATE customers')) {
         const customerId = query.params.find(
           (p) => typeof p === 'string' && CUSTOMERS.some((c) => c.id === p),
@@ -646,7 +665,11 @@ function reqAs(method: string, path: string, auth?: TestAuth | null, body?: unkn
     programs = PRISTINE_PROGRAMS.map((row) => ({ ...row }));
     balances = { [`${TENANT}:${CUSTOMER_ID}`]: 96942 };
     blankSlugTenant = null;
-  for (const row of CUSTOMERS) row.memberCode = null;
+  for (const row of CUSTOMERS) {
+    row.memberCode = null;
+    row.cardTokenVersion = null;
+    row.cardTokenHash = null;
+  }
   passRows = [];
   // Google holds a different balance by default, so the default request
   // reconciles by patching. Tests that want the other branch set `remoteObject`
@@ -948,6 +971,115 @@ describe('tenant scoping', () => {
 // ============================================================================
 // GET /v1/wallet/status
 // ============================================================================
+
+// ============================================================================
+// GET /v1/wallet/card
+// ============================================================================
+
+/** The `LoyaltyObject` inside a save link, read from the unsigned JWT payload. */
+function objectInSaveUrl(saveUrl: string): { barcode: { type: string; value: string } } {
+  const jwt = saveUrl.slice(SAVE_TO_WALLET_URL_PREFIX.length);
+  const payload = jwt.split('.')[1]!;
+  const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+    payload: { loyaltyObjects: Array<{ barcode: { type: string; value: string } }> };
+  };
+  return json.payload.loyaltyObjects[0]!;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+describe('GET /v1/wallet/card', () => {
+  const GET = (p: string) => reqAs('GET', p, CUSTOMER_AUTH);
+
+  it('assigns a token to a customer with no pass yet and stores only its hash', async () => {
+    const res = await GET('/v1/wallet/card');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { card_token: string | null } };
+    expect(body.data.card_token).toMatch(/^vyc1\.[A-Za-z0-9_-]{43}$/);
+    const row = CUSTOMERS.find((c) => c.id === CUSTOMER_ID)!;
+    expect(row.cardTokenVersion).toBe(1);
+    expect(row.cardTokenHash).toBe(await sha256Hex(body.data.card_token!));
+  });
+
+  it('answers the same token the pass barcode then carries', async () => {
+    const card = (await (await GET('/v1/wallet/card')).json()) as { data: { card_token: string } };
+
+    const res = await GET('/v1/wallet/pass');
+
+    expect(res.status).toBe(200);
+    const inserted = googleCalls.find((call) => call.method === 'insertObject')!.args[0] as {
+      barcode: { value: string };
+    };
+    expect(inserted.barcode.value).toBe(card.data.card_token);
+    const pass = (await res.json()) as { data: { save_url: string } };
+    expect(objectInSaveUrl(pass.data.save_url).barcode.value).toBe(card.data.card_token);
+  });
+
+  it('answers null for a legacy customer whose object Google already holds, and assigns nothing', async () => {
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: TENANT,
+        objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+        state: 'issued',
+        lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+      },
+    ];
+
+    const res = await GET('/v1/wallet/card');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ data: { card_token: null } });
+    expect(statements.some((sql) => sql.includes('card_token_hash IS NULL'))).toBe(false);
+    expect(CUSTOMERS.find((c) => c.id === CUSTOMER_ID)!.cardTokenHash).toBeNull();
+  });
+
+  it('refuses a caller with no customer row in this business', async () => {
+    const res = await reqAs('GET', '/v1/wallet/card', {
+      userId: 'not-a-member',
+      businessId: TENANT,
+      userRole: 'customer',
+    });
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('CUSTOMER_SELF_NOT_FOUND');
+  });
+
+  it('refuses a request with no auth headers', async () => {
+    expect((await reqAs('GET', '/v1/wallet/card', null)).status).toBe(403);
+  });
+});
+
+describe('GET /v1/wallet/pass: a legacy pass keeps its uuid barcode', () => {
+  it('re-signs the link of an issued pass with the global id, as before card tokens', async () => {
+    passRows = [
+      {
+        customerId: CUSTOMER_ID,
+        tenantId: TENANT,
+        objectId: `${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`,
+        state: 'issued',
+        lastSyncedAt: new Date('2026-09-28T12:00:00.000Z'),
+      },
+    ];
+
+    const res = await reqAs('GET', '/v1/wallet/pass', CUSTOMER_AUTH);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { save_url: string; object_id: string } };
+    expect(objectInSaveUrl(body.data.save_url).barcode).toEqual({
+      type: 'QR_CODE',
+      value: CUSTOMER_GLOBAL_ID,
+    });
+    expect(body.data.object_id).toBe(`${ISSUER}.member-${CUSTOMER_GLOBAL_ID}`);
+    expect(CUSTOMERS.find((c) => c.id === CUSTOMER_ID)!.cardTokenHash).toBeNull();
+    expect(googleCalls).toEqual([]);
+  });
+});
 
 describe('GET /v1/wallet/status', () => {
   it('reports availability without signing anything or writing', async () => {

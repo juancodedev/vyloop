@@ -155,6 +155,8 @@ function fakeStore(overrides: {
     recordPass: unused('recordPass'),
     isMemberCodeTaken: unused('isMemberCodeTaken'),
     claimMemberCode: unused('claimMemberCode'),
+    claimCardToken: unused('claimCardToken'),
+    rotateCardToken: unused('rotateCardToken'),
     listProgramTenants: unused('listProgramTenants'),
     listTenantsWithoutProgram: unused('listTenantsWithoutProgram'),
     findPassesByObjectIds: unused('findPassesByObjectIds'),

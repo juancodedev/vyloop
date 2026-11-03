@@ -179,6 +179,16 @@ class FakeStore implements WalletStore {
     return null;
   }
 
+  async claimCardToken(): Promise<null> {
+    this.record('claimCardToken', TENANT);
+    return null;
+  }
+
+  async rotateCardToken(): Promise<boolean> {
+    this.record('rotateCardToken', TENANT);
+    return false;
+  }
+
   async recordPass(): Promise<void> {
     this.record('recordPass', TENANT);
   }

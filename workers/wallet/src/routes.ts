@@ -40,6 +40,7 @@ import {
   MemberCodeUnavailableError,
   classReadinessFor,
   dispositionForExistingPass,
+  ensureCardToken,
   issuePass,
   linkForExistingPass,
   reasonCodeFor,
@@ -489,6 +490,59 @@ function reasonCodeForReason(reason: string): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * `GET /v1/wallet/card` — the caller's own scannable card token.
+ *
+ * The customer web renders its QR from this, so the QR and the pass barcode
+ * always carry the same value. Same authentication and customer resolution as
+ * `GET /v1/wallet/pass`: the customer is the one the token names, in the
+ * business the token names, and nothing in the request can choose another.
+ *
+ * `card_token: null` means a legacy customer whose Google object still carries
+ * the uuid barcode (see `ensureCardToken`): the client shows the uuid, which the
+ * POS still resolves. Otherwise a token is assigned lazily here, exactly as the
+ * pass route would assign it, so whichever of the two a customer opens first,
+ * both end up showing the same token.
+ *
+ * Never logs the token or the global id.
+ */
+router.get('/v1/wallet/card', async (c) => {
+  const auth = extractAuthHeaders(c);
+  const tenantId = auth.businessId;
+
+  const db = createDb(c.env.DATABASE_URL);
+  const store = createTenantWalletStore(db, tenantId);
+
+  const customer = await store.findCustomer(auth.userId, tenantId);
+  if (!customer) {
+    return c.json(
+      {
+        error: {
+          code: CUSTOMER_SELF_NOT_FOUND,
+          message:
+            'This account has no customer record in this business, so it has no member card here.',
+        },
+      },
+      403,
+    );
+  }
+
+  const pass = await store.findPass(customer.id, tenantId);
+  const cardToken = await ensureCardToken(
+    { store, cardTokenSecret: c.env.CARD_TOKEN_SECRET ?? '' },
+    {
+      customerId: customer.id,
+      tenantId,
+      customerGlobalId: customer.globalId,
+      storedVersion: customer.cardTokenVersion ?? null,
+      storedHash: customer.cardTokenHash ?? null,
+      passState: pass !== null && pass.tenantId === tenantId ? pass.state : null,
+    },
+  );
+
+  return c.json({ data: { card_token: cardToken } });
+});
+
+/**
  * GET /v1/wallet/pass
  *
  * A save-to-wallet link for the authenticated customer, carrying a `LoyaltyObject`
@@ -677,6 +731,7 @@ router.get('/v1/wallet/pass', async (c) => {
     const issueDeps = {
       store,
       pepper: c.env.MEMBER_CODE_PEPPER,
+      cardTokenSecret: c.env.CARD_TOKEN_SECRET,
       serviceAccountEmail: c.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
       privateKeyPem: c.env.GOOGLE_WALLET_PRIVATE_KEY,
       origins,
@@ -690,6 +745,11 @@ router.get('/v1/wallet/pass', async (c) => {
       customerGlobalId: customer.globalId,
       customerFullName: customer.fullName,
       storedMemberCode: customer.memberCode,
+      storedCardTokenVersion: customer.cardTokenVersion ?? null,
+      storedCardTokenHash: customer.cardTokenHash ?? null,
+      // The row the disposition was read from, or none. The same value on both
+      // paths, so a re-signed link carries the barcode the minted pass carried.
+      passState: existing !== null && existing.tenantId === tenantId ? existing.state : null,
       issuerId: readiness.issuerId,
       classId: readiness.classId,
     };
@@ -704,6 +764,7 @@ router.get('/v1/wallet/pass', async (c) => {
             ...issueInput,
             // The recorded id, not a fresh derivation. See `store.ts`.
             existingObjectId: disposition.objectId,
+            passState: disposition.state,
           })
         : await issuePass(issueDeps, issueInput);
 
