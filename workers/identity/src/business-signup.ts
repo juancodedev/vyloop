@@ -200,10 +200,14 @@ export async function signupBusiness(
       // this route has to maintain. The name is derived from the business name
       // the way the seed does it, so a merchant sees their own name on their
       // own program.
+      //
+      // `earn_by` is written rather than left to its column default ('visit'): the
+      // product is sold as points by purchase amount, so a self-service business
+      // starts on that mechanic at one point per $1.000.
       const program = firstRow(
         await tx.execute(
-          sql`INSERT INTO loyalty_programs (business_id, name, points_currency, earn_rate, min_redeem_points, is_active)
-              VALUES (${businessId}::uuid, ${`Programa de Lealtad ${input.name}`}, 'puntos', '1.0', 100, true)
+          sql`INSERT INTO loyalty_programs (business_id, name, points_currency, earn_rate, earn_by, earn_unit_amount, min_redeem_points, is_active)
+              VALUES (${businessId}::uuid, ${`Programa de Lealtad ${input.name}`}, 'puntos', '1.0', 'purchase', '1000.00', 100, true)
               RETURNING id`,
         ),
       );

@@ -267,6 +267,18 @@ describe('signupBusiness', () => {
     expect(programInsert).toContain(', Programa de Lealtad Café Central,');
   });
 
+  // The landing sells points by purchase amount, and the column default is
+  // 'visit'. A new business must start on the mechanic it signed up for.
+  it('starts the program on points by purchase amount, one point per $1.000', async () => {
+    const { db, log } = createMockDb();
+
+    await signup(db);
+
+    const programInsert = log.committed.find((s) => classify(s) === 'loyalty_programs') ?? '';
+    expect(programInsert).toMatch(/earn_by, earn_unit_amount/);
+    expect(programInsert).toContain("'purchase', '1000.00'");
+  });
+
   // The column default is the *string* '[]', so a writer that omits `benefits`
   // leaves a value the dashboard has to read as either a string or a list
   // depending on which writer made the row.
