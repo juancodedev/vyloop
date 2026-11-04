@@ -319,6 +319,41 @@ describe(`${BACKLOG_MIGRATION} closes the schema backlog`, () => {
 });
 
 // ---------------------------------------------------------------------------
+// Row-level security only arrives through reviewed RLS migrations
+// ---------------------------------------------------------------------------
+
+/**
+ * The migrations allowed to enable row-level security or create policies.
+ *
+ * Empty on purpose: no migration enables RLS yet. Enabling it applies tenant
+ * isolation to a table in one shot, and every code path that reads that table
+ * must already set the session context inside a transaction, so each RLS
+ * migration is a separate, reviewed rollout (openspec change
+ * `tenant-isolation-rls`, Units 6 and 7). Add a file name here in the same
+ * change that adds the migration, never ahead of it.
+ */
+const RLS_MIGRATIONS: readonly string[] = [];
+
+describe('row-level security is confined to the explicit RLS migrations', () => {
+  it('lists only migrations that exist', () => {
+    for (const name of RLS_MIGRATIONS) {
+      expect(migrationFiles).toContain(name);
+    }
+  });
+
+  it.each(migrationFiles.filter((file) => !RLS_MIGRATIONS.includes(file)))(
+    '%s neither enables row-level security nor creates a policy',
+    (file) => {
+      // Comments are stripped: the guard is about statements that run, and a
+      // migration may explain RLS in prose without enabling it.
+      const code = codeStatements(readMigration(file)).join('\n');
+      expect(code).not.toMatch(/ENABLE\s+ROW\s+LEVEL\s+SECURITY/i);
+      expect(code).not.toMatch(/CREATE\s+POLICY/i);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // The pass-inactivity window's migration
 // ---------------------------------------------------------------------------
 
