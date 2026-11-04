@@ -482,6 +482,43 @@ h2 {
   padding: 1.5rem;
 }
 
+/* A card whose content sits directly inside it, without a header/body split. */
+.card-section {
+  padding: 1.25rem 1.5rem;
+}
+
+.card-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.75rem;
+}
+
+/* Label above value, for read-only summaries outside the tier cards. */
+.detail-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.detail-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.detail-stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.detail-stat-value {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
 /* ========================================
    Tables
    ======================================== */
