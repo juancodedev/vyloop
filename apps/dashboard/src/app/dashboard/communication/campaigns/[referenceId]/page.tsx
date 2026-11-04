@@ -21,6 +21,7 @@ export default function CampaignDetailPage() {
   const [resending, setResending] = useState(false);
   const [showResendConfirm, setShowResendConfirm] = useState(false);
   const [toast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [venueNames, setVenueNames] = useState<Record<string, string>>({});
 
   const loadCampaign = useCallback(async () => {
     setLoading(true);
@@ -38,6 +39,22 @@ export default function CampaignDetailPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadCampaign();
   }, [loadCampaign]);
+
+  // A branch target stores only the venue id. Its name comes from the venue
+  // list; if that call fails the id is shown, as before, rather than nothing.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getVenues({ per_page: 100, includeInactive: true })
+      .then(({ branches }) => {
+        if (cancelled) return;
+        setVenueNames(Object.fromEntries(branches.map((b) => [b.id, b.name])));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleResend = async () => {
     if (!campaign) return;
@@ -105,17 +122,18 @@ export default function CampaignDetailPage() {
         Volver
       </button>
 
-      <div className="card" style={{ marginBottom: '1.5rem' }}>
-        <div className="dash-header" style={{ marginBottom: '1rem' }}>
+      <div className="card card-section" style={{ marginBottom: '1.5rem' }}>
+        <div className="dash-header" style={{ marginBottom: '1.25rem' }}>
           <div>
             <h1 className="dash-title">{campaign.title}</h1>
-            <p className="dash-subtitle">
+            {/* Not `dash-subtitle`: it capitalizes, which rewrites the reference id. */}
+            <p className="text-sm text-muted" style={{ marginTop: '0.125rem' }}>
               Referencia: <code>{campaign.reference_id}</code> · {formatDate(campaign.created_at)}
             </p>
           </div>
         </div>
 
-        <div className="card-body">
+        <div>
           <div style={{ marginBottom: '1rem' }}>
             <label className="text-sm text-muted">Cuerpo</label>
             <p style={{ whiteSpace: 'pre-wrap' }}>{campaign.body}</p>
@@ -129,39 +147,32 @@ export default function CampaignDetailPage() {
             </div>
           )}
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-              gap: '1rem',
-              marginBottom: '1.5rem',
-            }}
-          >
-            <div className="tier-stat">
-              <span className="tier-stat-label">Objetivo</span>
-              <span className="tier-stat-value">
+          <div className="detail-stats">
+            <div className="detail-stat">
+              <span className="detail-stat-label">Objetivo</span>
+              <span className="detail-stat-value">
                 {campaign.target_type === 'branch' ? 'Sede única' : 'Radio'}
               </span>
             </div>
-            <div className="tier-stat">
-              <span className="tier-stat-label">Audiencia</span>
-              <span className="tier-stat-value">{campaign.audience_size.toLocaleString()}</span>
+            <div className="detail-stat">
+              <span className="detail-stat-label">Audiencia</span>
+              <span className="detail-stat-value">{campaign.audience_size.toLocaleString()}</span>
             </div>
-            <div className="tier-stat">
-              <span className="tier-stat-label">Entregados</span>
-              <span className="tier-stat-value" style={{ color: 'var(--success)' }}>
+            <div className="detail-stat">
+              <span className="detail-stat-label">Entregados</span>
+              <span className="detail-stat-value" style={{ color: 'var(--success)' }}>
                 {campaign.delivered.toLocaleString()}
               </span>
             </div>
-            <div className="tier-stat">
-              <span className="tier-stat-label">Fallidos</span>
-              <span className="tier-stat-value" style={{ color: 'var(--error)' }}>
+            <div className="detail-stat">
+              <span className="detail-stat-label">Fallidos</span>
+              <span className="detail-stat-value" style={{ color: 'var(--error)' }}>
                 {campaign.failed.toLocaleString()}
               </span>
             </div>
-            <div className="tier-stat">
-              <span className="tier-stat-label">Omitidos</span>
-              <span className="tier-stat-value" style={{ color: '#f59e0b' }}>
+            <div className="detail-stat">
+              <span className="detail-stat-label">Omitidos</span>
+              <span className="detail-stat-value" style={{ color: '#f59e0b' }}>
                 {campaign.skipped.toLocaleString()}
               </span>
             </div>
@@ -196,7 +207,9 @@ export default function CampaignDetailPage() {
                   borderRadius: '6px',
                 }}
               >
-                <p className="text-sm text-muted">Sede: {campaign.target.branch_id}</p>
+                <p className="text-sm text-muted">
+                  Sede: {venueNames[campaign.target.branch_id] ?? campaign.target.branch_id}
+                </p>
               </div>
             )}
 
@@ -231,12 +244,6 @@ export default function CampaignDetailPage() {
           )}
 
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-            <button
-              className="btn btn-secondary"
-              onClick={() => router.push('/dashboard/communication/campaigns')}
-            >
-              Volver
-            </button>
             <button className="btn btn-primary" onClick={() => setShowResendConfirm(true)}>
               Reenviar
             </button>

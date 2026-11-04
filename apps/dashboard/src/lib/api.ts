@@ -389,7 +389,6 @@ export interface CustomerDetail extends Customer {
   totalPointsEarned: number;
   currentTier: string;
   currentTierId?: string;
-  globalId?: string;
   customer_events: Array<{
     id: string;
     eventType: string;
@@ -507,7 +506,6 @@ export const api = {
         // against the tier list, so the id is never offered as one.
         currentTier: '—',
         currentTierId: raw.currentTierId as string | undefined,
-        globalId: raw.globalId as string | undefined,
         createdAt: raw.createdAt ? (raw.createdAt as string).split('T')[0] : '—',
         customer_events: events,
         recent_transactions: transactions,
@@ -564,18 +562,6 @@ export const api = {
     // shape rather than two, and so the balance and tier on screen cannot drift
     // from what a second reader would see.
     return this.getCustomer(id);
-  },
-
-  /**
-   * Revoca el QR del cliente: rota su `globalId` para que el código impreso
-   * deje de funcionar en el POS y el cliente reciba uno nuevo al cargar
-   * customer-web. Devuelve el nuevo `globalId`.
-   */
-  async rotateCustomerQr(customerId: string): Promise<{ globalId: string }> {
-    const result = await apiFetch(`/v1/customers/${customerId}/rotate-qr`, {
-      method: 'POST',
-    });
-    return result as { globalId: string };
   },
 
   async getLoyaltyConfig(): Promise<LoyaltyConfig> {

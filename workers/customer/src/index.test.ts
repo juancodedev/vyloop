@@ -2132,103 +2132,6 @@ expect(res.status).toBe(201);
   });
 
   // -----------------------------------------------------------------------
-  // Rotate QR: POST /:id/rotate-qr
-  // -----------------------------------------------------------------------
-
-  describe('Rotate QR (POST /:id/rotate-qr)', () => {
-    function selectOneCustomer() {
-      mockDb.select.mockImplementationOnce(() => {
-        const chain: any = {};
-        chain.from = vi.fn(() => chain);
-        chain.where = vi.fn(() => chain);
-        chain.limit = vi.fn(() => chain);
-        chain.offset = vi.fn(() => chain);
-        chain.orderBy = vi.fn(() => chain);
-        chain.leftJoin = vi.fn(() => chain);
-        chain.then = (resolve: (v: any) => any) =>
-          Promise.resolve([
-            { id: 'c-1', businessId: 'biz-1', globalId: 'old-global-id', deletedAt: null },
-          ]).then(resolve);
-        return chain;
-      });
-    }
-
-    it('generates a new uuid v4 globalId for an operator token', async () => {
-      selectOneCustomer();
-
-      const res = await request('POST', '/v1/customers/c-1/rotate-qr');
-
-      expect(res.status).toBe(200);
-
-      const updateSetFn = mockDb.update.mock.results[0]?.value.set;
-      expect(updateSetFn).toHaveBeenCalledWith(
-        expect.objectContaining({ updatedAt: expect.any(Date) }),
-      );
-
-      // The globalId written to the row is a fresh uuid v4, not the old one.
-      const setCall = updateSetFn.mock.calls[0][0];
-      expect(setCall.globalId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      );
-      expect(setCall.globalId).not.toBe('old-global-id');
-    });
-
-    it('refuses a customer token with 403', async () => {
-      selectOneCustomer();
-
-      const res = await request('POST', '/v1/customers/c-1/rotate-qr', {
-        headers: { 'X-User-Role': 'customer' },
-      });
-
-      expect(res.status).toBe(403);
-      expect(mockDb.update).not.toHaveBeenCalled();
-    });
-
-    it('refuses a counter token with 403', async () => {
-      selectOneCustomer();
-
-      const res = await request('POST', '/v1/customers/c-1/rotate-qr', {
-        headers: { 'X-User-Id': 'pos:term-1', 'X-User-Role': '' },
-      });
-
-      expect(res.status).toBe(403);
-      expect(mockDb.update).not.toHaveBeenCalled();
-    });
-
-    it('returns 404 when the customer does not exist', async () => {
-      mockDb.select.mockImplementationOnce(() => {
-        const chain: any = {};
-        chain.from = vi.fn(() => chain);
-        chain.where = vi.fn(() => chain);
-        chain.limit = vi.fn(() => chain);
-        chain.offset = vi.fn(() => chain);
-        chain.orderBy = vi.fn(() => chain);
-        chain.leftJoin = vi.fn(() => chain);
-        chain.then = (resolve: (v: any) => any) => Promise.resolve([]).then(resolve);
-        return chain;
-      });
-
-      const res = await request('POST', '/v1/customers/missing/rotate-qr');
-
-      expect(res.status).toBe(404);
-      expect(mockDb.update).not.toHaveBeenCalled();
-    });
-
-    it('scopes the UPDATE to this business and non-deleted customer', async () => {
-      selectOneCustomer();
-
-      await request('POST', '/v1/customers/c-1/rotate-qr');
-
-      expect(updateCalls).toHaveLength(1);
-      const [updateCall] = updateCalls;
-      const { sql, params } = compile(updateCall.where);
-      expect(sql).toContain('"customers"."business_id"');
-      expect(sql).toContain('"customers"."deleted_at"');
-      expect(params).toContain('biz-1');
-    });
-  });
-
-  // -----------------------------------------------------------------------
   // Delete: DELETE /:id
   // -----------------------------------------------------------------------
 
@@ -4190,6 +4093,16 @@ describe('Card token credential', () => {
       expect(body.error.code).toBe('WALLET_UNAVAILABLE');
       expect(JSON.stringify(body)).not.toContain('vyc1.');
       expect(JSON.stringify(body)).not.toContain(UNTOKENED.globalId);
+    });
+  });
+
+  // The QR is revoked by rotating the card token (wallet `rotateCardToken`).
+  // A route that rewrote `global_id` orphaned the customer's Google Wallet
+  // object and broke the card token, both derived from it; it must not return.
+  describe('global_id is never rotated over HTTP', () => {
+    it('has no POST /v1/customers/:id/rotate-qr', async () => {
+      const res = await request('POST', '/v1/customers/c-1/rotate-qr');
+      expect(res.status).toBe(404);
     });
   });
 });

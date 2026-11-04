@@ -4,7 +4,7 @@ import { Cake } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
-import { useConfirm } from '@/components/ConfirmDialog';
+import { RevokeQr } from '@/app/dashboard/loyalty/pos/revoke-qr';
 import { api, type CustomerDetail } from '@/lib/api';
 import {
   buildCustomerPatch,
@@ -97,9 +97,6 @@ export default function CustomerDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: string; message: string } | null>(null);
-  const [revoking, setRevoking] = useState(false);
-  const [revokeError, setRevokeError] = useState<string | null>(null);
-  const [askRevokeQr, revokeDialog] = useConfirm();
 
   // --- Edit state -----------------------------------------------------------
   //
@@ -165,31 +162,6 @@ export default function CustomerDetailPage() {
       setSaveError(patchErrorFor(err));
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function handleRevokeQr() {
-    if (!customer) return;
-    const confirmed = await askRevokeQr({
-      title: '¿Revocar el código QR de este cliente?',
-      message: `El código QR impreso de ${customer.fullName} dejará de funcionar en el POS. Se generará uno nuevo que el cliente verá al cargar su tarjeta en customer-web. Esta acción no se deshace.`,
-      confirmLabel: 'Revocar QR',
-    });
-    if (!confirmed) return;
-
-    setRevoking(true);
-    setRevokeError(null);
-    try {
-      await api.rotateCustomerQr(customer.id);
-      const cust = await api.getCustomer(customer.id);
-      setCustomer(cust);
-      showToast('success', 'QR renovado. El código anterior ya no funciona.');
-    } catch (err) {
-      setRevokeError(
-        err instanceof Error ? err.message : 'No se pudo renovar el QR.',
-      );
-    } finally {
-      setRevoking(false);
     }
   }
 
@@ -489,18 +461,6 @@ export default function CustomerDetailPage() {
           <button className="btn btn-primary" onClick={handleOpenModal}>
             Registrar Venta
           </button>
-          <button
-            className="btn btn-outline"
-            onClick={handleRevokeQr}
-            disabled={revoking}
-          >
-            {revoking ? 'Revocando…' : 'Revocar QR'}
-          </button>
-          {revokeError && (
-            <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.5rem' }}>
-              {revokeError}
-            </p>
-          )}
         </div>
       </div>
 
@@ -515,7 +475,7 @@ export default function CustomerDetailPage() {
         customer and refreshes only on an explicit action.
       */}
       {editing && draft && (
-        <div className="card" style={{ marginTop: '1.5rem' }}>
+        <div className="card card-section" style={{ marginTop: '1.5rem' }}>
           <h2 className="card-title">Editar datos del cliente</h2>
 
           <p className="text-sm text-muted" style={{ marginBottom: '1rem' }}>
@@ -585,8 +545,24 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
+      {/* ---------- QR credential ---------- */}
+      {/*
+        The same control the POS shows after a lookup. It rotates the card
+        token (`card_token_version`), which is what the QR carries; the
+        customer's `global_id` never changes, because the Google Wallet object
+        id and the token itself are derived from it.
+      */}
+      <div className="card card-section" style={{ marginTop: '1.5rem' }}>
+        <h2 className="card-title">QR del cliente</h2>
+        <p className="text-sm text-muted" style={{ marginBottom: '0.75rem' }}>
+          Si el QR del cliente se filtró o se perdió, revócalo: el anterior deja de funcionar
+          en el POS y el cliente ve uno nuevo en su tarjeta.
+        </p>
+        <RevokeQr key={customer.id} customerId={customer.id} />
+      </div>
+
       {/* ---------- Recent Activity ---------- */}
-      <div className="card" style={{ marginTop: '1.5rem' }}>
+      <div className="card card-section" style={{ marginTop: '1.5rem' }}>
         <h2 className="card-title">Actividad reciente</h2>
 
         {timelineItems.length === 0 ? (
@@ -714,8 +690,6 @@ export default function CustomerDetailPage() {
           <div className={`toast toast-${toast.type}`}>{toast.message}</div>
         </div>
       )}
-
-      {revokeDialog}
     </>
   );
 }
