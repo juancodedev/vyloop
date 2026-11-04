@@ -31,9 +31,8 @@ const RAW_TENANT_SETTING =
 /**
  * Files allowed to set the tenant by hand, and why.
  *
- * Signup cannot use the helper at all; the automation helpers entry is dead
- * code left after Unit 3, and the last test fails once one of them is no
- * longer needed.
+ * Signup cannot use the helper at all. The last test fails once an entry is
+ * no longer needed.
  */
 const ALLOWED: Record<string, string> = {
   'workers/identity/src/business-signup.ts':

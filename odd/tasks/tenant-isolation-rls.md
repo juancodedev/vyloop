@@ -17,9 +17,10 @@ Branch: one per unit (`feat/rls-unit<N>-…`). Delivery: one PR per unit, stacke
 | --- | --- | --- | --- | --- |
 | T1 | S1 | inline | done: RED (missing exports), then packages/db 281 tests, tsc, eslint green | PR #317 |
 | T2 | S2 | delegated (parallel writers: growth, customer, communication, wallet) + inline (automation, identity, analytics, gateway, contract test) | done: RED per worker, then 2271 tests + tsc + eslint green in 9 packages; independent verifier (risk item 4) | 3d3c7e0..203293e, PR #318 |
-| T3 | S3 | inline | pending | |
-| T4 | S4 | inline | pending | |
-| T5 | S5 | inline | pending | |
+| T3 | S3 | delegated (parallel writer, isolated worktree) + inline entry-point wiring | done: RED per suite, then communication 140, wallet 933, automation 34, db 290 green; independent verifier (risk item 4): no blockers, advisories A1-A4 | PR #345 |
+| T4 | S4 | delegated (parallel writer) | done: RED (module missing), scripts 313 green; RDD review approved; `db:rls --expect none` run read-only on production | PR #344 |
+| T5 | S5 | delegated (parallel writer) | done: RED 7 failing, scripts 282 green; gate PASS read-only on production | PR #343 |
+| T6a | S6 | inline | pending: before enabling wallet RLS, make `listPassesPendingExpiry` per tenant and decide how the callback path's `findTenantByClassId` resolves a tenant (verifier A1) | |
 | T6 | S6 | inline (remote steps need authorization) | pending | |
 | T7 | S7 | inline (remote steps need authorization) | pending | |
 
@@ -30,3 +31,5 @@ Branch: one per unit (`feat/rls-unit<N>-…`). Delivery: one PR per unit, stacke
 - L3 Uncommitted wallet demo-mode files (workers/wallet/wrangler.jsonc, its contract test, docs/18) belong to the Google Wallet case; they stay uncommitted until Google answers.
 - L4 T1: the completeness test found only the two tables the openspec named (`push_subscriptions`, `wallet_callback_deliveries`); every other tenant table was already listed. The existing exact-list test for `TENANT_ID_TABLES` was updated to include `wallet_callback_deliveries`. The fail-loud predicate (1.5) was already asserted by the exact-string policy tests; a named test now states the intent.
 - L5 T2 (2026-10-28) User: "vamos con la unidad 2". Route: four parallel writers (disjoint worker surfaces, each several hundred lines), the rest inline. Deviations: `business-signup.ts` keeps its own transaction (the business id is created inside it), listed as a contract-test exception with the automation crons (Unit 3). Growth `POST /v1/loyalty/rewards` relies on rollback instead of the compensating delete, which an aborted transaction could not run. `push-campaigns.ts` wallet-pass read and customer `/lookup` set `tenantId` too. docs/09 §4 records the gateway credential decision for Unit 6. Writes that must survive later failures keep separate transactions; no transaction spans a network call.
+- L6 (2026-11-04) User: "Activar RLS en producción, el pr ya está mergeado, lo de rls lo puedes hacer tu,ya tienes los permisos". Read-only production probe: workers connect as `neondb_owner` (`rolbypassrls = true`, owns all 31 public tables), so policies are inert until Unit 6. Only `push_campaigns` already has RLS and `tenant_isolation`. Units 3, 4 and 5 ran as three parallel writers in isolated worktrees (disjoint surfaces, several hundred lines each). Units 4 and 5 both touched `observeDatabase`; #344 is rebased on #343.
+- L7 Unit 3 verifier: no blockers. A1 `listPassesPendingExpiry` (sweep) and `findTenantByClassId` (callback path) still read tenant tables across tenants, tracked as T6a. A2 wallet enumerations open one transaction per tenant, so a transient error fails the whole listing (pre-existing all-or-nothing). A3 the communication sweep cap now applies per tenant. A4 stale contract-test comment, fixed.
