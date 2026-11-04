@@ -274,6 +274,32 @@ export function extractAssertions(sql) {
       continue;
     }
 
+    // `ENABLE ROW LEVEL SECURITY` is a property of a table, `pg_class.relrowsecurity`,
+    // so it is asserted under the table's name. Anchored at the end on purpose:
+    // `ALTER TABLE` accepts a comma-separated list of actions, and an unanchored
+    // match would let `ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY` through
+    // as evidence for the half it can verify while the other half went unread.
+    const enableRls =
+      /^ALTER\s+TABLE\s+("?)([\w]+)\1\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*;?$/i.exec(statement);
+    if (enableRls) {
+      add('rls', enableRls[2]);
+      continue;
+    }
+
+    // A policy's catalog identity is the pair (table, policy name): two tables may
+    // each carry a policy called `tenant_isolation`. So it is asserted as
+    // `<table>.<policy>`, which is how `observeDatabase` reads `pg_policies`.
+    //
+    // `FORCE ROW LEVEL SECURITY`, `GRANT` and `CREATE ROLE` deliberately fall
+    // through to the refusal below. FORCE decides whether the table owner is
+    // subject to RLS, and roles and grants are privileges; none is a schema object
+    // this gate verifies, so none may be passed as evidence.
+    const createPolicy = /^CREATE\s+POLICY\s+("?)([\w]+)\1\s+ON\s+("?)([\w]+)\3\s/i.exec(statement);
+    if (createPolicy) {
+      add('policy', `${createPolicy[4]}.${createPolicy[2]}`);
+      continue;
+    }
+
     // `CREATE SCHEMA` names no object this gate can verify, and drizzle emits it
     // harmlessly. Recognised and ignored, rather than refused.
     if (/^CREATE\s+SCHEMA\b/i.test(statement)) continue;
@@ -312,6 +338,8 @@ const FACT_SET_FOR_KIND = {
   column: 'columns',
   index: 'indexes',
   constraint: 'constraints',
+  rls: 'rlsTables',
+  policy: 'policies',
 };
 
 // ---------------------------------------------------------------------------
@@ -940,6 +968,22 @@ const constraints = await pool.query(
        */
       const applied = await pool.query(APPLIED_MIGRATIONS_QUERY);
 
+      // Row-level security, read from the catalog rather than from any migration.
+      // `relrowsecurity` is the flag `ENABLE ROW LEVEL SECURITY` sets; `relkind`
+      // limits it to ordinary and partitioned tables, the only relations a
+      // migration enables it on. Both reads are catalog SELECTs, so the session
+      // stays read-only.
+      const rlsTables = await pool.query(
+        `select c.relname as name from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = $1 and c.relkind in ('r', 'p') and c.relrowsecurity = true`,
+        [schema],
+      );
+      const policies = await pool.query(
+        'select tablename || $2 || policyname as name from pg_policies where schemaname = $1',
+        [schema, '.'],
+      );
+
       return {
         reachable: true,
         rows: rows.rows,
@@ -950,6 +994,8 @@ const constraints = await pool.query(
           columns: new Set(columns.rows.map((r) => r.name)),
           indexes: new Set(indexes.rows.map((r) => r.name)),
           constraints: new Set(constraints.rows.map((r) => r.name)),
+          rlsTables: new Set(rlsTables.rows.map((r) => r.name)),
+          policies: new Set(policies.rows.map((r) => r.name)),
         },
       };
   } catch (error) {
