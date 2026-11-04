@@ -11,6 +11,8 @@
 // connection string carries a password; a rejected connection is exactly the
 // moment that password ends up in a terminal, a CI log, or a pasted report.
 
+import { readFileSync } from 'node:fs';
+
 /**
  * Parse only to reach `host` and the query parameters. Never returns the URL,
  * because callers print what they get here.
@@ -68,4 +70,24 @@ export function assertVerifiedTls(url) {
   }
 
   return parsed;
+}
+
+/**
+ * `DATABASE_URL` from the environment, falling back to the local dev files.
+ *
+ * The fallback exists only so a check can be run against development by hand.
+ * On CI the files are gitignored and absent, so the environment is the only
+ * source — and a missing URL is a failure, not a skip.
+ */
+export function resolveDatabaseUrl({ env = process.env, readFile = readFileSync } = {}) {
+  if (env.DATABASE_URL) return { url: env.DATABASE_URL, source: 'DATABASE_URL' };
+  for (const path of ['apps/gateway/.dev.vars', 'workers/wallet/.dev.vars']) {
+    try {
+      const url = /^DATABASE_URL=(.*)$/m.exec(readFile(path, 'utf8'))?.[1];
+      if (url) return { url, source: path };
+    } catch {
+      // No local dev file. Expected on CI.
+    }
+  }
+  return { url: null, source: null };
 }
