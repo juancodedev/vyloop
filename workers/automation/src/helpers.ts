@@ -1,5 +1,4 @@
 import type { Queue, KVNamespace } from '@cloudflare/workers-types';
-import { setCurrentBusinessId } from '@vyloop/db';
 import { WORKFLOW_TRIGGERED, createEnvelope } from '@vyloop/event-bus';
 import type { EventEnvelope } from '@vyloop/event-bus';
 import type { Context } from 'hono';
@@ -145,18 +144,6 @@ export function buildWorkflowTriggeredEvent(
     { business_id: businessId, timestamp: new Date().toISOString(), ...(requestId ? { request_id: requestId } : {}) },
     payload,
   );
-}
-
-// ---------------------------------------------------------------------------
-// RLS helper
-// ---------------------------------------------------------------------------
-
-/**
- * Set the `app.current_business_id` session variable for RLS isolation.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function withRls(db: any, businessId: string): Promise<void> {
-  await db.execute(setCurrentBusinessId(businessId));
 }
 
 // ---------------------------------------------------------------------------

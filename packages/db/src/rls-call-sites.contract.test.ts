@@ -38,8 +38,6 @@ const RAW_TENANT_SETTING =
 const ALLOWED: Record<string, string> = {
   'workers/identity/src/business-signup.ts':
     'Signup creates the business inside its transaction, so the id does not exist before the transaction opens; it sets the tenant on that transaction right after the insert.',
-  'workers/automation/src/helpers.ts':
-    'Still defines withRls, which nothing calls since the cron handlers moved to per-tenant transactions in Unit 3; remove both the function and this entry.',
 };
 
 /** Runtime source files of the workers and the gateway, as git tracks them. */
