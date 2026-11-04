@@ -268,10 +268,32 @@ export interface InactivityPlan {
   totalCandidates: number;
   /** Tenants whose candidate list was cut short by the bound. */
   tenantsTruncated: number;
+  /** Tenants whose candidates could not be read; the run went on without them. */
+  tenantsFailed: number;
+  /** Why each of those tenants failed, by tenant id. */
+  tenantFailures: InactivityTenantFailure[];
+}
+
+/** A tenant the plan could not read, and why. */
+export interface InactivityTenantFailure {
+  tenantId: string;
+  stage: 'find_candidates';
+  reason: string;
 }
 
 export interface InactivityPlanDeps {
+  /**
+   * The store the tenant enumeration (`listProgramTenants`) runs on. It has no
+   * tenant set, so nothing that reads one tenant's rows may run on it.
+   */
   store: WalletStore;
+  /**
+   * The store for one tenant's reads and writes, which sets that tenant on a
+   * transaction per call (`createTenantWalletStore` in production). Under
+   * row-level security a tenant table read with no tenant set errors. Omitted,
+   * the rule uses `store` for everything, which is what the in-memory tests do.
+   */
+  tenantStore?: ((tenantId: string) => WalletStore) | undefined;
   /** The clock. A parameter so no assertion depends on the wall. */
   now?: () => Date;
 }
@@ -299,6 +321,11 @@ export interface InactivityPlanDeps {
  * database. A platform rule whose decide half cannot be exercised in demo is a
  * rule whose *only* exercise is its first run against real customers.
  */
+/** The store for one tenant's work: see `InactivityPlanDeps.tenantStore`. */
+function tenantStoreFor(deps: InactivityPlanDeps, tenantId: string): WalletStore {
+  return deps.tenantStore?.(tenantId) ?? deps.store;
+}
+
 export async function planInactivityDeactivation(
   deps: InactivityPlanDeps,
 ): Promise<InactivityPlan> {
@@ -311,6 +338,8 @@ export async function planInactivityDeactivation(
     tenants: [],
     totalCandidates: 0,
     tenantsTruncated: 0,
+    tenantsFailed: 0,
+    tenantFailures: [],
   };
 
   let cursor: string | null = null;
@@ -338,11 +367,23 @@ export async function planInactivityDeactivation(
       }
 
       const cutoff = inactivityCutoff(now, months);
-      const candidates = await deps.store.findInactivePassCandidates({
-        tenantId: program.tenantId,
-        cutoff,
-        limit: MAX_CANDIDATES_PER_TENANT,
-      });
+      let candidates: InactivityCandidateRow[];
+      try {
+        candidates = await tenantStoreFor(deps, program.tenantId).findInactivePassCandidates({
+          tenantId: program.tenantId,
+          cutoff,
+          limit: MAX_CANDIDATES_PER_TENANT,
+        });
+      } catch (err: unknown) {
+        // Scoped to this tenant: it is reported by id and the next one is read.
+        const reason = err instanceof Error ? err.message : String(err);
+        plan.tenantsFailed += 1;
+        plan.tenantFailures.push({ tenantId: program.tenantId, stage: 'find_candidates', reason });
+        console.error(
+          `[wallet] Pass inactivity: could not read the candidates of tenant ${program.tenantId}: ${reason}`,
+        );
+        continue;
+      }
 
       // One past the bound is the only way to tell "exactly at the bound" from
       // "cut short", and the extra row is dropped rather than reported: it was
@@ -533,7 +574,7 @@ export async function applyInactivityDeactivation(
           );
         }
 
-        const rowsChanged = await deps.store.recordPassLifecycle({
+        const rowsChanged = await tenantStoreFor(deps, tenant.tenantId).recordPassLifecycle({
           tenantId: tenant.tenantId,
           customerId: candidate.customerId,
           state: INACTIVITY_STATE,
@@ -613,7 +654,7 @@ function logSummary(
       `${acted.googlePatchFailures} Google patch failure(s), ${acted.localWritesSkipped} local ` +
       `write(s) refused, ${acted.tenantsSkippedNotWritable} tenant(s) not acted on` +
       `${demoMode ? ' (deployment is in demo mode)' : ''}, ${plan.tenantsTruncated} tenant(s) ` +
-      `truncated, ${acted.failures.length} failure(s).`,
+      `truncated, ${plan.tenantsFailed} tenant(s) failed, ${acted.failures.length} failure(s).`,
   );
 }
 

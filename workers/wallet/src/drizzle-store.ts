@@ -31,6 +31,11 @@
  * that transaction and nothing else. `createTenantWalletStore` below is the one
  * place this worker opens such a transaction for its store; routes never issue
  * the statements themselves.
+ *
+ * The two tenant enumerations of the scheduled jobs, `listProgramTenants` and
+ * `listTenantsWithoutProgram`, page over `tenants` (exempt from RLS) and read
+ * each tenant's program row in that tenant's own transaction, so they keep
+ * working once the policies are enforced.
  */
 
 import {
@@ -153,6 +158,54 @@ const PROGRAM_COLUMNS = {
   passInactivityMonths: tenantWalletPrograms.passInactivityMonths,
   lastSyncedAt: tenantWalletPrograms.lastSyncedAt,
 };
+
+/**
+ * Walk `tenants` by keyset, one page of `pageSize` at a time, calling `visit`
+ * for each tenant id in ascending order until it answers `false` or the table
+ * ends.
+ *
+ * `tenants` is exempt from row-level security, so this runs on the handle it is
+ * given with no tenant set. It reads ids only: anything about the tenant that
+ * lives in a tenant table is read by `visit`, inside that tenant's transaction.
+ */
+async function forEachTenantPage(
+  db: Db,
+  pageSize: number,
+  afterTenantId: string | null,
+  visit: (tenantId: string) => Promise<boolean>,
+): Promise<void> {
+  let after = afterTenantId;
+
+  for (;;) {
+    // A null start is a branch, not a sentinel string, so no tenant can be
+    // skipped by colliding with it.
+    const page = (await db
+      .select({ id: tenants.id })
+      .from(tenants)
+      .where(after === null ? undefined : gt(tenants.id, after))
+      .orderBy(asc(tenants.id))
+      .limit(pageSize)) as Array<{ id: string }>;
+
+    for (const { id } of page) {
+      if (!(await visit(id))) return;
+    }
+
+    if (page.length < pageSize) return;
+    after = page[page.length - 1]!.id;
+  }
+}
+
+/** The tenant's program row, read in that tenant's own transaction. */
+async function readProgramInTenantTransaction(db: Db, tenantId: string): Promise<WalletProgramRow | null> {
+  return inTenantTransaction(db, tenantId, async (tx) => {
+    const [row] = await tx
+      .select(PROGRAM_COLUMNS)
+      .from(tenantWalletPrograms)
+      .where(eq(tenantWalletPrograms.tenantId, tenantId))
+      .limit(1);
+    return (row as WalletProgramRow | undefined) ?? null;
+  });
+}
 
 /**
  * A `WalletStore` bound to one database.
@@ -799,87 +852,71 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
     },
 
     /**
-     * One page of tenants, ascending by primary key.
+     * One page of tenants that have a program row, ascending by primary key.
      *
-     * Keyset, not `OFFSET`. `OFFSET n` re-reads and re-sorts the `n` rows it
-     * skips, so the last page of a large sweep costs proportionally more than
-     * the first, and a tenant inserted between two pages shifts every page after
-     * it — silently skipping tenants rather than merely reordering them.
-     * `tenant_id` is the primary key, so `>` is a total order and the cursor is
-     * exact.
+     * Keyset over `tenants`, not `OFFSET`. `OFFSET n` re-reads and re-sorts the
+     * `n` rows it skips, so the last page of a large sweep costs proportionally
+     * more than the first, and a tenant inserted between two pages shifts every
+     * page after it — silently skipping tenants rather than merely reordering
+     * them. `tenants.id` is the primary key, so `>` is a total order and the
+     * cursor is exact.
      *
-     * The `limit` is interpolated rather than parameterised because it is a
-     * validated integer from `sweep.ts` and Drizzle's `sql` template does not
-     * accept a bare number in a `LIMIT` position without casting it. It is
-     * clamped to `[1, 200]` here so a caller that passes something else cannot
-     * produce an unbounded read even by accident.
+     * ## Under row-level security
+     *
+     * `tenant_wallet_programs` is a tenant table, and its policy errors on a
+     * session with no `app.current_tenant_id`. So this pages over `tenants`
+     * (exempt from RLS) and reads each tenant's program row inside that
+     * tenant's own transaction (`inTenantTransaction`). The program read is
+     * filtered on the tenant in its `WHERE` as well, as every read here is.
+     *
+     * The `limit` is clamped to `[1, 200]` so a caller that passes something
+     * else cannot produce an unbounded result even by accident. It bounds the
+     * rows returned and the size of each page of `tenants`; pages continue past
+     * tenants with no program row until the result is full or `tenants` ends.
      */
     async listProgramTenants(options: {
       limit: number;
       afterTenantId: string | null;
     }): Promise<WalletProgramRow[]> {
       const limit = Math.min(200, Math.max(1, Math.trunc(options.limit)));
+      const found: WalletProgramRow[] = [];
 
-      // `afterTenantId` is a uuid column compared against a uuid literal, and
-      // a null start is expressed as a branch rather than as a sentinel string
-      // so no tenant can be skipped by colliding with it.
-      if (options.afterTenantId === null) {
-        const rows = await db
-          .select(PROGRAM_COLUMNS)
-          .from(tenantWalletPrograms)
-          .orderBy(asc(tenantWalletPrograms.tenantId))
-          .limit(limit);
-        return (rows as WalletProgramRow[]) ?? [];
-      }
+      await forEachTenantPage(db, limit, options.afterTenantId, async (tenantId) => {
+        const program = await readProgramInTenantTransaction(db, tenantId);
+        if (program !== null) found.push(program);
+        return found.length < limit;
+      });
 
-      const rows = await db
-        .select(PROGRAM_COLUMNS)
-        .from(tenantWalletPrograms)
-        .where(gt(tenantWalletPrograms.tenantId, options.afterTenantId))
-        .orderBy(asc(tenantWalletPrograms.tenantId))
-        .limit(limit);
-
-      return (rows as WalletProgramRow[]) ?? [];
+      return found;
     },
 
     /**
      * One page of tenants that have no program row, ascending by primary key.
      *
-     * An anti-join, because the set being asked for is defined by absence: `LEFT
-     * JOIN` the program table and keep the rows where its key is null. The
-     * alternative — reading `tenants` and asking `findProgram` per tenant — is the
-     * shape this method exists to avoid, because "has no row" is the one thing
-     * `listProgramTenants` cannot express and a per-tenant probe would bring back
-     * the N+1 this module's other enumerations were written without.
+     * The set is defined by absence, and under row-level security absence can
+     * only be observed from inside the tenant: a cross-tenant anti-join against
+     * `tenant_wallet_programs` errors on a session with no tenant set. So this
+     * pages over `tenants` by keyset, exactly as `listProgramTenants` does, and
+     * asks each tenant's own transaction whether its program row exists. That
+     * is one short transaction per tenant read, which is the price of not
+     * giving the sweep a role that bypasses RLS.
      *
-     * Keyset, exactly as `listProgramTenants` is: `tenants.id` is a uuid primary
-     * key, so `>` is an exact cursor, no `OFFSET` is involved, and a tenant
-     * inserted between two pages shifts nothing. Clamped the same way too.
-     *
-     * The RLS note on `WalletStore.listTenantsWithoutProgram` applies to this
-     * statement: it returns nothing once the tenant policies are enabled, and it
-     * is meant to run on a bare session.
+     * Clamped the same way, and the clamp bounds both the result and each page.
      */
     async listTenantsWithoutProgram(options: {
       limit: number;
       afterTenantId: string | null;
     }): Promise<string[]> {
       const limit = Math.min(200, Math.max(1, Math.trunc(options.limit)));
+      const missing: string[] = [];
 
-      const cursor =
-        options.afterTenantId === null
-          ? isNull(tenantWalletPrograms.tenantId)
-          : and(isNull(tenantWalletPrograms.tenantId), gt(tenants.id, options.afterTenantId));
+      await forEachTenantPage(db, limit, options.afterTenantId, async (tenantId) => {
+        const program = await readProgramInTenantTransaction(db, tenantId);
+        if (program === null) missing.push(tenantId);
+        return missing.length < limit;
+      });
 
-      const rows = await db
-        .select({ tenantId: tenants.id })
-        .from(tenants)
-        .leftJoin(tenantWalletPrograms, eq(tenantWalletPrograms.tenantId, tenants.id))
-        .where(cursor)
-        .orderBy(asc(tenants.id))
-        .limit(limit);
-
-      return ((rows as Array<{ tenantId: string }>) ?? []).map((row) => row.tenantId);
+      return missing;
     },
 
     /**
@@ -1148,9 +1185,9 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
      *
      * There is no tenant to scope to — establishing which tenant a class belongs
      * to *is* the question — so this runs on a session with no
-     * `app.current_tenant_id`, like `listProgramTenants`. It inherits that
-     * method's documented consequence: no rows at all once tenant RLS is
-     * enabled, until these cross-tenant queries are given a bypass role.
+     * `app.current_tenant_id`. Once tenant RLS is enforced this errors, because
+     * the policy reads `current_setting(...)` with no default; see the note on
+     * `WalletStore.findTenantByClassId`.
      *
      * ## The parameter is a value, never concatenated
      *
