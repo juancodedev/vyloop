@@ -73,7 +73,7 @@
 
 import { createDb } from '@vyloop/db';
 
-import { createDrizzleWalletStore } from './drizzle-store';
+import { createDrizzleWalletStore, createTenantWalletStore } from './drizzle-store';
 import { expirePass } from './expire';
 import type { ExpireOutcome } from './expire';
 import { storedReviewStatusFor, type GoogleWalletClient } from './google-client';
@@ -534,7 +534,20 @@ export function lifecycleStateFor(
 // ---------------------------------------------------------------------------
 
 export interface SweepDeps {
+  /**
+   * The store the enumerations run on: `listProgramTenants`,
+   * `listTenantsWithoutProgram` and `listPassesPendingExpiry`. It has no tenant
+   * set, so nothing that reads one tenant's rows may run on it.
+   */
   store: WalletStore;
+  /**
+   * The store for one tenant's work, which sets that tenant on a transaction per
+   * call (`createTenantWalletStore` in production). Under row-level security a
+   * tenant table read with no tenant set errors, so every per-tenant read and
+   * write of the sweep goes through this. Omitted, the sweep uses `store` for
+   * everything, which is what the in-memory tests do.
+   */
+  tenantStore?: ((tenantId: string) => WalletStore) | undefined;
   /** Injected, so the whole sweep is exercisable without a credential. */
   client: GoogleWalletClient;
   /**
@@ -578,6 +591,11 @@ export interface SweepInput {
    * `parseDemoMode`, which fails closed.
    */
   demoMode: boolean;
+}
+
+/** The store for one tenant's work: see `SweepDeps.tenantStore`. */
+function storeFor(deps: SweepDeps, tenantId: string): WalletStore {
+  return deps.tenantStore?.(tenantId) ?? deps.store;
 }
 
 /**
@@ -679,7 +697,7 @@ async function syncReviewStatuses(
     const previous = program.reviewStatus;
 
     try {
-      await deps.store.updateProgramReviewStatus(program.tenantId, stored, observedAt);
+      await storeFor(deps, program.tenantId).updateProgramReviewStatus(program.tenantId, stored, observedAt);
       report.reviewStatusesSynced += 1;
       if (stored !== previous) report.reviewStatusesChanged += 1;
     } catch (err: unknown) {
@@ -818,7 +836,7 @@ async function expirePendingPasses(
     let outcome: ExpireOutcome;
     try {
       outcome = await expirePass(
-        { store: deps.store, client: deps.client, now: observedAt, demoMode: deps.demoMode },
+        { store: storeFor(deps, row.tenantId), client: deps.client, now: observedAt, demoMode: deps.demoMode },
         { tenantId: row.tenantId, customerId: row.customerId },
       );
     } catch (err: unknown) {
@@ -897,7 +915,7 @@ async function provisionMissingClasses(deps: SweepDeps, report: SweepReport): Pr
   for (const tenantId of tenantIds) {
     try {
       const outcome = await provisionTenantClass(
-        { store: deps.store, client: deps.client, ...deps.provisioning },
+        { store: storeFor(deps, tenantId), client: deps.client, ...deps.provisioning },
         { tenantId },
       );
 
@@ -947,6 +965,7 @@ async function sweepTenant(
   let token: string | undefined;
   let page = 0;
   let budgetExhausted = false;
+  const store = storeFor(deps, tenantId);
 
   while (page < MAX_PAGES_PER_TENANT) {
     let listed;
@@ -966,7 +985,7 @@ async function sweepTenant(
 
     let rows: WalletPassRow[];
     try {
-      rows = await deps.store.findPassesByObjectIds(
+      rows = await store.findPassesByObjectIds(
         listed.objects.map((object) => object.id),
         tenantId,
       );
@@ -1001,7 +1020,7 @@ async function sweepTenant(
         break;
       }
 
-      await sweepOnePass(deps, object, row, observedAt, report);
+      await sweepOnePass(deps, store, object, row, observedAt, report);
       report.passesActedOn += 1;
     }
 
@@ -1044,6 +1063,7 @@ async function sweepTenant(
  */
 async function sweepOnePass(
   deps: SweepDeps,
+  store: WalletStore,
   object: LoyaltyObject,
   row: WalletPassRow,
   observedAt: Date,
@@ -1055,7 +1075,7 @@ async function sweepOnePass(
       // The returned count is the whole point of the call. A lifecycle write can
       // legitimately match no rows, and counting it as one would report an
       // observation this system does not hold.
-      const rowsChanged = await deps.store.recordPassLifecycle({
+      const rowsChanged = await store.recordPassLifecycle({
         customerId: row.customerId,
         tenantId: row.tenantId,
         state: lifecycle,
@@ -1081,7 +1101,7 @@ async function sweepOnePass(
 
   try {
     const outcome = await reconcilePass(
-      { store: deps.store, client: deps.client, now: observedAt, demoMode: deps.demoMode },
+      { store, client: deps.client, now: observedAt, demoMode: deps.demoMode },
       { tenantId: row.tenantId, customerId: row.customerId },
     );
     report.outcomes[outcome.kind] += 1;
@@ -1130,15 +1150,17 @@ async function sweepOnePass(
  * for a job it has already decided not to do is a dependency with no upside.
  * One boolean, checked twice, at two different boundaries.
  *
- * ## Why no tenant RLS transaction is opened
+ * ## Enumerations bare, each tenant's work in its own transactions
  *
- * `createTenantWalletStore` sets `app.current_tenant_id`, which is correct for
- * the request path and wrong for the enumeration: there is no tenant yet when
- * `listProgramTenants` runs, and setting one would hide every row from every
- * other tenant. So this opens a bare session and lets the cross-tenant query be
- * the cross-tenant query. See the RLS note on `listProgramTenants`: this returns
- * nothing once the tenant policies are enabled, and that is a known, named gap
- * rather than a surprise.
+ * The enumerations run on the store with no tenant set: there is no tenant yet
+ * when `listProgramTenants` runs. They read only `tenants` on that session and
+ * each tenant's program row in that tenant's transaction (see
+ * `drizzle-store.ts`), so they keep working under row-level security. Every
+ * per-tenant read and write goes through `createTenantWalletStore`, which opens
+ * one short transaction per store call with the tenant set on it, so no
+ * transaction is ever open across a call to Google. The pending-expiry window is
+ * still one cross-tenant statement, a named gap on
+ * `WalletStore.listPassesPendingExpiry`.
  */
 export async function runScheduledSweep(env: WalletBindings): Promise<SweepReport> {
   const demoMode = parseDemoMode(env.WALLET_DEMO_MODE);
@@ -1156,6 +1178,7 @@ export async function runScheduledSweep(env: WalletBindings): Promise<SweepRepor
   const report = await sweepPasses(
     {
       store: createDrizzleWalletStore(db),
+      tenantStore: (tenantId) => createTenantWalletStore(db, tenantId),
       client: googleWalletClientFor(env),
       demoMode,
       // The issuer and the three origins, read from the deployment because a

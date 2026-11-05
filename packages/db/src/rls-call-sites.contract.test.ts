@@ -31,16 +31,12 @@ const RAW_TENANT_SETTING =
 /**
  * Files allowed to set the tenant by hand, and why.
  *
- * Signup cannot use the helper at all; the cron entries are debts that end in
- * Unit 3, and the last test fails once one of them is no longer needed.
+ * Signup cannot use the helper at all. The last test fails once an entry is
+ * no longer needed.
  */
 const ALLOWED: Record<string, string> = {
   'workers/identity/src/business-signup.ts':
     'Signup creates the business inside its transaction, so the id does not exist before the transaction opens; it sets the tenant on that transaction right after the insert.',
-  'workers/automation/src/helpers.ts':
-    'Defines withRls for the cron handlers, which loop over every business and move to per-tenant transactions in Unit 3.',
-  'workers/automation/src/cron-handler.ts':
-    'Cross-tenant cron loops; they move to per-tenant transactions in Unit 3.',
 };
 
 /** Runtime source files of the workers and the gateway, as git tracks them. */

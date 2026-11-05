@@ -109,6 +109,9 @@ vi.mock('./drizzle-store', async (importOriginal) => {
   return {
     ...actual,
     createDrizzleWalletStore: vi.fn(() => store),
+    // The per-tenant store the entry point hands the rule. Same double: what
+    // is asserted is that each tenant's work is routed through it.
+    createTenantWalletStore: vi.fn(() => store),
     // Spied rather than passed through: the assertion is that the entry point never
     // calls it, which needs something to assert against.
     openTenantWalletStore: vi.fn(actual.openTenantWalletStore),
@@ -302,6 +305,20 @@ describe('deactivateInactivePasses', () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it('runs each tenant\'s work through a store scoped to that tenant', async () => {
+    // Under RLS a candidate read on the bare session errors, so the entry
+    // point must hand the rule a tenant-scoped store, in both modes.
+    const { createTenantWalletStore } = await import('./drizzle-store');
+    vi.mocked(createTenantWalletStore).mockClear();
+
+    await deactivateInactivePasses(env() as never);
+    expect(createTenantWalletStore).toHaveBeenCalledWith(expect.anything(), TENANT);
+
+    vi.mocked(createTenantWalletStore).mockClear();
+    await deactivateInactivePasses(env() as never, { dryRun: false });
+    expect(createTenantWalletStore).toHaveBeenCalledWith(expect.anything(), TENANT);
   });
 
   it('scopes the candidate query to the tenant it is reporting on', async () => {

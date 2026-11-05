@@ -362,14 +362,18 @@ export async function deactivateInactivePasses(
   const dryRun = options.dryRun ?? true;
 
   const db = createDb(env.DATABASE_URL);
+  // The enumeration runs on the bare store; each tenant's reads and writes run
+  // in that tenant's own transaction, so the rule keeps working under RLS.
   const store = createDrizzleWalletStore(db);
+  const tenantStore = (tenantId: string) => createTenantWalletStore(db, tenantId);
 
   if (dryRun) {
-    return planInactivityDeactivation({ store });
+    return planInactivityDeactivation({ store, tenantStore });
   }
 
   return applyInactivityDeactivation({
     store,
+    tenantStore,
     client: googleWalletClientFor(env),
     demoMode: parseDemoMode(env.WALLET_DEMO_MODE),
   });

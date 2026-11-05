@@ -819,10 +819,18 @@ export interface WalletStore {
    *
    * ## Why cross-tenant, and what that costs
    *
-   * Same reason, and the same named gap, as `listProgramTenants`: the sweep has
-   * no tenant to open a session for, and setting one would hide every other
-   * tenant's rows. Every row carries its own `tenant_id`, and every write the
-   * caller makes from it is tenant-scoped in its own `WHERE`.
+   * The sweep has no tenant to open a session for, and setting one would hide
+   * every other tenant's rows. Every row carries its own `tenant_id`, and every
+   * write the caller makes from it is tenant-scoped in its own `WHERE` and runs
+   * in that tenant's transaction.
+   *
+   * **Known gap under row-level security.** Unlike `listProgramTenants`, this
+   * read is still one cross-tenant statement over `customer_wallet_passes` and
+   * `customers`, so once their policies are enforced it errors (the policy reads
+   * `current_setting(...)` with no default). The sweep captures that as a
+   * `list_pending_expiries` failure and carries on; making it per tenant would
+   * change the rotation this window depends on, and is left to a separate
+   * change.
    *
    * ## Why the page rotates
    *
@@ -883,14 +891,16 @@ export interface WalletStore {
    * entirely**. `tenant_id` is the primary key, so it is unique, immutable and
    * monotonically comparable, which is exactly what a keyset cursor needs.
    *
-   * ## This is the one cross-tenant query in this worker
+   * ## Cross-tenant, and still correct under row-level security
    *
-   * It has no tenant to scope to — enumerating the tenants is the point — so it
-   * must be called on a session that has **not** set `app.current_tenant_id`.
-   * Every other method here requires one. See `sweep.ts` and the RLS note on
-   * `drizzle-store.ts`: this query returns no rows at all once the tenant
-   * policies are enabled, and giving it a bypass role is a separate change to
-   * `packages/db`.
+   * There is no tenant to scope the enumeration to — enumerating the tenants is
+   * the point — so it is called on a session with no tenant set. It must not
+   * read a tenant table on that session: the policy reads
+   * `current_setting('app.current_tenant_id')` with no default, so such a read
+   * errors rather than returning no rows. The implementation pages over
+   * `tenants`, which is exempt from RLS, and reads each tenant's program row in
+   * that tenant's own transaction. Workers are never given a role that bypasses
+   * RLS.
    */
   listProgramTenants(options: {
     /** Hard bound. The implementation must not fetch more than this. */
@@ -929,16 +939,11 @@ export interface WalletStore {
    *
    * ## RLS
    *
-   * **This returns no rows at all once the tenant policies are enabled**, the same
-   * gap `listProgramTenants` documents, and for the same reason: the sweep runs on
-   * a bare session with no `app.current_tenant_id`, and a policy keyed on that
-   * variable admits no rows to it.
-   *
-   * Stated rather than left to be discovered, because the failure mode is silence:
-   * the sweep would report zero unprovisioned tenants, every counter would read as
-   * healthy, and the businesses that need a class would stay without one. Giving
-   * these two queries a bypass role is a change to `packages/db` and a separate
-   * decision.
+   * Absence can only be observed from inside the tenant: a cross-tenant
+   * anti-join against `tenant_wallet_programs` errors on a session with no
+   * tenant set. So the implementation pages over `tenants` and asks each
+   * tenant's own transaction whether its program row exists, the same pattern
+   * as `listProgramTenants`.
    */
   listTenantsWithoutProgram(options: {
     /** Hard bound. The implementation must not fetch more than this. */
@@ -1114,11 +1119,12 @@ export interface WalletStore {
    * ## This is a cross-tenant query
    *
    * There is no tenant to scope to; working out which tenants exist *is* the
-   * question. Like `listProgramTenants` and `listTenantsWithoutProgram`, it must
-   * be called on a session with **no** `app.current_tenant_id`, and it will
-   * return no rows at all once the tenant RLS policies are enabled — a gap both
-   * of those already document, and one this method inherits rather than
-   * introduces.
+   * question. It must be called on a session with **no**
+   * `app.current_tenant_id`, and once the tenant RLS policies are enforced it
+   * errors, because the policy reads `current_setting(...)` with no default.
+   * `listProgramTenants` and `listTenantsWithoutProgram` solved the same problem
+   * by paging over `tenants`; a lookup by class id has no such roster to page
+   * over cheaply, so this one is still open.
    */
   findTenantByClassId(classId: string): Promise<WalletTenantByClassIdRow | null>;
 

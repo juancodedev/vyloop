@@ -1265,3 +1265,120 @@ describe('the run log', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// One tenant at a time
+//
+// Under row-level security a tenant table read with no tenant set errors, so
+// the rule enumerates tenants on the bare store and reads and writes each
+// tenant's passes through the store scoped to that tenant
+// (`createTenantWalletStore` in production).
+// ---------------------------------------------------------------------------
+
+describe('each tenant\'s work goes through that tenant\'s store', () => {
+  const A = tenantId(1);
+  const B = tenantId(2);
+  const C = tenantId(3);
+
+  function seeded(): CountingStore {
+    return storeFor(
+      [A, B, C].map((tenant, n) => ({
+        tenant,
+        customer: customerId(n + 1),
+        objectId: `${OBJECT_ID}-${n}`,
+        state: 'issued',
+        transactions: [{ at: new Date('2021-01-01T00:00:00.000Z'), points: 100 }],
+        enrolledAt: new Date('2020-01-01T00:00:00.000Z'),
+      })),
+      [program(A, 6), program(B, 6), program(C, 6)],
+    );
+  }
+
+  /** A bare store and a per-tenant factory over one store, recording both. */
+  function scoped(store: CountingStore) {
+    const bareCalls: string[] = [];
+    const tenantCalls: Array<{ bound: string; method: string; tenantArg: unknown }> = [];
+    const wrap = (onCall: (method: string, args: unknown[]) => void): WalletStore =>
+      new Proxy(store, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver);
+          if (typeof value !== 'function') return value;
+          return (...args: unknown[]) => {
+            onCall(String(prop), args);
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        },
+      }) as unknown as WalletStore;
+    return {
+      bare: wrap((method) => bareCalls.push(method)),
+      tenantStore: vi.fn((bound: string) =>
+        wrap((method, args) =>
+          tenantCalls.push({ bound, method, tenantArg: (args[0] as { tenantId?: unknown })?.tenantId }),
+        ),
+      ),
+      bareCalls,
+      tenantCalls,
+    };
+  }
+
+  it('plans on the bare store only for the enumeration, and per tenant through its own store', async () => {
+    const stores = scoped(seeded());
+
+    const plan = await planInactivityDeactivation({
+      store: stores.bare,
+      tenantStore: stores.tenantStore,
+      now: () => NOW,
+    });
+
+    expect(plan.totalCandidates).toBe(3);
+    expect(new Set(stores.bareCalls)).toEqual(new Set(['listProgramTenants']));
+    expect(stores.tenantCalls.map((call) => [call.bound, call.method, call.tenantArg])).toEqual([
+      [A, 'findInactivePassCandidates', A],
+      [B, 'findInactivePassCandidates', B],
+      [C, 'findInactivePassCandidates', C],
+    ]);
+  });
+
+  it('records each deactivation through the store of its own tenant', async () => {
+    const stores = scoped(seeded());
+
+    const report = await applyInactivityDeactivation({
+      store: stores.bare,
+      tenantStore: stores.tenantStore,
+      client: new CountingClient(),
+      demoMode: false,
+      now: () => NOW,
+    });
+
+    expect(report.acted.passesDeactivated).toBe(3);
+    expect(new Set(stores.bareCalls)).toEqual(new Set(['listProgramTenants']));
+    const writes = stores.tenantCalls.filter((call) => call.method === 'recordPassLifecycle');
+    expect(writes.map((call) => [call.bound, call.tenantArg])).toEqual([
+      [A, A],
+      [B, B],
+      [C, C],
+    ]);
+  });
+
+  it('reports a tenant whose candidates cannot be read by id, and still plans the next one', async () => {
+    const store = seeded();
+    const original = store.findInactivePassCandidates.bind(store);
+    store.findInactivePassCandidates = async (input) => {
+      if (input.tenantId === B) throw new Error('B is broken');
+      return original(input);
+    };
+
+    const plan = await planInactivityDeactivation({ store, now: () => NOW });
+
+    expect(plan.tenants.map((tenant) => tenant.tenantId)).toEqual([A, C]);
+    expect(plan.tenantsFailed).toBe(1);
+    expect(plan.tenantFailures).toEqual([{ tenantId: B, stage: 'find_candidates', reason: 'B is broken' }]);
+  });
+
+  it('reports no tenant failures when every tenant was read', async () => {
+    const plan = await planInactivityDeactivation({ store: seeded(), now: () => NOW });
+
+    expect(plan.tenantsFailed).toBe(0);
+    expect(plan.tenantFailures).toEqual([]);
+  });
+});

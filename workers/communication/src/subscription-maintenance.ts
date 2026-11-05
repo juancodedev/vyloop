@@ -1,5 +1,5 @@
-import { createDb, customers, pushSubscriptions } from '@vyloop/db';
-import { and, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { createDb, customers, pushSubscriptions, tenants, withTenantTransaction } from '@vyloop/db';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 
 import type { Bindings } from './helpers';
@@ -38,13 +38,20 @@ import type { Bindings } from './helpers';
 // first run already pruned. Each sub-task therefore captures its own failure
 // and the sweep carries on, and the counts it reports say what happened.
 //
-// ## No tenant session
+// ## One tenant at a time
 //
-// The sweep is table-wide: it runs across every tenant at once, the same way
-// the wallet's own ageing sweep does. Opening a tenant session here would set
-// `app.current_business_id` and hide every other tenant's rows from the sweep
-// itself, so there is no session to open — and every statement below carries
-// its own scope in its own `WHERE`.
+// `push_subscriptions` and `customers` are tenant tables: under row-level
+// security their policy reads `current_setting('app.current_business_id')`
+// with no default, so a statement issued with no tenant set does not see
+// nothing — it errors. The sweep therefore enumerates `tenants` (exempt from
+// RLS) by keyset, and runs each step of each tenant inside its own
+// `withTenantTransaction`. Every statement also carries the tenant in its own
+// `WHERE`, so the session is the second line of defence, not the only one.
+//
+// One transaction per step, not per tenant: a failed statement aborts the
+// transaction it runs in, so the second step needs a transaction of its own to
+// run after the first one failed. A failure is reported with its tenant id and
+// the next step, and the next tenant, still run.
 // ---------------------------------------------------------------------------
 
 /**
@@ -57,7 +64,7 @@ import type { Bindings } from './helpers';
 export const STALE_SUBSCRIPTION_DAYS = 180;
 
 /**
- * The most rows one step of one run deletes.
+ * The most rows one step of one run deletes for one tenant.
  *
  * A sweep that deletes everything due in one statement holds its locks for as
  * long as that takes, and the first run after a backlog — or after a bug that
@@ -67,89 +74,79 @@ export const STALE_SUBSCRIPTION_DAYS = 180;
  */
 export const SWEEP_BATCH_SIZE = 1000;
 
+/**
+ * How many tenants one page of the enumeration reads.
+ *
+ * Keyset on the primary key, so a page costs the same wherever it starts and a
+ * tenant created mid-run shifts nothing.
+ */
+export const TENANT_PAGE_SIZE = 100;
+
 /** The milliseconds in a day, so the window is written in days and computed once. */
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * Prune the subscriptions that are no longer worth keeping.
+ * Prune the subscriptions that are no longer worth keeping, tenant by tenant.
  *
- * Never throws. The counts are the report, and they are logged in one line.
+ * Never throws. The counts are the report, and they are logged in one line:
+ * the totals, the deletions of every tenant that had any, and the ids of the
+ * tenants that failed.
  */
 export async function handleSubscriptionMaintenance(env: Bindings): Promise<void> {
   let prunedStale = 0;
   let prunedDeletedCustomer = 0;
   let errors = 0;
+  const pruned: string[] = [];
+  const failedTenants = new Set<string>();
 
   try {
     const db = createDb(env.DATABASE_URL);
 
-    // The window, computed once: both halves of the staleness rule compare
-    // against the same moment.
+    // The window, computed once: both halves of the staleness rule, in every
+    // tenant, compare against the same moment.
     const cutoff = new Date(Date.now() - STALE_SUBSCRIPTION_DAYS * MILLISECONDS_PER_DAY);
 
-    // -----------------------------------------------------------------------
-    // The stale subscriptions
-    // -----------------------------------------------------------------------
-    try {
-      const stale = or(
-        // Seen, but not for a long time.
-        lt(pushSubscriptions.lastSeenAt, cutoff),
-        // Never seen, and old enough that it never will be.
-        and(
-          isNull(pushSubscriptions.lastSeenAt),
-          lt(pushSubscriptions.createdAt, cutoff),
-        ),
-      );
+    let after: string | null = null;
+    for (;;) {
+      // `tenants` is exempt from RLS, so this read needs no tenant set.
+      const page: Array<{ id: string }> = await db
+        .select({ id: tenants.id })
+        .from(tenants)
+        .where(after === null ? undefined : gt(tenants.id, after))
+        .orderBy(asc(tenants.id))
+        .limit(TENANT_PAGE_SIZE);
 
-      const removed = await db
-        .delete(pushSubscriptions)
-        .where(oneBatchOf(stale))
-        .returning({ id: pushSubscriptions.id });
+      for (const { id: tenantId } of page) {
+        const stale = await pruneStep(tenantId, 'stale push subscriptions', () =>
+          withTenantTransaction(db, { businessId: tenantId }, (tx) => pruneStale(tx, tenantId, cutoff)),
+        );
+        const deletedCustomer = await pruneStep(
+          tenantId,
+          'push subscriptions of deleted customers',
+          () =>
+            withTenantTransaction(db, { businessId: tenantId }, (tx) =>
+              pruneDeletedCustomers(tx, tenantId),
+            ),
+        );
 
-      prunedStale = removed.length;
-    } catch (error) {
-      errors += 1;
-      console.error(
-        '[communication] Could not prune the stale push subscriptions:',
-        error instanceof Error ? error.message : error,
-      );
-    }
+        if (stale === null || deletedCustomer === null) {
+          errors += (stale === null ? 1 : 0) + (deletedCustomer === null ? 1 : 0);
+          failedTenants.add(tenantId);
+        }
+        prunedStale += stale ?? 0;
+        prunedDeletedCustomer += deletedCustomer ?? 0;
+        if ((stale ?? 0) + (deletedCustomer ?? 0) > 0) {
+          pruned.push(`${tenantId}:stale=${stale ?? 0},deleted_customer=${deletedCustomer ?? 0}`);
+        }
+      }
 
-    // -----------------------------------------------------------------------
-    // The subscriptions of a deleted customer
-    // -----------------------------------------------------------------------
-    try {
-      // The soft-deleted customers, as a subquery, so the delete is one
-      // statement and cannot race with a customer deleted between the read
-      // and the write.
-      //
-      // This reads `customers` with no tenant set: the sweep is table-wide.
-      // That works because row-level security is not enforced on `customers`
-      // today. Once it is, this subquery would see no rows and the step would
-      // delete nothing without an error — so the RLS rollout has to give the
-      // sweep a role that bypasses it, or a tenant-by-tenant loop.
-      const deletedCustomers = db
-        .select({ id: customers.id })
-        .from(customers)
-        .where(isNotNull(customers.deletedAt));
-
-      const removed = await db
-        .delete(pushSubscriptions)
-        .where(oneBatchOf(inArray(pushSubscriptions.customerId, deletedCustomers)))
-        .returning({ id: pushSubscriptions.id });
-
-      prunedDeletedCustomer = removed.length;
-    } catch (error) {
-      errors += 1;
-      console.error(
-        '[communication] Could not prune the push subscriptions of deleted customers:',
-        error instanceof Error ? error.message : error,
-      );
+      if (page.length < TENANT_PAGE_SIZE) break;
+      after = page[page.length - 1]!.id;
     }
   } catch (error) {
-    // The sweep could not even start: the connection, the pool, the deploy.
-    // The counts are still reported, because a run that reported nothing is a
-    // run nobody can tell from a run that never happened.
+    // The sweep could not enumerate tenants: the connection, the pool, the
+    // deploy. The counts are still reported, because a run that reported
+    // nothing is a run nobody can tell from a run that never happened.
     errors += 1;
     console.error(
       '[communication] The subscription sweep did not run:',
@@ -159,8 +156,79 @@ export async function handleSubscriptionMaintenance(env: Bindings): Promise<void
 
   console.log(
     `[communication] Subscription maintenance: pruned_stale=${prunedStale} ` +
-      `pruned_deleted_customer=${prunedDeletedCustomer} errors=${errors}`,
+      `pruned_deleted_customer=${prunedDeletedCustomer} errors=${errors}` +
+      (pruned.length > 0 ? ` pruned_by_tenant=${pruned.join(';')}` : '') +
+      (failedTenants.size > 0 ? ` failed_tenants=${[...failedTenants].join(',')}` : ''),
   );
+}
+
+/**
+ * Run one step for one tenant, and turn a failure into `null` and a log line
+ * that names the tenant.
+ */
+async function pruneStep(
+  tenantId: string,
+  what: string,
+  step: () => Promise<number>,
+): Promise<number | null> {
+  try {
+    return await step();
+  } catch (error) {
+    console.error(
+      `[communication] Could not prune the ${what} of tenant ${tenantId}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
+/** The handle `withTenantTransaction` gives the steps: the tenant is set on it. */
+type TenantTx = Pick<ReturnType<typeof createDb>, 'select' | 'delete'>;
+
+/** Delete one batch of the tenant's stale subscriptions; answer how many. */
+async function pruneStale(tx: TenantTx, tenantId: string, cutoff: Date): Promise<number> {
+  const stale = and(
+    eq(pushSubscriptions.businessId, tenantId),
+    or(
+      // Seen, but not for a long time.
+      lt(pushSubscriptions.lastSeenAt, cutoff),
+      // Never seen, and old enough that it never will be.
+      and(isNull(pushSubscriptions.lastSeenAt), lt(pushSubscriptions.createdAt, cutoff)),
+    ),
+  );
+
+  const removed = await tx
+    .delete(pushSubscriptions)
+    .where(oneBatchOf(stale))
+    .returning({ id: pushSubscriptions.id });
+
+  return removed.length;
+}
+
+/** Delete one batch of the subscriptions of the tenant's deleted customers. */
+async function pruneDeletedCustomers(tx: TenantTx, tenantId: string): Promise<number> {
+  // The soft-deleted customers, as a subquery, so the delete is one statement
+  // and cannot race with a customer deleted between the read and the write.
+  // It reads `customers` on the same transaction, so it sees this tenant's
+  // rows under RLS — a missing tenant would make it error, not come back empty.
+  const deletedCustomers = tx
+    .select({ id: customers.id })
+    .from(customers)
+    .where(and(eq(customers.businessId, tenantId), isNotNull(customers.deletedAt)));
+
+  const removed = await tx
+    .delete(pushSubscriptions)
+    .where(
+      oneBatchOf(
+        and(
+          eq(pushSubscriptions.businessId, tenantId),
+          inArray(pushSubscriptions.customerId, deletedCustomers),
+        ),
+      ),
+    )
+    .returning({ id: pushSubscriptions.id });
+
+  return removed.length;
 }
 
 /**

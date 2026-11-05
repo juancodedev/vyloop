@@ -1,4 +1,6 @@
 import { createDb } from '@vyloop/db';
+import { getTableName } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
@@ -2349,5 +2351,255 @@ describe('the sweep expires the passes of deleted customers', () => {
     expect(report.expiries.expired).toBe(0);
     expect(store.methodsCalled()).toEqual([]);
     expect(client.patchObject).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// One tenant at a time
+//
+// Under row-level security a tenant table read with no tenant set errors, so
+// the sweep enumerates tenants on the bare store and does each tenant's work
+// through the store scoped to that tenant (`createTenantWalletStore` in
+// production, which sets the tenant on a transaction per store call).
+// ============================================================================
+
+/** The methods that enumerate across tenants and so run on the bare store. */
+const ENUMERATIONS = ['listProgramTenants', 'listTenantsWithoutProgram', 'listPassesPendingExpiry'];
+
+/** Every tenant id an argument names, at any depth. */
+function tenantIdsIn(value: unknown): string[] {
+  if (typeof value === 'string') return /^00000000-0000-4000-8000-\d{12}$/.test(value) ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap(tenantIdsIn);
+  if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.values(value).flatMap(tenantIdsIn);
+  }
+  return [];
+}
+
+/**
+ * The bare store and a per-tenant store factory over one `SweepStore`, both
+ * recording what reached them. A call on a tenant store whose arguments name a
+ * different tenant is recorded as a crossing.
+ */
+function scopedStores(store: SweepStore) {
+  const bareCalls: string[] = [];
+  const tenantCalls: Array<{ bound: string; method: string }> = [];
+  const crossings: Array<{ bound: string; method: string; named: string[] }> = [];
+
+  const wrap = (onCall: (method: string, args: unknown[]) => void): WalletStore =>
+    new Proxy(store, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) => {
+          onCall(String(prop), args);
+          return (value as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    }) as unknown as WalletStore;
+
+  const bare = wrap((method) => bareCalls.push(method));
+  const tenantStore = vi.fn((bound: string) =>
+    wrap((method, args) => {
+      tenantCalls.push({ bound, method });
+      const named = tenantIdsIn(args).filter((id) => id !== bound);
+      if (named.length > 0) crossings.push({ bound, method, named });
+    }),
+  );
+
+  return { bare, tenantStore, bareCalls, tenantCalls, crossings };
+}
+
+describe('the sweep does each tenant\'s work through that tenant\'s store', () => {
+  function scenario() {
+    const swept = tenantId(1);
+    const unprovisioned = tenantId(2);
+    const draft = tenantId(3);
+    const store = new SweepStore(
+      { [swept]: program(swept), [draft]: program(draft, { reviewStatus: 'draft' }) },
+      {},
+      [swept, unprovisioned, draft],
+    );
+    store.seedPass({ tenant: swept, customer: 'c-1', objectId: OBJECT_ID, balance: 50 });
+    store.seedPass({ tenant: swept, customer: 'gone', objectId: `${OBJECT_ID}-gone`, balance: 10 });
+    store.deletedCustomers.add(`${swept}:gone`);
+    return { store, swept, unprovisioned, draft };
+  }
+
+  it('enumerates on the bare store and nothing else', async () => {
+    const { store } = scenario();
+    const scoped = scopedStores(store);
+    const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 40)]) });
+    client.getClass.mockResolvedValue({ id: 'c', reviewStatus: 'approved' });
+
+    await sweepPasses(
+      { store: scoped.bare, tenantStore: scoped.tenantStore, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(scoped.bareCalls.length).toBeGreaterThan(0);
+    expect(scoped.bareCalls.filter((method) => !ENUMERATIONS.includes(method))).toEqual([]);
+  });
+
+  it('reconciles, expires, provisions and syncs each tenant through a store bound to it', async () => {
+    const { store, swept, unprovisioned, draft } = scenario();
+    const scoped = scopedStores(store);
+    const client = fakeGoogle({
+      pages: onePage([remoteObject(OBJECT_ID, 40), remoteObject(`${OBJECT_ID}-gone`, 10)]),
+    });
+    client.getClass.mockResolvedValue({ id: 'c', reviewStatus: 'approved' });
+
+    const report = await sweepPasses(
+      { store: scoped.bare, tenantStore: scoped.tenantStore, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    // The work still happened.
+    expect(report.tenantsSwept).toBe(1);
+    expect(report.outcomes.patched).toBe(1);
+    expect(report.expiries.expired).toBe(1);
+    expect(report.classesProvisioned).toBe(1);
+    expect(report.reviewStatusesSynced).toBeGreaterThan(0);
+
+    // Through the store of each tenant, and never naming another one.
+    const methodsFor = (tenant: string) =>
+      scoped.tenantCalls.filter((call) => call.bound === tenant).map((call) => call.method);
+    expect(methodsFor(swept)).toEqual(
+      expect.arrayContaining(['findPassesByObjectIds', 'recordPassReconciliation', 'findDeletedCustomerPass', 'recordPassExpired']),
+    );
+    expect(methodsFor(unprovisioned)).toEqual(expect.arrayContaining(['insertProgram']));
+    expect(methodsFor(draft)).toEqual(expect.arrayContaining(['updateProgramReviewStatus']));
+    expect(scoped.crossings).toEqual([]);
+  });
+
+  it('reports a failing tenant by id and still sweeps the next one', async () => {
+    const a = tenantId(1);
+    const b = tenantId(2);
+    const c = tenantId(3);
+    const store = new SweepStore({ [a]: program(a), [b]: program(b), [c]: program(c) });
+    for (const tenant of [a, b, c]) {
+      store.seedPass({ tenant, customer: `c-${tenant}`, objectId: OBJECT_ID, balance: 50 });
+    }
+    store.failResolve.set(b, new Error('B is broken'));
+    const scoped = scopedStores(store);
+    const client = fakeGoogle({ pages: onePage([remoteObject(OBJECT_ID, 40)]) });
+
+    const report = await sweepPasses(
+      { store: scoped.bare, tenantStore: scoped.tenantStore, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(report.tenantsFailed).toBe(1);
+    expect(report.tenantsSwept).toBe(2);
+    expect(report.failures).toEqual(
+      expect.arrayContaining([expect.objectContaining({ tenantId: b, stage: 'resolve_passes' })]),
+    );
+    expect(scoped.tenantCalls.some((call) => call.bound === c && call.method === 'findPassesByObjectIds')).toBe(true);
+  });
+});
+
+describe('runScheduledSweep reads tenant data only on a transaction that set that tenant', () => {
+  /**
+   * A database that behaves like Postgres with the policies enforced: the bare
+   * handle reads `tenants` and nothing else (any other table throws), and a
+   * transaction handle records the tenant its `set_config` set on every read.
+   */
+  function rlsDb(tenantIds: string[]) {
+    const reads: Array<{ table: string; tenant: string | null }> = [];
+    const bareReads: string[] = [];
+
+    function chain(resolve: () => unknown[]) {
+      const c: Record<string, unknown> = {};
+      for (const name of ['where', 'orderBy', 'limit', 'leftJoin', 'innerJoin', 'set', 'values', 'returning', 'onConflictDoNothing']) {
+        c[name] = () => c;
+      }
+      c.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) =>
+        Promise.resolve().then(resolve).then(ok, ko);
+      return c;
+    }
+
+    const db = {
+      select: () => ({
+        from: (table: unknown) => {
+          const name = getTableName(table as never);
+          bareReads.push(name);
+          return chain(() => {
+            if (name !== 'tenants') throw new Error(`unrecognized configuration parameter (bare read of ${name})`);
+            return tenantIds.map((id) => ({ id }));
+          });
+        },
+      }),
+      // The pending-expiry window is still one cross-tenant statement (a named
+      // gap); under the policies it errors, and the sweep reports it.
+      execute: async () => {
+        throw new Error('unrecognized configuration parameter (bare execute)');
+      },
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+        let tenant: string | null = null;
+        const tx = {
+          execute: async (statement: unknown) => {
+            const { sql, params } = new PgDialect().sqlToQuery(statement as never);
+            if (sql.includes("set_config('app.current_tenant_id'")) tenant = String(params[0]);
+            return { rows: [] };
+          },
+          select: () => ({
+            from: (table: unknown) => {
+              reads.push({ table: getTableName(table as never), tenant });
+              return chain(() => []);
+            },
+          }),
+          insert: (table: unknown) => {
+            reads.push({ table: getTableName(table as never), tenant });
+            return chain(() => []);
+          },
+          update: (table: unknown) => {
+            reads.push({ table: getTableName(table as never), tenant });
+            return chain(() => []);
+          },
+        };
+        return fn(tx);
+      },
+    };
+
+    return { db, reads, bareReads };
+  }
+
+  it('enumerates `tenants` bare and reads each tenant\'s rows under that tenant', async () => {
+    const tenants = [tenantId(1), tenantId(2)];
+    const fake = rlsDb(tenants);
+    vi.mocked(createDb).mockImplementationOnce(() => fake.db as never);
+    const errors = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const report = await runScheduledSweep({
+        DATABASE_URL: 'postgres://test',
+        GOOGLE_WALLET_ISSUER_ID: ISSUER,
+        GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: 'wallet@example.invalid',
+        GOOGLE_WALLET_PRIVATE_KEY: 'not-a-key',
+        MEMBER_CODE_PEPPER: 'pepper',
+        CARD_TOKEN_SECRET: 'card-token-secret',
+        WALLET_ALLOWED_ORIGINS: 'https://app.vyloop.app',
+        WALLET_DEMO_MODE: 'false',
+        WALLET_MEDIA_BASE_URL: PROVISIONING.mediaBaseUrl,
+        WALLET_WEB_BASE_URL: PROVISIONING.webBaseUrl,
+        WALLET_CUSTOMER_WEB_BASE_URL: PROVISIONING.customerWebBaseUrl,
+        WALLET_CALLBACK_BASE_URL: PROVISIONING.callbackBaseUrl,
+      } as never);
+
+      // Only `tenants` was read on the bare handle.
+      expect(new Set(fake.bareReads)).toEqual(new Set(['tenants']));
+      // Each tenant's program row was read inside that tenant's transaction,
+      // and the provisioning path's own reads ran under the same tenant.
+      for (const tenant of tenants) {
+        expect(fake.reads.filter((read) => read.tenant === tenant).length).toBeGreaterThan(1);
+      }
+      expect(fake.reads.every((read) => read.tenant !== null)).toBe(true);
+      // The enumeration did not fail; the named cross-tenant gap did.
+      expect(report.failures.map((f) => f.stage)).not.toContain('list_tenants');
+      expect(report.failures.map((f) => f.stage)).not.toContain('list_unprovisioned_tenants');
+      expect(report.tenantsWithoutProgram).toBe(2);
+    } finally {
+      errors.mockRestore();
+    }
   });
 });

@@ -94,6 +94,7 @@ vi.mock('@vyloop/db', async () => {
   };
 });
 
+import { tenantWalletPrograms, tenants } from '@vyloop/db';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -489,21 +490,14 @@ describe('WalletStore tenant scoping', () => {
     // The same argument, asserted against the caller the argument is actually
     // about. `listProgramTenants` walks every tenant that has a class, in
     // primary-key order with a hard page bound, and it is the read that must not
-    // acquire a dependency on a branding row: a sweep whose enumeration depended
-    // on `tenants` would skip a merchant with a missing branding row and report
-    // itself healthy, which is the failure mode this worker's sweep comments
-    // already call out twice.
-    //
-    // So both halves: the columns must not be on the rows the sweep receives, and
-    // the sweep must not join at all.
-    const fake = createFakeDb(
+    // acquire a dependency on a branding row: the program read for each tenant
+    // must not join, and the rows the sweep receives must not carry the columns.
+    const fake = enumerationFixture(
+      [TENANT, OTHER_TENANT],
       [
         { tenantId: TENANT, classId: '1.tenant-a', reviewStatus: 'approved' },
         { tenantId: OTHER_TENANT, classId: '1.tenant-b', reviewStatus: 'draft' },
       ],
-      'tenantId',
-      undefined,
-      { table: 'tenants', rows: [], on: 'id', columns: { businessName: 'name', businessSlug: 'slug' } },
     );
     const store = createDrizzleWalletStore(fake.db);
 
@@ -514,7 +508,7 @@ describe('WalletStore tenant scoping', () => {
       expect(row).not.toHaveProperty('businessName');
       expect(row).not.toHaveProperty('businessSlug');
     }
-    expect(fake.joins).toEqual([]);
+    expect(fake.programJoins).toBe(0);
   });
 
   it('excludes a withdrawn customer from the pass path', async () => {
@@ -1349,6 +1343,125 @@ describe('recordPassObservation', () => {
 // The sweep's enumeration queries
 // ============================================================================
 
+/**
+ * The database as the cross-tenant enumerations see it under row-level security.
+ *
+ * The outer handle answers one kind of read: a keyset page of `tenants`, which
+ * is exempt from RLS. Reading `tenant_wallet_programs` on it throws, the way
+ * the policy does when `current_setting('app.current_tenant_id')` has no value.
+ * `transaction` hands out a handle whose program reads only see the rows of the
+ * tenant its `set_config` named — the policy, modelled — and every program read
+ * records that tenant, so a test can assert which transaction read which row.
+ */
+function enumerationFixture(tenantIds: string[], programRows: Row[]) {
+  const tenantPages: Array<{ sql: string; params: unknown[]; limit: number | undefined }> = [];
+  const programReads: Array<{ tenant: string | null; params: unknown[] }> = [];
+  const transactions: string[][] = [];
+  let programJoins = 0;
+
+  const sorted = [...tenantIds].sort();
+
+  function tenantsPage() {
+    const page = { sql: '', params: [] as unknown[], limit: undefined as number | undefined };
+    tenantPages.push(page);
+    const chain: Builder = {};
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn((clause: unknown) => {
+      if (clause !== undefined) {
+        const query = dialect.sqlToQuery(clause as never);
+        page.sql = `${page.sql} where ${query.sql}`;
+        page.params.push(...query.params);
+      }
+      return chain;
+    });
+    chain.orderBy = vi.fn((clause: unknown) => {
+      page.sql = `${page.sql} order by ${dialect.sqlToQuery(clause as never).sql}`;
+      return chain;
+    });
+    chain.limit = vi.fn((n: number) => {
+      page.limit = n;
+      return chain;
+    });
+    chain.leftJoin = vi.fn(() => {
+      throw new Error('the tenant page must not join the program table: that read is not scoped');
+    });
+    chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+      const after = page.params.find((p) => typeof p === 'string') as string | undefined;
+      const rows = sorted
+        .filter((id) => after === undefined || id > after)
+        .slice(0, page.limit)
+        .map((id) => ({ id }));
+      return Promise.resolve(rows).then(resolve, reject);
+    };
+    return chain;
+  }
+
+  const db: Builder = {
+    select: vi.fn(() => ({
+      from: (table: unknown) => {
+        if (table !== tenants) {
+          throw new Error('a tenant table was read on the outer db, with no tenant set');
+        }
+        return tenantsPage().from(table);
+      },
+    })),
+    execute: vi.fn(() => {
+      throw new Error('a statement reached the outer db');
+    }),
+    transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const settings: string[] = [];
+      transactions.push(settings);
+      let tenant: string | null = null;
+      const tx: Builder = {
+        execute: vi.fn(async (chunk: unknown) => {
+          const query = dialect.sqlToQuery(chunk as never);
+          settings.push(query.sql);
+          if (query.sql.includes("set_config('app.current_tenant_id'")) tenant = String(query.params[0]);
+          return { rows: [] };
+        }),
+        select: vi.fn(() => {
+          const read = { tenant, params: [] as unknown[] };
+          const chain: Builder = {};
+          chain.from = vi.fn((table: unknown) => {
+            if (table !== tenantWalletPrograms) throw new Error('unexpected table in the tenant transaction');
+            return chain;
+          });
+          chain.leftJoin = vi.fn(() => {
+            programJoins += 1;
+            return chain;
+          });
+          chain.where = vi.fn((clause: unknown) => {
+            read.params = dialect.sqlToQuery(clause as never).params;
+            return chain;
+          });
+          chain.limit = vi.fn(() => chain);
+          chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+            if (read.tenant === null) return Promise.reject(new Error('unrecognized configuration parameter')).then(resolve, reject);
+            programReads.push(read);
+            // The policy: only the transaction's own tenant's rows are visible.
+            const visible = programRows.filter((row) => row.tenantId === read.tenant);
+            return Promise.resolve(visible).then(resolve, reject);
+          };
+          return chain;
+        }),
+      };
+      return fn(tx);
+    }),
+  };
+
+  return {
+    db,
+    tenantPages,
+    programReads,
+    transactions,
+    get programJoins() {
+      return programJoins;
+    },
+  };
+}
+
+const THIRD_TENANT = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
+
 describe('listProgramTenants', () => {
   function programs(): Row[] {
     return [
@@ -1357,80 +1470,133 @@ describe('listProgramTenants', () => {
     ];
   }
 
-  it('orders by the primary key, which is what makes the cursor exact', async () => {
-    const fake = createFakeDb(programs(), 'tenantId');
+  it('pages over `tenants` and reads each program row in a transaction that set that tenant', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT, THIRD_TENANT], programs());
+    const store = createDrizzleWalletStore(fake.db);
+
+    const rows = await store.listProgramTenants({ limit: 10, afterTenantId: null });
+
+    // Ascending by tenant id; the tenant with no program row is not returned.
+    expect(rows.map((r) => r.tenantId)).toEqual([OTHER_TENANT, TENANT]);
+    // One program read per tenant, each under its own tenant, filtered by it too.
+    expect(fake.programReads.map((r) => r.tenant)).toEqual([OTHER_TENANT, TENANT, THIRD_TENANT]);
+    for (const read of fake.programReads) expect(read.params).toEqual([read.tenant]);
+    // Both variables set on each transaction, transaction-locally.
+    expect(fake.transactions).toHaveLength(3);
+    for (const settings of fake.transactions) {
+      expect(settings[0]).toContain("set_config('app.current_business_id'");
+      expect(settings[1]).toContain("set_config('app.current_tenant_id'");
+    }
+  });
+
+  it('orders `tenants` by the primary key, which is what makes the cursor exact', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT], programs());
     const store = createDrizzleWalletStore(fake.db);
 
     await store.listProgramTenants({ limit: 10, afterTenantId: null });
 
-    // An unordered keyset page is not resumable: the next page's cursor would be
-    // meaningless, so a tenant could be read twice or skipped entirely. `asc` is
-    // what drizzle compiles an ascending `orderBy` column to.
-    expect(fake.scoped[0]!.sql).toContain('tenant_id" asc');
+    expect(fake.tenantPages[0]!.sql).toContain('"id" asc');
   });
 
-  it('applies the bound it was given, so the read is never unbounded', async () => {
-    const fake = createFakeDb(programs(), 'tenantId');
+  it('applies the bound it was given, so the result is never unbounded', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT], programs());
     const store = createDrizzleWalletStore(fake.db);
 
     const rows = await store.listProgramTenants({ limit: 1, afterTenantId: null });
 
     expect(rows).toHaveLength(1);
+    // It stopped reading once it had a full page.
+    expect(fake.programReads).toHaveLength(1);
+  });
+
+  it('keeps paging `tenants` past tenants with no program row until the page is full', async () => {
+    const fake = enumerationFixture([THIRD_TENANT, OTHER_TENANT, TENANT], [programs()[0]!]);
+    const store = createDrizzleWalletStore(fake.db);
+
+    const rows = await store.listProgramTenants({ limit: 1, afterTenantId: null });
+
+    expect(rows.map((r) => r.tenantId)).toEqual([TENANT]);
+    // One-row pages of `tenants`, the second resuming after the first, and no
+    // third once the result was full.
+    expect(fake.tenantPages.map((p) => p.limit)).toEqual([1, 1]);
+    expect(fake.tenantPages[1]!.params).toEqual([OTHER_TENANT]);
   });
 
   it('clamps a nonsensical bound rather than passing it through', async () => {
-    const fake = createFakeDb(programs(), 'tenantId');
+    const fake = enumerationFixture([TENANT, OTHER_TENANT], programs());
     const store = createDrizzleWalletStore(fake.db);
 
-    // Zero or negative would return nothing at best and error at worst, and an
-    // enormous one would be the unbounded read this method exists to prevent.
     expect(await store.listProgramTenants({ limit: 0, afterTenantId: null })).toHaveLength(1);
     expect(await store.listProgramTenants({ limit: 10_000, afterTenantId: null })).toHaveLength(2);
+    expect(fake.tenantPages.every((p) => p.limit !== undefined && p.limit <= 200)).toBe(true);
   });
 
   it('resumes with a strict comparison on the cursor, and never with an offset', async () => {
-    const fake = createFakeDb(programs(), 'tenantId');
+    const fake = enumerationFixture([TENANT, OTHER_TENANT], programs());
     const store = createDrizzleWalletStore(fake.db);
 
-    await store.listProgramTenants({ limit: 10, afterTenantId: TENANT });
+    const rows = await store.listProgramTenants({ limit: 10, afterTenantId: OTHER_TENANT });
 
-    // `>` not `>=`, so a page never repeats the cursor row, and no OFFSET: an
-    // offset page re-reads and re-sorts everything it skips, and a tenant
-    // inserted mid-sweep shifts every page after it and skips rows silently.
-    //
-    // The compiled predicate is what is asserted, not the rows it returns: this
-    // fake admits by comparing every uuid parameter for equality, which is the
-    // right model for `eq(tenant_id, $1)` and the wrong one for a `>` cursor.
-    // Asserting the SQL is asserting the thing that is actually shipped.
-    const sql = fake.scoped[0]!.sql;
+    const sql = fake.tenantPages[0]!.sql;
     expect(sql).toContain('>');
-    expect(sql).not.toContain('OFFSET');
     expect(sql).not.toContain('>=');
-    expect(fake.scoped[0]!.params).toContain(TENANT);
+    expect(sql.toLowerCase()).not.toContain('offset');
+    expect(fake.tenantPages[0]!.params).toEqual([OTHER_TENANT]);
+    expect(rows.map((r) => r.tenantId)).toEqual([TENANT]);
   });
 
   it('emits no predicate at all when starting from the beginning', async () => {
-    // A null cursor is a branch, not a sentinel string, so no tenant can be
-    // skipped by colliding with a magic value.
-    const fake = createFakeDb(programs(), 'tenantId');
+    const fake = enumerationFixture([TENANT], programs());
     const store = createDrizzleWalletStore(fake.db);
 
     await store.listProgramTenants({ limit: 10, afterTenantId: null });
 
-    expect(fake.scoped[0]!.where).toBeUndefined();
-    expect(fake.scoped[0]!.params).toEqual([]);
+    expect(fake.tenantPages[0]!.sql).not.toContain('where');
+    expect(fake.tenantPages[0]!.params).toEqual([]);
   });
 
-  it('reads every tenant when starting from the beginning, because enumerating is the point', async () => {
-    const fake = createFakeDb(programs(), 'tenantId');
+  it('never reads the program table on the bare session', async () => {
+    // The fixture's outer handle throws on any tenant table, so a regression to
+    // the single cross-tenant query fails here, as it would under the policy.
+    const fake = enumerationFixture([TENANT, OTHER_TENANT], programs());
     const store = createDrizzleWalletStore(fake.db);
 
-    // The one cross-tenant query in the worker, cross-tenant on purpose. A
-    // tenant filter here would hide every tenant but one, and the sweep would
-    // reconcile a single merchant forever.
-    const rows = await store.listProgramTenants({ limit: 10, afterTenantId: null });
+    await expect(store.listProgramTenants({ limit: 10, afterTenantId: null })).resolves.toHaveLength(2);
+    expect(fake.db.execute).not.toHaveBeenCalled();
+  });
+});
 
-    expect(rows.map((r) => r.tenantId)).toEqual([TENANT, OTHER_TENANT]);
+describe('listTenantsWithoutProgram', () => {
+  const PROGRAMS: Row[] = [{ tenantId: TENANT, issuerId: '3388', classId: 'c1', reviewStatus: 'approved' }];
+
+  it('answers the tenants whose own transaction sees no program row', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT, THIRD_TENANT], PROGRAMS);
+    const store = createDrizzleWalletStore(fake.db);
+
+    const ids = await store.listTenantsWithoutProgram({ limit: 10, afterTenantId: null });
+
+    expect(ids).toEqual([OTHER_TENANT, THIRD_TENANT]);
+    expect(fake.programReads.map((r) => r.tenant)).toEqual([OTHER_TENANT, TENANT, THIRD_TENANT]);
+    for (const read of fake.programReads) expect(read.params).toEqual([read.tenant]);
+  });
+
+  it('applies the bound, and stops reading once it has a full page', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT, THIRD_TENANT], PROGRAMS);
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.listTenantsWithoutProgram({ limit: 1, afterTenantId: null })).toEqual([OTHER_TENANT]);
+    expect(fake.programReads).toHaveLength(1);
+  });
+
+  it('resumes strictly after the cursor', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT, THIRD_TENANT], PROGRAMS);
+    const store = createDrizzleWalletStore(fake.db);
+
+    const ids = await store.listTenantsWithoutProgram({ limit: 10, afterTenantId: OTHER_TENANT });
+
+    expect(fake.tenantPages[0]!.params).toEqual([OTHER_TENANT]);
+    expect(fake.tenantPages[0]!.sql).not.toContain('>=');
+    expect(ids).toEqual([THIRD_TENANT]);
   });
 });
 
