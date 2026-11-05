@@ -1,6 +1,7 @@
+import { SignJWT, jwtVerify } from 'jose';
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
-import { issueToken, validateToken, issueTokenPair, generateRefreshToken } from './auth';
+import { issueToken, validateToken, issueTokenPair, validateRefreshToken } from './auth';
 
 // ---------------------------------------------------------------------------
 // Test configuration
@@ -360,15 +361,47 @@ describe('JWT Lifecycle', () => {
     });
   });
 
-  describe('generateRefreshToken', () => {
-    it('should generate a unique opaque string', () => {
-      const token1 = generateRefreshToken();
-      const token2 = generateRefreshToken();
+  describe('the refresh token', () => {
+    it('is a signed refresh credential carrying the user and the tenant', async () => {
+      const { refreshToken } = await issueTokenPair(
+        TEST_SECRET,
+        TEST_SUB,
+        TEST_BUSINESS_ID,
+        TEST_ROLE,
+        TEST_SCOPES,
+      );
+      const claims = await validateRefreshToken(TEST_SECRET, refreshToken);
+      expect(claims.sub).toBe(TEST_SUB);
+      expect(claims.business_id).toBe(TEST_BUSINESS_ID);
+    });
 
-      expect(token1).toBeTruthy();
-      expect(token1).not.toBe(token2);
-      // Should be hex string (64 chars = 32 bytes)
-      expect(token1).toMatch(/^[0-9a-f]{64}$/);
+    it('cannot be used as an access token by any verifier that holds JWT_SECRET', async () => {
+      const { refreshToken } = await issueTokenPair(
+        TEST_SECRET,
+        TEST_SUB,
+        TEST_BUSINESS_ID,
+        TEST_ROLE,
+        TEST_SCOPES,
+      );
+      await expect(validateToken(TEST_SECRET, refreshToken)).rejects.toThrow();
+      // The gateway and the wallet verify with the raw secret and issuer `vyloop`.
+      await expect(
+        jwtVerify(refreshToken, new TextEncoder().encode(TEST_SECRET), {
+          issuer: 'vyloop',
+          algorithms: ['HS256'],
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('rejects an access token presented as a refresh token', async () => {
+      const { accessToken } = await issueTokenPair(
+        TEST_SECRET,
+        TEST_SUB,
+        TEST_BUSINESS_ID,
+        TEST_ROLE,
+        TEST_SCOPES,
+      );
+      await expect(validateRefreshToken(TEST_SECRET, accessToken)).rejects.toThrow();
     });
   });
 });
@@ -418,6 +451,94 @@ describe('Identity API', () => {
       );
 
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe('POST /v1/auth/refresh', () => {
+    const ENV = { JWT_SECRET: TEST_SECRET, DATABASE_URL: 'postgres://mock' };
+    const refresh = (body: Record<string, unknown>) =>
+      app.fetch(
+        new Request('http://localhost/v1/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+        ENV,
+      );
+    const loginRefreshToken = async () => {
+      const res = await app.fetch(
+        new Request('http://localhost/v1/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: 'test@example.com', password: 'test-password' }),
+        }),
+        ENV,
+      );
+      return ((await res.json()) as { refresh_token: string }).refresh_token;
+    };
+
+    it('refuses an arbitrary refresh_token for a known email', async () => {
+      const res = await refresh({ refresh_token: 'a'.repeat(64), email: 'test@example.com' });
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('AUTH_TOKEN_INVALID');
+      expect(body).not.toHaveProperty('access_token');
+    });
+
+    it('exchanges the refresh token from login for a new token pair, with or without the email', async () => {
+      for (const extra of [{ email: 'test@example.com' }, {}]) {
+        const res = await refresh({ refresh_token: await loginRefreshToken(), ...extra });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, string>;
+        expect(body.token_type).toBe('Bearer');
+        expect(body.scope).toBe('read:customers write:customers write:loyalty read:analytics');
+        const claims = await validateToken(TEST_SECRET, body.access_token);
+        expect(claims.sub).toBe(TEST_SUB);
+        expect(claims.business_id).toBe(TEST_BUSINESS_ID);
+        expect(claims.role).toBe(TEST_ROLE);
+        const next = await validateRefreshToken(TEST_SECRET, body.refresh_token);
+        expect(next.sub).toBe(TEST_SUB);
+      }
+    });
+
+    it('refuses an access token, a token for another tenant, an expired token and a missing token', async () => {
+      const { accessToken } = await issueTokenPair(
+        TEST_SECRET,
+        TEST_SUB,
+        TEST_BUSINESS_ID,
+        TEST_ROLE,
+        TEST_SCOPES,
+      );
+      const otherTenant = (
+        await issueTokenPair(
+          TEST_SECRET,
+          TEST_SUB,
+          '99999999-9999-4999-8999-999999999999',
+          TEST_ROLE,
+          TEST_SCOPES,
+        )
+      ).refreshToken;
+      const forgedKey = await new SignJWT({ business_id: TEST_BUSINESS_ID, typ: 'refresh' })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuer('vyloop')
+        .setAudience('vyloop:refresh')
+        .setSubject(TEST_SUB)
+        .setExpirationTime('1h')
+        .sign(new TextEncoder().encode(TEST_SECRET));
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const stale = await loginRefreshToken();
+      vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+      const expiredRes = await refresh({ refresh_token: stale });
+      vi.useRealTimers();
+      expect(expiredRes.status).toBe(401);
+
+      for (const token of [accessToken, otherTenant, forgedKey]) {
+        expect((await refresh({ refresh_token: token, email: 'test@example.com' })).status).toBe(
+          401,
+        );
+      }
+      expect((await refresh({ email: 'test@example.com' })).status).toBe(401);
     });
   });
 

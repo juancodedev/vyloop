@@ -1,5 +1,12 @@
 import type { MessageBatch } from '@cloudflare/workers-types';
-import { checkPasswordPolicy, createDb, hashPassword, schema, verifyPassword } from '@vyloop/db';
+import {
+  checkPasswordPolicy,
+  createDb,
+  hashPassword,
+  schema,
+  verifyPassword,
+  withTenantTransaction,
+} from '@vyloop/db';
 import { consume, type EventEnvelope } from '@vyloop/event-bus';
 import { createErrorHandler, requestIdMiddleware } from '@vyloop/request-context';
 import { requireOperatorRole } from '@vyloop/types';
@@ -7,7 +14,16 @@ import { and, eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 
-import { counterSubject, isPosPlan, issueToken, issueTokenPair, validateToken, type JwtClaims } from './auth';
+import {
+  counterSubject,
+  isPosPlan,
+  issueToken,
+  issueTokenPair,
+  validateRefreshToken,
+  validateToken,
+  type JwtClaims,
+  type RefreshClaims,
+} from './auth';
 import { resolveBranchLocation, type BranchLocation } from './branch-location';
 import {
   createBranch,
@@ -187,25 +203,49 @@ app.post('/v1/auth/refresh', async (c) => {
   }
 
   try {
+    // `email` is still accepted, because the dashboard sends it, and ignored: the
+    // signed token names the user. Looking the user up by a caller-supplied
+    // email is what let any string plus a known address mint a staff token.
     const body = await c.req.json<{ refresh_token?: string; email?: string }>();
 
-    if (!body.refresh_token || !body.email) {
+    if (!body.refresh_token) {
       return c.json(
-        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing refresh_token or email' } },
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Missing refresh_token' } },
+        401,
+      );
+    }
+
+    let claims: RefreshClaims;
+    try {
+      claims = await validateRefreshToken(secret, body.refresh_token);
+    } catch {
+      return c.json(
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid refresh token' } },
         401,
       );
     }
 
     const db = createDb(dbUrl);
-    const [user] = await db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.email, body.email))
-      .limit(1);
+    const user = await withTenantTransaction(db, { businessId: claims.business_id }, async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(schema.users)
+        .where(and(eq(schema.users.id, claims.sub), eq(schema.users.businessId, claims.business_id)))
+        .limit(1);
+      return row;
+    });
 
-    if (!user) {
+    // The query already filters on both ids; the comparison is the second line
+    // of defence for the one thing this route must never do, which is issue a
+    // token for a different user or tenant than the one the refresh token names.
+    if (
+      !user ||
+      user.id !== claims.sub ||
+      user.businessId !== claims.business_id ||
+      user.isActive === false
+    ) {
       return c.json(
-        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid email or refresh token' } },
+        { error: { code: 'AUTH_TOKEN_INVALID', message: 'Invalid refresh token' } },
         401,
       );
     }
