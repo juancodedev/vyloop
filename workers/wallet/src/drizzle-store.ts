@@ -32,10 +32,13 @@
  * place this worker opens such a transaction for its store; routes never issue
  * the statements themselves.
  *
- * The two tenant enumerations of the scheduled jobs, `listProgramTenants` and
- * `listTenantsWithoutProgram`, page over `tenants` (exempt from RLS) and read
- * each tenant's program row in that tenant's own transaction, so they keep
- * working once the policies are enforced.
+ * The tenant enumerations of the scheduled jobs, `listProgramTenants`,
+ * `listTenantsWithoutProgram` and `listTenantIds`, page over `tenants` (exempt
+ * from RLS) and read anything about a tenant in that tenant's own transaction,
+ * so they keep working once the policies are enforced. The sweep's
+ * pending-expiry set is counted and read per tenant the same way, and a
+ * callback's tenant is parsed from its class id and confirmed inside that
+ * tenant (`findTenantByClassId`). No method reads a tenant table across tenants.
  */
 
 import {
@@ -51,6 +54,7 @@ import {
 } from '@vyloop/db';
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
+import { tenantIdFromClassId } from './ids';
 import { createLocationsSource } from './locations-source';
 import type { LocationsSource } from './locations-source';
 import type {
@@ -205,6 +209,24 @@ async function readProgramInTenantTransaction(db: Db, tenantId: string): Promise
       .limit(1);
     return (row as WalletProgramRow | undefined) ?? null;
   });
+}
+
+/**
+ * `tenantId` when its program row stores exactly `classId`, read on `handle`,
+ * which must be a transaction that set that tenant. Only the tenant column is
+ * selected: a caller resolving a class has no business with the rest of the row.
+ */
+async function readClassOwner(
+  handle: Db,
+  tenantId: string,
+  classId: string,
+): Promise<WalletTenantByClassIdRow | null> {
+  const rows = await handle
+    .select({ tenantId: tenantWalletPrograms.tenantId })
+    .from(tenantWalletPrograms)
+    .where(and(eq(tenantWalletPrograms.tenantId, tenantId), eq(tenantWalletPrograms.classId, classId)))
+    .limit(1);
+  return (rows[0] as WalletTenantByClassIdRow | undefined) ?? null;
 }
 
 /**
@@ -785,47 +807,70 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
     },
 
     /**
-     * The retry set for deleted customers' passes: one page of it, in deletion
-     * order, entered at a point that moves with `rotation`.
-     *
-     * The inner select numbers the whole pending set oldest deletion first
-     * (`position`, from zero) and counts it (`total`). The outer one orders by
-     * the distance from `offset` going forwards round the set, so the page is
-     * `position` `offset mod total` onwards, wrapping past the newest deletion
-     * back to the oldest. `rotation` advances by one a day, which moves the entry
-     * point by exactly one page, so consecutive runs read consecutive pages and
-     * each pending pass is in some page within `ceil(total / limit)` runs. The
-     * double `%` is because Postgres's `%` keeps the sign of the dividend, and
-     * `position - offset` is negative for every row before the entry point.
-     *
-     * Both windows run over the pending set only, which in steady state is
-     * empty and after an outage is the backlog the outage made — never the
-     * passes table.
-     *
-     * The `limit` is clamped for the same reason `listProgramTenants` clamps its
-     * own: a caller passing anything else must not produce an unbounded read.
-     * The offset is computed from the clamped value, so the pages a caller walks
-     * are the pages it is actually given.
+     * `tenants` ids by keyset, on the handle given with no tenant set (`tenants`
+     * is exempt from RLS). The clamp bounds both the result and each page.
      */
-    async listPassesPendingExpiry(options: { limit: number; rotation: number }): Promise<WalletPassRow[]> {
+    async listTenantIds(options: { limit: number; afterTenantId: string | null }): Promise<string[]> {
+      const limit = Math.min(200, Math.max(1, Math.trunc(options.limit)));
+      const ids: string[] = [];
+
+      await forEachTenantPage(db, limit, options.afterTenantId, async (tenantId) => {
+        ids.push(tenantId);
+        return ids.length < limit;
+      });
+
+      return ids;
+    },
+
+    /**
+     * The size of one tenant's pending-expiry set. Same predicate as the slice
+     * read below, and tenant-filtered on both tables as well as by the join.
+     */
+    async countPassesPendingExpiry(tenantId: string): Promise<number> {
+      const result = await db.execute(sql`
+        SELECT count(*)::int AS pending
+          FROM customer_wallet_passes p
+          JOIN customers c
+            ON c.id = p.customer_id
+           AND c.business_id = p.tenant_id
+         WHERE p.tenant_id = ${tenantId}::uuid
+           AND c.business_id = ${tenantId}::uuid
+           AND c.deleted_at IS NOT NULL
+           AND p.state IN ('issued', 'inactive', 'completed')
+      `);
+
+      const [row] = (result as { rows?: Array<{ pending?: unknown }> }).rows ?? [];
+      return Number(row?.pending ?? 0);
+    },
+
+    /**
+     * One slice of one tenant's pending-expiry set, oldest deletion first.
+     *
+     * `OFFSET` is deliberate here, unlike the tenant enumerations: the sweep
+     * plans positions in this exact order (`planExpiryWindow`), and the set is
+     * the backlog an outage made — empty in steady state — never the passes
+     * table. `p.customer_id` breaks ties so the order, and so the positions, is
+     * total.
+     */
+    async listPassesPendingExpiry(
+      tenantId: string,
+      options: { offset: number; limit: number },
+    ): Promise<WalletPassRow[]> {
       const limit = Math.min(500, Math.max(1, Math.trunc(options.limit)));
-      const rotation = Number.isFinite(options.rotation) ? Math.max(0, Math.trunc(options.rotation)) : 0;
-      const offset = rotation * limit;
+      const offset = Number.isFinite(options.offset) ? Math.max(0, Math.trunc(options.offset)) : 0;
 
       const result = await db.execute(sql`
-        SELECT pending.customer_id, pending.tenant_id, pending.object_id, pending.state, pending.last_synced_at
-          FROM (
-            SELECT p.customer_id, p.tenant_id, p.object_id, p.state, p.last_synced_at,
-                   row_number() OVER (ORDER BY c.deleted_at ASC, p.customer_id ASC) - 1 AS position,
-                   count(*) OVER () AS total
-              FROM customer_wallet_passes p
-              JOIN customers c
-                ON c.id = p.customer_id
-               AND c.business_id = p.tenant_id
-             WHERE c.deleted_at IS NOT NULL
-               AND p.state IN ('issued', 'inactive', 'completed')
-          ) pending
-         ORDER BY (((pending.position - ${offset}::bigint) % pending.total) + pending.total) % pending.total ASC
+        SELECT p.customer_id, p.tenant_id, p.object_id, p.state, p.last_synced_at
+          FROM customer_wallet_passes p
+          JOIN customers c
+            ON c.id = p.customer_id
+           AND c.business_id = p.tenant_id
+         WHERE p.tenant_id = ${tenantId}::uuid
+           AND c.business_id = ${tenantId}::uuid
+           AND c.deleted_at IS NOT NULL
+           AND p.state IN ('issued', 'inactive', 'completed')
+         ORDER BY c.deleted_at ASC, p.customer_id ASC
+         OFFSET ${offset}
          LIMIT ${limit}
       `);
 
@@ -1166,28 +1211,21 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
     },
 
     /**
-     * `class_id` → `tenant_id`, and the only cross-tenant read on the callback
-     * path.
+     * Which tenant owns this class, confirmed inside that tenant.
      *
-     * ## Why the column is compared rather than derived
+     * ## Parsed for a candidate, compared for the answer
      *
-     * The obvious shortcut is to parse the tenant out of `<issuerId>.tenant-<id>`
-     * with the same helper `ids.ts` uses. It is not used, and the reason is that
-     * the program row is the *authority* on which tenant owns which class — the
-     * same reason every other read in this worker prefers
-     * `tenant_wallet_programs` over a re-derivation. A class whose stored
-     * `class_id` disagrees with the formula would be resolved by the formula to a
-     * tenant that does not own it, and the callback would then write that
-     * tenant's rows. Reading the row cannot have that failure mode: a class id
-     * that is not in the table resolves to `null` and is refused.
+     * Under row-level security there is no cross-tenant read of
+     * `tenant_wallet_programs`, so the candidate tenant comes from the class id
+     * itself (`tenantIdFromClassId`, the strict inverse of `classIdFor`). The
+     * candidate is never the answer. The program row is the authority on which
+     * tenant owns which class, so the candidate's own transaction reads its row
+     * and requires `class_id` to equal the id exactly. A class id built to embed
+     * somebody's tenant id, or one whose stored `class_id` disagrees with the
+     * formula, resolves to `null` and is refused.
      *
-     * ## No session variable
-     *
-     * There is no tenant to scope to — establishing which tenant a class belongs
-     * to *is* the question — so this runs on a session with no
-     * `app.current_tenant_id`. Once tenant RLS is enforced this errors, because
-     * the policy reads `current_setting(...)` with no default; see the note on
-     * `WalletStore.findTenantByClassId`.
+     * Text that is not exactly the `classIdFor` shape answers `null` before any
+     * transaction opens, so a forged body costs no database work.
      *
      * ## The parameter is a value, never concatenated
      *
@@ -1196,13 +1234,9 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
      * parameter rather than SQL.
      */
     async findTenantByClassId(classId: string): Promise<WalletTenantByClassIdRow | null> {
-      const rows = await db
-        .select({ tenantId: tenantWalletPrograms.tenantId })
-        .from(tenantWalletPrograms)
-        .where(eq(tenantWalletPrograms.classId, classId))
-        .limit(1);
-
-      return (rows[0] as WalletTenantByClassIdRow | undefined) ?? null;
+      const candidate = tenantIdFromClassId(classId);
+      if (candidate === null) return null;
+      return inTenantTransaction(db, candidate, (tx) => readClassOwner(tx, candidate, classId));
     },
 
     /**
@@ -1299,6 +1333,14 @@ export function createTenantWalletStore(db: Db, tenantId: string): WalletStore {
         return method(...args);
       });
   }
+  // A tenant store can only confirm its own tenant. A class id naming another
+  // tenant is refused without a read, and its own one is confirmed in this
+  // store's single transaction, never a nested one.
+  scoped.findTenantByClassId = async (...args: unknown[]) => {
+    const classId = String(args[0]);
+    if (tenantIdFromClassId(classId) !== tenantId) return null;
+    return inTenantTransaction(db, tenantId, (tx) => readClassOwner(tx, tenantId, classId));
+  };
   return scoped as unknown as WalletStore;
 }
 

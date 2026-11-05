@@ -283,6 +283,82 @@ export function expiryRotationFor(observedAt: Date): number {
   return Math.floor(observedAt.getTime() / 86_400_000);
 }
 
+/** Page size of the tenant-id enumeration the expiry step walks. */
+export const EXPIRY_TENANT_PAGE_SIZE = 200;
+
+/** One tenant's share of a run's pending-expiry window. */
+export interface ExpirySlice {
+  tenantId: string;
+  /** Position in that tenant's own pending set, oldest deletion first, from zero. */
+  offset: number;
+  limit: number;
+}
+
+/**
+ * Which slice of each tenant's pending-expiry set this run reads.
+ *
+ * ## The window, per tenant
+ *
+ * Under row-level security no statement can see two tenants' passes, so the
+ * pending set can only be counted and read one tenant at a time. The set this
+ * plans over is therefore the tenants' pending sets **concatenated in tenant id
+ * order**, each in its own deletion order (`counts` must arrive in that order,
+ * which is the order `listTenantIds` enumerates). The window is the same one
+ * the single cross-tenant statement took before: `min(limit, total)` positions
+ * entered at `rotation * limit` modulo the total, wrapping round its end. It is
+ * cut at tenant boundaries into one slice per tenant it crosses (two for a
+ * tenant the wrap enters at both ends).
+ *
+ * ## What is kept and what changed
+ *
+ * Kept: one global budget per run (`limit` rows in total, never per tenant),
+ * and the fairness guarantee — `rotation` advances by one a day, so consecutive
+ * runs read consecutive pages and every pending pass is attempted within
+ * `ceil(total / limit)` runs whatever the passes ahead of it do. When the set
+ * fits in one page, the steady state, every pass is attempted every run.
+ *
+ * Changed: the order inside a page. The old window ordered the whole set by
+ * deletion time across tenants; this one orders by tenant, then deletion time.
+ * A global deletion order would need every tenant's rows read before any could
+ * be ranked, which is an unbounded read where the counts are not. Only *which
+ * page first* differs, never whether a pass is reached, so it is the closest
+ * stateless equivalent.
+ *
+ * Clamped as the store clamped it: `limit` to `[1, 500]`, a non-finite or
+ * negative `rotation` to zero.
+ */
+export function planExpiryWindow(
+  counts: ReadonlyArray<{ tenantId: string; pending: number }>,
+  limit: number,
+  rotation: number,
+): ExpirySlice[] {
+  const page = Math.min(500, Math.max(1, Math.trunc(Number.isFinite(limit) ? limit : 1)));
+  const turn = Number.isFinite(rotation) ? Math.max(0, Math.trunc(rotation)) : 0;
+
+  const ranges: Array<{ tenantId: string; start: number; end: number }> = [];
+  let total = 0;
+  for (const { tenantId, pending } of counts) {
+    const n = Math.max(0, Math.trunc(pending));
+    if (n === 0) continue;
+    ranges.push({ tenantId, start: total, end: total + n });
+    total += n;
+  }
+  if (total === 0) return [];
+
+  const slices: ExpirySlice[] = [];
+  let remaining = Math.min(page, total);
+  // `turn * page` stays far inside the safe-integer range for any real date.
+  let position = (turn * page) % total;
+  while (remaining > 0) {
+    const range = ranges.find((r) => position >= r.start && position < r.end)!;
+    const take = Math.min(remaining, range.end - position);
+    slices.push({ tenantId: range.tenantId, offset: position - range.start, limit: take });
+    remaining -= take;
+    position = (position + take) % total;
+  }
+  return slices;
+}
+
 // ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
@@ -536,8 +612,8 @@ export function lifecycleStateFor(
 export interface SweepDeps {
   /**
    * The store the enumerations run on: `listProgramTenants`,
-   * `listTenantsWithoutProgram` and `listPassesPendingExpiry`. It has no tenant
-   * set, so nothing that reads one tenant's rows may run on it.
+   * `listTenantsWithoutProgram` and `listTenantIds`. It has no tenant set, so
+   * nothing that reads one tenant's rows may run on it.
    */
   store: WalletStore;
   /**
@@ -815,21 +891,62 @@ await provisionMissingClasses(deps, report);
  *
  * `expirePass` checks it, in the same position `reconcilePass` does. A second
  * check here would be a second answer to the question.
+ *
+ * ## One tenant at a time, one budget for the run
+ *
+ * Under row-level security the pending set cannot be read across tenants, so
+ * the tenants are enumerated on the bare store, each tenant's pending passes are
+ * counted and read in that tenant's own transaction, and `planExpiryWindow`
+ * keeps the single `MAX_EXPIRIES_PER_RUN` budget and the daily rotation across
+ * all of them. That is one short count transaction per tenant per run, which is
+ * the price of not giving the sweep a role that bypasses RLS.
  */
 async function expirePendingPasses(
   deps: SweepDeps,
   report: SweepReport,
   observedAt: Date,
 ): Promise<void> {
-  let pending: WalletPassRow[];
+  // 1. Every tenant id, on the bare store: `tenants` is exempt from RLS.
+  const tenantIds: string[] = [];
   try {
-    pending = await deps.store.listPassesPendingExpiry({
-      limit: MAX_EXPIRIES_PER_RUN,
-      rotation: expiryRotationFor(observedAt),
-    });
+    let after: string | null = null;
+    for (;;) {
+      const page = await deps.store.listTenantIds({ limit: EXPIRY_TENANT_PAGE_SIZE, afterTenantId: after });
+      tenantIds.push(...page);
+      if (page.length < EXPIRY_TENANT_PAGE_SIZE) break;
+      after = page[page.length - 1]!;
+    }
   } catch (err: unknown) {
     report.failures.push({ tenantId: '', stage: 'list_pending_expiries', reason: describe(err) });
     return;
+  }
+
+  // 2. Each tenant's pending count, in that tenant's own transaction. A tenant
+  // that cannot be counted is reported and left out of this run's window; the
+  // next tenant is still counted.
+  const counts: Array<{ tenantId: string; pending: number }> = [];
+  for (const tenantId of tenantIds) {
+    try {
+      counts.push({ tenantId, pending: await storeFor(deps, tenantId).countPassesPendingExpiry(tenantId) });
+    } catch (err: unknown) {
+      report.failures.push({ tenantId, stage: 'list_pending_expiries', reason: describe(err) });
+    }
+  }
+
+  // 3. One global window over the concatenated sets, read slice by slice, each
+  // in its own tenant transaction that closes before any call to Google.
+  const pending: WalletPassRow[] = [];
+  for (const slice of planExpiryWindow(counts, MAX_EXPIRIES_PER_RUN, expiryRotationFor(observedAt))) {
+    try {
+      const rows = await storeFor(deps, slice.tenantId).listPassesPendingExpiry(slice.tenantId, {
+        offset: slice.offset,
+        limit: slice.limit,
+      });
+      // The store filters on the tenant; a row naming another is not acted on.
+      pending.push(...rows.filter((row) => row.tenantId === slice.tenantId));
+    } catch (err: unknown) {
+      report.failures.push({ tenantId: slice.tenantId, stage: 'list_pending_expiries', reason: describe(err) });
+    }
   }
 
   for (const row of pending) {
@@ -1159,8 +1276,7 @@ async function sweepOnePass(
  * per-tenant read and write goes through `createTenantWalletStore`, which opens
  * one short transaction per store call with the tenant set on it, so no
  * transaction is ever open across a call to Google. The pending-expiry window is
- * still one cross-tenant statement, a named gap on
- * `WalletStore.listPassesPendingExpiry`.
+ * counted and read per tenant the same way (see `planExpiryWindow`).
  */
 export async function runScheduledSweep(env: WalletBindings): Promise<SweepReport> {
   const demoMode = parseDemoMode(env.WALLET_DEMO_MODE);

@@ -119,6 +119,57 @@ export function classIdFor(issuerId: string, tenantId: string): string {
 }
 
 /**
+ * The exact shape `classIdFor` emits: a sanitised issuer part (no leading or
+ * trailing separator), `.tenant-`, and a canonical lowercase UUID, and nothing
+ * else. Anchored at both ends.
+ */
+const CLASS_ID_SHAPE =
+  /^([a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)\.tenant-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/**
+ * The tenant a class id names, read back from the `classIdFor` shape, or `null`
+ * when the value is not exactly that shape.
+ *
+ * ## A candidate, never an authority
+ *
+ * The result only says which tenant to *ask*. The program row is still the
+ * authority on which tenant owns which class, so the caller confirms it by
+ * reading `tenant_wallet_programs` inside that tenant's transaction and
+ * comparing `class_id` exactly (`WalletStore.findTenantByClassId`). A class id
+ * crafted to embed somebody's tenant id resolves to that tenant only if that
+ * tenant's row stores exactly the same id.
+ *
+ * ## Strict on purpose
+ *
+ * Anything `classIdFor` cannot have produced answers `null`: an object id, a
+ * slug instead of a UUID, an uppercase UUID, surrounding whitespace, or the
+ * demo-mode name marker (`DEMO_MODE_NAME_PREFIX` is a stored-value marker, never
+ * part of an id Google sends). Nothing is repaired: a lenient parser would turn
+ * text that names no class into a database read.
+ *
+ * @param expectedIssuerId when given, the issuer part must equal it after the
+ * same sanitising `classIdFor` applies, so another issuer's class id is refused
+ * before any read.
+ */
+export function tenantIdFromClassId(classId: string, expectedIssuerId?: string): string | null {
+  const match = CLASS_ID_SHAPE.exec(classId);
+  if (match === null) return null;
+  const [, issuerPart, tenantId] = match;
+
+  if (expectedIssuerId !== undefined) {
+    let expected: string;
+    try {
+      expected = sanitizeIdPart(expectedIssuerId);
+    } catch {
+      return null;
+    }
+    if (issuerPart !== expected) return null;
+  }
+
+  return tenantId ?? null;
+}
+
+/**
  * `<issuerId>.member-<customerGlobalId>` — one pass object per customer.
  *
  * @param customerGlobalId `customers.global_id`, never `customers.id`.
