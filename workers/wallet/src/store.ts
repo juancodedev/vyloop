@@ -1116,15 +1116,20 @@ export interface WalletStore {
    * refused, and refusing is the whole point — a class we cannot attribute to a
    * tenant names no row we are permitted to write.
    *
-   * ## This is a cross-tenant query
+   * ## Under row-level security
    *
-   * There is no tenant to scope to; working out which tenants exist *is* the
-   * question. It must be called on a session with **no**
-   * `app.current_tenant_id`, and once the tenant RLS policies are enforced it
-   * errors, because the policy reads `current_setting(...)` with no default.
-   * `listProgramTenants` and `listTenantsWithoutProgram` solved the same problem
-   * by paging over `tenants`; a lookup by class id has no such roster to page
-   * over cheaply, so this one is still open.
+   * There is no cross-tenant read of the program table: its policy errors on a
+   * session with no `app.current_tenant_id`. So the candidate tenant is parsed
+   * from the class id (`tenantIdFromClassId` in `ids.ts`, the strict inverse of
+   * `classIdFor`), and that tenant's own transaction confirms it by reading its
+   * program row and comparing `class_id` exactly. The parse only says whom to
+   * ask; the row is still the answer, so a class id crafted to embed another
+   * tenant's id resolves to `null` unless that tenant stores exactly that id.
+   * Text that is not the `classIdFor` shape answers `null` without a read.
+   *
+   * On a tenant-scoped store (`createTenantWalletStore`) the method confirms
+   * only the store's own tenant and answers `null` for a class id naming any
+   * other.
    */
   findTenantByClassId(classId: string): Promise<WalletTenantByClassIdRow | null>;
 

@@ -265,12 +265,12 @@ router.post(WALLET_CALLBACK_PATH, async (c) => {
 
   // -- Verify, before any database work -----------------------------------
   //
-  // This runs against a store with **no** tenant session, because
-  // `findTenantByClassId` is a cross-tenant read: working out which tenant a
-  // Google class belongs to *is* the question. Opening a tenant session first
-  // would admit no rows to it once the tenant RLS policies are enabled, and every
-  // callback would resolve to `unknown_class` — a silent total failure rather
-  // than an error. Same constraint `sweep.ts` documents for `listProgramTenants`.
+  // The resolver is the store with no tenant bound, because no tenant is known
+  // yet: working out which tenant a Google class belongs to *is* the question.
+  // `findTenantByClassId` parses the candidate tenant from the class id and
+  // confirms it inside that tenant's own transaction (exact `class_id` match),
+  // so it keeps working once the tenant RLS policies are enabled and never
+  // trusts a tenant the body merely names.
   const db = createDb(c.env.DATABASE_URL);
   const resolverStore = createDrizzleWalletStore(db);
 

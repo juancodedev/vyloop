@@ -51,6 +51,7 @@ import {
 } from '@vyloop/db';
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 
+import { tenantIdFromClassId } from './ids';
 import { createLocationsSource } from './locations-source';
 import type { LocationsSource } from './locations-source';
 import type {
@@ -205,6 +206,24 @@ async function readProgramInTenantTransaction(db: Db, tenantId: string): Promise
       .limit(1);
     return (row as WalletProgramRow | undefined) ?? null;
   });
+}
+
+/**
+ * `tenantId` when its program row stores exactly `classId`, read on `handle`,
+ * which must be a transaction that set that tenant. Only the tenant column is
+ * selected: a caller resolving a class has no business with the rest of the row.
+ */
+async function readClassOwner(
+  handle: Db,
+  tenantId: string,
+  classId: string,
+): Promise<WalletTenantByClassIdRow | null> {
+  const rows = await handle
+    .select({ tenantId: tenantWalletPrograms.tenantId })
+    .from(tenantWalletPrograms)
+    .where(and(eq(tenantWalletPrograms.tenantId, tenantId), eq(tenantWalletPrograms.classId, classId)))
+    .limit(1);
+  return (rows[0] as WalletTenantByClassIdRow | undefined) ?? null;
 }
 
 /**
@@ -1166,28 +1185,21 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
     },
 
     /**
-     * `class_id` → `tenant_id`, and the only cross-tenant read on the callback
-     * path.
+     * Which tenant owns this class, confirmed inside that tenant.
      *
-     * ## Why the column is compared rather than derived
+     * ## Parsed for a candidate, compared for the answer
      *
-     * The obvious shortcut is to parse the tenant out of `<issuerId>.tenant-<id>`
-     * with the same helper `ids.ts` uses. It is not used, and the reason is that
-     * the program row is the *authority* on which tenant owns which class — the
-     * same reason every other read in this worker prefers
-     * `tenant_wallet_programs` over a re-derivation. A class whose stored
-     * `class_id` disagrees with the formula would be resolved by the formula to a
-     * tenant that does not own it, and the callback would then write that
-     * tenant's rows. Reading the row cannot have that failure mode: a class id
-     * that is not in the table resolves to `null` and is refused.
+     * Under row-level security there is no cross-tenant read of
+     * `tenant_wallet_programs`, so the candidate tenant comes from the class id
+     * itself (`tenantIdFromClassId`, the strict inverse of `classIdFor`). The
+     * candidate is never the answer. The program row is the authority on which
+     * tenant owns which class, so the candidate's own transaction reads its row
+     * and requires `class_id` to equal the id exactly. A class id built to embed
+     * somebody's tenant id, or one whose stored `class_id` disagrees with the
+     * formula, resolves to `null` and is refused.
      *
-     * ## No session variable
-     *
-     * There is no tenant to scope to — establishing which tenant a class belongs
-     * to *is* the question — so this runs on a session with no
-     * `app.current_tenant_id`. Once tenant RLS is enforced this errors, because
-     * the policy reads `current_setting(...)` with no default; see the note on
-     * `WalletStore.findTenantByClassId`.
+     * Text that is not exactly the `classIdFor` shape answers `null` before any
+     * transaction opens, so a forged body costs no database work.
      *
      * ## The parameter is a value, never concatenated
      *
@@ -1196,13 +1208,9 @@ export function createDrizzleWalletStore(db: Db): WalletStore {
      * parameter rather than SQL.
      */
     async findTenantByClassId(classId: string): Promise<WalletTenantByClassIdRow | null> {
-      const rows = await db
-        .select({ tenantId: tenantWalletPrograms.tenantId })
-        .from(tenantWalletPrograms)
-        .where(eq(tenantWalletPrograms.classId, classId))
-        .limit(1);
-
-      return (rows[0] as WalletTenantByClassIdRow | undefined) ?? null;
+      const candidate = tenantIdFromClassId(classId);
+      if (candidate === null) return null;
+      return inTenantTransaction(db, candidate, (tx) => readClassOwner(tx, candidate, classId));
     },
 
     /**
@@ -1299,6 +1307,14 @@ export function createTenantWalletStore(db: Db, tenantId: string): WalletStore {
         return method(...args);
       });
   }
+  // A tenant store can only confirm its own tenant. A class id naming another
+  // tenant is refused without a read, and its own one is confirmed in this
+  // store's single transaction, never a nested one.
+  scoped.findTenantByClassId = async (...args: unknown[]) => {
+    const classId = String(args[0]);
+    if (tenantIdFromClassId(classId) !== tenantId) return null;
+    return inTenantTransaction(db, tenantId, (tx) => readClassOwner(tx, tenantId, classId));
+  };
   return scoped as unknown as WalletStore;
 }
 

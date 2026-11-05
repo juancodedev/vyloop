@@ -1989,51 +1989,157 @@ describe('insertProgram', () => {
 // ============================================================================
 
 describe('findTenantByClassId', () => {
-  it('resolves the tenant from the stored class id, and reads no other column', async () => {
-    const fake = createFakeDb(
-      [{ tenantId: TENANT, classId: `${TENANT}.class` }],
-      'tenantId',
-    );
-    const store = createDrizzleWalletStore(fake.db);
+  const ISSUER = '3388000000023206930';
+  const OWN_CLASS = `${ISSUER}.tenant-${TENANT}`;
+  const OTHER_CLASS = `${ISSUER}.tenant-${OTHER_TENANT}`;
 
-    const found = await store.findTenantByClassId(`${TENANT}.class`);
+  /**
+   * The program table under the tenant policy. The outer handle refuses every
+   * statement, as Postgres does with no `app.current_tenant_id`. A transaction
+   * handle sees only its own tenant's rows (the policy), and a row matches only
+   * when the compiled `WHERE` binds both its tenant and its exact class id.
+   */
+  function classLookupFixture(programRows: Array<{ tenantId: string; classId: string }>) {
+    const reads: Array<{ tenant: string | null; sql: string; params: unknown[]; columns: string[] }> = [];
+    const transactions: string[][] = [];
 
-    // Asserted on the field rather than with `toEqual`, and the reason is the
-    // fake: it returns the rows it was seeded with and does not model a
-    // `.select({...})` projection, so the shape it hands back is the fixture's.
-    // Postgres would return only the selected column. What the fake *can* prove
-    // is which columns the statement reads, asserted immediately below.
-    expect(found?.tenantId).toBe(TENANT);
-    // The whole tenant-isolation boundary of the callback path is this lookup, so
-    // what it reads is asserted rather than assumed: a version that selected the
-    // whole program row would invite a caller to read `reviewStatus` from a row it
-    // reached cross-tenant.
-    expect(fake.scoped[0]!.sql).toContain('class_id');
-    expect(fake.scoped[0]!.sql).not.toContain('review_status');
-    expect(fake.scoped[0]!.sql).not.toContain('demo_mode');
+    const outer = {
+      select: vi.fn(() => {
+        throw new Error('the program table was read on the outer db, with no tenant set');
+      }),
+      execute: vi.fn(() => {
+        throw new Error('a statement reached the outer db');
+      }),
+      transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+        const settings: string[] = [];
+        transactions.push(settings);
+        let tenant: string | null = null;
+        const tx = {
+          execute: vi.fn(async (chunk: unknown) => {
+            const query = dialect.sqlToQuery(chunk as never);
+            settings.push(query.sql);
+            if (query.sql.includes("set_config('app.current_tenant_id'")) tenant = String(query.params[0]);
+            return { rows: [] };
+          }),
+          transaction: vi.fn(() => {
+            throw new Error('a nested transaction was opened');
+          }),
+          select: vi.fn((projection: Record<string, unknown>) => {
+            const read = { tenant, sql: '', params: [] as unknown[], columns: Object.keys(projection) };
+            const chain: Builder = {};
+            chain.from = vi.fn((table: unknown) => {
+              if (table !== tenantWalletPrograms) throw new Error('unexpected table');
+              return chain;
+            });
+            chain.where = vi.fn((clause: unknown) => {
+              const query = dialect.sqlToQuery(clause as never);
+              read.sql = query.sql;
+              read.params = query.params;
+              return chain;
+            });
+            chain.limit = vi.fn(() => chain);
+            chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+              if (read.tenant === null) {
+                return Promise.reject(new Error('unrecognized configuration parameter')).then(resolve, reject);
+              }
+              reads.push(read);
+              const visible = programRows.filter((row) => row.tenantId === read.tenant);
+              const matched = visible.filter(
+                (row) => read.params.includes(row.tenantId) && read.params.includes(row.classId),
+              );
+              return Promise.resolve(matched.map((row) => ({ tenantId: row.tenantId }))).then(resolve, reject);
+            };
+            return chain;
+          }),
+        };
+        return fn(tx);
+      }),
+    };
+
+    return { outer, reads, transactions };
+  }
+
+  it('confirms the tenant the class id names inside that tenant\'s transaction', async () => {
+    const fake = classLookupFixture([{ tenantId: TENANT, classId: OWN_CLASS }]);
+
+    const found = await createDrizzleWalletStore(fake.outer).findTenantByClassId(OWN_CLASS);
+
+    expect(found).toEqual({ tenantId: TENANT });
+    expect(fake.outer.select).not.toHaveBeenCalled();
+    expect(fake.outer.execute).not.toHaveBeenCalled();
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.transactions[0]![0]).toContain("set_config('app.current_business_id'");
+    expect(fake.transactions[0]![1]).toContain("set_config('app.current_tenant_id'");
+    expect(fake.reads).toHaveLength(1);
+    expect(fake.reads[0]!.tenant).toBe(TENANT);
   });
 
-  it('returns null for a class no row owns, so it is refused rather than guessed', async () => {
-    // A class created by hand in the console, or one belonging to another
-    // deployment pointed at this endpoint. Refusing is the point: a class we
-    // cannot attribute to a tenant names no row we may write.
-    const fake = createFakeDb([{ tenantId: TENANT, classId: `${TENANT}.class` }], 'tenantId');
-    const store = createDrizzleWalletStore(fake.db);
+  it('filters on the tenant and the exact class id, and reads no other column', async () => {
+    // The whole tenant-isolation boundary of the callback path is this lookup,
+    // so what it reads is asserted: a version that selected the whole program
+    // row would invite a caller to read `reviewStatus` from it.
+    const fake = classLookupFixture([{ tenantId: TENANT, classId: OWN_CLASS }]);
 
-    await expect(store.findTenantByClassId('somebody-elses-class')).resolves.toBeNull();
+    await createDrizzleWalletStore(fake.outer).findTenantByClassId(OWN_CLASS);
+
+    const read = fake.reads[0]!;
+    expect(read.columns).toEqual(['tenantId']);
+    expect(read.sql).toContain('"tenant_id" =');
+    expect(read.sql).toContain('"class_id" =');
+    // Bound values, never SQL text: the class id arrives in a request body.
+    expect(read.params).toEqual(expect.arrayContaining([TENANT, OWN_CLASS]));
+    expect(read.sql).not.toContain(OWN_CLASS);
   });
 
-  it('binds the class id as a parameter instead of putting it in the SQL text', async () => {
-    // The class id arrives in a request body. It is safe here only because it
-    // becomes a bound value; this asserts that, since concatenating it is the
-    // failure that turns a public endpoint into an injection point.
-    const fake = createFakeDb([], 'tenantId');
-    const store = createDrizzleWalletStore(fake.db);
+  it('resolves a forged class id to null when the tenant it embeds stores a different class id', async () => {
+    // Somebody builds `<their issuer>.tenant-<our tenant>`. The parse names our
+    // tenant, but our tenant's row stores the real issuer's id, so the exact
+    // comparison refuses it and the callback writes nothing.
+    const fake = classLookupFixture([
+      { tenantId: TENANT, classId: OWN_CLASS },
+      { tenantId: OTHER_TENANT, classId: OTHER_CLASS },
+    ]);
 
-    await store.findTenantByClassId(`x'; DROP TABLE tenants; --`);
+    const forged = `999999.tenant-${OTHER_TENANT}`;
+    await expect(createDrizzleWalletStore(fake.outer).findTenantByClassId(forged)).resolves.toBeNull();
+    // It was asked of the embedded tenant only, and that tenant did not confirm.
+    expect(fake.reads.map((r) => r.tenant)).toEqual([OTHER_TENANT]);
+  });
 
-    expect(fake.scoped[0]!.params).toContain(`x'; DROP TABLE tenants; --`);
-    expect(fake.scoped[0]!.sql).not.toContain('DROP TABLE');
+  it('returns null for a well-shaped class id no row owns', async () => {
+    const fake = classLookupFixture([{ tenantId: TENANT, classId: OWN_CLASS }]);
+
+    await expect(createDrizzleWalletStore(fake.outer).findTenantByClassId(OTHER_CLASS)).resolves.toBeNull();
+  });
+
+  it.each([
+    ['somebody-elses-class'],
+    [`x'; DROP TABLE tenants; --`],
+    [`[TEST ONLY] 3388.tenant-${TENANT}`],
+  ])('answers null for %s without opening a transaction or reading anything', async (classId) => {
+    const fake = classLookupFixture([{ tenantId: TENANT, classId: OWN_CLASS }]);
+
+    await expect(createDrizzleWalletStore(fake.outer).findTenantByClassId(classId)).resolves.toBeNull();
+    expect(fake.outer.transaction).not.toHaveBeenCalled();
+    expect(fake.reads).toEqual([]);
+  });
+
+  it('on a tenant store, confirms only that store\'s own tenant, in one transaction', async () => {
+    // The callback route asks again through the owner's tenant store. A class
+    // id naming another tenant is refused there without a read, and the store's
+    // own one is confirmed in its single transaction, never a nested one.
+    const fake = classLookupFixture([
+      { tenantId: TENANT, classId: OWN_CLASS },
+      { tenantId: OTHER_TENANT, classId: OTHER_CLASS },
+    ]);
+    const scoped = createTenantWalletStore(fake.outer, TENANT);
+
+    await expect(scoped.findTenantByClassId(OTHER_CLASS)).resolves.toBeNull();
+    expect(fake.outer.transaction).not.toHaveBeenCalled();
+
+    await expect(scoped.findTenantByClassId(OWN_CLASS)).resolves.toEqual({ tenantId: TENANT });
+    expect(fake.outer.transaction).toHaveBeenCalledTimes(1);
+    expect(fake.reads.map((r) => r.tenant)).toEqual([TENANT]);
   });
 });
 

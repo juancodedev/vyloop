@@ -9,6 +9,7 @@ import {
   isValidIdPart,
   objectIdFor,
   sanitizeIdPart,
+  tenantIdFromClassId,
 } from './ids';
 
 /**
@@ -205,5 +206,39 @@ describe('isValidGoogleId', () => {
     expect(isValidGoogleId('nodots')).toBe(false);
     expect(isValidGoogleId('trailing.')).toBe(false);
     expect(isValidGoogleId('.leading')).toBe(false);
+  });
+});
+
+describe('tenantIdFromClassId', () => {
+  it('round-trips classIdFor, so the tenant it names is the tenant the id was built for', () => {
+    expect(tenantIdFromClassId(classIdFor(ISSUER, TENANT_UUID))).toBe(TENANT_UUID);
+    expect(tenantIdFromClassId(classIdFor(ISSUER, OTHER_TENANT_UUID))).toBe(OTHER_TENANT_UUID);
+    expect(tenantIdFromClassId(classIdFor('Issuer.Test', TENANT_UUID))).toBe(TENANT_UUID);
+  });
+
+  it('round-trips with the issuer check, which compares against the sanitised issuer', () => {
+    const id = classIdFor(ISSUER, TENANT_UUID);
+    expect(tenantIdFromClassId(id, ISSUER)).toBe(TENANT_UUID);
+    expect(tenantIdFromClassId(classIdFor('Issuer.Test', TENANT_UUID), 'Issuer.Test')).toBe(TENANT_UUID);
+  });
+
+  it('rejects a class id of another issuer when the expected issuer is given', () => {
+    expect(tenantIdFromClassId(classIdFor('999999', TENANT_UUID), ISSUER)).toBeNull();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['no issuer part', `tenant-${TENANT_UUID}`],
+    ['empty issuer part', `.tenant-${TENANT_UUID}`],
+    ['an object id, not a class id', objectIdFor(ISSUER, CUSTOMER_GLOBAL_ID)],
+    ['a tenant part that is not a uuid', `${ISSUER}.tenant-cafe-prueba`],
+    ['a truncated uuid', `${ISSUER}.tenant-${TENANT_UUID.slice(0, -1)}`],
+    ['trailing text after the uuid', `${ISSUER}.tenant-${TENANT_UUID}.x`],
+    ['an uppercase uuid, which classIdFor never emits', `${ISSUER}.tenant-${TENANT_UUID.toUpperCase()}`],
+    ['the demo-mode name marker, which is not part of a Google id', `[TEST ONLY] ${classIdFor(ISSUER, TENANT_UUID)}`],
+    ['surrounding whitespace', ` ${classIdFor(ISSUER, TENANT_UUID)} `],
+    ['an issuer part with characters Google refuses', `33 88.tenant-${TENANT_UUID}`],
+  ])('answers null for %s', (_label, value) => {
+    expect(tenantIdFromClassId(value)).toBeNull();
   });
 });
