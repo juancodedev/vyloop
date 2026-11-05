@@ -78,6 +78,9 @@ function fakePool({
   };
 }
 
+/** The production state after migration 0026: every table the wallet phase enables. */
+const WALLET_PHASE = new Set([...TENANT_ID_TABLES, ...RLS_BATCHES.wallet]);
+
 describe('the table lists', () => {
   it('are read from packages/db/src/rls.ts, not copied', async () => {
     const loaded = await loadRlsTables();
@@ -85,7 +88,7 @@ describe('the table lists', () => {
   });
 
   it('batches name only business tables, and `rest` is every business table left', () => {
-    const named = [...RLS_BATCHES.communication, ...RLS_BATCHES.growth];
+    const named = [...RLS_BATCHES.wallet, ...RLS_BATCHES.communication, ...RLS_BATCHES.growth];
     for (const table of named) expect(LISTS.businessIdTables).toContain(table);
 
     const rest = expectedEnabled('rest', LISTS);
@@ -116,9 +119,17 @@ describe('parseArgs', () => {
 describe('expectedEnabled', () => {
   it('is cumulative: each phase keeps every earlier phase enabled', () => {
     expect(expectedEnabled('none', LISTS)).toEqual(new Set());
-    expect(expectedEnabled('wallet', LISTS)).toEqual(new Set(LISTS.tenantIdTables));
+    expect(expectedEnabled('wallet', LISTS)).toEqual(
+      new Set([...LISTS.tenantIdTables, 'push_campaigns']),
+    );
     expect(expectedEnabled('communication', LISTS)).toEqual(
-      new Set([...LISTS.tenantIdTables, 'message_log', 'whatsapp_templates', 'push_subscriptions']),
+      new Set([
+        ...LISTS.tenantIdTables,
+        'push_campaigns',
+        'message_log',
+        'whatsapp_templates',
+        'push_subscriptions',
+      ]),
     );
     const growth = expectedEnabled('growth', LISTS);
     for (const table of [
@@ -136,6 +147,23 @@ describe('expectedEnabled', () => {
 });
 
 describe('buildReport', () => {
+  it('`--expect wallet` covers push_campaigns, which was enabled before the rollout', () => {
+    const walletOnly = buildReport({
+      lists: LISTS,
+      observation: observation(new Set(TENANT_ID_TABLES)),
+      expectation: 'wallet',
+    });
+    expect(walletOnly.exitCode).toBe(1);
+    expect(formatReport(walletOnly)).toContain('push_campaigns: expected RLS on');
+
+    const production = buildReport({
+      lists: LISTS,
+      observation: observation(new Set([...TENANT_ID_TABLES, 'push_campaigns'])),
+      expectation: 'wallet',
+    });
+    expect(production.failures).toEqual([]);
+  });
+
   it('reports every listed table, the role, its bypass and the tables it owns, and exits 0 without an expectation', () => {
     const report = buildReport({
       lists: LISTS,
@@ -178,9 +206,20 @@ describe('buildReport', () => {
 
   it.each([
     ['none', new Set()],
-    ['wallet', new Set(TENANT_ID_TABLES)],
-    ['communication', new Set([...TENANT_ID_TABLES, ...RLS_BATCHES.communication])],
-    ['growth', new Set([...TENANT_ID_TABLES, ...RLS_BATCHES.communication, ...RLS_BATCHES.growth])],
+    ['wallet', new Set([...TENANT_ID_TABLES, ...RLS_BATCHES.wallet])],
+    [
+      'communication',
+      new Set([...TENANT_ID_TABLES, ...RLS_BATCHES.wallet, ...RLS_BATCHES.communication]),
+    ],
+    [
+      'growth',
+      new Set([
+        ...TENANT_ID_TABLES,
+        ...RLS_BATCHES.wallet,
+        ...RLS_BATCHES.communication,
+        ...RLS_BATCHES.growth,
+      ]),
+    ],
     ['rest', new Set([...TENANT_ID_TABLES, ...BUSINESS_ID_TABLES])],
     ['all', new Set([...TENANT_ID_TABLES, ...BUSINESS_ID_TABLES])],
   ])('passes `--expect %s` when the database matches it', (expectation, enabled) => {
@@ -195,7 +234,7 @@ describe('buildReport', () => {
     (expectation) => {
       const report = buildReport({
         lists: LISTS,
-        observation: observation(new Set(TENANT_ID_TABLES)),
+        observation: observation(WALLET_PHASE),
         expectation,
       });
       expect(report.exitCode).toBe(1);
@@ -209,7 +248,7 @@ describe('buildReport', () => {
   it('lists the wallet tables as enabled and the business tables as not, under `--expect wallet`', () => {
     const report = buildReport({
       lists: LISTS,
-      observation: observation(new Set(TENANT_ID_TABLES)),
+      observation: observation(WALLET_PHASE),
       expectation: 'wallet',
     });
     const text = formatReport(report);
@@ -221,7 +260,7 @@ describe('buildReport', () => {
   });
 
   it('fails and names a table whose RLS is on but whose policy is missing', () => {
-    const obs = observation(new Set(TENANT_ID_TABLES));
+    const obs = observation(WALLET_PHASE);
     obs.policies = obs.policies.filter((t) => t !== 'customer_wallet_passes');
 
     const report = buildReport({ lists: LISTS, observation: obs, expectation: 'wallet' });
@@ -339,7 +378,7 @@ describe('main', () => {
   });
 
   it('exits 0 for a matching expectation and 1 for a differing one', async () => {
-    const walletPhase = async () => observation(new Set(TENANT_ID_TABLES));
+    const walletPhase = async () => observation(WALLET_PHASE);
     expect((await run(['--expect', 'wallet'], walletPhase)).code).toBe(0);
     expect((await run(['--expect', 'all'], walletPhase)).code).toBe(1);
   });

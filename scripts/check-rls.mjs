@@ -11,8 +11,8 @@
 // phase covers must have RLS on *and* the policy, every other listed table must
 // have RLS off *and* no policy, and any difference exits 1 naming the table.
 //
-// Phases are cumulative, in rollout order: `wallet` (the `TENANT_ID_TABLES`),
-// then the business tables in the batches of openspec tenant-isolation-rls 7.1
+// Phases are cumulative, in rollout order: `wallet` (the `TENANT_ID_TABLES`,
+// plus `push_campaigns`, see `RLS_BATCHES.wallet`), then the business tables in the batches of openspec tenant-isolation-rls 7.1
 // — `communication`, `growth`, then `rest` (every business table left, so
 // `rest` and `all` describe the same state). `none` expects nothing enabled.
 //
@@ -39,6 +39,12 @@ export const RLS_SOURCE = 'packages/db/src/rls.ts';
  * rather than in none.
  */
 export const RLS_BATCHES = {
+  // Business tables the wallet phase enables alongside the `TENANT_ID_TABLES`.
+  // `push_campaigns` had RLS and the `tenant_isolation` policy in production
+  // before the rollout started, applied outside any migration. Migration 0026
+  // records it with the wallet tables, so every phase from `wallet` on expects
+  // it enabled and `none` describes a database that predates that state.
+  wallet: ['push_campaigns'],
   communication: ['message_log', 'whatsapp_templates', 'push_subscriptions'],
   growth: [
     'loyalty_programs',
@@ -101,14 +107,22 @@ export function parseArgs(argv) {
 
 /** The tables a phase expects enabled with the policy. */
 export function expectedEnabled(expectation, lists) {
-  for (const table of [...RLS_BATCHES.communication, ...RLS_BATCHES.growth]) {
+  for (const table of [
+    ...RLS_BATCHES.wallet,
+    ...RLS_BATCHES.communication,
+    ...RLS_BATCHES.growth,
+  ]) {
     if (!lists.businessIdTables.includes(table)) {
       throw new Error(`batch table ${table} is not in BUSINESS_ID_TABLES (${RLS_SOURCE})`);
     }
   }
-  const batched = new Set([...RLS_BATCHES.communication, ...RLS_BATCHES.growth]);
+  const batched = new Set([
+    ...RLS_BATCHES.wallet,
+    ...RLS_BATCHES.communication,
+    ...RLS_BATCHES.growth,
+  ]);
   const phases = [
-    ['wallet', lists.tenantIdTables],
+    ['wallet', [...lists.tenantIdTables, ...RLS_BATCHES.wallet]],
     ['communication', RLS_BATCHES.communication],
     ['growth', RLS_BATCHES.growth],
     ['rest', lists.businessIdTables.filter((t) => !batched.has(t))],

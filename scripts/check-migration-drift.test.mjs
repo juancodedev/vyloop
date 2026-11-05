@@ -93,11 +93,11 @@ const BASELINE_COVERING_0002 = {
  * them.
  */
 const FACTS_WITH_0002 = {
-    tables: new Set(['alpha']),
-    columns: new Set(['alpha.label']),
-    indexes: new Set(['idx_alpha_label']),
-    constraints: new Set(),
-  };
+  tables: new Set(['alpha']),
+  columns: new Set(['alpha.label']),
+  indexes: new Set(['idx_alpha_label']),
+  constraints: new Set(),
+};
 
 /**
  * A database that answered, and which ran exactly the migrations `rows` records.
@@ -110,11 +110,11 @@ const FACTS_WITH_0002 = {
  * migrations that this database has never run".
  */
 const seen = (rows, facts = FACTS_WITH_0002) => ({
-    reachable: true,
-    rows,
-    facts,
-    appliedAt: rows,
-  });
+  reachable: true,
+  rows,
+  facts,
+  appliedAt: rows,
+});
 
 /** A database that did not. */
 const unreachable = (error = 'connect ECONNREFUSED') => ({ reachable: false, error });
@@ -1066,6 +1066,8 @@ describe('the committed baseline', () => {
     column: 'columns',
     index: 'indexes',
     constraint: 'constraints',
+    rls: 'rlsTables',
+    policy: 'policies',
   };
 
   const factsFor = (entries) => {
@@ -1074,6 +1076,8 @@ describe('the committed baseline', () => {
       columns: new Set(),
       indexes: new Set(),
       constraints: new Set(),
+      rlsTables: new Set(),
+      policies: new Set(),
     };
     for (const entry of entries) {
       for (const item of entry.evidence) facts[FACT_SET[item.kind]].add(item.name);
@@ -1136,9 +1140,7 @@ describe('the committed baseline', () => {
     }
 
     // A retried delivery must not append a second claim for one migration.
-    expect(new Set(baseline.migrations.map((e) => e.tag)).size).toBe(
-      baseline.migrations.length,
-    );
+    expect(new Set(baseline.migrations.map((e) => e.tag)).size).toBe(baseline.migrations.length);
   });
 
   it('an empty baseline still fails the gate on real drift', () => {
@@ -1226,7 +1228,10 @@ describe('the committed baseline', () => {
     //
     // Also written against a built baseline: the committed one is empty, so running
     // this against it would prove nothing about the stale path.
-    const claimed = migrations.slice(4).map(entryFor).sort((a, b) => a.when - b.when);
+    const claimed = migrations
+      .slice(4)
+      .map(entryFor)
+      .sort((a, b) => a.when - b.when);
     const stale = { version: 1, migrations: claimed };
     const all = migrations.map((m, i) => ({ id: i + 1, hash: m.hash, created_at: m.when }));
     const gate = runGate({
@@ -1283,7 +1288,12 @@ describe('the committed baseline', () => {
     // migration(s)" — that is the signal that a hand is needed. When 0009 is
     // applied and the baseline is re-derived from production, `pending` empties
     // and this assertion returns to `[]` on its own.
-    expect(gate.forward.map((m) => m.tag).slice().sort()).toEqual(pending.slice().sort());
+    expect(
+      gate.forward
+        .map((m) => m.tag)
+        .slice()
+        .sort(),
+    ).toEqual(pending.slice().sort());
 
     // The property this test was written for, and the one the `[]` used to carry
     // by implication: **nothing the baseline claims is reported as outstanding.**

@@ -7,7 +7,13 @@ import PgQueryModule from 'pg-query-emscripten';
 import { describe, expect, it } from 'vitest';
 
 import { allIndexes, indexByName } from './indexes';
-import { BUSINESS_ID_TABLES } from './rls';
+import {
+  BUSINESS_ID_TABLES,
+  createRlsPolicies,
+  createTenantRlsPolicies,
+  enableRls,
+  enableTenantRls,
+} from './rls';
 import {
   customerCredentialRevocations,
   customers,
@@ -325,20 +331,41 @@ describe(`${BACKLOG_MIGRATION} closes the schema backlog`, () => {
 /**
  * The migrations allowed to enable row-level security or create policies.
  *
- * Empty on purpose: no migration enables RLS yet. Enabling it applies tenant
- * isolation to a table in one shot, and every code path that reads that table
- * must already set the session context inside a transaction, so each RLS
- * migration is a separate, reviewed rollout (openspec change
- * `tenant-isolation-rls`, Units 6 and 7). Add a file name here in the same
- * change that adds the migration, never ahead of it.
+ * Enabling RLS applies tenant isolation to a table in one shot, and every code
+ * path that reads that table must already set the session context inside a
+ * transaction, so each RLS migration is a separate, reviewed rollout (openspec
+ * change `tenant-isolation-rls`, Units 6 and 7). Add a file name here in the
+ * same change that adds the migration, never ahead of it.
  */
-const RLS_MIGRATIONS: readonly string[] = [];
+const RLS_MIGRATIONS: readonly string[] = ['0026_wallet_rls.sql'];
+
+const WALLET_RLS_MIGRATION = '0026_wallet_rls.sql';
 
 describe('row-level security is confined to the explicit RLS migrations', () => {
   it('lists only migrations that exist', () => {
     for (const name of RLS_MIGRATIONS) {
       expect(migrationFiles).toContain(name);
     }
+  });
+
+  it(`${WALLET_RLS_MIGRATION} runs exactly the statements rls.ts generates for the wallet tables and push_campaigns`, () => {
+    const dialect = new PgDialect();
+    const render = (statements: ReturnType<typeof enableRls>) =>
+      statements.map((statement) => dialect.sqlToQuery(statement).sql.replace(/;$/, ''));
+    const pushCampaigns = (statements: string[]) =>
+      statements.filter((statement) => statement.includes('"push_campaigns"'));
+
+    const expected = [
+      ...render(enableTenantRls()),
+      ...pushCampaigns(render(enableRls())),
+      ...render(createTenantRlsPolicies()),
+      ...pushCampaigns(render(createRlsPolicies())),
+    ];
+    const actual = codeStatements(readMigration(WALLET_RLS_MIGRATION)).map((statement) =>
+      statement.replace(/;$/, ''),
+    );
+
+    expect(actual).toEqual(expected);
   });
 
   it.each(migrationFiles.filter((file) => !RLS_MIGRATIONS.includes(file)))(
@@ -516,7 +543,15 @@ describe(`${CARD_CREDENTIAL_MIGRATION} adds the rotatable card credential`, () =
 
   it('creates the revocation audit table with who, when and why', () => {
     expect(sql).toMatch(/CREATE TABLE "customer_credential_revocations"/);
-    for (const column of ['business_id', 'customer_id', 'actor_user_id', 'reason', 'previous_version', 'new_version', 'created_at']) {
+    for (const column of [
+      'business_id',
+      'customer_id',
+      'actor_user_id',
+      'reason',
+      'previous_version',
+      'new_version',
+      'created_at',
+    ]) {
       expect(sql).toContain(`"${column}"`);
     }
     expect(sql).toMatch(/"reason" text NOT NULL/);
@@ -525,10 +560,20 @@ describe(`${CARD_CREDENTIAL_MIGRATION} adds the rotatable card credential`, () =
 
   it('declares the same shape in the Drizzle schema', () => {
     const customerColumns = getTableConfig(customers).columns.map((c) => c.name);
-    expect(customerColumns).toEqual(expect.arrayContaining(['card_token_version', 'card_token_hash']));
+    expect(customerColumns).toEqual(
+      expect.arrayContaining(['card_token_version', 'card_token_hash']),
+    );
     const auditColumns = getTableConfig(customerCredentialRevocations).columns.map((c) => c.name);
     expect(auditColumns).toEqual(
-      expect.arrayContaining(['business_id', 'customer_id', 'actor_user_id', 'reason', 'previous_version', 'new_version', 'created_at']),
+      expect.arrayContaining([
+        'business_id',
+        'customer_id',
+        'actor_user_id',
+        'reason',
+        'previous_version',
+        'new_version',
+        'created_at',
+      ]),
     );
   });
 
