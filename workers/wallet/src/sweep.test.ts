@@ -29,6 +29,7 @@ import {
   SWEEP_CRON,
 
   lifecycleStateFor,
+  planExpiryWindow,
   runScheduledSweep,
   sweepPasses,
 } from './sweep';
@@ -161,10 +162,16 @@ class SweepStore implements WalletStore {
   readonly lifecycles: PassLifecycleUpdate[] = [];
   readonly observations: PassObservationUpdate[] = [];
   readonly expiries: PassExpiryUpdate[] = [];
-  /** The page sizes the pending-expiry enumeration was asked for. */
-  readonly expiryPageRequests: number[] = [];
-  /** The rotation each pending-expiry enumeration was asked for. */
-  readonly expiryRotations: number[] = [];
+  /** Every per-tenant pending-expiry slice read, in the order it was asked for. */
+  readonly expiryWindows: Array<{ tenantId: string; offset: number; limit: number }> = [];
+  /** The page requests the tenant-id enumeration was asked for. */
+  readonly tenantIdPageRequests: Array<{ limit: number; afterTenantId: string | null }> = [];
+  /** Tenant id -> throw on `countPassesPendingExpiry`. */
+  failCountPendingExpiry = new Map<string, Error>();
+  /** Tenant id -> throw on `listPassesPendingExpiry`. */
+  failListPendingExpiry = new Map<string, Error>();
+  /** Throw on `listTenantIds`. */
+  failListTenantIds: Error | null = null;
 
   /**
    * `tenantId:customerId` of every customer whose `customers.deleted_at` is set.
@@ -469,33 +476,53 @@ class SweepStore implements WalletStore {
     return null;
   }
 
+  /** The roster, ascending by id, one keyset page at a time. */
+  async listTenantIds(options: { limit: number; afterTenantId: string | null }): Promise<string[]> {
+    this.record('listTenantIds', '');
+    this.tenantIdPageRequests.push({ limit: options.limit, afterTenantId: options.afterTenantId });
+    if (this.failListTenantIds) throw this.failListTenantIds;
+    const all = [...this.tenants].sort();
+    const after = options.afterTenantId;
+    return all.filter((id) => after === null || id > after).slice(0, options.limit);
+  }
+
   /**
-   * The same window the SQL takes: the pending set in deletion order, entered
-   * at `rotation * limit` and wrapping round its end. Deletion order is the
-   * order `deletedCustomers` was filled in, which is what `c.deleted_at ASC`
-   * means for a fixture.
+   * One tenant's pending set in deletion order, the same predicate as the SQL.
+   * Deletion order is the order `deletedCustomers` was filled in, which is what
+   * `c.deleted_at ASC` means for a fixture.
    */
-  async listPassesPendingExpiry(options: { limit: number; rotation: number }): Promise<WalletPassRow[]> {
-    this.record('listPassesPendingExpiry', '');
-    this.expiryPageRequests.push(options.limit);
-    this.expiryRotations.push(options.rotation);
+  private pendingFor(tenant: string): WalletPassRow[] {
     const deletionOrder = [...this.deletedCustomers];
     const pending: WalletPassRow[] = [];
-    for (const rows of this.passes.values()) {
-      for (const row of rows.values()) {
-        if (!this.deletedCustomers.has(`${row.tenantId}:${row.customerId}`)) continue;
-        if (!['issued', 'inactive', 'completed'].includes(row.state)) continue;
-        pending.push({ ...row });
-      }
+    for (const row of this.passes.get(tenant)?.values() ?? []) {
+      if (row.tenantId !== tenant) continue;
+      if (!this.deletedCustomers.has(`${row.tenantId}:${row.customerId}`)) continue;
+      if (!['issued', 'inactive', 'completed'].includes(row.state)) continue;
+      pending.push({ ...row });
     }
-    pending.sort(
+    return pending.sort(
       (a, b) =>
         deletionOrder.indexOf(`${a.tenantId}:${a.customerId}`) -
         deletionOrder.indexOf(`${b.tenantId}:${b.customerId}`),
     );
-    if (pending.length === 0) return [];
-    const start = (options.rotation * options.limit) % pending.length;
-    return [...pending.slice(start), ...pending.slice(0, start)].slice(0, options.limit);
+  }
+
+  async countPassesPendingExpiry(tenant: string): Promise<number> {
+    this.record('countPassesPendingExpiry', tenant);
+    const failure = this.failCountPendingExpiry.get(tenant);
+    if (failure) throw failure;
+    return this.pendingFor(tenant).length;
+  }
+
+  async listPassesPendingExpiry(
+    tenant: string,
+    options: { offset: number; limit: number },
+  ): Promise<WalletPassRow[]> {
+    this.record('listPassesPendingExpiry', tenant);
+    this.expiryWindows.push({ tenantId: tenant, offset: options.offset, limit: options.limit });
+    const failure = this.failListPendingExpiry.get(tenant);
+    if (failure) throw failure;
+    return this.pendingFor(tenant).slice(options.offset, options.offset + options.limit);
   }
 
   async recordPassExpired(update: PassExpiryUpdate): Promise<number> {
@@ -944,9 +971,10 @@ describe('the sweep never writes for a tenant whose class is not usable', () => 
       expect(report.tenantsSwept).toBe(0);
       expect(client.listObjects).not.toHaveBeenCalled();
       expect(client.patchObject).not.toHaveBeenCalled();
-      // Not one call about this tenant either: the readiness check comes before
-      // the store is asked anything about it.
-      expect(store.method(tenant)).toEqual([]);
+      // Not one call about this tenant's passes either: the readiness check comes
+      // before the store is asked anything about them. The expiry step's count
+      // of every tenant's pending set is a separate step, and reads no pass here.
+      expect(store.method(tenant).filter((m) => m !== 'countPassesPendingExpiry')).toEqual([]);
     });
   }
 
@@ -2193,7 +2221,7 @@ describe('the sweep expires the passes of deleted customers', () => {
     expect(store.expiries).toEqual([{ customerId: 'gone', tenantId: tenant, observedAt: RUN_ONE }]);
     expect(store.passes.get(tenant)?.get(OBJECT_ID)?.state).toBe('expired');
     expect(report.expiries.expired).toBe(1);
-    expect(store.expiryPageRequests).toEqual([MAX_EXPIRIES_PER_RUN]);
+    expect(store.expiryWindows).toEqual([{ tenantId: tenant, offset: 0, limit: 1 }]);
     expect(client.remote.get(OBJECT_ID)?.state).toBe('EXPIRED');
     expect(client.remote.get(OBJECT_ID)).not.toHaveProperty('accountName');
   });
@@ -2329,11 +2357,101 @@ describe('the sweep expires the passes of deleted customers', () => {
 
     expect(store.passes.get(healthy)?.get(OBJECT_ID)?.state).toBe('expired');
     expect(client.patchObject).toHaveBeenCalledWith(OBJECT_ID, { state: 'EXPIRED', accountName: null });
-    // One rotation per day, so consecutive runs enter the set at consecutive pages.
-    expect(new Set(store.expiryRotations).size).toBe(runsToCoverEveryPass);
+    // One rotation per day, so consecutive runs enter the set at consecutive
+    // pages: no run read the same window as another.
+    const windowsPerRun = store.expiryWindows.map((w) => `${w.tenantId}@${w.offset}+${w.limit}`);
+    expect(new Set(windowsPerRun).size).toBe(windowsPerRun.length);
     // And the stuck passes are still pending: the rotation moved past them, it did
     // not give up on them.
     expect(store.passes.get(stuck)?.get('obj-old-0')?.state).toBe('issued');
+  });
+
+  it('keeps one budget for the whole run, however many tenants have pending passes', async () => {
+    const tenants = [tenantId(1), tenantId(2), tenantId(3)];
+    const store = new SweepStore(Object.fromEntries(tenants.map((t) => [t, program(t)])));
+    for (const tenant of tenants) {
+      for (let i = 0; i < 60; i += 1) {
+        store.seedPass({ tenant, customer: `gone-${i}`, objectId: `obj-${tenant}-${i}`, balance: 1 });
+        store.deletedCustomers.add(`${tenant}:gone-${i}`);
+      }
+    }
+    const client = fakeGoogle({ pages: onePage([]) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    const read = store.expiryWindows.reduce((sum, w) => sum + w.limit, 0);
+    expect(read).toBe(MAX_EXPIRIES_PER_RUN);
+    const attempted = Object.values(report.expiries).reduce((sum, n) => sum + n, 0);
+    expect(attempted).toBe(MAX_EXPIRIES_PER_RUN);
+    // Every tenant was counted, each through its own call.
+    for (const tenant of tenants) expect(store.method(tenant)).toContain('countPassesPendingExpiry');
+  });
+
+  it('reports a tenant whose pending set cannot be counted, and still expires the next one', async () => {
+    const [a, b, c] = [tenantId(1), tenantId(2), tenantId(3)];
+    const store = new SweepStore({ [a]: program(a), [b]: program(b), [c]: program(c) });
+    for (const tenant of [a, b, c]) {
+      store.seedPass({ tenant, customer: 'gone', objectId: `obj-${tenant}`, balance: 1 });
+      store.deletedCustomers.add(`${tenant}:gone`);
+    }
+    store.failCountPendingExpiry.set(b, new Error('B count is broken'));
+    const client = fakeGoogle({ pages: onePage([a, b, c].map((t) => namedObject(`obj-${t}`, 1))) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(report.failures).toContainEqual(
+      expect.objectContaining({ tenantId: b, stage: 'list_pending_expiries' }),
+    );
+    expect(store.passes.get(a)?.get(`obj-${a}`)?.state).toBe('expired');
+    expect(store.passes.get(c)?.get(`obj-${c}`)?.state).toBe('expired');
+    expect(store.passes.get(b)?.get(`obj-${b}`)?.state).toBe('issued');
+  });
+
+  it('reports a tenant whose pending page cannot be read, and still expires the next one', async () => {
+    const [a, b, c] = [tenantId(1), tenantId(2), tenantId(3)];
+    const store = new SweepStore({ [a]: program(a), [b]: program(b), [c]: program(c) });
+    for (const tenant of [a, b, c]) {
+      store.seedPass({ tenant, customer: 'gone', objectId: `obj-${tenant}`, balance: 1 });
+      store.deletedCustomers.add(`${tenant}:gone`);
+    }
+    store.failListPendingExpiry.set(b, new Error('B page is broken'));
+    const client = fakeGoogle({ pages: onePage([a, b, c].map((t) => namedObject(`obj-${t}`, 1))) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(report.failures).toContainEqual(
+      expect.objectContaining({ tenantId: b, stage: 'list_pending_expiries' }),
+    );
+    expect(report.expiries.expired).toBe(2);
+    expect(store.passes.get(c)?.get(`obj-${c}`)?.state).toBe('expired');
+  });
+
+  it('reports a failed tenant enumeration once and expires nothing', async () => {
+    const tenant = tenantId(1);
+    const store = new SweepStore({ [tenant]: program(tenant) });
+    store.seedPass({ tenant, customer: 'gone', objectId: OBJECT_ID, balance: 500 });
+    store.deletedCustomers.add(`${tenant}:gone`);
+    store.failListTenantIds = new Error('tenants unreadable');
+    const client = fakeGoogle({ pages: onePage([namedObject(OBJECT_ID, 500)]) });
+
+    const report = await sweepPasses(
+      { store, client, now: RUN_ONE, demoMode: false, provisioning: PROVISIONING },
+      { demoMode: false },
+    );
+
+    expect(report.failures).toContainEqual(
+      expect.objectContaining({ tenantId: '', stage: 'list_pending_expiries' }),
+    );
+    expect(store.expiries).toEqual([]);
   });
 
   it('expires nothing in Demo Mode, because the sweep refuses before it reads anything', async () => {
@@ -2354,6 +2472,68 @@ describe('the sweep expires the passes of deleted customers', () => {
   });
 });
 
+describe('planExpiryWindow', () => {
+  const [a, b, c] = ['tenant-a', 'tenant-b', 'tenant-c'];
+
+  it('takes every pending pass when the whole set fits in one page, whatever the rotation', () => {
+    const counts = [{ tenantId: a, pending: 2 }, { tenantId: b, pending: 3 }];
+    for (const rotation of [0, 1, 7, 20_000]) {
+      const slices = planExpiryWindow(counts, 100, rotation);
+      expect(slices.reduce((sum, s) => sum + s.limit, 0)).toBe(5);
+      const covered = new Set(slices.flatMap((s) => Array.from({ length: s.limit }, (_, i) => `${s.tenantId}:${s.offset + i}`)));
+      expect(covered.size).toBe(5);
+    }
+  });
+
+  it('enters the concatenated set at rotation * limit and slices it per tenant', () => {
+    // Positions: a 0-3, b 4-5, c 6-9. Rotation 1 with a page of 4 starts at 4.
+    const counts = [{ tenantId: a, pending: 4 }, { tenantId: b, pending: 2 }, { tenantId: c, pending: 4 }];
+    expect(planExpiryWindow(counts, 4, 1)).toEqual([
+      { tenantId: b, offset: 0, limit: 2 },
+      { tenantId: c, offset: 0, limit: 2 },
+    ]);
+  });
+
+  it('wraps round the end of the set, back to the first tenant', () => {
+    // Total 10, page 4, rotation 2 starts at 8: c 2-3, then a 0-1.
+    const counts = [{ tenantId: a, pending: 4 }, { tenantId: b, pending: 2 }, { tenantId: c, pending: 4 }];
+    expect(planExpiryWindow(counts, 4, 2)).toEqual([
+      { tenantId: c, offset: 2, limit: 2 },
+      { tenantId: a, offset: 0, limit: 2 },
+    ]);
+  });
+
+  it('covers every pending pass within ceil(total / limit) consecutive rotations', () => {
+    const counts = [{ tenantId: a, pending: 7 }, { tenantId: b, pending: 0 }, { tenantId: c, pending: 6 }];
+    const limit = 5;
+    const runs = Math.ceil(13 / limit);
+    for (const first of [0, 3, 19_000]) {
+      const covered = new Set<string>();
+      for (let r = first; r < first + runs; r += 1) {
+        for (const s of planExpiryWindow(counts, limit, r)) {
+          for (let i = 0; i < s.limit; i += 1) covered.add(`${s.tenantId}:${s.offset + i}`);
+        }
+      }
+      expect(covered.size).toBe(13);
+    }
+  });
+
+  it('never plans a slice for a tenant with nothing pending, and nothing for an empty set', () => {
+    expect(planExpiryWindow([{ tenantId: a, pending: 0 }], 100, 3)).toEqual([]);
+    expect(planExpiryWindow([], 100, 3)).toEqual([]);
+    const slices = planExpiryWindow([{ tenantId: a, pending: 0 }, { tenantId: b, pending: 1 }], 100, 0);
+    expect(slices).toEqual([{ tenantId: b, offset: 0, limit: 1 }]);
+  });
+
+  it('clamps a nonsensical page and rotation rather than passing them through', () => {
+    const counts = [{ tenantId: a, pending: 1_000 }];
+    expect(planExpiryWindow(counts, 0, 0)).toEqual([{ tenantId: a, offset: 0, limit: 1 }]);
+    expect(planExpiryWindow(counts, 10_000, 0)).toEqual([{ tenantId: a, offset: 0, limit: 500 }]);
+    expect(planExpiryWindow(counts, 10, Number.NaN)).toEqual([{ tenantId: a, offset: 0, limit: 10 }]);
+    expect(planExpiryWindow(counts, 10, -4)).toEqual([{ tenantId: a, offset: 0, limit: 10 }]);
+  });
+});
+
 // ============================================================================
 // One tenant at a time
 //
@@ -2364,7 +2544,7 @@ describe('the sweep expires the passes of deleted customers', () => {
 // ============================================================================
 
 /** The methods that enumerate across tenants and so run on the bare store. */
-const ENUMERATIONS = ['listProgramTenants', 'listTenantsWithoutProgram', 'listPassesPendingExpiry'];
+const ENUMERATIONS = ['listProgramTenants', 'listTenantsWithoutProgram', 'listTenantIds'];
 
 /** Every tenant id an argument names, at any depth. */
 function tenantIdsIn(value: unknown): string[] {
@@ -2465,7 +2645,14 @@ describe('the sweep does each tenant\'s work through that tenant\'s store', () =
     const methodsFor = (tenant: string) =>
       scoped.tenantCalls.filter((call) => call.bound === tenant).map((call) => call.method);
     expect(methodsFor(swept)).toEqual(
-      expect.arrayContaining(['findPassesByObjectIds', 'recordPassReconciliation', 'findDeletedCustomerPass', 'recordPassExpired']),
+      expect.arrayContaining([
+        'findPassesByObjectIds',
+        'recordPassReconciliation',
+        'countPassesPendingExpiry',
+        'listPassesPendingExpiry',
+        'findDeletedCustomerPass',
+        'recordPassExpired',
+      ]),
     );
     expect(methodsFor(unprovisioned)).toEqual(expect.arrayContaining(['insertProgram']));
     expect(methodsFor(draft)).toEqual(expect.arrayContaining(['updateProgramReviewStatus']));
@@ -2506,6 +2693,7 @@ describe('runScheduledSweep reads tenant data only on a transaction that set tha
    */
   function rlsDb(tenantIds: string[]) {
     const reads: Array<{ table: string; tenant: string | null }> = [];
+    const statements: Array<{ sql: string; tenant: string | null }> = [];
     const bareReads: string[] = [];
 
     function chain(resolve: () => unknown[]) {
@@ -2529,8 +2717,8 @@ describe('runScheduledSweep reads tenant data only on a transaction that set tha
           });
         },
       }),
-      // The pending-expiry window is still one cross-tenant statement (a named
-      // gap); under the policies it errors, and the sweep reports it.
+      // No raw statement may reach the bare handle: under the policies a
+      // tenant-table statement with no tenant set errors.
       execute: async () => {
         throw new Error('unrecognized configuration parameter (bare execute)');
       },
@@ -2540,6 +2728,7 @@ describe('runScheduledSweep reads tenant data only on a transaction that set tha
           execute: async (statement: unknown) => {
             const { sql, params } = new PgDialect().sqlToQuery(statement as never);
             if (sql.includes("set_config('app.current_tenant_id'")) tenant = String(params[0]);
+            else if (!sql.includes('set_config(')) statements.push({ sql, tenant });
             return { rows: [] };
           },
           select: () => ({
@@ -2561,7 +2750,7 @@ describe('runScheduledSweep reads tenant data only on a transaction that set tha
       },
     };
 
-    return { db, reads, bareReads };
+    return { db, reads, statements, bareReads };
   }
 
   it('enumerates `tenants` bare and reads each tenant\'s rows under that tenant', async () => {
@@ -2594,10 +2783,15 @@ describe('runScheduledSweep reads tenant data only on a transaction that set tha
         expect(fake.reads.filter((read) => read.tenant === tenant).length).toBeGreaterThan(1);
       }
       expect(fake.reads.every((read) => read.tenant !== null)).toBe(true);
-      // The enumeration did not fail; the named cross-tenant gap did.
+      // No enumeration failed, the pending-expiry step included.
+      expect(report.failures.map((f) => f.stage)).not.toContain('list_pending_expiries');
       expect(report.failures.map((f) => f.stage)).not.toContain('list_tenants');
       expect(report.failures.map((f) => f.stage)).not.toContain('list_unprovisioned_tenants');
       expect(report.tenantsWithoutProgram).toBe(2);
+      // Each tenant's pending-expiry count ran as a raw statement inside that
+      // tenant's transaction, never on the bare handle.
+      const pendingCounts = fake.statements.filter((st) => st.sql.includes('customer_wallet_passes'));
+      expect(pendingCounts.map((st) => st.tenant).sort()).toEqual([...tenants].sort());
     } finally {
       errors.mockRestore();
     }

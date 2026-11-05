@@ -2575,51 +2575,114 @@ describe('findDeletedCustomerPass', () => {
   });
 });
 
-describe('listPassesPendingExpiry', () => {
-  it('lists only saved passes of deleted customers, oldest deletion first, bounded', async () => {
+describe('listTenantIds', () => {
+  it('pages `tenants` by keyset on the bare handle and reads no tenant table', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT, THIRD_TENANT], []);
+    const store = createDrizzleWalletStore(fake.db);
+
+    const ids = await store.listTenantIds({ limit: 10, afterTenantId: null });
+
+    expect(ids).toEqual([OTHER_TENANT, TENANT, THIRD_TENANT]);
+    expect(fake.transactions).toEqual([]);
+    expect(fake.db.execute).not.toHaveBeenCalled();
+    expect(fake.tenantPages[0]!.sql).toContain('"id" asc');
+  });
+
+  it('resumes strictly after the cursor and applies the clamped bound', async () => {
+    const fake = enumerationFixture([TENANT, OTHER_TENANT, THIRD_TENANT], []);
+    const store = createDrizzleWalletStore(fake.db);
+
+    expect(await store.listTenantIds({ limit: 1, afterTenantId: OTHER_TENANT })).toEqual([TENANT]);
+    expect(fake.tenantPages[0]!.params).toEqual([OTHER_TENANT]);
+    expect(fake.tenantPages[0]!.sql).not.toContain('>=');
+    await store.listTenantIds({ limit: 10_000, afterTenantId: null });
+    expect(fake.tenantPages.every((p) => p.limit !== undefined && p.limit <= 200)).toBe(true);
+  });
+});
+
+describe('countPassesPendingExpiry', () => {
+  it('counts one tenant\'s saved passes of deleted customers, filtered on that tenant', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    fake.executeRows.push({ pending: 3 });
+    const store = createDrizzleWalletStore(fake.db);
+
+    const count = await store.countPassesPendingExpiry(TENANT);
+
+    const statement = fake.executed[0]!;
+    expect(count).toBe(3);
+    expect(statement.sql).toContain('count(*)');
+    expect(statement.sql).toContain('c.deleted_at IS NOT NULL');
+    expect(statement.sql).toContain('c.business_id = p.tenant_id');
+    expect(statement.sql).toContain('p.tenant_id =');
+    expect(statement.sql).toContain('c.business_id = $');
+    expect(statement.sql).toContain("p.state IN ('issued', 'inactive', 'completed')");
+    expect(statement.params).toEqual([TENANT, TENANT]);
+  });
+
+  it('answers zero when the tenant has nothing pending', async () => {
     const fake = createFakeDb([], 'tenantId');
     const store = createDrizzleWalletStore(fake.db);
 
-    await store.listPassesPendingExpiry({ limit: 100, rotation: 0 });
+    await expect(store.countPassesPendingExpiry(TENANT)).resolves.toBe(0);
+  });
+});
+
+describe('listPassesPendingExpiry', () => {
+  it('lists one slice of one tenant\'s saved passes of deleted customers, oldest deletion first', async () => {
+    const fake = createFakeDb([], 'tenantId');
+    const store = createDrizzleWalletStore(fake.db);
+
+    await store.listPassesPendingExpiry(TENANT, { offset: 40, limit: 60 });
 
     const statement = fake.executed[0]!;
     expect(statement.sql).toContain('c.deleted_at IS NOT NULL');
     expect(statement.sql).toContain('c.business_id = p.tenant_id');
+    expect(statement.sql).toContain('p.tenant_id =');
     expect(statement.sql).toContain("p.state IN ('issued', 'inactive', 'completed')");
     for (const absent of ['not_issued', 'not_saved', 'expired']) {
       expect(statement.sql).not.toContain(`'${absent}'`);
     }
-    expect(statement.sql).toContain('ORDER BY c.deleted_at ASC');
+    // A total order, so the positions the sweep plans are the rows it reads.
+    expect(statement.sql).toContain('ORDER BY c.deleted_at ASC, p.customer_id ASC');
+    expect(statement.sql).toContain('OFFSET');
     expect(statement.sql).toContain('LIMIT');
-    expect(statement.params).toContain(100);
+    expect(statement.params).toEqual([TENANT, TENANT, 40, 60]);
   });
 
-  it('enters the set at a page that moves with the rotation, and wraps round its end', async () => {
-    // Oldest-first alone starves: a page's worth of passes that keep failing
-    // would hold every slot for ever. The window is the deletion order entered at
-    // `rotation * limit`, modulo the size of the set, so consecutive rotations
-    // walk consecutive pages and every pending pass is attempted within
-    // `ceil(pending / limit)` of them, whatever the ones before it do.
+  it('clamps the slice, so no caller can make the read unbounded or negative', async () => {
     const fake = createFakeDb([], 'tenantId');
     const store = createDrizzleWalletStore(fake.db);
 
-    await store.listPassesPendingExpiry({ limit: 100, rotation: 3 });
+    await store.listPassesPendingExpiry(TENANT, { offset: -5, limit: 1_000_000 });
 
-    const statement = fake.executed[0]!;
-    expect(statement.sql).toContain('row_number() OVER (ORDER BY c.deleted_at ASC, p.customer_id ASC)');
-    expect(statement.sql).toContain('count(*) OVER ()');
-    expect(statement.sql).toContain('% pending.total');
-    expect(statement.params).toContain(300);
-    expect(statement.params).toContain(100);
+    expect(fake.executed[0]!.params).toEqual([TENANT, TENANT, 0, 500]);
   });
 
-  it('clamps the page, so no caller can make the read unbounded', async () => {
-    const fake = createFakeDb([], 'tenantId');
-    const store = createDrizzleWalletStore(fake.db);
+  it('runs the count and the slice inside a transaction that set that tenant, never on the outer db', async () => {
+    const tx = createFakeDb([], 'tenantId');
+    const outer = {
+      transaction: vi.fn((fn: (handle: unknown) => Promise<unknown>) => fn(tx.db)),
+      execute: vi.fn(() => {
+        throw new Error('a pending-expiry statement reached the outer db, with no tenant set');
+      }),
+      select: vi.fn(() => {
+        throw new Error('a tenant query reached the outer db');
+      }),
+    };
+    const scoped = createTenantWalletStore(outer, OTHER_TENANT);
 
-    await store.listPassesPendingExpiry({ limit: 1_000_000, rotation: 0 });
+    await scoped.countPassesPendingExpiry(OTHER_TENANT);
+    await scoped.listPassesPendingExpiry(OTHER_TENANT, { offset: 0, limit: 10 });
 
-    expect(fake.executed[0]!.params).toContain(500);
+    expect(outer.transaction).toHaveBeenCalledTimes(2);
+    const sqls = tx.executed.map((st) => st.sql);
+    expect(sqls[0]).toContain("set_config('app.current_business_id'");
+    expect(sqls[1]).toContain("set_config('app.current_tenant_id'");
+    expect(sqls[2]).toContain('count(*)');
+    expect(sqls[3]).toContain("set_config('app.current_business_id'");
+    expect(sqls[4]).toContain("set_config('app.current_tenant_id'");
+    expect(sqls[5]).toContain('ORDER BY c.deleted_at ASC');
+    for (const statement of tx.executed) expect(statement.params).toContain(OTHER_TENANT);
   });
 });
 

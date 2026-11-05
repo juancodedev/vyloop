@@ -805,8 +805,29 @@ export interface WalletStore {
   findDeletedCustomerPass(customerId: string, tenantId: string): Promise<WalletPassRow | null>;
 
   /**
-   * One bounded page of passes whose customer is deleted and whose pass is saved
-   * at Google but not yet recorded `expired` — across every tenant.
+   * One page of `tenants` ids, ascending by primary key, after `afterTenantId`.
+   *
+   * `tenants` is exempt from row-level security, so this is the one roster a
+   * session with no tenant set may read. It reads ids only; anything about a
+   * tenant that lives in a tenant table is read in that tenant's transaction.
+   * The `limit` is clamped to `[1, 200]`. The expiry step of the sweep walks it
+   * to count each tenant's pending expiries (`countPassesPendingExpiry`).
+   */
+  listTenantIds(options: { limit: number; afterTenantId: string | null }): Promise<string[]>;
+
+  /**
+   * How many of this tenant's passes are pending expiry: the customer is
+   * deleted and the pass is saved at Google but not yet recorded `expired`.
+   *
+   * Tenant-scoped like every other read: it runs in that tenant's transaction
+   * and filters on the tenant in its own `WHERE`. The sweep sums these to plan
+   * one window across all tenants (`planExpiryWindow` in `sweep.ts`).
+   */
+  countPassesPendingExpiry(tenantId: string): Promise<number>;
+
+  /**
+   * One slice of this tenant's pending-expiry set, oldest deletion first,
+   * `limit` rows from position `offset`.
    *
    * ## Why only the saved states
    *
@@ -817,36 +838,15 @@ export interface WalletStore {
    * would return the same rows on every run and, at the page bound, starve the
    * passes that do need the retry.
    *
-   * ## Why cross-tenant, and what that costs
+   * ## Per tenant, under row-level security
    *
-   * The sweep has no tenant to open a session for, and setting one would hide
-   * every other tenant's rows. Every row carries its own `tenant_id`, and every
-   * write the caller makes from it is tenant-scoped in its own `WHERE` and runs
-   * in that tenant's transaction.
-   *
-   * **Known gap under row-level security.** Unlike `listProgramTenants`, this
-   * read is still one cross-tenant statement over `customer_wallet_passes` and
-   * `customers`, so once their policies are enforced it errors (the policy reads
-   * `current_setting(...)` with no default). The sweep captures that as a
-   * `list_pending_expiries` failure and carries on; making it per tenant would
-   * change the rotation this window depends on, and is left to a separate
-   * change.
-   *
-   * ## Why the page rotates
-   *
-   * The set is ordered oldest deletion first, so a backlog drains in the order
-   * it built up — but a page that always *started* at the oldest deletion would
-   * starve. A pass that can never be expired (a tenant whose class stopped being
-   * usable is `skipped` on every run; an object Google keeps refusing `failed`s
-   * on every run) never leaves the set, and a page's worth of them would hold
-   * every slot for ever, so a deletion made after them would never be tried.
-   *
-   * So the page is entered at `rotation * limit`, modulo the size of the set,
-   * and wraps round its end. The caller advances `rotation` by one per run, which
-   * walks consecutive pages: every pending pass is attempted within
-   * `ceil(pending / limit)` runs, whatever the passes ahead of it do. When the
-   * set fits in one page — the steady state — every pass is attempted every run
-   * and the rotation changes nothing.
+   * The set used to be one cross-tenant statement over `customer_wallet_passes`
+   * and `customers`, which errors once their policies are enforced. It is now
+   * counted and read per tenant, in that tenant's transaction, and the sweep
+   * plans the window across tenants: the budget is still one per run and the
+   * rotation still walks consecutive pages, so a page's worth of passes that can
+   * never be expired cannot hold every slot for ever. See `planExpiryWindow` for
+   * the one thing that changed (the order inside a page).
    *
    * Stateless on purpose. The obvious alternative, ordering by when each pass
    * was last attempted, needs that fact stored somewhere: `customer_wallet_passes`
@@ -854,8 +854,14 @@ export interface WalletStore {
    * the balance loop's due filter, and `updated_at` is also written by that
    * loop's reconciliation of the same rows, so neither can say "attempted by the
    * expiry" without the other writer deciding the order instead.
+   *
+   * The `limit` is clamped to `[1, 500]` and the `offset` to a non-negative
+   * integer, so no caller can make the read unbounded.
    */
-  listPassesPendingExpiry(options: { limit: number; rotation: number }): Promise<WalletPassRow[]>;
+  listPassesPendingExpiry(
+    tenantId: string,
+    options: { offset: number; limit: number },
+  ): Promise<WalletPassRow[]>;
 
   /**
    * Record that a deleted customer's pass is expired at Google.

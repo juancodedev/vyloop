@@ -202,6 +202,12 @@ class FakeStore implements WalletStore {
   async findDeletedCustomerPass(): Promise<never> {
     throw new Error('findDeletedCustomerPass is not part of this path');
   }
+  async listTenantIds(): Promise<never> {
+    throw new Error('listTenantIds is not part of this path');
+  }
+  async countPassesPendingExpiry(): Promise<never> {
+    throw new Error('countPassesPendingExpiry is not part of this path');
+  }
   async listPassesPendingExpiry(): Promise<never> {
     throw new Error('listPassesPendingExpiry is not part of this path');
   }
