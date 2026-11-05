@@ -72,9 +72,9 @@ Chain strategy: stacked-to-main
 
 ## Unit 6: Phases 1–3 — role, shadow, wallet tables
 
-- [ ] 6.1 `docs/09-Database-Design.md` §4 — runbook: create `vyloop_app` (LOGIN, NOBYPASSRLS, owns nothing), `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`, `GRANT USAGE ON ALL SEQUENCES`, `ALTER DEFAULT PRIVILEGES` for future tables; run on a Neon branch first; confirm with `pnpm db:rls`.
+- [x] 6.1 `docs/09-Database-Design.md` §4 — runbook: create `vyloop_app` (LOGIN, NOBYPASSRLS, owns nothing), `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`, `GRANT USAGE ON ALL SEQUENCES`, `ALTER DEFAULT PRIVILEGES` for future tables; run on a Neon branch first; confirm with `pnpm db:rls`.
 - [ ] 6.2 Phase 1: move the workers' `DATABASE_URL` GitHub secret (consumed by `.github/workflows/deploy.yml`) to the `vyloop_app` credential; keep the owner credential in a separate secret for the `migration-drift` job and the scripts. Record the decision in `docs/09` §4.
-- [ ] 6.3 Phase 2: on a Neon branch of `ep-shiny-paper-aibbf0hk`, apply `enableRls()`, `createRlsPolicies()`, `enableTenantRls()` and `createTenantRlsPolicies()`; point a preview deploy at it; run the smoke flows and the wallet sweep; record the error count from the branch logs.
+- [x] 6.3 Phase 2 (rehearsed against the real wallet store and sweep instead of a preview deploy; see `odd/tasks/tenant-isolation-rls.md` L9): on a Neon branch of `ep-shiny-paper-aibbf0hk`, apply `enableRls()`, `createRlsPolicies()`, `enableTenantRls()` and `createTenantRlsPolicies()`; point a preview deploy at it; run the smoke flows and the wallet sweep; record the error count from the branch logs.
 - [ ] 6.4 Phase 3: `packages/db/drizzle/<next>_wallet_rls.sql` (next free number, reserved per `docs/18-Trabajo-Pendiente.md`) — `ENABLE ROW LEVEL SECURITY` and `CREATE POLICY tenant_isolation` for the three `TENANT_ID_TABLES`; apply by hand; register in `packages/db/drizzle/meta/_applied-outside-drizzle.json` with `rls`/`policy` evidence; `pnpm db:drift` and `pnpm db:rls -- --expect wallet` green.
 
 ## Unit 7: Phase 4 — business tables and docs

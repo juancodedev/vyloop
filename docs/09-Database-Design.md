@@ -344,7 +344,7 @@ CREATE TABLE localization_configs (
 
 ## 4. Row-Level Security (RLS) — implementación
 
-**Estado actual: RLS no está desplegado.** La estrategia de la sección 1 (multi-tenancy por `business_id` con RLS) sigue siendo la decisión de diseño, pero el rollout está staged, no completo. Los tres hechos que hay que conocer:
+**Estado actual: RLS desplegado en la fase `wallet`.** Desde la migración `0026_wallet_rls.sql`, las tres `TENANT_ID_TABLES` y `push_campaigns` tienen RLS y la política `tenant_isolation`, y los workers se conectan con el rol `vyloop_app`, que no tiene `BYPASSRLS` ni es dueño de ninguna tabla. Las demás tablas de negocio siguen sin RLS: el rollout es por fases (Unidad 7 de `tenant-isolation-rls`). La estrategia de la sección 1 (multi-tenancy por `business_id` con RLS) sigue siendo la decisión de diseño. Los tres hechos que hay que conocer:
 
 1. Los workers y el gateway fijan el tenant con `withTenantTransaction(db, { businessId?, tenantId? }, fn)` de `@vyloop/db`: abre una transacción, ejecuta `set_config(..., true)` sobre ella y corre las consultas de `fn` en ese mismo handle. Es la única forma válida, porque `set_config(..., true)` dura lo que dura su transacción; el `withRls` anterior lo ejecutaba como sentencia suelta y el valor desaparecía antes de la consulta siguiente. Un contract test (`packages/db/src/rls-call-sites.contract.test.ts`) impide volver a fijarlo a mano; las excepciones son el alta de negocio, que crea el id dentro de su propia transacción, y los crons que recorren todos los negocios (Unidad 3). Aun así, **hoy nada aísla por RLS**: sin políticas creadas y sin `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, la sesión ve todas las filas. El aislamiento real de hoy descansa en los filtros explícitos de `business_id` en los handlers de ruta.
 2. El mecanismo existe y está probado: `packages/db/src/rls.ts` expone `BUSINESS_ID_TABLES` (17 tablas con `business_id`), `TENANT_ID_TABLES`, `RLS_POLICY_NAME` (`tenant_isolation`) y `createRlsPolicies()`. `createRlsPolicies()` **no se llama en código de producción**; está disponible para el rollout.
@@ -372,9 +372,39 @@ CREATE POLICY tenant_isolation ON customer_wallet_passes
 
 `workers/wallet` ya usa el mecanismo con scope de tenant: `openTenantSession` en `drizzle-store.ts` ejecuta `setCurrentBusinessId(tenantId)` y `setCurrentTenantId(tenantId)` antes de leer nada, usando los builders que exporta `@vyloop/db`. Poner las dos variables desde el inicio es deliberado: una variable faltante es invisible hasta que la política correspondiente se habilite, que es el peor momento para descubrirlo.
 
-**Verificación: `pnpm db:rls`.** `scripts/check-rls.mjs` abre una sesión de solo lectura (`SET default_transaction_read_only = on`, confirmada con `SHOW`; si el servidor no la respeta, corta la conexión) y reporta, para cada tabla de `BUSINESS_ID_TABLES` y `TENANT_ID_TABLES` —leídas de `rls.ts`, no copiadas—, `relrowsecurity`, `relforcerowsecurity` y si existe la política `tenant_isolation`; además el rol conectado, su `rolbypassrls` y qué tablas listadas posee. Sin argumentos es un reporte. `pnpm db:rls -- --expect <fase>` lo convierte en criterio de salida: `none`, `wallet` (las `TENANT_ID_TABLES`), `communication`, `growth`, `rest` (los lotes de negocio, acumulativos en ese orden) o `all`. Las tablas de la fase deben tener RLS y la política; el resto, ni lo uno ni lo otro; cualquier diferencia sale con código 1 y nombra la tabla. Una base inalcanzable o una sesión que no queda en solo lectura también sale con 1: no hay tercer estado. El rol se reporta pero no se juzga, porque el script corre con la credencial de dueño.
+**Verificación: `pnpm db:rls`.** `scripts/check-rls.mjs` abre una sesión de solo lectura (`SET default_transaction_read_only = on`, confirmada con `SHOW`; si el servidor no la respeta, corta la conexión) y reporta, para cada tabla de `BUSINESS_ID_TABLES` y `TENANT_ID_TABLES` —leídas de `rls.ts`, no copiadas—, `relrowsecurity`, `relforcerowsecurity` y si existe la política `tenant_isolation`; además el rol conectado, su `rolbypassrls` y qué tablas listadas posee. Sin argumentos es un reporte. `pnpm db:rls -- --expect <fase>` lo convierte en criterio de salida: `none`, `wallet` (las `TENANT_ID_TABLES` y `push_campaigns`), `communication`, `growth`, `rest` (los lotes de negocio, acumulativos en ese orden) o `all`. Las tablas de la fase deben tener RLS y la política; el resto, ni lo uno ni lo otro; cualquier diferencia sale con código 1 y nombra la tabla. Una base inalcanzable o una sesión que no queda en solo lectura también sale con 1: no hay tercer estado. El rol se reporta pero no se juzga, porque el script corre con la credencial de dueño.
 
-**Credencial del gateway — decisión pendiente para la Unidad 6.** `apps/gateway` lee `loyalty_programs` para la página pública `/p/{slug}` con el mismo `DATABASE_URL` que los workers, y ya fija el tenant con `withTenantTransaction`. Cuando los workers pasen al rol `vyloop_app` (sin `BYPASSRLS`), el gateway tiene dos caminos: moverse con ellos, para lo que no le falta nada, o conservar una credencial propia de dueño. Se decide antes de habilitar políticas en `loyalty_programs`.
+**Credenciales: un rol para los workers y el dueño fuera del runtime.** Decisión de la Unidad 6:
+
+- El secret `DATABASE_URL` de GitHub, que `deploy.yml` pasa a los seis workers, al gateway y al job `migration-drift`, es la credencial de `vyloop_app`. El gateway se mueve con los workers: ya fija el tenant con `withTenantTransaction` para `/p/{slug}`, así que no necesita una credencial de dueño.
+- `migration-drift` no necesita ser dueño. Lee catálogos (`pg_class`, `pg_policies`, `information_schema`) y `drizzle.__drizzle_migrations`; para lo último, `vyloop_app` tiene `USAGE` sobre el esquema `drizzle` y `SELECT` sobre sus tablas. Ningún job de CI tiene credencial con DDL.
+- La credencial de dueño (`neondb_owner`) queda solo para las migraciones aplicadas a mano y los scripts operativos (`db:anonymise-deleted`, `seed-demo`), que se corren desde una máquina con el `.dev.vars` local.
+- `FORCE ROW LEVEL SECURITY` no se activa: el dueño sigue leyendo todo, que es lo que necesitan las migraciones y los scripts.
+
+**Runbook del rol `vyloop_app`.** Se ejecuta con la credencial de dueño. Se ensaya primero en una rama de Neon creada desde `production`: ahí se aplica la migración RLS de la fase, se corre el sweep del wallet con un cliente de Google falso y se confirma con `pnpm db:rls -- --expect <fase>` y `pnpm db:drift` conectados como `vyloop_app`. Después se repite en `production`.
+
+```sql
+-- La contraseña se genera localmente (openssl rand -hex 24) y nunca se pega en un chat ni en un archivo versionado.
+CREATE ROLE vyloop_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD '<generada>';
+GRANT CONNECT ON DATABASE neondb TO vyloop_app;
+GRANT USAGE ON SCHEMA public TO vyloop_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO vyloop_app;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO vyloop_app;
+-- Las tablas que creen migraciones futuras (siempre como neondb_owner) heredan los permisos.
+ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vyloop_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO vyloop_app;
+-- Solo lectura sobre el registro de migraciones, para el gate de drift.
+GRANT USAGE ON SCHEMA drizzle TO vyloop_app;
+GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO vyloop_app;
+```
+
+El rol se crea por SQL y no desde la consola de Neon a propósito: los roles que crea la consola son miembros de `neon_superuser`, y el de los workers no debe heredar nada.
+
+Orden en producción, de menos a más riesgoso, cada paso reversible por separado:
+
+1. Crear `vyloop_app` y sus permisos. No cambia nada para nadie.
+2. Cambiar el secret `DATABASE_URL` a `vyloop_app` y redesplegar. A partir de aquí la política de `push_campaigns`, que ya existía, se aplica de verdad. Rollback: volver a poner la credencial de dueño en el secret y redesplegar.
+3. Aplicar `0026_wallet_rls.sql` (con el `DROP POLICY` previo de `push_campaigns`, en la misma transacción) y mergear. Rollback: las sentencias del encabezado de la migración.
 
 ---
 

@@ -183,6 +183,13 @@
       "when": 1793000000000,
       "tag": "0025_card_credential",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793100000000,
+      "tag": "0026_wallet_rls",
+      "breakpoints": true
     }
   ]
 }

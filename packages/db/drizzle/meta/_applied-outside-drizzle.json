@@ -251,6 +251,45 @@
           "name": "customers.card_token_version"
         }
       ]
+    },
+    {
+      "tag": "0026_wallet_rls",
+      "when": 1793100000000,
+      "hash": "2ff1c15fd20e01e10e1ff6cc19ba52a2bab14e014afa42f0df61ecc903c92507",
+      "evidence": [
+        {
+          "kind": "rls",
+          "name": "tenant_wallet_programs"
+        },
+        {
+          "kind": "rls",
+          "name": "customer_wallet_passes"
+        },
+        {
+          "kind": "rls",
+          "name": "wallet_callback_deliveries"
+        },
+        {
+          "kind": "rls",
+          "name": "push_campaigns"
+        },
+        {
+          "kind": "policy",
+          "name": "tenant_wallet_programs.tenant_isolation"
+        },
+        {
+          "kind": "policy",
+          "name": "customer_wallet_passes.tenant_isolation"
+        },
+        {
+          "kind": "policy",
+          "name": "wallet_callback_deliveries.tenant_isolation"
+        },
+        {
+          "kind": "policy",
+          "name": "push_campaigns.tenant_isolation"
+        }
+      ]
     }
   ]
 }
