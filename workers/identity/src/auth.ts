@@ -51,7 +51,11 @@ export interface TokenResponse {
 const ACCESS_TOKEN_TTL = 3600;
 
 /** Refresh token lifetime: 30 days */
-const _REFRESH_TOKEN_TTL = 2_592_000;
+/** 30 days. A refresh token is stateless, so this is also how long a leaked one stays usable. */
+const REFRESH_TOKEN_TTL = 2_592_000;
+
+/** The audience every refresh token carries and `validateRefreshToken` requires. */
+const REFRESH_TOKEN_AUDIENCE = 'vyloop:refresh';
 
 // ---------------------------------------------------------------------------
 // POS terminals
@@ -182,16 +186,71 @@ export function hasScope(claims: JwtClaims, requiredScopes: string[]): boolean {
   return requiredScopes.some((s) => claims.scopes.includes(s));
 }
 
+/** The claims of a refresh token: who it was issued to, in which tenant. */
+export interface RefreshClaims {
+  sub: string;
+  business_id: string;
+}
+
 /**
- * Generate a refresh token (opaque string, not a JWT).
- * In production, store this in DB with an expiry date.
+ * The key refresh tokens are signed with: `JWT_SECRET` with a fixed suffix.
+ *
+ * A separate key, not only a separate audience. The gateway and the wallet worker
+ * verify access tokens with the raw `JWT_SECRET` and do not check the audience,
+ * so a refresh token signed with that same key would be one claim check away
+ * from being accepted as an access token. Under this key it fails every access
+ * verifier's signature check, whatever claims it carries.
  */
-export function generateRefreshToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+function refreshKey(secret: string): Uint8Array {
+  return new TextEncoder().encode(`${secret}\u0000vyloop-refresh-token`);
+}
+
+/**
+ * Issue a refresh token: a JWT naming the user and the tenant, signed with
+ * `refreshKey`, valid for `REFRESH_TOKEN_TTL`.
+ *
+ * It carries no role and no scopes on purpose. `POST /v1/auth/refresh` reads
+ * the user again and takes the role from the row, so a demoted or deactivated
+ * user does not keep their old access through a refresh.
+ */
+export async function issueRefreshToken(
+  secret: string,
+  sub: string,
+  businessId: string,
+  ttl: number = REFRESH_TOKEN_TTL,
+): Promise<string> {
+  return new SignJWT({ business_id: businessId, typ: 'refresh' })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime(`${ttl}s`)
+    .setIssuer('vyloop')
+    .setAudience(REFRESH_TOKEN_AUDIENCE)
+    .setSubject(sub)
+    .sign(refreshKey(secret));
+}
+
+/**
+ * Verify a refresh token and return whom it names.
+ *
+ * @throws {Error} If the signature, issuer, audience, expiry or claims are wrong.
+ *   An access token fails here: it is signed with the other key.
+ */
+export async function validateRefreshToken(secret: string, token: string): Promise<RefreshClaims> {
+  const { payload } = await jwtVerify(token, refreshKey(secret), {
+    issuer: 'vyloop',
+    audience: REFRESH_TOKEN_AUDIENCE,
+    algorithms: ['HS256'],
+  });
+
+  if (
+    payload.typ !== 'refresh' ||
+    typeof payload.sub !== 'string' ||
+    typeof payload.business_id !== 'string'
+  ) {
+    throw new Error('AUTH_TOKEN_INVALID: not a refresh token');
+  }
+
+  return { sub: payload.sub, business_id: payload.business_id };
 }
 
 /**
@@ -212,7 +271,7 @@ export async function issueTokenPair(
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
   const [accessToken, refreshToken] = await Promise.all([
     issueToken(secret, sub, businessId, role, scopes, plan),
-    Promise.resolve(generateRefreshToken()),
+    issueRefreshToken(secret, sub, businessId),
   ]);
 
   return { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL };
