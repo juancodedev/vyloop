@@ -290,6 +290,37 @@
           "name": "push_campaigns.tenant_isolation"
         }
       ]
+    },
+    {
+      "tag": "0027_communication_rls",
+      "when": 1793200000000,
+      "hash": "46b07fa8ba7e8bef70edae620d6edc84807f1dab008f81bda4330f4537dc0fbf",
+      "evidence": [
+        {
+          "kind": "rls",
+          "name": "message_log"
+        },
+        {
+          "kind": "rls",
+          "name": "whatsapp_templates"
+        },
+        {
+          "kind": "rls",
+          "name": "push_subscriptions"
+        },
+        {
+          "kind": "policy",
+          "name": "message_log.tenant_isolation"
+        },
+        {
+          "kind": "policy",
+          "name": "whatsapp_templates.tenant_isolation"
+        },
+        {
+          "kind": "policy",
+          "name": "push_subscriptions.tenant_isolation"
+        }
+      ]
     }
   ]
 }

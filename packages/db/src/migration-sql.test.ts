@@ -337,9 +337,13 @@ describe(`${BACKLOG_MIGRATION} closes the schema backlog`, () => {
  * change `tenant-isolation-rls`, Units 6 and 7). Add a file name here in the
  * same change that adds the migration, never ahead of it.
  */
-const RLS_MIGRATIONS: readonly string[] = ['0026_wallet_rls.sql'];
+const RLS_MIGRATIONS: readonly string[] = ['0026_wallet_rls.sql', '0027_communication_rls.sql'];
 
 const WALLET_RLS_MIGRATION = '0026_wallet_rls.sql';
+
+/** The communication batch of the rollout (`RLS_BATCHES.communication` in `scripts/check-rls.mjs`). */
+const COMMUNICATION_RLS_MIGRATION = '0027_communication_rls.sql';
+const COMMUNICATION_TABLES = ['message_log', 'whatsapp_templates', 'push_subscriptions'];
 
 describe('row-level security is confined to the explicit RLS migrations', () => {
   it('lists only migrations that exist', () => {
@@ -362,6 +366,25 @@ describe('row-level security is confined to the explicit RLS migrations', () => 
       ...pushCampaigns(render(createRlsPolicies())),
     ];
     const actual = codeStatements(readMigration(WALLET_RLS_MIGRATION)).map((statement) =>
+      statement.replace(/;$/, ''),
+    );
+
+    expect(actual).toEqual(expected);
+  });
+
+  it(`${COMMUNICATION_RLS_MIGRATION} runs exactly the statements rls.ts generates for the communication batch`, () => {
+    const dialect = new PgDialect();
+    const render = (statements: ReturnType<typeof enableRls>) =>
+      statements.map((statement) => dialect.sqlToQuery(statement).sql.replace(/;$/, ''));
+    const batch = (statements: string[]) =>
+      COMMUNICATION_TABLES.map((table) => {
+        const match = statements.filter((statement) => statement.includes(`"${table}"`));
+        expect(match).toHaveLength(1);
+        return match[0];
+      });
+
+    const expected = [...batch(render(enableRls())), ...batch(render(createRlsPolicies()))];
+    const actual = codeStatements(readMigration(COMMUNICATION_RLS_MIGRATION)).map((statement) =>
       statement.replace(/;$/, ''),
     );
 
