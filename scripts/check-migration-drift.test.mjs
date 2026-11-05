@@ -43,6 +43,7 @@ import {
   runGate,
   formatReport,
   loadMigrations,
+  unsatisfiedBaseline,
   BASELINE_PATH,
   MIGRATIONS_FOLDER,
 } from './check-migration-drift.mjs';
@@ -420,6 +421,137 @@ describe('extractAssertions', () => {
 
   it('returns nothing for a statement that creates no named object', () => {
     expect(extractAssertions('CREATE SCHEMA IF NOT EXISTS "extra";')).toEqual([]);
+  });
+
+  it('reads ALTER TABLE ENABLE ROW LEVEL SECURITY as an rls assertion on the table', () => {
+    expect(
+      extractAssertions('ALTER TABLE "customer_wallet_passes" ENABLE ROW LEVEL SECURITY;'),
+    ).toEqual([{ kind: 'rls', name: 'customer_wallet_passes' }]);
+  });
+
+  it('reads CREATE POLICY as a policy assertion named table.policy', () => {
+    const sql =
+      `CREATE POLICY tenant_isolation ON "customer_wallet_passes" ` +
+      `USING (tenant_id = current_setting('app.current_tenant_id')::uuid);`;
+    expect(extractAssertions(sql)).toEqual([
+      { kind: 'policy', name: 'customer_wallet_passes.tenant_isolation' },
+    ]);
+    // A quoted policy name reads the same.
+    expect(
+      extractAssertions('CREATE POLICY "tenant_isolation" ON "customers" USING (true);'),
+    ).toEqual([{ kind: 'policy', name: 'customers.tenant_isolation' }]);
+  });
+
+  it('reads an RLS migration in statement order, next to the kinds it already knew', () => {
+    const sql = [
+      'ALTER TABLE "customer_wallet_passes" ADD COLUMN "label" text;',
+      'ALTER TABLE "customer_wallet_passes" ENABLE ROW LEVEL SECURITY;',
+      `CREATE POLICY tenant_isolation ON "customer_wallet_passes" USING (true);`,
+    ].join('--> statement-breakpoint\n');
+    expect(extractAssertions(sql)).toEqual([
+      { kind: 'column', name: 'customer_wallet_passes.label' },
+      { kind: 'rls', name: 'customer_wallet_passes' },
+      { kind: 'policy', name: 'customer_wallet_passes.tenant_isolation' },
+    ]);
+  });
+
+  it('still refuses FORCE ROW LEVEL SECURITY, GRANT and CREATE ROLE', () => {
+    // FORCE changes who RLS applies to (the table owner), and roles and grants
+    // are credentials and privileges. None of them is a schema object this gate
+    // can verify, so each stays an unsupported statement.
+    expect(() => extractAssertions('ALTER TABLE "customers" FORCE ROW LEVEL SECURITY;')).toThrow(
+      /Unsupported migration statement/,
+    );
+    // Nor can FORCE ride along behind an ENABLE in one ALTER TABLE action list.
+    expect(() =>
+      extractAssertions(
+        'ALTER TABLE "customers" ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;',
+      ),
+    ).toThrow(/Unsupported migration statement/);
+    expect(() => extractAssertions('GRANT SELECT ON "customers" TO vyloop_app;')).toThrow(
+      /Unsupported migration statement/,
+    );
+    expect(() => extractAssertions('CREATE ROLE vyloop_app NOLOGIN;')).toThrow(
+      /Unsupported migration statement/,
+    );
+  });
+});
+
+describe('unsatisfiedBaseline with rls and policy evidence', () => {
+  const RLS_SQL = [
+    'ALTER TABLE "customer_wallet_passes" ENABLE ROW LEVEL SECURITY;',
+    `CREATE POLICY tenant_isolation ON "customer_wallet_passes" USING (true);`,
+  ].join('--> statement-breakpoint\n');
+  const RLS = { tag: '0003_rls', when: 4000, hash: sha256(RLS_SQL), sql: RLS_SQL };
+  const baseline = {
+    version: 1,
+    migrations: [
+      {
+        tag: RLS.tag,
+        when: RLS.when,
+        hash: RLS.hash,
+        evidence: [
+          { kind: 'rls', name: 'customer_wallet_passes' },
+          { kind: 'policy', name: 'customer_wallet_passes.tenant_isolation' },
+        ],
+      },
+    ],
+  };
+  const facts = (rlsTables, policies) => ({
+    ...FACTS_WITH_0002,
+    rlsTables: new Set(rlsTables),
+    policies: new Set(policies),
+  });
+
+  it('is satisfied when the live catalog has RLS enabled and the policy present', () => {
+    expect(
+      unsatisfiedBaseline(
+        baseline,
+        [RLS],
+        facts(['customer_wallet_passes'], ['customer_wallet_passes.tenant_isolation']),
+      ),
+    ).toEqual([]);
+  });
+
+  it('names a policy the database does not have', () => {
+    expect(unsatisfiedBaseline(baseline, [RLS], facts(['customer_wallet_passes'], []))).toEqual([
+      {
+        tag: RLS.tag,
+        missing: [{ kind: 'policy', name: 'customer_wallet_passes.tenant_isolation' }],
+      },
+    ]);
+  });
+
+  it('names a table whose RLS is not enabled', () => {
+    expect(
+      unsatisfiedBaseline(baseline, [RLS], facts([], ['customer_wallet_passes.tenant_isolation'])),
+    ).toEqual([{ tag: RLS.tag, missing: [{ kind: 'rls', name: 'customer_wallet_passes' }] }]);
+  });
+
+  it('still reports a missing index for the kinds it already knew', () => {
+    expect(
+      unsatisfiedBaseline(BASELINE_COVERING_0002, [M0, M1, M2], {
+        ...FACTS_WITH_0002,
+        indexes: new Set(),
+      }),
+    ).toEqual([{ tag: M2.tag, missing: [{ kind: 'index', name: 'idx_alpha_label' }] }]);
+  });
+
+  it('fails the gate and names the missing policy in the report', () => {
+    const rows = [applied(M0, 1)];
+    const migrations = [M0, RLS];
+    const observation = {
+      reachable: true,
+      rows,
+      appliedAt: rows,
+      facts: facts(['customer_wallet_passes'], []),
+    };
+    const gate = runGate({ migrations, observation, baseline });
+    expect(gate.ok).toBe(false);
+    expect(gate.exitCode).toBe(1);
+    expect(formatReport(gate)).toContain(
+      '0003_rls is missing policy customer_wallet_passes.tenant_isolation',
+    );
   });
 });
 

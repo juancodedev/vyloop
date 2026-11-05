@@ -154,9 +154,9 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 
-import { assertVerifiedTls } from './lib/database-url.mjs';
+import { resolveDatabaseUrl } from './lib/database-url.mjs';
+import { withReadOnlySession } from './lib/read-only-session.mjs';
 
 export const MIGRATIONS_FOLDER = 'packages/db/drizzle';
 export const JOURNAL_PATH = join(MIGRATIONS_FOLDER, 'meta/_journal.json');
@@ -274,6 +274,32 @@ export function extractAssertions(sql) {
       continue;
     }
 
+    // `ENABLE ROW LEVEL SECURITY` is a property of a table, `pg_class.relrowsecurity`,
+    // so it is asserted under the table's name. Anchored at the end on purpose:
+    // `ALTER TABLE` accepts a comma-separated list of actions, and an unanchored
+    // match would let `ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY` through
+    // as evidence for the half it can verify while the other half went unread.
+    const enableRls =
+      /^ALTER\s+TABLE\s+("?)([\w]+)\1\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*;?$/i.exec(statement);
+    if (enableRls) {
+      add('rls', enableRls[2]);
+      continue;
+    }
+
+    // A policy's catalog identity is the pair (table, policy name): two tables may
+    // each carry a policy called `tenant_isolation`. So it is asserted as
+    // `<table>.<policy>`, which is how `observeDatabase` reads `pg_policies`.
+    //
+    // `FORCE ROW LEVEL SECURITY`, `GRANT` and `CREATE ROLE` deliberately fall
+    // through to the refusal below. FORCE decides whether the table owner is
+    // subject to RLS, and roles and grants are privileges; none is a schema object
+    // this gate verifies, so none may be passed as evidence.
+    const createPolicy = /^CREATE\s+POLICY\s+("?)([\w]+)\1\s+ON\s+("?)([\w]+)\3\s/i.exec(statement);
+    if (createPolicy) {
+      add('policy', `${createPolicy[4]}.${createPolicy[2]}`);
+      continue;
+    }
+
     // `CREATE SCHEMA` names no object this gate can verify, and drizzle emits it
     // harmlessly. Recognised and ignored, rather than refused.
     if (/^CREATE\s+SCHEMA\b/i.test(statement)) continue;
@@ -312,6 +338,8 @@ const FACT_SET_FOR_KIND = {
   column: 'columns',
   index: 'indexes',
   constraint: 'constraints',
+  rls: 'rlsTables',
+  policy: 'policies',
 };
 
 // ---------------------------------------------------------------------------
@@ -855,128 +883,92 @@ const APPLIED_MIGRATIONS_QUERY = DRIFT_QUERY;
 /**
  * Read the journal table and the schema, or report that it could not be read.
  *
- * ## Enforcing read-only rather than promising it
- *
- * `SET default_transaction_read_only = on` puts the session itself in read-only
- * mode, so any statement this script did not intend to send is refused by the
- * server rather than by review. The setting is read back with `SHOW` and the
- * connection is dropped if the server did not honour it: a gate that claims to be
+ * The session is opened by `withReadOnlySession` (`scripts/lib/read-only-session.mjs`):
+ * `SET default_transaction_read_only = on`, read back with `SHOW`, and the
+ * connection dropped if the server did not honour it. A gate that claims to be
  * read-only while silently holding a writable session is worse than one that
  * cannot run.
  *
- * `sslmode=verify-full` is left at the connection string's own default rather
- * than disabled. The readiness report sets `rejectUnauthorized: false` because it
- * connects constantly to a Neon branch during development; this gate runs in CI
- * against production, where an unverified TLS connection is exactly the moment
- * not to take the shortcut.
+ * `sslmode=verify-full` is required rather than left to the driver. The readiness
+ * report sets `rejectUnauthorized: false` because it connects constantly to a
+ * Neon branch during development; this gate runs in CI against production, where
+ * an unverified TLS connection is exactly the moment not to take the shortcut.
  */
-export async function observeDatabase(url, { connectTimeoutMs = 10_000 } = {}) {
-  if (!url) return { reachable: false, error: 'DATABASE_URL is not set' };
-
-  // The comment below says this gate runs in CI against production, which is
-  // exactly why it may not rely on the driver's current, soon-to-change reading
-  // of `sslmode`.
-  assertVerifiedTls(url);
-
-  // `pg` is a dependency of packages/db, not of the repository root, so a plain
-  // dynamic import from a script at the top level does not resolve it.
-  const require = createRequire(join(process.cwd(), 'packages/db/package.json'));
-  const { Pool } = require('pg');
-
-  const pool = new Pool({
-    connectionString: url,
-    max: 1,
-    connectionTimeoutMillis: connectTimeoutMs,
-  });
-
-  try {
-    await pool.query('SET default_transaction_read_only = on');
-    const mode = await pool.query('SHOW default_transaction_read_only');
-    if (mode.rows[0]?.default_transaction_read_only !== 'on') {
-      return {
-        reachable: false,
-        error: 'the database did not honour a read-only session; refusing to continue',
-      };
-    }
-
-    const schema = (await pool.query('select current_schema() as schema')).rows[0].schema;
-
-    const rows = await pool.query(DRIFT_QUERY);
-    const tables = await pool.query(
-      'select table_name from information_schema.tables where table_schema = $1',
-      [schema],
-    );
-    const columns = await pool.query(
-      'select table_name || $2 || column_name as name from information_schema.columns where table_schema = $1',
-      [schema, '.'],
-    );
-    const indexes = await pool.query(
-      'select indexname as name from pg_indexes where schemaname = $1',
-      [schema],
-    );
-const constraints = await pool.query(
-        `select c.conname as name from pg_constraint c
-         join pg_namespace n on n.oid = c.connamespace
-         where n.nspname = $1`,
-        [schema],
-      );
-
-      /**
-       * The journal rows the database itself recorded.
-       *
-       * Read here and, until this change, nowhere. The gate compared the committed
-       * schema files against the committed journal — two files in the repository —
-       * and then checked the *baseline* against the live schema. Neither of those
-       * asks the database which migrations it has actually run, so a migration in
-       * the journal that was never applied was invisible to it:
-       *
-       *     [PASS] the target schema matches the migration journal
-       *     PASS — safe to deploy.
-       *
-       * while production was missing five of them, and `/v1/communication/templates`
-       * was answering 500 on a column that migration would have created.
-       *
-       * A schema file and a journal agree perfectly about work that never happened.
-       */
-      const applied = await pool.query(APPLIED_MIGRATIONS_QUERY);
-
-      return {
-        reachable: true,
-        rows: rows.rows,
-        schema,
-        appliedAt: applied.rows,
-        facts: {
-          tables: new Set(tables.rows.map((r) => r.table_name)),
-          columns: new Set(columns.rows.map((r) => r.name)),
-          indexes: new Set(indexes.rows.map((r) => r.name)),
-          constraints: new Set(constraints.rows.map((r) => r.name)),
-        },
-      };
-  } catch (error) {
-    return { reachable: false, error: error.message };
-  } finally {
-    await pool.end();
-  }
+export async function observeDatabase(url, { connectTimeoutMs = 10_000, createPool } = {}) {
+  return withReadOnlySession(url, readSchema, { connectTimeoutMs, createPool });
 }
 
-/**
- * `DATABASE_URL` from the environment, falling back to the local dev file.
- *
- * The fallback exists only so the gate can be run against development by hand.
- * On CI the file is gitignored and absent, so the environment is the only source
- * — and a missing URL is a failure, not a skip, for the reason in the header.
- */
-function resolveDatabaseUrl() {
-  if (process.env.DATABASE_URL) return { url: process.env.DATABASE_URL, source: 'DATABASE_URL' };
-  for (const path of ['apps/gateway/.dev.vars', 'workers/wallet/.dev.vars']) {
-    try {
-      const url = /^DATABASE_URL=(.*)$/m.exec(readFileSync(path, 'utf8'))?.[1];
-      if (url) return { url, source: path };
-    } catch {
-      // No local dev file. Expected on CI.
-    }
-  }
-  return { url: null, source: null };
+async function readSchema(pool) {
+  const schema = (await pool.query('select current_schema() as schema')).rows[0].schema;
+
+  const rows = await pool.query(DRIFT_QUERY);
+  const tables = await pool.query(
+    'select table_name from information_schema.tables where table_schema = $1',
+    [schema],
+  );
+  const columns = await pool.query(
+    'select table_name || $2 || column_name as name from information_schema.columns where table_schema = $1',
+    [schema, '.'],
+  );
+  const indexes = await pool.query(
+    'select indexname as name from pg_indexes where schemaname = $1',
+    [schema],
+  );
+  const constraints = await pool.query(
+    `select c.conname as name from pg_constraint c
+     join pg_namespace n on n.oid = c.connamespace
+     where n.nspname = $1`,
+    [schema],
+  );
+
+  /**
+   * The journal rows the database itself recorded.
+   *
+   * Read here and, until this change, nowhere. The gate compared the committed
+   * schema files against the committed journal — two files in the repository —
+   * and then checked the *baseline* against the live schema. Neither of those
+   * asks the database which migrations it has actually run, so a migration in
+   * the journal that was never applied was invisible to it:
+   *
+   *     [PASS] the target schema matches the migration journal
+   *     PASS — safe to deploy.
+   *
+   * while production was missing five of them, and `/v1/communication/templates`
+   * was answering 500 on a column that migration would have created.
+   *
+   * A schema file and a journal agree perfectly about work that never happened.
+   */
+  const applied = await pool.query(APPLIED_MIGRATIONS_QUERY);
+
+  // Row-level security, read from the catalog rather than from any migration.
+  // `relrowsecurity` is the flag `ENABLE ROW LEVEL SECURITY` sets; `relkind`
+  // limits it to ordinary and partitioned tables, the only relations a
+  // migration enables it on. Both reads are catalog SELECTs, so the session
+  // stays read-only.
+  const rlsTables = await pool.query(
+    `select c.relname as name from pg_class c
+     join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = $1 and c.relkind in ('r', 'p') and c.relrowsecurity = true`,
+    [schema],
+  );
+  const policies = await pool.query(
+    'select tablename || $2 || policyname as name from pg_policies where schemaname = $1',
+    [schema, '.'],
+  );
+
+  return {
+    rows: rows.rows,
+    schema,
+    appliedAt: applied.rows,
+    facts: {
+      tables: new Set(tables.rows.map((r) => r.table_name)),
+      columns: new Set(columns.rows.map((r) => r.name)),
+      indexes: new Set(indexes.rows.map((r) => r.name)),
+      constraints: new Set(constraints.rows.map((r) => r.name)),
+      rlsTables: new Set(rlsTables.rows.map((r) => r.name)),
+      policies: new Set(policies.rows.map((r) => r.name)),
+    },
+  };
 }
 
 function readBaselineFile() {

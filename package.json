@@ -18,6 +18,7 @@
     "wallet:inactivity:dry-run": "pnpm --filter @vyloop/db exec tsx ../../scripts/pass-inactivity-dry-run.mjs",
     "db:drift": "node scripts/check-migration-drift.mjs",
     "db:drift:baseline": "node scripts/check-migration-drift.mjs --check-baseline",
+    "db:rls": "node scripts/check-rls.mjs",
     "db:checkin-backlog": "node scripts/check-checkin-backlog.mjs",
     "db:payment-reconciliation": "node scripts/check-payment-reconciliation.mjs",
     "db:anonymise-deleted": "node scripts/anonymise-deleted-customers.mjs",
