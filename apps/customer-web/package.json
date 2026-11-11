@@ -23,7 +23,7 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^1.20.13",
+    "@opennextjs/cloudflare": "^1.20.16",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.5",
     "@types/qrcode": "^1.5.6",
